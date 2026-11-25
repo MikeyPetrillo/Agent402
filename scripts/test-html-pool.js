@@ -8,6 +8,7 @@
 // because the pool reads its limits from the environment at load. Offline.
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -69,6 +70,36 @@ function scenario(name, env = {}, { waitMs = 120_000 } = {}) {
   const { result: r } = await scenario("large");
   ok(r.state?.largeInFlight === 1, `only one large page is parsed at once (${JSON.stringify(r.state)})`);
   ok((r.results || []).every((x) => x.ok === true), "all three finish");
+}
+
+// ---- jsdom's optional canvas backend is not installed where jsdom resolves it ----------------
+// jsdom requires its canvas peer at load whenever it can resolve it, so a hoisted
+// copy (pdf-parse and pdfjs-dist bring @napi-rs/canvas) would load a native Skia
+// module in every HTML worker and give each <img src> a native image. The workers
+// never draw, so the lockfile must keep the peer off jsdom's resolution path. Read
+// from the lockfile, so it holds for the image's install whatever a parent folder
+// of a local checkout holds.
+{
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")).packages || {};
+  const jsdomPaths = Object.keys(lock).filter((p) => /(^|\/)node_modules\/jsdom$/.test(p) && !lock[p].dev);
+  ok(jsdomPaths.length >= 1, `jsdom is a production dependency in the lockfile (${jsdomPaths.join(", ")})`);
+  for (const at of jsdomPaths) {
+    const peers = Object.keys(lock[at].peerDependencies || {});
+    ok(peers.length > 0, `${at} declares its optional canvas peer (${peers.join(", ") || "none"})`);
+    for (const peer of peers) {
+      // Node's walk from jsdom's own folder up to the root.
+      const candidates = [];
+      for (let dir = at; ; ) {
+        candidates.push(`${dir}/node_modules/${peer}`);
+        const i = dir.lastIndexOf("/node_modules/");
+        if (i < 0) break;
+        dir = dir.slice(0, i);
+      }
+      candidates.push(`node_modules/${peer}`);
+      const hit = [...new Set(candidates)].filter((c) => lock[c]);
+      ok(hit.length === 0, `${at} cannot resolve its canvas peer ${peer} (${hit.join(", ") || "not on its path"})`);
+    }
+  }
 }
 
 // ---- idle workers never hold the process open ----------------------------------------------

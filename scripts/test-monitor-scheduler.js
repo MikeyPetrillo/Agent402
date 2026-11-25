@@ -420,6 +420,32 @@ const d = describeDomainChanges({ grade: "B", composite: 80, spf: "present", dma
 ok(d.length === 2 && /added b/.test(d[0]) && /renewed/.test(d[1]), "describeDomainChanges reports header additions and renewals, nothing else");
 ok(describeDomainChanges(null, { grade: "A" }).length === 0, "no baseline = no changes described");
 
+// --- a free first month (a 100% promotion code) is a trial: notice before the first charge ---
+{
+  const { buildMonitorEmail } = await import("../src/email.js");
+  const store2 = join("/tmp", `test-monitors-trial-${process.pid}.json`);
+  try { rmSync(store2); } catch { /* first run */ }
+  const t0 = Date.parse("2026-10-01T12:00:00Z");
+  let tclock = t0;
+  const recs = new Map([
+    ["sub_free", { subId: "sub_free", status: "active", product: "domain-monitor", target: "free.example", email: "f@example.com", firstPeriodCents: 0, renewalCents: 500, createdAt: new Date(t0).toISOString(), currentPeriodEnd: Math.floor((t0 + 30 * DAY) / 1000) }],
+    ["sub_paid", { subId: "sub_paid", status: "active", product: "domain-monitor", target: "paid.example", email: "p@example.com", createdAt: new Date(t0).toISOString(), currentPeriodEnd: Math.floor((t0 + 30 * DAY) / 1000) }],
+  ]);
+  const mail = [];
+  const s2 = createMonitorScheduler({ subs: { listActive: () => [...recs.values()], get: (id) => recs.get(id) || null }, generate, probeDomain, normDomain, latestFiling, resolveManager, notify: async (m) => { mail.push(m); return true; }, probeRecalls, probeIpos, probeInsiderFilings, baseUrl: "https://agent402.tools", storePath: store2, now: () => tclock, ownerId: "T", log: () => {}, sleep: async () => {} });
+  const trial = () => mail.filter((m) => m.reason === "trial-ending");
+  tclock = t0 + 20 * DAY; await s2.tick();
+  ok(trial().length === 0, "no trial notice ten days before the first charge (outside the seven-day lead)");
+  tclock = t0 + 24 * DAY; await s2.tick();
+  ok(trial().length === 1 && trial()[0].to === "f@example.com" && trial()[0].renewsOn === "2026-10-31" && trial()[0].priceCents === 500, `a free first month gets one notice six days before the first full charge (${JSON.stringify(trial().map((m) => [m.to, m.renewsOn]))})`);
+  tclock = t0 + 25 * DAY; await s2.tick();
+  ok(trial().length === 1, "the notice is sent once");
+  ok(!mail.some((m) => m.reason === "trial-ending" && m.to === "p@example.com"), "a subscriber who paid the first month gets no trial notice");
+  const e = buildMonitorEmail({ ...trial()[0] });
+  ok(/free month/i.test(e.subject) && /ends on 2026-10-31/.test(e.text) && /\$5\.00 a month/.test(e.text) && /renews each month until you cancel/i.test(e.text) && /cancel/i.test(e.text), "the notice states the date, the monthly price after the free month and how to cancel");
+  try { rmSync(store2); } catch { /* ignore */ }
+}
+
 try { rmSync(STORE); } catch { /* ignore */ }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

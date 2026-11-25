@@ -33,11 +33,11 @@ import { noteSellerDeliveryOutcome } from "./seller-reputation.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
-import { Agent as UndiciAgent } from "undici";
+import { fetchAgent } from "./fetch-dispatcher.js";
 import { withDistrust } from "./tls-distrust.js";
 // Used only while a suite has turned the address guard off
 // (__setBuyerAddressGuardForTest in x402-buyer.js); still refuses a distrusted chain.
-const unguardedDispatcher = new UndiciAgent({ connect: withDistrust() });
+const unguardedDispatcher = fetchAgent({ connect: withDistrust() });
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "./capped-body.js";
 import { markNotSellerBody } from "./response-observation.js";
 import { noteHostRequest } from "./seller-load.js"; // the request log /crawler describes

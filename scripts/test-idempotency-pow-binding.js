@@ -28,7 +28,7 @@ app.use((req, res, next) => {
   return res.status(402).json({ error: "payment_required" });
 });
 app.post("/api/tool", (req, res) => { runs++; res.json({ run: runs, echo: req.body?.text ?? null }); });
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const B = `http://127.0.0.1:${server.address().port}`;
 const call = (headers, body = { text: "a" }) => fetch(`${B}/api/tool`, {

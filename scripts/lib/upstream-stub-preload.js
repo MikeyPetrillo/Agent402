@@ -3,12 +3,20 @@
 // with no key, no network and nothing spent. Every other request goes to the
 // real fetch untouched.
 //
+// STUB_OPENROUTER_CHAT=on also answers the model aggregator: a chat completion
+// gets a canned answer whose usage reports a small cost (so a metered route
+// has a figure to settle), and every other read of that host a 503 (a read
+// failure every caller already handles), so nothing reaches the network.
+//
 // Loaded with `node --import ./scripts/lib/upstream-stub-preload.js src/server.js`
 // by scripts/test-paid-settle-breaker.js. Installed before the server's own
 // fetch wrappers (drain-abort, facilitator diagnostics), which wrap whatever
 // fetch they find, so the stub sits underneath them exactly like the network.
 const realFetch = globalThis.fetch;
 const EMBEDDINGS = "https://api.openai.com/v1/embeddings";
+const CHAT_HOST = "https://openrouter.ai/";
+const CHAT = "https://openrouter.ai/api/v1/chat/completions";
+const stubChat = String(process.env.STUB_OPENROUTER_CHAT || "").toLowerCase() === "on";
 globalThis.fetch = async function stubbedUpstream(input, init) {
   const url = typeof input === "string" ? input : input?.url || String(input);
   if (url === EMBEDDINGS) {
@@ -19,6 +27,17 @@ globalThis.fetch = async function stubbedUpstream(input, init) {
       data: Array.from({ length: n }, (_, index) => ({ object: "embedding", index, embedding: [0.01, 0.02, 0.03] })),
       model: "text-embedding-3-small",
       usage: { prompt_tokens: n, total_tokens: n },
+    };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (stubChat && url.startsWith(CHAT_HOST)) {
+    if (url !== CHAT) return new Response(JSON.stringify({ error: "stubbed" }), { status: 503, headers: { "content-type": "application/json" } });
+    let model = "stub/model";
+    try { model = JSON.parse(init?.body || "{}").model || model; } catch { /* default */ }
+    const body = {
+      id: "gen-stub", object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
+      choices: [{ index: 0, message: { role: "assistant", content: "x402 lets an agent pay per request." }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21, cost: 0.00002 },
     };
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }

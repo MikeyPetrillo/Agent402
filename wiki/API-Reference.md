@@ -122,7 +122,7 @@ Each catalog row carries that delivery record as `responseDelivery`, the name
 the index's rows use. `ourPaidCalls` is deprecated: it carries the same value
 and stays in the answer for readers of the earlier name.
 
-It ends in plain-language flags and deliberately carries **no score** - a number
+It ends in written flags and deliberately carries **no score** - a number
 reads as a verdict we did not measure. Like `seller-trust` it never fetches the
 seller: it is the assembled record, which is why it is priced above the list
 endpoints.

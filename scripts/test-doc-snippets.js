@@ -75,9 +75,9 @@ function addPackage(dir) {
 }
 for (const d of readdirSync(join(ROOT, "adapters"))) if (existsSync(join(ROOT, "adapters", d, "package.json"))) addPackage(join("adapters", d));
 for (const d of ["client", "tollbooth"]) addPackage(d);
-ok(OURS.get("agent402-openai-tools")?.shape === "per-slug" && OURS.get("agent402-langchain")?.shape === "array" && OURS.get("agent402-ai-sdk")?.shape === "keyed",
+ok(OURS.get("agent402-function-calling")?.shape === "per-slug" && OURS.get("agent402-structured-tools")?.shape === "array" && OURS.get("agent402-stream-tools")?.shape === "keyed",
   "control: the source reader classifies per-slug, array and keyed adapters");
-ok(OURS.get("agent402-openai-tools").options.join() === "baseUrl,slugs,freeOnly,fetch,maxPerCallUsd,dailyLimitUsd,maxPerHostUsd,x402Client" && OURS.get("agent402-langchain").options.join() === "baseUrl,fetch,fetchImpl,maxPerCallUsd,dailyLimitUsd",
+ok(OURS.get("agent402-function-calling").options.join() === "baseUrl,slugs,freeOnly,fetch,maxPerCallUsd,dailyLimitUsd,maxPerHostUsd,x402Client" && OURS.get("agent402-structured-tools").options.join() === "baseUrl,fetch,fetchImpl,maxPerCallUsd,dailyLimitUsd",
   "control: the source reader extracts each adapter's real option names");
 ok(OURS.get("agent402-client").ctor?.includes("creditsKey") && !OURS.get("agent402-client").ctor.includes("agentKey"), "control: the Agent402 constructor options are read from source");
 
@@ -321,10 +321,10 @@ ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something
     if (status !== 200) continue;
     for (const m of text.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)) {
       const code = decode(m[1]);
-      if (/npx\s+(?:-y\s+)?agent402-openclaw(?:@\S+)?\s+proxy/.test(code)) {
+      if (/npx\s+(?:-y\s+)?agent402-model-provider(?:@\S+)?\s+proxy/.test(code)) {
         openclawBlocks++;
-        ok(/npm i(?:nstall)?\s+agent402-openclaw\b[^\n]*@x402\/fetch[^\n]*@x402\/evm[^\n]*viem/.test(code) || /npx\s+(?:-y\s+)?-p\s+agent402-openclaw/.test(code),
-          `${page}: the wallet proxy block installs agent402-openclaw with @x402/fetch, @x402/evm and viem in one folder`);
+        ok(/npm i(?:nstall)?\s+agent402-model-provider\b[^\n]*@x402\/fetch[^\n]*@x402\/evm[^\n]*viem/.test(code) || /npx\s+(?:-y\s+)?-p\s+agent402-model-provider/.test(code),
+          `${page}: the wallet proxy block installs agent402-model-provider with @x402/fetch, @x402/evm and viem in one folder`);
       }
       if (/npx\s+agent402-tollbooth/.test(code) && /TOLLBOOTH_FACILITATOR_URL|TOLLBOOTH_CDP_API_KEY/.test(code)) {
         tollBlocks++;
@@ -370,7 +370,7 @@ ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something
 
 // The checker must catch the defects it was written for (a planted control,
 // run through the same functions as the pages).
-const planted = OURS.get("agent402-langchain");
+const planted = OURS.get("agent402-structured-tools");
 ok(!planted.options.includes("categories") && !planted.options.includes("agentKey"), "control: categories/agentKey are not adapter options");
 ok(!THIRD_PARTY["openai-agents"] && !THIRD_PARTY["@strands/agents"] && !THIRD_PARTY.llamaindex.includes("OpenAIAgent"), "control: the wrong package names stay unverified");
 ok(priced.get("extract")?.computePayable === false, "control: extract is wallet-only, so a free-tier sample naming it fails");

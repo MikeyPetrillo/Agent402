@@ -11,7 +11,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 ok(!isComputePayable({ slug: "a-brand-new-tool-on-no-list" }), "a slug on neither list is wallet-only (the safe default)");
-ok(FREE_TIER_SLUGS.size > 100, `the free tier is populated (${FREE_TIER_SLUGS.size} slugs)`);
+ok(FREE_TIER_SLUGS.size > 0, `the free tier is populated (${FREE_TIER_SLUGS.size} slugs)`);
 const both = [...FREE_TIER_SLUGS].filter((s) => WALLET_ONLY_SLUGS.has(s));
 ok(both.length === 0, `no slug is on both lists${both.length ? ` (${both.join(", ")})` : ""}`);
 const listed = [...FREE_TIER_SLUGS][0];

@@ -44,6 +44,7 @@ import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./pr
 import { alertFormHtml } from "./free-alerts.js";
 import { fitTitle, firstFit } from "./seo-meta.js";
 import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
+import { EDGAR_MARK_NOTICE } from "./mark-notices.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -550,7 +551,7 @@ export const PROGRAMMATIC_CSS = `
   .pg-fact .v{font-size:var(--fs-lg);color:var(--ink);margin-top:5px;line-height:1.35}
 `;
 
-const DISCLAIMER = "Generated from public SEC EDGAR filings. Filing data is shown as filed. This is information, not investment advice.";
+const DISCLAIMER = `Generated from public SEC EDGAR filings. Filing data is shown as filed. This is information, not investment advice. ${EDGAR_MARK_NOTICE}`;
 
 const fmtInt = (n) => (Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "");
 const fmtUsd = (n) => (Number.isFinite(n) ? `$${Math.round(n).toLocaleString("en-US")}` : "");

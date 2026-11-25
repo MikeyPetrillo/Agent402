@@ -274,6 +274,37 @@ ok(__test.TTL.price === 60_000 && __test.TTL.list === 300_000 && __test.TTL.coin
   routes = { "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400)]), "/api/v3/exchange_rates": jsonRes(500, { error: "down" }) };
   const down = await h("rwa-markets")({});
   ok(down.count === 1 && down.markets[0].price === 3400 && down.markets[0].tracking.reference === "XAU spot" && down.markets[0].tracking.referencePrice === null && down.markets[0].tracking.premiumBps === null, "rwa-markets: a reference that cannot be read leaves the market answer whole, with null figures");
+  ok(down.markets[0].tracking.referenceStatus === "rate_table_unreadable", `rwa-markets: a null reference states why (${JSON.stringify(down.markets[0].tracking)})`);
+  ok(g.tracking.referenceStatus === "read" && s.tracking.referenceStatus === "read", "rwa-markets: a read reference says it was read");
+  // The race that read null in a sweep: the market read takes the minute
+  // bucket's last token and the reference read behind it is refused.
+  reset();
+  routes = { "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400)]), "/api/v3/exchange_rates": jsonRes(200, rates) };
+  {
+    const prevMax = process.env.COINGECKO_MAX_PER_MIN;
+    process.env.COINGECKO_MAX_PER_MIN = "1";
+    resetCgRateLimit();
+    const fn = CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "rwa-markets").handler;
+    const raced = await fn({});
+    if (prevMax == null) delete process.env.COINGECKO_MAX_PER_MIN; else process.env.COINGECKO_MAX_PER_MIN = prevMax;
+    resetCgRateLimit();
+    const t = raced.markets[0].tracking;
+    ok(raced.markets[0].price === 3400 && t.referencePrice === null && t.premiumBps === null && t.referenceStatus === "rate_table_unreadable", `rwa-markets: a reference read refused by the minute bucket reads null with its reason, never 0 (${JSON.stringify(t)})`);
+  }
+  // A table row that is missing, zero or not a number is not a price.
+  for (const [label, table] of [
+    ["no xau row", { rates: { usd: { value: 77000 } } }],
+    ["no quote-currency row", { rates: { xau: { value: 22.9 } } }],
+    ["a zero quote rate", { rates: { usd: { value: 0 }, xau: { value: 22.9 } } }],
+    ["a zero ounce rate", { rates: { usd: { value: 77000 }, xau: { value: 0 } } }],
+    ["a text rate", { rates: { usd: { value: "n/a" }, xau: { value: 22.9 } } }],
+  ]) {
+    reset();
+    routes = { "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400)]), "/api/v3/exchange_rates": jsonRes(200, table) };
+    const t = (await h("rwa-markets")({})).markets[0].tracking;
+    ok(t.referencePrice === null && t.premiumBps === null && t.referenceStatus === "rate_not_listed", `rwa-markets: ${label} reads null with its reason, never 0 (${JSON.stringify(t)})`);
+  }
+  ok(rwaTracking({ id: "gold", price: 10 }, { xau: 0 }).referencePrice === null, "rwaTracking: a zero reference is no reference");
   reset();
   routes = {
     "/api/v3/rwas/gold": jsonRes(200, { id: "gold", symbol: "xau", name: "Gold", asset_type: "commodity" }),

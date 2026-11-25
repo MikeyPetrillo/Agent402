@@ -1,6 +1,9 @@
-name: Publish agent402-langchain (PyPI)
+name: Publish agent402-structured-tools (PyPI)
 
-# Publishes the Python adapter (adapters/langchain-py) to PyPI via Trusted
+# Publishes the Python adapter (adapters/langchain-py, agent402-structured-tools)
+# and the last release of the renamed project agent402-langchain
+# (renamed/agent402-langchain-py: it depends on the new one and re-exports it)
+# to PyPI via Trusted
 # Publishing (OpenID Connect) — no API token stored anywhere. PyPI verifies the
 # request came from THIS repo + THIS workflow via a short-lived OIDC token.
 #
@@ -38,7 +41,8 @@ jobs:
         # version, instead of whatever "hatchling" resolves to in a fresh env.
         run: |
           python -m pip install --quiet build==1.5.0 hatchling==1.27.0
-          python -m build --no-isolation adapters/langchain-py
+          python -m build --no-isolation --outdir adapters/langchain-py/dist/new adapters/langchain-py
+          python -m build --no-isolation --outdir adapters/langchain-py/dist/shim renamed/agent402-langchain-py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: langchain-py-dist
@@ -56,7 +60,29 @@ jobs:
         with:
           name: langchain-py-dist
           path: dist/
-      - name: Publish to PyPI
+      # The new name first. The forwarding release of the old name depends on
+      # it, so it is published only once PyPI serves the new name at the
+      # version just built: a shim never points at a name nobody holds.
+      # A later run re-uploads a release PyPI already holds: that file is
+      # skipped, never an error.
+      - name: Publish agent402-structured-tools to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
-          packages-dir: dist/
+          packages-dir: dist/new/
+          skip-existing: true
+      - name: Confirm PyPI serves agent402-structured-tools
+        run: |
+          WHL=$(ls dist/new/agent402_structured_tools-*.whl 2>/dev/null | head -1)
+          [ -n "$WHL" ] || { echo "::error::no agent402-structured-tools wheel was built"; exit 1; }
+          V=$(basename "$WHL" | sed -E 's/^agent402_structured_tools-([^-]+)-.*/\1/')
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "https://pypi.org/pypi/agent402-structured-tools/$V/json"; then echo "agent402-structured-tools $V is on PyPI"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::PyPI does not serve agent402-structured-tools $V; the forwarding release is not published"
+          exit 1
+      - name: Publish the forwarding release of the earlier name agent402-langchain to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist/shim/
+          skip-existing: true

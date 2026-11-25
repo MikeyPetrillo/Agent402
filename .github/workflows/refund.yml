@@ -107,7 +107,7 @@ jobs:
         with:
           node-version: 24
       - name: Install deps (senders only load for chains that have rows)
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@16.0.1 viem@2.52.2 algosdk@3.5.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@17.4.0 viem@2.52.2 algosdk@3.5.0
       - name: Run refunds
         env:
           AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
@@ -149,6 +149,9 @@ jobs:
           # and used for the send. A secret: a keyed URL carries its key, and
           # the job never prints it. Unset: the public host alone.
           REFUND_RPC_42220: ${{ secrets.REFUND_RPC_42220 }}
+          # The keyed lane (src/rpc-terms.js): the only permitted RPC for Monad,
+          # and a second lane behind each public host. Never printed.
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
           # The router tiers settle to our spending wallets, not the treasury
           # (src/payments.js), so the pre-send proof must count those public
           # addresses as ours (ourPayToSet in scripts/refund-run.js). Repository

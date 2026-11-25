@@ -1,4 +1,4 @@
-// /terms and /privacy each say "last updated <date>" and that the date marks
+// /terms, /privacy and /dpa each say "last updated <date>" and that the date marks
 // the current version. /terms changed three times after its date (truth audit
 // 2026-10-02) because nothing tied the date to the text. This pins a hash of
 // each page's source with the date line removed: edit the text, and this test
@@ -22,8 +22,8 @@ const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-24", sha: "c76a48a96ce6d492", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
-  "src/privacy.js": { date: "2026-11-24", sha: "d501a9546c13f8c7", with: ["src/credits-figures.js"] },
+  "src/terms.js": { date: "2026-11-25", sha: "e4cc560d06641fba", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
+  "src/privacy.js": { date: "2026-11-25", sha: "00f74a30ac077cf4", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -52,12 +52,14 @@ for (const [file, pin] of Object.entries(PINS)) {
 // main branch is at hand the test also reads main's history and fails when a
 // row main already has was rewritten (a changed hash under an old date).
 const RENDERED = {
-  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"]] },
-  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"]] },
+  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"]] },
+  dpa: { off: [["2026-11-25", "f2425114421ddfba"]], on: [["2026-11-25", "f2425114421ddfba"]] },
 };
 {
   const { termsPage } = await import("../src/terms.js");
   const { privacyPage } = await import("../src/privacy.js");
+  const { dpaPage } = await import("../src/dpa.js");
   const SWITCHES = ["CREDITS_SALES", "MCP_OAUTH", "WEB_BOT_AUTH"];
   const keep = Object.fromEntries(SWITCHES.map((k) => [k, process.env[k]]));
   // The text a reader sees in the page's main content: scripts, styles, tags
@@ -69,7 +71,7 @@ const RENDERED = {
   const renderHash = (html) => createHash("sha256").update(mainText(html).replace(DATE_LINE, "last updated <date>.")).digest("hex").slice(0, 16);
   for (const variant of ["off", "on"]) {
     for (const k of SWITCHES) { if (variant === "on") process.env[k] = "on"; else delete process.env[k]; }
-    for (const [page, fn] of [["terms", termsPage], ["privacy", privacyPage]]) {
+    for (const [page, fn] of [["terms", termsPage], ["privacy", privacyPage], ["dpa", dpaPage]]) {
       const html = fn("https://agent402.tools");
       const printed = (html.match(DATE_LINE) || [])[1];
       const rows = RENDERED[page][variant];
@@ -96,6 +98,26 @@ const RENDERED = {
   } else {
     console.log("note - main's history is not in this checkout; the append-only rows above still hold the date to the text");
   }
+}
+// /dpa (src/dpa.js) prints DPA_DATE. The addendum grants specific prior
+// authorization to the sub-processors it lists (SCC clause 9(a) option 1), and
+// that list is read live from /trust (trustSubprocessors) plus the mailbox
+// row: a sub-processor added, removed or changed there would read on /dpa as
+// already authorized. So the page's source, its sub-processor list and its
+// rendered text are pinned to DPA_DATE: any change fails here until the date
+// moves (after the written request the addendum promises) and the pins with it.
+const DPA_PIN = { date: "2026-11-25", sha: "257ed92bccb0db50", subs: "803808ab1b084421" };
+{
+  const DPA_DATE_RE = /DPA_DATE = "(\d{4}-\d{2}-\d{2})"/;
+  const src = readFileSync(new URL("../src/dpa.js", import.meta.url), "utf8");
+  const date = (src.match(DPA_DATE_RE) || [])[1];
+  ok(date === DPA_PIN.date && date <= TODAY, `src/dpa.js: DPA_DATE ${date}, pinned ${DPA_PIN.date}, not after today (${TODAY} UTC)`);
+  const h = createHash("sha256").update(src.replace(DPA_DATE_RE, 'DPA_DATE = "<date>"')).digest("hex").slice(0, 16);
+  ok(h === DPA_PIN.sha, `src/dpa.js: text unchanged since ${DPA_PIN.date} (hash ${h}; if you changed the addendum, bump DPA_DATE and set date + sha here)`);
+  const { trustSubprocessors } = await import("../src/trust-page.js");
+  const { DPA_MAILBOX_ROW } = await import("../src/dpa.js");
+  const subs = createHash("sha256").update(JSON.stringify([...trustSubprocessors(), DPA_MAILBOX_ROW].map((r) => [r.category, r.name, r.gets]))).digest("hex").slice(0, 16);
+  ok(subs === DPA_PIN.subs, `/dpa sub-processors unchanged since ${DPA_PIN.date} (hash ${subs}; a new or changed sub-processor is asked for in writing first, then DPA_DATE and this pin move)`);
 }
 {
   const { CREDITS_SALES_TERMS_DATE } = await import("../src/credits-sales.js");

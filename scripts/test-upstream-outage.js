@@ -44,6 +44,24 @@ try {
   ok(!isUpstreamErrorShape(500, relayed) && !isUpstreamErrorShape(500, { error: "Internal error" }), "our 500 is never an upstream-error answer");
   ok(!isUpstreamErrorShape(502, { error: "Upstream returned non-JSON" }) && !isUpstreamErrorShape(503, { error: "Weather data is temporarily unavailable because of a service problem on our side" }), "our parse 502 and our own 503 are never upstream-error answers");
   ok(!isUpstreamErrorShape(200, { alerts: [] }) && !isUpstreamErrorShape(502, null), "a 200 or an empty body is not one");
+  // cert-transparency's own words for its log's deadline and 5xx or 429.
+  const ctLate = { error: "The upstream cert transparency log did not respond within 10 s; try again later" };
+  ok(isUpstreamErrorShape(502, ctLate) && isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 503" }) && isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 429" }), "cert-transparency's log deadline and 5xx/429 answers (502) are upstream-error answers");
+  ok(!isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 404" }) && !isUpstreamErrorShape(502, { error: "crt.sh returned non-JSON - try again later" }) && !isUpstreamErrorShape(422, { error: "crt.sh returned HTTP 400" }), "control: its mislabelled 404, its parse failure and a 4xx it relays are not");
+  ok(JSON.stringify([...upstreamHostsForSlug("cert-transparency")]) === JSON.stringify(["crt.sh"]), `cert-transparency declares the keyless log it reads (${[...upstreamHostsForSlug("cert-transparency")].join(", ")})`);
+  {
+    const ctLog = join(work, "ct-failures.jsonl");
+    const ctUrl = "https://crt.sh/?q=%25.example.com&output=json&exclude=expired";
+    writeFileSync(ctLog, `${JSON.stringify({ t: 1000, host: "crt.sh", url: ctUrl, method: "GET", keyed: false, error: "AbortError" })}\n`);
+    const ct = (o) => upstreamOutageVerdict({ slug: "cert-transparency", status: 502, body: ctLate, t0: 900, t1: 1100, logPath: ctLog, ...o });
+    let readUrl = null;
+    const v1 = await ct({ readFails: async (u) => { readUrl = u; return true; } });
+    ok(v1.verdict === "upstream" && readUrl === ctUrl, `cert-transparency's log deadline, recorded in the call and refused to the runner's direct read of the same request: excused (${v1.evidence || v1.reason})`);
+    const v2 = await ct({ readFails: async () => false });
+    ok(v2.verdict === "fail", `control: the same answer while crt.sh answers the runner's direct read FAILS (${v2.reason})`);
+    const v3 = await ct({ t0: 1200, t1: 1300, readFails: async () => true });
+    ok(v3.verdict === "fail", "control: no crt.sh failure recorded during the call excuses nothing");
+  }
 
   // ---- keyed requests are never re-read
   ok(isKeyedRequest(new URL("https://h.example/x?api_key=1"), {}) && isKeyedRequest(new URL("https://h.example/x?token=1"), {}), "a key-like query parameter marks the request keyed");
@@ -126,7 +144,7 @@ try {
   // ---- a bundle product's failure is read as its leg's, against the hosts the bundle declares
   {
     const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
-    const bundleBody = (leg, words, unit = "Chicago DC") => ({ error: `6 of 6 unit(s) could not be completed on the source's side (first: ${unit}, ${leg}: ${words}). Nothing was charged; retry later` });
+    const bundleBody = (leg, words, unit = "Chicago DC") => ({ error: `6 of 6 unit(s) could not be completed on the source's side (first: ${unit}, ${leg}: ${words}). Nothing was charged. Retry later.` });
     const legs = ["stub-tool", "other-tool"];
     const inner = bundleLegAnswer(503, bundleBody("stub-tool", limitedWords), legs);
     ok(inner?.leg === "stub-tool" && inner.status === 503 && inner.body.error === limitedWords, "a bundle's source-side failure names its leg and carries the leg's own message");
@@ -182,7 +200,7 @@ try {
       ok(hostsOf(slug).some((h) => h.endsWith(".open-meteo.com")), `${slug} (reads through the weather kit's helper) names an Open-Meteo host`);
     }
     // The exact answer that failed a sweep: the forecast host rate-limited the runner.
-    const real = { error: "6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, weather-thresholds: The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later). Nothing was charged; retry later" };
+    const real = { error: "6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, weather-thresholds: The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later). Nothing was charged. Retry later." };
     const realRow = { url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", host: "api.open-meteo.com", status: 429 };
     const realFor = (got) => bundleOutageVerdict({ slug: "weather-risk-brief", legs: BUNDLE_LEGS["weather-risk-brief"], status: 503, body: real, t0: 900, t1: 1100, logPath: log, readStatus: async () => got });
     rmSync(log, { force: true }); row(realRow);
@@ -192,7 +210,7 @@ try {
     const cgWords = "Market data upstream rate-limited this request - retry in about 60 seconds";
     ok(legRefusalStatus(503, { error: cgWords }) === 429 && legRefusalStatus(503, { error: limitedWords }) === 429 && legRefusalStatus(502, { error: cgWords }) === null && legRefusalStatus(503, { error: "Market data is not configured on this deployment. You were not charged." }) === null && legRefusalStatus(503, { error: "This server paces its Market data requests and has no room this moment; retry in 1 s." }) === null,
       "a market leg's rate-limit answer reads as the source's 429; its other 503s (not configured, our own pacing) do not");
-    const cgBody = { error: `4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: ${cgWords}). Nothing was charged; retry later` };
+    const cgBody = { error: `4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: ${cgWords}). Nothing was charged. Retry later.` };
     const cgRow = { url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true", host: "api.coingecko.com", status: 429 };
     const cgFor = (got, o = {}) => bundleOutageVerdict({ slug: "token-diligence", legs: BUNDLE_LEGS["token-diligence"], status: 503, body: cgBody, t0: 900, t1: 1100, logPath: log, readStatus: async () => got, ...o });
     rmSync(log, { force: true }); row(cgRow);

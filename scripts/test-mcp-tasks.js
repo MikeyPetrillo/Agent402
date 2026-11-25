@@ -139,7 +139,7 @@ mountMcp(app, CATALOG, {
   mppLoopback: stubLoopback, taskStoreDir: STORE_DIR,
   onPaidCutoff: (slug, info) => cutoffs.push({ slug, ...info }),
 });
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 

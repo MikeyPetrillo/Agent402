@@ -42,16 +42,17 @@ import { receiptHeader as tempoReceiptHeader, txFromReceiptHeader as tempoTxFrom
 import { tempo } from "mppx/server";
 import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
-import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, MultisigConfig } from "ox/tempo";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, AccountConfig } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
-import { tempoPushSender } from "./tempo-confirm.js";
+import { tempoPushSender, tempoPushTransfer } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
+import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
 import { relayPayerScreen } from "./payer-screen-rails.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
@@ -813,6 +814,45 @@ export function isTempoCredential(authorizationHeader) {
   }
 }
 
+/** Why a Tempo challenge is not one this server issued for its own payTo, or
+ *  null when it is: a tempo/charge challenge whose id HMAC-verifies against
+ *  MPP_SECRET_KEY, in our realm, unexpired, naming a currency we offer, our
+ *  Tempo payTo as recipient, and Tempo mainnet. The gate's binding check and
+ *  the region block's push reader share it. Pure, never throws. */
+export function tempoChallengeNotOurs(ch, { secretKey, realm, now = Date.now() } = {}) {
+  if (!ch || ch.method !== "tempo" || (ch.intent || "charge") !== "charge") return "not a tempo/charge challenge";
+  if (!secretKey) return "server has no MPP_SECRET_KEY - cannot verify the challenge binding";
+  let verified = false;
+  try { verified = Challenge.verify(ch, { secretKey }); } catch { verified = false; }
+  if (!verified) return "challenge id does not HMAC-verify - not minted by this server";
+  if (realm && ch.realm !== realm) return `challenge realm ${JSON.stringify(ch.realm)} is not ours`;
+  const exp = Date.parse(ch.expires);
+  if (!Number.isFinite(exp) || exp <= now) return "challenge expired";
+  const r = ch.request || {};
+  const currencies = envCurrencies().map((c) => c.toLowerCase());
+  if (!currencies.includes(String(r.currency || "").toLowerCase())) return "challenge currency is not one this server offers";
+  if (!envRecipient() || String(r.recipient || "").toLowerCase() !== String(envRecipient()).toLowerCase()) return "challenge recipient is not this server's payTo";
+  const chainId = Number(r.methodDetails?.chainId ?? r.chainId);
+  if (chainId !== TEMPO_MAINNET_CHAIN_ID) return `challenge chainId ${chainId} is not Tempo mainnet`;
+  return null;
+}
+
+/** The transfer a PUSH credential names, only when it paid THIS server: the
+ *  challenge is one we issued (tempoChallengeNotOurs), and the chain shows a
+ *  TransferWithMemo to our Tempo payTo, in a currency we offer, bound to that
+ *  challenge. Returns { from, value, currency } with the on-chain value (base
+ *  units, a string), or null on anything else. Never throws. */
+export async function ourTempoPushTransfer(authorizationHeader, { secretKey, realm, now = Date.now(), read = tempoPushTransfer, ...readOpts } = {}) {
+  try {
+    const ch = Credential.deserialize(authorizationHeader)?.challenge;
+    if (tempoChallengeNotOurs(ch, { secretKey, realm, now })) return null;
+    const t = await read(authorizationHeader, { ...readOpts, recipient: envRecipient(), currencies: envCurrencies() });
+    return t && typeof t.from === "string" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
 /** INBOUND BINDING - the check mppx's own docs say the host must perform
  *  ("validateCredential does not prove that the challenge was issued by a
  *  particular server; hosts that issue challenges must verify that binding
@@ -844,20 +884,10 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   let credential;
   try { credential = Credential.deserialize(authorizationHeader); } catch { return bad("credential does not deserialize"); }
   const ch = credential?.challenge;
-  if (!ch || ch.method !== "tempo" || (ch.intent || "charge") !== "charge") return bad("not a tempo/charge challenge");
-  if (!secretKey) return bad("server has no MPP_SECRET_KEY - cannot verify the challenge binding");
-  let verified = false;
-  try { verified = Challenge.verify(ch, { secretKey }); } catch { verified = false; }
-  if (!verified) return bad("challenge id does not HMAC-verify - not minted by this server");
-  if (realm && ch.realm !== realm) return bad(`challenge realm ${JSON.stringify(ch.realm)} is not ours`);
+  const notOurs = tempoChallengeNotOurs(ch, { secretKey, realm, now });
+  if (notOurs) return bad(notOurs);
   const exp = Date.parse(ch.expires);
-  if (!Number.isFinite(exp) || exp <= now) return bad("challenge expired");
   const r = ch.request || {};
-  const currencies = envCurrencies().map((c) => c.toLowerCase());
-  if (!currencies.includes(String(r.currency || "").toLowerCase())) return bad("challenge currency is not one this server offers");
-  if (String(r.recipient || "").toLowerCase() !== String(envRecipient()).toLowerCase()) return bad("challenge recipient is not this server's payTo");
-  const chainId = Number(r.methodDetails?.chainId ?? r.chainId);
-  if (chainId !== TEMPO_MAINNET_CHAIN_ID) return bad(`challenge chainId ${chainId} is not Tempo mainnet`);
   const item = typeof priceFor === "function" ? priceFor(method, path, req) : null;
   const priceUsd = Number(item?.priceUsd);
   if (!(priceUsd > 0)) return badRoute("route has no price - a tempo credential buys nothing here");
@@ -963,6 +993,10 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
 const PRIMITIVE_ENVELOPES = new Set(["secp256k1", "p256", "webAuthn"]);
+// Tempo's multisig: a configurable account envelope (TIP-1107, wire type 0x05).
+// The ox decoder names it "configurable"; "multisig" is the pre-rename name,
+// kept so a decoder that still uses it is read the same way.
+const MULTISIG_ENVELOPES = new Set(["configurable", "multisig"]);
 
 /** Does a key authorization carried inline by a keychain transaction prove
  *  that `account` authorized `accessKey`? It must authorize exactly that key,
@@ -987,18 +1021,23 @@ function inlineAuthorizationProves(ka, { account, accessKey, keyType, now }) {
   }
 }
 
-/** Do the owner approvals of a multisig envelope verify against the config
- *  it carries? Each must be a primitive signature over the multisig digest of
- *  `signPayload` (MultisigConfig.getSignPayload) by a distinct owner of that
- *  config, and their weights together must reach its threshold. Returns the
- *  config's commitment (lowercased) when they do, else null. Offline; never
- *  throws. It does not prove the config is the account's own on chain. */
+/** Do the owner approvals of a configurable account envelope (Tempo's
+ *  multisig, TIP-1107, wire type 0x05) verify against the config it carries?
+ *  Each must be a primitive signature over the account's approval digest of
+ *  `signPayload` (AccountConfig.getSignPayload, domain
+ *  "tempo:configurable-account:signature", the one the Tempo node checks) by
+ *  a distinct owner of that config, and their weights together must reach its
+ *  threshold. An approval made under the pre-release "tempo:multisig:*"
+ *  domain recovers to no owner here and is refused, as the node refuses it.
+ *  Returns the config's commitment (lowercased) when they verify, else null.
+ *  Offline; never throws. It does not prove the config is the account's own
+ *  on chain. */
 function multisigApprovalsCommitment(sig, signPayload) {
   try {
     const cfg = sig?.config;
     if (!cfg || !Array.isArray(cfg.owners) || !Array.isArray(sig.signatures) || !lcAddress(sig.account)) return null;
     const weightOf = new Map(cfg.owners.map((o) => [lcAddress(o.owner), Number(o.weight)]));
-    const digest = MultisigConfig.getSignPayload({ account: sig.account, config: cfg, payload: signPayload });
+    const digest = AccountConfig.getSignPayload({ account: sig.account, config: cfg, payload: signPayload });
     const seen = new Set();
     let total = 0;
     for (const s of sig.signatures) {
@@ -1010,7 +1049,7 @@ function multisigApprovalsCommitment(sig, signPayload) {
       total += weightOf.get(owner);
     }
     if (!(total >= Number(cfg.threshold)) || !(Number(cfg.threshold) >= 1)) return null;
-    return String(MultisigConfig.getCommitment(cfg)).toLowerCase();
+    return String(AccountConfig.getCommitment(cfg)).toLowerCase();
   } catch {
     return null;
   }
@@ -1084,7 +1123,8 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
       const inlineAuthorization = inlineAuthorizationProves(tx.keyAuthorization, { account, accessKey, keyType: inner.type, now });
       return { ...out, keychain: { account, accessKey, inlineAuthorization }, reason: inlineAuthorization ? "access key authorized in this transaction" : "the key authorization it carries does not prove the account" };
     }
-    if (sig.type === "multisig") {
+    // A configurable account envelope (wire type 0x05).
+    if (MULTISIG_ENVELOPES.has(sig.type)) {
       if (lcAddress(sig.account) !== out.claimed) return { ...out, reason: "the multisig account is not the named sender" };
       const commitment = multisigApprovalsCommitment(sig, signPayload);
       // Unproven whatever the approvals say: they are checked only against
@@ -1395,10 +1435,30 @@ export function tempoPaymentParties(authorizationHeader) {
         if (sig) {
           const signPayload = TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx));
           if (PRIMITIVE_ENVELOPES.has(sig.type)) add(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
-          if (sig.type === "keychain" && sig.inner && PRIMITIVE_ENVELOPES.has(sig.inner.type)) {
+          // Every owner whose approval of a configurable account envelope
+          // recovers under the account's digest of `payload` is screened.
+          const owners = (env, payload) => {
+            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return 0;
+            let digest;
+            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return 0; }
+            let n = 0;
+            for (const s of env.signatures) {
+              if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) continue;
+              try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); n++; } catch { /* nothing to add */ }
+            }
+            return n;
+          };
+          if (sig.type === "keychain" && sig.inner) {
             const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
-            add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+            if (PRIMITIVE_ENVELOPES.has(sig.inner.type)) add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+            // A configurable account acting as an access key (TIP-1111) names
+            // its own account inside the keychain envelope, and its owners'
+            // approvals sign the access key's payload.
+            if (MULTISIG_ENVELOPES.has(sig.inner.type)) { add(sig.inner.account); owners(sig.inner, keyPayload); }
           }
+          // The account a configurable envelope acts for is screened once an
+          // owner's approval recovers (as before the records redesign).
+          if (owners(sig, signPayload) && sig.account) add(sig.account);
         }
       } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
       if (tx?.feePayerSignature && tx.from) {
@@ -1444,6 +1504,32 @@ export function tempoPayerAddresses(authorizationHeader) {
   return [...out];
 }
 
+/**
+ * What a Tempo screen refusal records (src/sanctions-events.js). A row names
+ * an address only once the payment is verified: the sender the relay or the
+ * chain settled on (`settled`, read after mppx validated the credential), and
+ * only when that sender is listed (for the funding check: when it is the
+ * funded payer, `only`). Every refusal before validation, and one whose listed
+ * address is not the settled sender (a source, keychain account, configurable
+ * account, call target or calldata word the credential states), is counted in
+ * the hour's address-free aggregate. Never throws; never changes the refusal.
+ */
+function recordTempoRefusal(settled, phase, detailOf, { only = null, funded = false } = {}) {
+  try {
+    const senders = [...new Set((Array.isArray(settled) ? settled : []).map(lcAddress).filter(Boolean))];
+    let address = null;
+    if (senders.length) {
+      if (funded) address = only && senders.includes(only) ? only : null;
+      else { const w = screenAddresses(senders); address = w && w.ok === false && w.reason === "listed" ? w.address : null; }
+    }
+    if (address) recordSanctionsEvent({ kind: "screen-hit", address, rail: "tempo", detail: detailOf(address) }).catch(() => {});
+    else recordSanctionsAggregate({ kind: "unproven-refusal", reason: senders.length ? "not-the-payer" : "before-verify", rail: "tempo" }).catch(() => {});
+  } catch { /* never changes the refusal */ }
+}
+
+/** Tests: the recorder itself (settled senders, phase, detail, options). */
+export const __recordTempoRefusalForTests = (...a) => recordTempoRefusal(...a);
+
 /** Direct mode's payment-party screen. null when every party passes, else the
  *  refusal result validate/broadcast return (screen-rejected or
  *  screen-unavailable). The address in `error` is masked. */
@@ -1452,6 +1538,7 @@ function screenTempoParties(authorizationHeader, phase, extra = []) {
   const v = screenAddresses(parties);
   if (v.ok) return null;
   if (v.reason === "listed") {
+    recordTempoRefusal(extra, phase, (w) => `Tempo payment party, ${phase}`);
     return { ok: false, cls: "screen-rejected", error: `screen ${phase}: party ${maskOne(v.address)} is on the OFAC SDN list (${parties.length} parties screened)`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
   }
   return { ok: false, cls: "screen-unavailable", error: `screen ${phase}: no list loaded (status ${sanctionsScreenStatus()})`, reason: "payment-party screening unavailable", requestId: null, relayMessage: null };
@@ -1466,6 +1553,8 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
   let v;
   try { v = await screenFunding(payers); } catch { v = { ok: true }; }
   if (v.ok) return null;
+  // Funded by a listed address: recorded only for the settled sender, when it is the payer read.
+  recordTempoRefusal(extra, phase, () => `Tempo payer funded by a listed address${v.funder ? ` ${v.funder}` : ""}, ${phase}`, { only: lcAddress(v.payer), funded: true });
   const amount = Number.isFinite(v.listedUsd) ? ` $${v.listedUsd.toFixed(6)} in ${v.count} transfer(s), ${(v.share * 100).toFixed(2)}% of inflows read` : "";
   return { ok: false, cls: "screen-rejected", error: `screen ${phase}: funded by a listed address (payer ${maskOne(v.payer)}, funder ${v.funder ? maskOne(v.funder) : "cached verdict"}${amount})`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
 }
@@ -1499,7 +1588,7 @@ export async function validateTempoCredential(authorizationHeader) {
   } else {
     // Relay mode: the payer addresses only (src/payer-screen-rails.js); no list loaded serves unscreened.
     const refused = relayPayerScreen(tempoPayerAddresses(authorizationHeader), "before validate");
-    if (refused) return refused;
+    if (refused) { recordTempoRefusal([], "before validate", () => ""); return refused; }
   }
   try {
     const [validation] = await withRelayTrace(() => Method.validateCredential((sponsored && sponsorMethod()) || tempoMethod(), authorizationHeader));
@@ -1512,8 +1601,9 @@ export async function validateTempoCredential(authorizationHeader) {
       const refused = screenTempoParties(authorizationHeader, "after validate", settledSenders) || await screenTempoFunding(authorizationHeader, "after validate", settledSenders);
       if (refused) return refused;
     } else {
-      const refused = relayPayerScreen([validation?.details?.sender, validation?.receipt?.from, validation?.payer], "after validate");
-      if (refused) return refused;
+      const settled = [validation?.details?.sender, validation?.receipt?.from, validation?.payer];
+      const refused = relayPayerScreen(settled, "after validate");
+      if (refused) { recordTempoRefusal(settled, "after validate", () => "Tempo payer (relay mode), after validate"); return refused; }
     }
     return { ok: true, validation };
   } catch (e) {

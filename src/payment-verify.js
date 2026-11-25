@@ -21,7 +21,9 @@
 // refund costs a delay and is visible in the ledger, while paying an unreal
 // one costs money and is invisible.
 
-export const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || "https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com").split(",").map((x) => x.trim()).filter(Boolean);
+// Solana reads: the keyed lane when ALCHEMY_API_KEY is set, then PublicNode
+// (endpoints whose terms permit commercial use, src/rpc-terms.js).
+export const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || defaultSolanaRpcs().join(",")).split(",").map((x) => x.trim()).filter(Boolean);
 export const ALGORAND_INDEXERS = (process.env.REFUND_ALGORAND_INDEXERS || "https://mainnet-idx.4160.nodely.dev").split(",").map((x) => x.trim()).filter(Boolean);
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -33,6 +35,7 @@ export const TEMPO_NETWORK = "eip155:4217";
 /** Base USDC: the asset a referral-rail payment moves. */
 export const REFERRAL_USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
+import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { isGatewayWire } from "./gateway-wire.js";
 import { proveReceipt } from "./referral-proof.js";
 import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";

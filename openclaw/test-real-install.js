@@ -5,10 +5,10 @@
 //   npm pack + npm i -g <tgz>    (the bin SYMLINK path - 0.1.0/0.1.1 were no-ops through it)
 //   openclaw plugins install <tgz>   (the documented install; 0.1.0-0.2.0 were REFUSED here:
 //                                    "plugin manifest requires configSchema")
-//   openclaw plugins install agent402-openclaw  (the PUBLISHED package by name, as a user
+//   openclaw plugins install agent402-model-provider  (the PUBLISHED package by name, as a user
 //                                    runs it: npm, or ClawHub from 2026.11.5, plus
-//                                    npm:agent402-openclaw there; same verdict as the tgz)
-//   agent402-openclaw setup --write  (through the symlink, against a stub gateway)
+//                                    npm:agent402-model-provider there; same verdict as the tgz)
+//   agent402-model-provider setup --write  (through the symlink, against a stub gateway)
 //   openclaw models list / status    (the provider and primary OpenClaw actually sees)
 //   openclaw gateway run             (the plugin service must start the loopback proxy)
 //   openclaw agent -m ...            (ONE agent turn: OpenClaw -> proxy -> stub, paid with the key)
@@ -160,8 +160,8 @@ try {
   const tgz = join(work, packed.stdout.trim().split("\n").pop());
   ok(packed.status === 0 && existsSync(tgz), `npm pack -> ${tgz.split("/").pop()}`);
   const g = await sh("npm", ["i", "-g", tgz, "--no-audit", "--no-fund", "--prefix", prefix]);
-  const bin = join(prefix, "bin", "agent402-openclaw");
-  ok(g.status === 0 && existsSync(bin), "npm i -g <tgz> links bin/agent402-openclaw (a symlink)");
+  const bin = join(prefix, "bin", "agent402-model-provider");
+  ok(g.status === 0 && existsSync(bin), "npm i -g <tgz> links bin/agent402-model-provider (a symlink)");
   ok(realpathSync(bin) !== bin, "the bin IS a symlink - the entry guard must survive it (0.1.0/0.1.1 did not)");
 
   // 3. The documented install: openclaw plugins install.
@@ -205,7 +205,7 @@ try {
 
   // 3b. What a user actually runs: the PUBLISHED package from the npm registry
   // by name, into a separate state dir (the archive install above is this
-  // commit's code; this one is what `openclaw plugins install agent402-openclaw`
+  // commit's code; this one is what `openclaw plugins install agent402-model-provider`
   // gives a user today). It must load and earn the same verdict as the archive
   // install: the provenance notice is the host's word on every outside plugin,
   // not an artifact of installing from a tgz. A TTY user answers two y/N
@@ -214,7 +214,18 @@ try {
   // from 2026.11.5 (the same release is published to both). On a ClawHub-default
   // host the npm channel is proven too, with the explicit `npm:` prefix.
   const bareSource = /ClawHub by default/.test(installHelp.out) ? "clawhub" : "npm";
-  const registryInstalls = [["agent402-openclaw", bareSource], ...(bareSource === "npm" ? [] : [["npm:agent402-openclaw", "npm"]])];
+  // The name a user installs today: this package's name once a real release of
+  // it is on npm, and until then the earlier name it was published under
+  // (scripts/lib/package-renames.js), whose release is the full plugin. A
+  // claim placeholder (a "-claim." prerelease) is not a release.
+  const { PACKAGE_RENAMES } = await import("../scripts/lib/package-renames.js");
+  const ownName = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).name;
+  const earlier = PACKAGE_RENAMES.find((r) => r.registry === "npm" && r.name === ownName)?.old || null;
+  const latest = await sh("npm", ["view", ownName, "version"], { env });
+  const released = latest.status === 0 && /^\d+\.\d+\.\d+$/.test(latest.out.trim());
+  const pub = released || !earlier ? ownName : earlier;
+  if (pub !== ownName) console.log(`note - ${ownName} has no release on npm yet; the registry installs use ${pub}, the name its current release is under`);
+  const registryInstalls = [[pub, bareSource], ...(bareSource === "npm" ? [] : [[`npm:${pub}`, "npm"]])];
   for (const [spec, source] of registryInstalls) {
     const regHome = join(work, `home-registry-${source}`);
     await sh("mkdir", ["-p", regHome]);
@@ -238,7 +249,7 @@ try {
   if (!primary) console.log(`setup stdout: ${setup.stdout.trim()}\nsetup stderr: ${setup.stderr.trim()}\nconfig: ${JSON.stringify(cfg).slice(0, 400)}`);
   // The config key is the MANIFEST id, not the provider id - OpenClaw 2026.8.1
   // requires the manifest id to equal the npm package name, so it is
-  // "agent402-openclaw" while the provider a user types stays "agent402".
+  // "agent402-model-provider" while the provider a user types stays "agent402".
   // Asserting the old key here is how the 2026-08-26 --port defect hid: setup
   // wrote one key and the service read another, and nothing errored.
   const entry = cfg.plugins?.entries?.["agent402"];
@@ -268,7 +279,7 @@ try {
     await new Promise((r) => setTimeout(r, 1000));
   }
   ok(proxyUp, `gateway boot started the plugin's loopback proxy on :${proxyPort} (${proxyUp ? "up" : gwLog.slice(-600)})`);
-  ok(/\[agent402-openclaw\] proxy on http:\/\/127\.0\.0\.1:\d+\/v1/.test(gwLog), "gateway log carries the plugin's proxy line");
+  ok(/\[agent402-model-provider\] proxy on http:\/\/127\.0\.0\.1:\d+\/v1/.test(gwLog), "gateway log carries the plugin's proxy line");
   ok(new RegExp(`agent model: ${primary.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`).test(gwLog), "gateway resolved the agent model to our primary");
   while (Date.now() < deadline && !/\[gateway\].*ready/.test(gwLog)) await new Promise((r) => setTimeout(r, 500));
 

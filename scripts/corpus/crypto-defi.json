@@ -925,23 +925,27 @@
     "populated": [
      "token",
      "authorities",
-     "score"
-    ]
+     "notice"
+    ],
+    "minCount": {
+     "flags": 0,
+     "unknown": 0
+    }
    },
    "requires": "SOLANA_RPC_URL"
   },
   {
    "slug": "sol-token-safety",
    "requires": "RUGCHECK_TOOLS",
-   "name": "USDC safety",
+   "name": "USDC risk facts: live authorities are flags",
    "input": {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
    },
    "expect": {
     "populated": [
-     "score",
-     "riskLevel",
-     "token"
+     "flags",
+     "token",
+     "notice"
     ]
    }
   },
@@ -1150,7 +1154,7 @@
     },
     "gt": {
      "venues": 3,
-     "openInterest.totalUsd": 1000000000
+     "highest[0].percentile": 0
     },
     "maxCount": {
      "highest": 3,
@@ -1266,7 +1270,7 @@
     },
     "gt": {
      "venuesCompared": 5,
-     "medianPriceUsd": 1000
+     "venues[0].pricePercentile": 0
     },
     "maxCount": {
      "venues": 5
@@ -1310,7 +1314,7 @@
     "gt": {
      "screened": 100,
      "matched": 3,
-     "categoryTotals.marketCapUsd": 1000000000
+     "categoryTotals.turnoverPct": 0
     },
     "maxCount": {
      "tokens": 4
@@ -1318,7 +1322,7 @@
     "populated": [
      "tokens[0].id",
      "tokens[0].capSharePct",
-     "tokens[0].athDrawdownPct",
+     "tokens[0].athDrawdownBand",
      "credit"
     ]
    },
@@ -1381,7 +1385,7 @@
     },
     "gt": {
      "poolsRead": 10,
-     "totals.volume24hUsd": 1000000,
+     "totals.turnover": 0,
      "totals.dexes": 1
     },
     "maxCount": {
@@ -1411,7 +1415,7 @@
      "pool": "0xd0b53d9277642d899df5c87a3966a349a798f224"
     },
     "gt": {
-     "liquidityUsd": 100000,
+     "healthScore.score": 0,
      "ageDays": 100,
      "recentTrades.count": 10
     },
@@ -1419,7 +1423,7 @@
      "name",
      "dex",
      "priceImpactEstimate.per10kUsdPct",
-     "activity24h.trades",
+     "activity24h.tier",
      "credit"
     ]
    },

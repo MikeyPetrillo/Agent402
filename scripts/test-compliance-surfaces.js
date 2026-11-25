@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { textNamesUrl } from "./lib/url-host.js";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -39,6 +40,9 @@ const privacy = privacyPage(BASE), privacyText = strip(privacy);
 
 // 1. Age
 ok(/at least 18/.test(termsText) && /not directed at children/.test(termsText) && /under 13/.test(termsText), "terms: 18 and older, not directed at children, nothing knowingly collected under 13");
+ok(/Google Analytics keeps its event and user data for 2 months/.test(privacyText) && /PostHog\) are kept for one year/.test(privacyText) && !/14 months/.test(privacyText), "privacy: the analytics retention periods set in each tool");
+ok(/IP address the request came from/.test(privacyText) && /sanctioned country or region code/.test(privacyText) && /kept privately for ten years/.test(privacyText), "privacy: every field the sanctions events store keeps, and for how long");
+ok(/consent a card checkout records/.test(privacyText) && /No follow-up emails/.test(privacyText), "privacy: checkout consent records and the follow-up opt-out");
 ok(/18 and older/.test(privacyText) && /under 13/.test(privacyText) && /we will delete it/.test(privacyText), "privacy: children statement says how to have a child's data deleted");
 
 // 2. Externally loaded fonts and stylesheets
@@ -81,7 +85,7 @@ const ph = island ? JSON.parse(island[1].replace(/\\u003c/g, "<")) : { cfg: {} }
 ok(ph.cfg.autocapture === false, "PostHog: autocapture off (no clicks or inputs captured)");
 ok(ph.cfg.disable_session_recording === true, "PostHog: session recording off");
 ok(!ph.cfg.enable_heatmaps && !ph.cfg.capture_dead_clicks, "PostHog: heatmaps and dead-click capture not turned on");
-ok(ph.cfg.persistence === "sessionStorage", "PostHog: no cookie (session storage only)");
+ok(ph.cfg.persistence === "memory", "PostHog: no cookie and no browser storage (memory only)");
 ok(/no session replay/i.test(privacyText) && /Google Analytics/.test(privacyText), "privacy names the page counter, its lack of replay, and Google Analytics");
 
 // 4. Recurring email carries its stop path
@@ -159,8 +163,92 @@ ok(/counter-notice/i.test(cr) && /10 to 14 business days/.test(cr) && /repeat in
 ok(/the person who sent the notice or that person's agent/.test(cr.replace(/&#39;/g, "'")), "terms: counter-notice consent to service from the notifier or that person's agent");
 ok(/take reasonable steps to notify the person who provided it, where we can identify them/.test(cr) && !/promptly and tell the person/.test(cr), "terms: notice to the provider is reasonable steps, not a promise");
 ok(/shared answer page deletes it, so it cannot be restored/.test(cr) && /for material we can restore, restore it/.test(cr), "terms: no restoration promised for a deleted shared answer");
-const subsTerms = termsText.slice(termsText.indexOf("Subscriptions (monitors)"));
+const subsTerms = termsText.slice(termsText.indexOf("Monitors renew automatically"));
 ok(/POST request to the cancel link/.test(subsTerms) && /revoking the authorization/.test(subsTerms) && /stays active until the end of the period you already paid for and is not renewed/.test(subsTerms) && /no partial refund for the remaining days/.test(subsTerms), "terms: each rail's cancel path and what canceling does");
+ok(/renews automatically at the price shown when you subscribed until you cancel/.test(subsTerms) && /Cancel anytime online/.test(subsTerms) && /price of an active subscription does not change/.test(subsTerms) && !/email you the new price/.test(subsTerms), "terms: automatic renewal, its price, online cancel; no price-change notice the code has no path for");
+ok(/separate, required consent to the automatic renewal/.test(subsTerms) && /first full charge is the price shown when you subscribed, made when that month ends/.test(subsTerms) && !/we email you before/.test(subsTerms), "terms: the renewal consent and the free month's first charge, with no email promise");
+ok(/We do not serve requests from Cuba, Iran and North Korea or from the Crimea, Sevastopol, Donetsk and Luhansk regions of Ukraine \(where the request carries region data\), which are under comprehensive U\.S\. sanctions\. As a business choice we also do not serve requests from Syria\./.test(termsText) && !/Syria[^.]*comprehensive/.test(termsText), "terms: the refused regions are named, Syria apart from the sanctioned ones");
+ok(/refused before its payment is verified or settled/.test(termsText) && !/before any payment is read/.test(termsText), "terms: the refusal's timing is worded as the code runs it");
+ok(/No part of a run's budget is kept as a credit/.test(termsText) && /A decision paid with a wallet, when its answer includes a plan, comes with an execution credit worth its fee, usable only toward running that decision's plan[^.]*until the expiry its answer states; it has no cash value/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no run budget as credit; the decision-fee credit is scoped (a plan, its fee as configured, execute only, expiry, no cash value)");
+ok(/does not apply to\s+a claim by a consumer/.test(termsText) && !/permanently barred/.test(termsText), "terms: the one-year limit yields to consumer law");
+ok(/The token tools report facts read from the chain and named public sources; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions\./.test(termsText.replace(/&#39;|&rsquo;/g, "'")), "terms: the token tools are facts, not an assessment");
+ok(/required choice, to request that we start at once/.test(termsText), "terms: the withdrawal sentence names the checkout choice");
+{
+  const disputes = termsText.slice(termsText.indexOf("Governing law"));
+  ok(/give up the right to a jury trial for any dispute that is arbitrated/.test(disputes) && !/waive the right to a jury trial/.test(disputes) && /Consumer Arbitration Rules/.test(disputes), "terms: the jury waiver covers arbitrated disputes only, under the AAA consumer rules");
+  ok(/A change applies to\s+calls and purchases made on or after that date, and never to a dispute that arose before it/.test(termsText) && /An active subscription keeps the price it was bought at/.test(termsText) && !/30 days before|we (?:also )?email[^.]*change|notify you/i.test(termsText), "terms: a change applies from its date, never to an earlier dispute; no notice promise");
+  ok(/DOES NOT REDUCE ANY REFUND OR REPAYMENT THESE TERMS SAY WE OWE YOU/.test(termsText), "terms: the liability cap never reduces a refund we owe");
+  ok(/may be blocked permanently/.test(termsText) && !/report as required by law/.test(termsText), "terms: no permanent-block or reporting promise the code does not keep");
+  ok(/Export Administration Regulations/.test(termsText) && /comprehensive U\.S\. sanctions/.test(termsText), "terms: export controls and sanctioned regions");
+  ok(/keep the attribution and license notice with it/.test(termsText), "terms: open data licenses travel with the data");
+  ok(/right of withdrawal/.test(termsText) && /id="withdrawal"/.test(terms) && /id="refunds"/.test(terms) && /id="arbitration"/.test(terms) && /href="\/accessibility"/.test(terms), "terms: the withdrawal clause and the anchors checkout links to; the accessibility statement is linked");
+}
+// No notice or email promise on a legal page (owner rule): a sentence on
+// /terms, /privacy or /dpa that speaks of notice, notifying or email is
+// either a legally required duty, a notice someone else gives, or an action
+// on the reader's own request, each listed here with why; anything else fails.
+{
+  const { dpaPage } = await import("../src/dpa.js");
+  const legalText = (h) => stripTags(stripScripts(h)).replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  const NOTICE_RE = /\b\d+\s+days?'?\s+(?:of\s+)?notice\b|\bdays'?\s+notice\b|\bby e-?mail\b|\bin writing\b|\bnotif(?:y|ies|ied|ying|ication)\b|\bnotices?\b|\bwe(?:'ll| will)? (?:e-?mail|tell|inform|alert|write to) you\b/i;
+  const ALLOWED = [
+    [/keep the attribution and license notice with it/, "a data license's own notice, the reader's duty"],
+    [/with or without notice/, "disclaims notice"],
+    [/how to have a service removed - by email or by disallowing/, "the site owner writes to us"],
+    [/a notice may concern that content too/, "a copyright notice someone sends us"],
+    [/send a notice to our designated agent/, "the DMCA notice a complainant sends (17 U.S.C. 512(c)(3))"],
+    [/take reasonable steps to notify the person who provided it, where we can identify them/, "the DMCA duty to notify the provider (17 U.S.C. 512(g)(2)(A))"],
+    [/send a counter-notice to the same agent/, "the DMCA counter-notice a provider sends (17 U.S.C. 512(g)(3))"],
+    [/We forward the counter-notice to that person/, "the DMCA duty to forward the counter-notice (17 U.S.C. 512(g)(2)(B))"],
+    [/It starts only after you confirm by email/, "the reader confirms"],
+    [/enter your checkout email under "Already subscribed\?" on \/monitors and we email you a new link/, "an answer to the reader's own request"],
+    [/Legal notices to us go to/, "notices to us"],
+    [/follow-up emails about that purchase/, "describes processing the reader can turn off"],
+    [/from the day we confirm it by email/, "how the addendum is formed"],
+    [/We notify a personal data breach affecting your data without undue delay after becoming aware of it, to the customers we can identify and reach\./, "GDPR Art. 33(2): a processor notifies its controller without undue delay"],
+    [/we ask for it in writing at least \d+ days before the engagement/, "SCC clause 9(a) option 1: specific prior authorization, requested in writing ahead of the engagement"],
+    [/at a time we agree in writing/, "an audit's time, agreed with the customer who asks for it"],
+    [/We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+ unless you turn that notice off/, "the credits code's own sends (src/credits.js receipt, src/credits-account.js low-balance email), shown only while credit sales are on"],
+    [/We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+, and a notice when a call is refused by a daily spending limit you set \(at most once a day\); both can be turned off/, "privacy: the same sends plus the spend-limit email (src/credits-account.js buildSpendLimitEmail), shown only while credit sales are on"],
+    [/signed in at \/credits\/account with your email: a link we email you, valid once for/, "a sign-in link sent on the reader's own request"],
+    [/bought and managed signed in by email at \/credits\/account/, "sign-in by email, on the reader's own request"],
+  ];
+  const offenders = [];
+  const used = new Set();
+  // Every page is read with credit sales off and on: the on branch adds its
+  // own sentences (src/terms.js, src/privacy.js).
+  const priorSales = process.env.CREDITS_SALES;
+  try {
+    for (const sales of ["off", "on"]) {
+      if (sales === "on") process.env.CREDITS_SALES = "on"; else delete process.env.CREDITS_SALES;
+      for (const [page, h] of [["/terms", termsPage(BASE)], ["/privacy", privacyPage(BASE)], ["/dpa", dpaPage(BASE)]]) {
+        for (const sentence of legalText(h).split(/(?<=[.!?])\s+(?=[A-Z("])/)) {
+          if (!NOTICE_RE.test(sentence)) continue;
+          const hit = ALLOWED.find(([re]) => re.test(sentence));
+          if (hit) used.add(hit[0].source); else offenders.push(`${page} (credit sales ${sales}): ${sentence.slice(0, 160)}`);
+        }
+      }
+    }
+  } finally { if (priorSales === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = priorSales; }
+  ok(offenders.length === 0, `legal pages (credit sales off and on): no notice or email promise outside the listed duties (${offenders.join(" | ") || "none"})`);
+  ok(used.has(String.raw`We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+ unless you turn that notice off`) && used.has(String.raw`we ask for it in writing at least \d+ days before the engagement`), "the credits receipt sentence and the DPA's written request are read (the on render and the in-writing pattern reach them)");
+  // The pattern sees the promises it exists for.
+  const control = ["We will give at least 30 days' notice of a change on this site and by email.", "We give 30 days notice before the service stops.", "We will notify you before a change.", "We'll email you before the first full charge.", "We post the notice on /status."];
+  ok(control.every((c) => NOTICE_RE.test(c) && !ALLOWED.some(([re]) => re.test(c))), "control: the pattern catches each phrasing of a notice promise");
+}
+// The region block's sentences follow its switch on both pages, by content.
+{
+  const geoPrivacy = /we read only the country and the region, in memory, to refuse requests from the countries and regions we do not serve \(see the terms\) and, for the analytics choice above, the country, and we do not store or log any of them, with one exception: a request refused from a region under U\.S\. sanctions that carried a payment keeps the country or region code as the reason it was refused, in an hourly count, or, when it named a transfer already sent whose sender the chain shows, with that sender \(see Retention\)/;
+  ok(geoPrivacy.test(privacyText) && /or refused because it came from a region under U\.S\. sanctions/.test(privacyText), "privacy: the location sentence and the retention clause, as worded, while the block is on");
+  ok(/a transfer that a payment credential says was already sent is not claimed for it/.test(termsText), "terms: a push transfer from a refused region is not claimed");
+  const prior = process.env.SANCTIONS_GEO_BLOCK;
+  process.env.SANCTIONS_GEO_BLOCK = "off";
+  try {
+    const t = strip(termsPage(BASE)), p = strip(privacyPage(BASE));
+    ok(!/We do not serve requests from/.test(t) && !/comprehensive U\.S\. sanctions/.test(t) && !/refused before its payment is verified or settled/.test(t), "terms (block off): no region sentence");
+    ok(!/countries and regions we do not serve/.test(p) && !/region under U\.S\. sanctions/.test(p) && /we read only the country, in memory, for the analytics choice above, and we do not store or log it/.test(p), "privacy (block off): no region sentence; the country is read only for the analytics choice");
+  } finally { if (prior === undefined) delete process.env.SANCTIONS_GEO_BLOCK; else process.env.SANCTIONS_GEO_BLOCK = prior; }
+}
 ok(/under penalty of perjury/.test(cr) && /physical or electronic signature/.test(cr), "terms: the notice elements");
 delete process.env.COMPANY_POSTAL_ADDRESS;
 const termsNoAddr = strip(termsPage(BASE));

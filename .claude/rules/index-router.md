@@ -64,7 +64,7 @@ Loaded when an index, discovery, router or buyer file is read.
   network probes; `probePublicUrl`'s default), `Agent402-Router` (the pre-payment probe, the
   model-list read and the purchase, with `X-Agent402-Via: router`), `Agent402-Fetch` (a tool
   fetching a caller's URL; `safeFetch`'s default, or `NETWORK_KIT_USER_AGENT` in network-kit2 when
-  set) and `Agent402Bot` (the site-crawl tool). The older `Agent402/1.0` token is left only in the
+  set), `Agent402Bot` (the site-crawl tool) and `Agent402SuggestBot` (search-suggest's one source). The older `Agent402/1.0` token is left only in the
   kits that call one data provider's fixed API, a list `scripts/test-user-agents.js` pins. Every
   robots.txt group naming one of our tokens is combined (RFC 9309; `robotsAllows` in kit.js).
 - **Seller load:** `src/seller-load.js`. Process memory decides every request; the shared limits
@@ -309,3 +309,6 @@ Loaded when an index, discovery, router or buyer file is read.
   https link on the seller's exact host (under its own path for a seller listed with a path) and
   dropped on a row the listing screen flags; the detail then carries `sellerDocsUrlLegend`. The index
   never fetches it, and it changes no price, quote, routing or payment. `?seller=` is its only surface.
+
+## Algorand seller catalog
+- `ALGORAND_SELLERS_WARM` (default on; `off` skips the boot warm-up), `ALGORAND_SELLERS_MAX_PAGES` (default 80, at most 500 pages a listing), `ALGORAND_SELLERS_BG_BUILD_MAX_MS` (default 10 minutes for a background build), `ALGORAND_SELLERS_BG_READ_TIMEOUT_MS` (default 60 s a read), `ALGORAND_SELLERS_TTL_MS` (default 30 minutes). The timer rebuilds only when the router read the catalog since the last build started; each build logs the pages it read.

@@ -1,6 +1,10 @@
-# agent402-anthropic-tools
+# agent402-messages-tools
 
-Drop-in **Anthropic tool-use tools** for [Agent402](https://agent402.tools) - the open-source, self-hostable x402 + MCP server with 500+ pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+[Agent402](https://agent402.tools) tools as **tool-use definitions**, for use with the Claude Messages API. Agent402 is the open-source, self-hostable x402 + MCP server with 500+ pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+
+Works with the Claude Messages API. Agent402 is not affiliated with or endorsed by Anthropic.
+
+Formerly `agent402-anthropic-tools`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
@@ -14,7 +18,7 @@ Drop-in **Anthropic tool-use tools** for [Agent402](https://agent402.tools) - th
 ## Install
 
 ```bash
-npm install @anthropic-ai/sdk agent402-anthropic-tools @x402/fetch @x402/core @x402/evm viem
+npm install @anthropic-ai/sdk agent402-messages-tools @x402/fetch @x402/core @x402/evm viem
 ```
 
 The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first two.
@@ -23,7 +27,7 @@ The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the fr
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-anthropic-tools";
+import { agent402Tools } from "agent402-messages-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

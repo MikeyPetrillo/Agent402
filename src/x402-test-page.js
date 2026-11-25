@@ -13,6 +13,7 @@ import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { REJECTION_REASONS } from "./payment-reject.js";
 import { COMPACT_REQUEST_EXAMPLE, paymentRequiredCompactEnabled } from "./payment-required-compact.js";
+import { termsFields } from "./payment-required-body.js";
 
 import { repoUrl } from "./repo-link.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
@@ -25,6 +26,8 @@ const PROBE_PRICE = "$0.001";
 
 export function x402TestPage(baseUrl) {
   const canonical = `${baseUrl}/x402-test`;
+  // The terms fields every mirrored 402 body carries (src/payment-required-body.js).
+  const sampleTerms = termsFields(`${baseUrl}/terms`);
   const title = "Test your x402 client";
   const description =
     "Point any x402 or MPP client at a real paid endpoint and see exactly why its payment was refused. Free, since a refused x402 payment never settles.";
@@ -60,7 +63,7 @@ export function x402TestPage(baseUrl) {
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
   <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">2. Pay it, and read the refusal</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Retry with your client's <code>PAYMENT-SIGNATURE</code> header. If it is wrong, the 402 body carries a <code>reason</code>, a <code>hint</code> in words, and a <code>retry</code> telling you what kind of change is needed, ahead of the same offer the header carries. The header's one-line <code>error</code> is left out of a refusal's body, so a client that reads <code>error</code> first reads the hint instead. Here is a real one, with the offer trimmed. A route that also takes proof-of-work puts an <code>altPayment</code> pointer first.${paymentRequiredCompactEnabled() ? ` <code>paymentRequiredHeader</code> gives the header's size and how to ask for a compact one (<code>${esc(COMPACT_REQUEST_EXAMPLE)}</code>) when a client's parser caps a header line near 8 KB.` : ""}</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Retry with your client's <code>PAYMENT-SIGNATURE</code> header. If it is wrong, the 402 body carries a <code>reason</code>, a <code>hint</code> in words, and a <code>retry</code> telling you what kind of change is needed, ahead of the same offer the header carries. The header's one-line <code>error</code> is left out of a refusal's body, so a client that reads <code>error</code> first reads the hint instead. Here is a real one, with the offer trimmed. A route that also takes proof-of-work puts an <code>altPayment</code> pointer first. <code>terms</code> names the terms a payment is made under.${paymentRequiredCompactEnabled() ? ` <code>paymentRequiredHeader</code> gives the header's size and how to ask for a compact one (<code>${esc(COMPACT_REQUEST_EXAMPLE)}</code>) when a client's parser caps a header line near 8 KB.` : ""}</p>
   ${pre(`{
   "reason": "unsupported-scheme",
   "hint": "Scheme \\"lightning\\" is not offered on this route. Offered: exact, upto.",
@@ -68,7 +71,9 @@ export function x402TestPage(baseUrl) {
   "x402Version": 2,
   "resource": { ... },
   "accepts": [ ... ],
-  "extensions": { ... }${paymentRequiredCompactEnabled() ? `,
+  "extensions": { ... },
+  "terms": ${JSON.stringify(sampleTerms.terms)},
+  "termsNote": ${JSON.stringify(sampleTerms.termsNote)}${paymentRequiredCompactEnabled() ? `,
   "paymentRequiredHeader": { ... }` : ""}
 }`)}
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Field <em>names</em> are echoed so you can compare them; values never are. A payment header is a credential.</p>

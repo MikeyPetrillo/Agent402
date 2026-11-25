@@ -55,13 +55,15 @@ t node scripts/test-server-tools.js
 t node scripts/test-algorand-router.js
 # Algorand payTo binding: every candidate is paid only at the address its proof was counted at; no address, not dispatched (offline)
 t node scripts/test-algorand-payto-proof.js
+# Algorand seller catalog after a deploy: paging to the listing total under a page cap, background build limit, boot warm-up, cold catalog answers 503 uncharged within the payment budget (offline, stubbed facilitator)
+t node scripts/test-algorand-catalog-warm.js
 # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
 t node scripts/test-solana-router.js
 # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)
-t node scripts/test-payai-solana-sweep.js
+t node scripts/test-registry-solana-sweep.js
 # Listing coverage per registry and chain from fixtures; the PayAI pass's selection, cap and preflight (offline)
 t node scripts/test-listing-coverage.js
-t node scripts/test-payai-listing-pass.js
+t node scripts/test-registry-listing-pass.js
 # The listing pass's purposeful inputs validate against each route's published input schema (booted FREE_MODE, offline)
 t node scripts/test-listing-inputs.js
 # Multipart routes publish multipart/form-data on /openapi.json
@@ -101,9 +103,11 @@ t node scripts/test-logs-cap-wording.js
 t node scripts/test-block-clock.js
 # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
 t node scripts/test-chain-block-time.js
-t node scripts/test-payai-credit-watch.js
+t node scripts/test-facilitator-credit-watch.js
 # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
 t node scripts/test-advisory-triage.js
+# The heartbeat's holiday source sponsorship read: active, not active and unreadable, the token never echoed, the workflow step wired (offline)
+t node scripts/test-holiday-sponsorship-check.js
 # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
 t node scripts/test-heartbeat-mpp-window.js
 t node scripts/test-revenue-fresh-recent.js
@@ -141,17 +145,23 @@ t node scripts/test-late-settlements.js
 t node scripts/test-pending-settle.js
 # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check,
 t node scripts/test-own-relayer.js
+# Our own Ink settler (INK_RELAYER_KEY): listed facilitators first, ours last and only after a refusal that moved nothing; minimum, payer screen, compliance finality, gas row, own key
+t node scripts/test-ink-relayer.js
 t node scripts/test-settle-compliance.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# Every eligible published slug's /ref 402 carries the catalog description and the public route's extensions.bazaar block, no pointer home, inside the challenge budget (paid boot, offline).
+t node scripts/test-referral-listing-parity.js
 # /ref split legs per proven sale: stored shape, yearly totals per recipient, one row per payment (offline)
 t node scripts/test-referral-legs.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
 t node scripts/test-aws-marketplace-gate.js
-# The AWS Marketplace listing's own surfaces: the 74 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
+# The AWS Marketplace listing's own surfaces: the 73 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
 t node scripts/test-aws-start-page.js
-# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream (offline)
+# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream and serve no outside facts (offline)
 t node scripts/test-resale-clearance.js
+# Chain RPC terms: no code default names an endpoint whose terms bar commercial use, and each settlement chain keeps its permitted lanes (offline)
+t node scripts/test-rpc-host-terms.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read
@@ -283,7 +293,7 @@ t node scripts/test-tempo-gas-sponsorship.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call
 t node scripts/test-tempo-credential-check.js
 
-# @step 4: Offline suites (27 scripts, one process each)
+# @step 4: Offline suites (28 scripts, one process each)
 # MPP leaderboard (live-offer recipients via mppx codec, one batched Tempo getLogs per chunk, grouping/ranking/priming, split-on-error + stale-keeps-previous, page badges - offline)
 t node scripts/test-mpp-leaderboard.js
 # Agent-kit tests (token-count, text-chunk, json-validate, jsonl)
@@ -304,6 +314,8 @@ t node scripts/test-cleanroom-openapi-alias.js
 t node scripts/test-reliability-claims.js
 # Four false absolutes (a claim must stay true as the service widens)
 t node scripts/test-copy-absolutes.js
+# Class guard, claims broader than the code: each registered public claim about charging, refunds, caps, receipts and limits checked against the code fact it states, and no new unscoped absolute or free paid route on a public surface (baseline only shrinks; offline)
+t node scripts/test-claim-registry.js
 # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
 t node scripts/test-resale-copy.js
 t node scripts/test-mcp-dockerfiles.js
@@ -320,6 +332,12 @@ t node scripts/test-tls-cert-lookup.js
 # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
 t node scripts/test-cache-repeat-copy.js
 t node scripts/test-legal-dates.js
+# Third-party marks: /terms clause and footer link, owner notices, chain and integration titles, EDGAR notice (offline)
+t node scripts/test-trademark-notices.js
+# The legal entity's name: one spelling in src/legal-entity.js, no other casing in any tracked text file (offline)
+t node scripts/test-legal-entity-name.js
+# The terms reach the machine surfaces: openapi info, mirrored 402 bodies, MCP initialize instructions, the /x402-test sample (offline)
+t node scripts/test-terms-links.js
 # Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
@@ -338,6 +356,8 @@ t node scripts/test-package-readme-claims.js
 t node scripts/test-meta-adapter-caps.js
 # Published packages ship TypeScript declarations: types conditions, strict nodenext consumers compile, runtime and declared exports agree, a misuse fails (offline, typescript)
 t node scripts/test-package-types.js
+# Package renames: each new name at its version, each earlier name's forwarding release exports the same names and warns once, no published name carries another party's mark, the publish job orders them (offline)
+t node scripts/test-package-renames.js
 t node scripts/test-pack-copy-retired.js
 # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
 t node scripts/test-tollbooth-cloud-retired.js
@@ -347,8 +367,14 @@ t node scripts/test-sdk-snippet-credentials.js
 t node scripts/test-plugin-manifests.js
 # Docs that state a requirement match the engines that enforce it
 t node scripts/test-doc-claims.js
-# The cheap EVM token-safety verdict (unknown is never counted as safe)
+# The cheap EVM token risk facts (no verdict; an unchecked fact is unknown)
 t node scripts/test-token-safety.js
+# Token tools state facts, never a judgment: the claim check, the withheld report, the copy guard
+t node scripts/test-token-claims.js
+# Token facts computed from chain reads, Sourcify and DEX pairs (each null path named)
+t node scripts/test-token-facts.js
+# No source whose terms bar commercial use is read, served or credited anywhere
+t node scripts/test-barred-upstreams.js
 # Index seller count is not instance-inflated (origins vs operators)
 t node scripts/test-index-inflation.js
 # Tollbooth dashboard runtime smoke (boots CLI, hits /__tollbooth + /__tollbooth/stats over HTTP)

@@ -54,9 +54,9 @@ const fail = (msg, out) => { if (out) console.log(out); console.log(`::error::${
 
 if (!version) fail("VERSION is not set");
 
-const ins = call(["package", "inspect", "agent402-openclaw", "--version", version]);
+const ins = call(["package", "inspect", "agent402-model-provider", "--version", version]);
 if (ins.code === 0) {
-  console.log(`agent402-openclaw@${version} is already on ClawHub - nothing to do`);
+  console.log(`agent402-model-provider@${version} is already on ClawHub - nothing to do`);
   process.exit(0);
 }
 if (ins.limited) fail("ClawHub inspect stayed rate limited; not publishing blind", ins.out);
@@ -71,20 +71,20 @@ const pub = call([
   "--manual-override-reason", "repository policy requires SHA-pinned actions; ClawHub's reusable OIDC workflow is tag-pinned",
   "--source-repo", env.GITHUB_REPOSITORY || "", "--source-commit", env.GITHUB_SHA || "",
   "--source-ref", env.GITHUB_REF_NAME || "", "--source-path", "openclaw",
-  "--changelog", `agent402-openclaw ${version} (see the package README and CHANGELOG at https://agent402.tools/changelog)`,
+  "--changelog", `agent402-model-provider ${version} (see the package README and CHANGELOG at https://agent402.tools/changelog)`,
 ]);
 if (pub.code === 0) {
   console.log(pub.out);
-  console.log(`published agent402-openclaw@${version} -> https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)`);
+  console.log(`published agent402-model-provider@${version} -> https://clawhub.ai/plugins/agent402-model-provider (hidden until ClawHub review completes)`);
 } else if (pub.limited) {
   fail("ClawHub publish stayed rate limited", pub.out);
 } else if (/already exists/.test(pub.out)) {
   // A version still under review is hidden from inspect, so a re-run reaches
   // publish and is refused "already exists": the no-op inspect means.
-  console.log(`agent402-openclaw@${version} is already on ClawHub (hidden while under review) - nothing to do`);
+  console.log(`agent402-model-provider@${version} is already on ClawHub (hidden while under review) - nothing to do`);
 } else if (/is staged by failed publish attempt/.test(pub.out)) {
   console.log(pub.out);
-  console.log(`::warning::agent402-openclaw@${version} is staged on ClawHub behind a failed ClawHub scan; npm and the MCP Registry are published`);
+  console.log(`::warning::agent402-model-provider@${version} is staged on ClawHub behind a failed ClawHub scan; npm and the MCP Registry are published`);
 } else {
   fail("ClawHub publish failed", pub.out);
 }

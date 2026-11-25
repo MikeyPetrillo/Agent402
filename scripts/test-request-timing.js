@@ -64,7 +64,7 @@ __resetTimingForTest();
 
 // --- end to end through express: upstream wait charged to the right request
 installRequestTimingFetch();
-const upstream = http.createServer((req, res) => setTimeout(() => res.end("{}"), 120)).listen(0);
+const upstream = http.createServer((req, res) => setTimeout(() => res.end("{}"), 120)).listen(0, "127.0.0.1");
 await new Promise((r) => upstream.once("listening", r));
 const up = `http://127.0.0.1:${upstream.address().port}/`;
 const app = express();
@@ -72,7 +72,7 @@ app.use(requestTimingMiddleware((req) => `${req.method} ${req.path}`));
 app.get("/slow-upstream", async (_q, res) => { await fetch(up); res.json({ ok: true }); });
 app.get("/busy", (_q, res) => { const t = Date.now() + 60; while (Date.now() < t); res.json({ ok: true }); });
 app.get("/hang", (_q, res) => { setTimeout(() => res.json({ ok: true }), 300); });
-const srv = app.listen(0); await new Promise((r) => srv.once("listening", r));
+const srv = app.listen(0, "127.0.0.1"); await new Promise((r) => srv.once("listening", r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 await fetch(`${base}/slow-upstream`); await fetch(`${base}/busy`);
 const hang = fetch(`${base}/hang`);
@@ -102,7 +102,7 @@ ok(loopLagStatus().stalls >= 1, "the stall is counted");
 const app2 = express();
 app2.use(requestTimingMiddleware((req) => `${req.method} ${req.path}`));
 app2.get("/hog", (_q, res) => { const u = Date.now() + 250; while (Date.now() < u); res.json({ ok: true }); });
-const srv2 = app2.listen(0); await new Promise((r) => srv2.once("listening", r));
+const srv2 = app2.listen(0, "127.0.0.1"); await new Promise((r) => srv2.once("listening", r));
 const lines2 = [];
 setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
 const stop3 = startLoopLagMonitor({ tickMs: 20, warnMs: 100, log: (l) => lines2.push(l), statsLog: () => {} });

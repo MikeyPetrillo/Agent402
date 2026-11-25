@@ -2886,3 +2886,28 @@ function* scoreboardLedgerSteps({ days = 30, weekDays = 7, now = Date.now(), exc
 export function scoreboardLedger(opts = {}) { return runSteps(scoreboardLedgerSteps(opts)); }
 /** scoreboardLedger across event-loop turns (same answer). */
 export function scoreboardLedgerAsync(opts = {}) { return runStepsAsync(scoreboardLedgerSteps(opts)); }
+
+
+/**
+ * Retention (src/ledger-retention.js): the sales older than `cutoffMs`, and
+ * the feedback bound to them. Counts only unless `apply` is true; with a state
+ * database the rows go from the table, the mirror and the write-through file
+ * alike. Resolves { due, removed }.
+ */
+export async function pruneSalesBefore(cutoffMs, { apply = false } = {}) {
+  const cut = Math.floor(Number(cutoffMs));
+  if (!Number.isFinite(cut) || cut <= 0) throw new Error("a cutoff time is required");
+  if (USE_PG) {
+    const due = Number((await stateQuery(`SELECT count(*)::bigint AS n FROM ${T("sales")} WHERE ts < $1`, [cut])).rows[0].n);
+    if (!apply || !due) return { due, removed: 0 };
+    await stateQuery(`DELETE FROM ${T("sale_feedback")} WHERE sale_id IN (SELECT id FROM ${T("sales")} WHERE ts < $1)`, [cut]);
+    const r = await stateQuery(`DELETE FROM ${T("sales")} WHERE ts < $1`, [cut]);
+    for (const h of [db, fileDb]) if (h) { try { h.prepare("DELETE FROM sale_feedback WHERE sale_id IN (SELECT id FROM sales WHERE ts < ?)").run(cut); h.prepare("DELETE FROM sales WHERE ts < ?").run(cut); } catch { /* the table is the record */ } }
+    return { due, removed: r.rowCount };
+  }
+  const due = Number(db.prepare("SELECT count(*) AS n FROM sales WHERE ts < ? /* retention-view: every row past its period, whatever its rail */").get(cut).n);
+  if (!apply || !due) return { due, removed: 0 };
+  db.prepare("DELETE FROM sale_feedback WHERE sale_id IN (SELECT id FROM sales WHERE ts < ?)").run(cut);
+  const removed = db.prepare("DELETE FROM sales WHERE ts < ?").run(cut).changes;
+  return { due, removed };
+}

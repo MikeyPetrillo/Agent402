@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import { bootServer } from "./lib/boot-server.js";
-import { parseInputs } from "./payai-listing-pass.js";
+import { parseInputs } from "./registry-listing-pass.js";
 import { X_DATA_TOOLS } from "../src/tools/x-data-kit.js";
 import { EXTERNAL_EXAMPLE_INPUT } from "../src/tools/route-execute.js";
 import { requestExampleOf } from "../src/openapi-request.js";

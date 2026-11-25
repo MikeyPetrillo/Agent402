@@ -99,7 +99,9 @@ const table = guardsTable();
   ]) {
     const srv = await bootServer({ stores: `guards-${want}-${label.length}`, env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", ...env } });
     try {
-      const w = (await (await fetch(`${srv.url}/api/gateway-status`)).json()).creditsGuards?.status;
+      const r = await fetch(`${srv.url}/api/gateway-status`);
+      const text = await r.text();
+      let w = null; try { w = JSON.parse(text).creditsGuards?.status; } catch { w = `HTTP ${r.status} ${r.headers.get("content-type")}: ${text.replace(/\s+/g, " ").slice(0, 300)}`; }
       ok(w === want, `${label}: /api/gateway-status creditsGuards reads ${want} (${w})`);
     } finally { await srv.stop(); }
   }

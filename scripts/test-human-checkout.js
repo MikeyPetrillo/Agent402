@@ -85,6 +85,44 @@ ok(sess.url && sess.id === "cs_new", "createSession returns a Stripe Checkout ur
 await hc.createSession("research", "Q".repeat(1200));
 ok(stripe._last.metadata.input.length === 500 && stripe._last.metadata.input3.length === 200, "createSession chunks a 1200-char input across metadata keys");
 ok(stripe._last.allow_promotion_codes === true, "one-shot Checkout accepts promotion codes (dashboard-created first-report / partner codes)");
+// Consent and disclosures before purchase (src/checkout-consent.js).
+{
+  const { REPORT_REFUND_LINE, termsAcceptanceMessage } = await import("../src/checkout-consent.js");
+  const a = stripe._last;
+  ok(a.consent_collection?.terms_of_service === "required", "the report checkout requires the Terms of Service checkbox");
+  ok(a.custom_text?.terms_of_service_acceptance?.message === termsAcceptanceMessage("https://agent402.tools") && /binding individual arbitration and the class-action waiver\]\(https:\/\/agent402\.tools\/terms#disputes\)/.test(a.custom_text.terms_of_service_acceptance.message), "the acceptance line names arbitration and the class-action waiver and links the terms");
+  ok(a.custom_text?.submit?.message === REPORT_REFUND_LINE && /refunded automatically/.test(REPORT_REFUND_LINE) && /delivered report is final/.test(REPORT_REFUND_LINE), "the refund rule is shown above the pay button");
+  const fu = (a.custom_fields || []).find((f) => f.key === "followups");
+  ok(fu && fu.optional === true && fu.dropdown.default_value === "yes" && fu.dropdown.options.some((o) => o.value === "no") && fu.label.custom.length <= 50, "the buyer can turn the follow-up emails off at checkout");
+  const sn = (a.custom_fields || []).find((f) => f.key === "startnow");
+  ok(sn && sn.optional === false && sn.dropdown.options.length === 1 && /lose my right to withdraw/.test(sn.dropdown.options[0].label) && sn.dropdown.options[0].label.length <= 100 && sn.label.custom.length <= 50, "the report checkout takes the required start-now choice that acknowledges the withdrawal right (within Stripe's field limits)");
+  const { withTermsDropdown, START_NOW_CONFIRMATION, consentRecordOf } = await import("../src/checkout-consent.js");
+  const fb = withTermsDropdown(a);
+  ok(fb.custom_fields.length <= 3 && ["terms", "startnow", "followups"].every((k) => fb.custom_fields.some((f) => f.key === k)), "the terms-dropdown fallback keeps the start-now choice and the follow-up choice inside Stripe's three fields");
+  const { buildReportReadyEmail } = await import("../src/email.js");
+  const withSn = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_1", productLabel: "Dossier", subjectOf: "AAPL", startNow: true });
+  const noSn = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_1", productLabel: "Dossier", subjectOf: "AAPL" });
+  ok(withSn.text.includes(START_NOW_CONFIRMATION) && withSn.html.includes("right of withdrawal") && !noSn.text.includes(START_NOW_CONFIRMATION), "the report-ready email confirms the start-now choice, and only when it was made");
+  ok(consentRecordOf({ id: "cs_y", custom_fields: [{ key: "startnow", dropdown: { value: "agreed" } }] }).startNow === "agreed", "the consent record keeps the start-now choice");
+}
+// A buyer who chose "No follow-up emails" is delivered the report and passed as opted out.
+{
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const delivered = [];
+  const optSessions = {
+    cs_optout: { id: "cs_optout", mode: "payment", payment_status: "paid", payment_intent: "pi_optout", customer_details: { email: "buyer@example.com" }, custom_fields: [{ key: "followups", type: "dropdown", dropdown: { value: "no" } }], metadata: { product: "dossier", input: "AAPL" } },
+    cs_optin: { id: "cs_optin", mode: "payment", payment_status: "paid", payment_intent: "pi_optin", customer_details: { email: "buyer2@example.com" }, custom_fields: [{ key: "followups", type: "dropdown", dropdown: { value: "yes" } }], metadata: { product: "dossier", input: "MSFT" } },
+  };
+  const s2 = { checkout: { sessions: { retrieve: async (id) => { if (!optSessions[id]) throw new Error("No such session"); return optSessions[id]; } } }, refunds: { create: async () => ({ id: "re_x", status: "succeeded" }) } };
+  const hc2 = createHumanCheckout({ stripe: s2, generate: async (kind, slug, input) => ({ report: `# R ${input}`, title: input, sources: [], tables: [] }), baseUrl: "https://agent402.tools", storeDir: mkdtempSync(join(tmpdir(), "hc-optout-")), onSale: () => {}, onDelivered: (d) => delivered.push(d), now, log: () => {} });
+  await hc2.fulfill("cs_optout"); await hc2.fulfill("cs_optin");
+  for (let i = 0; i < 100 && delivered.length < 2; i++) await wait(10);
+  const out = delivered.find((d) => d.sessionId === "cs_optout"), inn = delivered.find((d) => d.sessionId === "cs_optin");
+  ok(out?.followupsOptOut === true && inn?.followupsOptOut === false, `the delivery hook carries the buyer's follow-up choice (${JSON.stringify(delivered.map((d) => [d.sessionId, d.followupsOptOut]))})`);
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/if \(followupsOptOut !== true\) _followups\.enqueue\(/.test(src), "the server never starts the follow-up sequence for a buyer who opted out");
+}
 let threw = false; try { await hc.createSession("dossier", ""); } catch { threw = true; }
 ok(threw, "createSession rejects empty input");
 threw = false; try { await hc.createSession("not-a-product", "x"); } catch { threw = true; }
@@ -112,6 +150,7 @@ ok(g1.status === "generating", "a paid session starts generating");
 await hc.fulfill("cs_paid"); // a concurrent poll must not double-generate
 const finalPaid = await settle("cs_paid");
 ok(finalPaid.status === "done" && /REPORT/.test(finalPaid.report), "the paid report completes and is stored");
+ok(finalPaid.consent && typeof finalPaid.consent === "object" && "terms" in finalPaid.consent && typeof finalPaid.consent.at === "string" && /^cs_/.test(finalPaid.consent.session || ""), `the report record keeps the consent its checkout recorded (${JSON.stringify(finalPaid.consent)})`);
 ok(genCalls === 1, "generate ran exactly ONCE despite two fulfill calls (idempotent)");
 ok(finalPaid._ctx === undefined && sales.length === 1 && sales[0].product === "dossier" && sales[0].priceUsd === HUMAN_PRODUCTS["dossier"].price / 100 && sales[0].paymentIntent === "pi_ok", "a delivered report fires onSale once (accounting) and the record carries no generator context");
 await hc.fulfill("cs_paid");

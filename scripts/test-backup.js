@@ -68,7 +68,7 @@ const stub = createServer((req, res) => {
     } else res.writeHead(404).end();
   });
 });
-await new Promise((r) => stub.listen(0, r));
+await new Promise((r) => stub.listen(0, "127.0.0.1", r));
 const PORT = stub.address().port;
 
 // --- fixture /data ---------------------------------------------------------

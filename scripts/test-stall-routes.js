@@ -17,7 +17,6 @@
 //      serve equal a direct read of the ledger.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync as readProcFile, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +26,7 @@ import { createHash } from "node:crypto";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import Database from "better-sqlite3";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
 let n = 0;
@@ -616,8 +615,9 @@ const mp = await import("../src/market-page.js");
   rows.length = 0;
   cache.clear();
   const builds0 = x._indexSnapshotBuildsForTest();
-  let turns = 0, shared = true, readerWorst = 0, readerWorstWall = 0, inLine = 0;
-  gaps = []; last = performance.now();
+  let turns = 0, shared = true, readerWorst = 0, readerWorstWall = 0, inLine = 0, readerWorstGc = 0, readerWorstBuilt = 0;
+  const windows = [];
+  gaps = []; last = performance.now(); gcPauses.length = 0;
   const warming = x.loadPersistedIndexCacheAsync(ndjson);
   // Each turn of the warm start: the nav strip, the page and a second page
   // read the snapshot, as three HTML requests landing in one turn would.
@@ -629,14 +629,25 @@ const mp = await import("../src/market-page.js");
     // A build that finishes inside the readers' turn is an in-line build; the
     // sliced rebuild only starts here and finishes over later turns.
     if (x._indexSnapshotBuildsForTest() - before > 1) inLine++;
-    // Ours, as blockOf reads a gap (the wall time is printed).
-    readerWorst = Math.max(readerWorst, Math.min(performance.now() - t, oursMs() - c0));
-    readerWorstWall = Math.max(readerWorstWall, performance.now() - t);
+    // Ours, as blockOf reads a gap (the wall time is printed); a collector
+    // pause inside the window is taken off below, as blockOf does.
+    const t1 = performance.now();
+    windows.push([t, t1, Math.min(t1 - t, oursMs() - c0), x._indexSnapshotBuildsForTest() - before]);
+    readerWorstWall = Math.max(readerWorstWall, t1 - t);
     turns++;
     await new Promise((r) => setImmediate(r));
   }
   const loaded = await warming;
-  await new Promise((r) => setTimeout(r, 5));
+  // The observer delivers gc entries on a later task: wait for them first.
+  await new Promise((r) => setTimeout(r, 50));
+  // A full collection inside a reader's window is the collector's, not the
+  // readers' (the rule blockOf applies): what is left is the readers' own.
+  for (const [w0, w1, ours, built] of windows) {
+    let inGc = 0;
+    for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(w1, e0) - Math.max(w0, s0));
+    const own = Math.max(0, ours - inGc);
+    if (own > readerWorst) { readerWorst = own; readerWorstGc = inGc; readerWorstBuilt = built; }
+  }
   const warmWorst = Math.round(Math.max(0, ...gaps.map(([g0, g1]) => g1 - g0)));
   gaps = null;
   const builds = x._indexSnapshotBuildsForTest() - builds0;
@@ -645,7 +656,7 @@ const mp = await import("../src/market-page.js");
   ok(builds < turns, `the readers of ${turns} turns shared ${builds} snapshot builds (each reader used to build its own: ${turns * 3})`);
   // The loop's own worst block over the warm start is printed, not bounded:
   // it is mostly the loader's batches, which this file does not pin.
-  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms ours (${GAP.note}; ${Math.round(readerWorstWall)} ms of wall time; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
+  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms ours less the collector (${GAP.note}; that turn built ${readerWorstBuilt} snapshot(s) and the collector ran ${Math.round(readerWorstGc)} ms in it; ${Math.round(readerWorstWall)} ms of wall time at most; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
   ok(isDeepStrictEqual(x.warmStartSnapshot(ctx).sellers.length, x.indexSnapshot(ctx).sellers.length), "after the warm start a reader builds from the whole cache");
 }
 
@@ -693,18 +704,20 @@ if (isMainThread && typeof process.send === "function") {
   });
 }
 `);
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
+// PORT=0, the port read back (scripts/lib/boot-server.js); the IPC channel
+// carries the hold probe's readings.
+const booted = await bootServer({
   env: {
-    ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "on", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+    FREE_MODE: "true", X402_INDEX_CRAWL: "on", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
     ROUTE_INDEX_WARM_DELAY_MS: "0", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", ROUTER_WORKERS: "0",
     AGENT402_OPERATOR_TOKEN: TOKEN, STATS_DB_DIR: dir, LOOP_LAG_TICK_MS: "5", LAZY_DEPS_WARM: "off",
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --import ${JSON.stringify(HOLD_PROBE).slice(1, -1)}`.trim(),
   },
-  stdio: ["ignore", "ignore", "inherit", "ipc"],
+  stores: false, ipc: true, timeoutMs: 120_000,
 });
+const proc = booted.child;
 serverProc = proc;
-const base = `http://127.0.0.1:${port}`;
+const base = booted.url;
 const op = { headers: { authorization: `Bearer ${TOKEN}` } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const serverHold = (cmd) => new Promise((resolve, reject) => {
@@ -715,9 +728,7 @@ const serverHold = (cmd) => new Promise((resolve, reject) => {
   proc.send(cmd);
 });
 try {
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-  ok(up, "server booted");
+  ok((await fetch(`${base}/health`)).ok, "server booted");
   let sellers = 0;
   for (let i = 0; i < 240 && sellers < 5700; i++) {
     try { sellers = (await (await fetch(`${base}/__operator/heap.json`, op)).json()).index?.entries || 0; } catch { /* warming */ }

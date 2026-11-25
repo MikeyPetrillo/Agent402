@@ -8,9 +8,7 @@
 // that require its sentence next to the tools that carry it.
 // Dependency-free: src/payments.js, src/skills.js and the tool kits import it.
 
-// The terms behind each sentence: FRED API Terms of Use
-// (https://fred.stlouisfed.org/docs/api/terms_of_use.html, the notice the
-// macro kit's FRED routes carry); CoinGecko in src/tools/coingecko-rate.js;
+// The terms behind each sentence: CoinGecko in src/tools/coingecko-rate.js;
 // Jupiter in src/tools/solana-intel-kit.js; Open-Meteo and GeoNames in
 // src/tools/weather-kit.js; NVD in
 // src/tools/cve-kit.js; the ECB's reuse terms, which ask that the ECB be
@@ -34,19 +32,15 @@
 // services in one short sentence, the disclaimer once, so that a listing's
 // shortest cut (300 characters, src/payments.js) keeps the run whole; its
 // answers carry each full credit.
-export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
-// The same terms ask an application others use to link the Terms of Use and
-// to tell its users they are bound by them: every answer that carries FRED
-// data says so in its `terms` field (termsAnswers below; the macro kit marks
-// each tool whose attribution is "fred").
-export const FRED_TERMS_URL = "https://fred.stlouisfed.org/docs/api/terms_of_use.html";
-export const FRED_TERMS = `Users of this data are bound by the FRED API Terms of Use: ${FRED_TERMS_URL}`;
-// CoinGecko's API terms ask for the credit with a link to its API page,
-// shown next to the data: the description sentence carries the link, and
+// CoinGecko's API terms (section 4.3) ask for "Powered by CoinGecko",
+// displayed prominently with a link to its API page next to the data: the
+// description sentence carries the link, and
 // every CoinGecko-backed answer carries the same sentence as `credit`
 // (creditAnswers below).
+import { keepAnswerCharges } from "./answer-charges.js";
+
 export const COINGECKO_API_URL = "https://www.coingecko.com/en/api";
-export const COINGECKO_ATTRIBUTION = `Data provided by CoinGecko (${COINGECKO_API_URL}).`;
+export const COINGECKO_ATTRIBUTION = `Powered by CoinGecko (${COINGECKO_API_URL}).`;
 export const COINGECKO_CREDIT = COINGECKO_ATTRIBUTION;
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
@@ -67,8 +61,26 @@ export const OPEN_METEO_PLACE_LICENSE_FIELDS = Object.freeze({ attributionText: 
 // fema-disasters answer carries all three (src/tools/gov-kit.js).
 export const FEMA_NOTICE = "This product uses the Federal Emergency Management Agency's OpenFEMA API, but is not endorsed by FEMA.";
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
-export const ECB_ATTRIBUTION = "Source: European Central Bank.";
+// The ECB's reuse terms (the disclaimer page above) ask that the ECB be cited
+// as the source, that a publisher selling documents that include its
+// information tell buyers, before payment and each time they access it, that
+// the information is available free of charge on the ECB's site, and that a
+// change such as a computed rate be stated explicitly. The sentence below is
+// every FX tool's description tail (read before payment: the 402 listing and
+// the catalog) and every FX answer's `credit`; each answer whose rate is not
+// the ECB's own EUR quote says how it was computed (`rateBasis`,
+// src/tools/frankfurter.js).
+export const ECB_ATTRIBUTION = "Source: European Central Bank; the ECB reference rates are available free of charge at ecb.europa.eu.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
+// Government sources that ask for a credit line (public-domain data, carried
+// as each answer's `credit`, like the network sources below): the USGS asks
+// for "Credit: U.S. Geological Survey" on its data (earthquakes); the Census
+// Bureau asks a product using its API to say it is not endorsed or certified
+// (geo-lookup, on the answers the Census geocoder served); openFDA's credit
+// line names the FDA (the openFDA tools).
+export const USGS_CREDIT = "Credit: U.S. Geological Survey.";
+export const CENSUS_CREDIT = "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.";
+export const OPENFDA_CREDIT = "Data provided by the U.S. Food and Drug Administration (https://open.fda.gov).";
 // Network sources, each credited by name and link on the answers it serves
 // (the `credit` field; no key in ATTRIBUTIONS, so a tool's catalog text and
 // listing are unchanged, and the 402 sample is read without the field:
@@ -79,11 +91,11 @@ export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 // Mapping service on every asn-info answer (src/tools/network-kit2.js).
 export const CRTSH_ATTRIBUTION = "Certificate data from crt.sh by Sectigo (https://crt.sh).";
 export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mapping (https://team-cymru.com/community-services/ip-asn-mapping/).";
-// fred-series (src/tools/us-macro-series.js, which cites each publisher's
+// us-macro-series (src/tools/us-macro-series.js, which cites each publisher's
 // terms): the publishers named and the New York Fed's disclaimer for a product
 // described with its rates; each answer carries its publisher's full credit
 // (the BLS statement and retrieval date, the New York Fed's notice).
-export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, BEA, the U.S. Treasury, the Fed Board and the New York Fed. Agent402 is not affiliated with them.";
+export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, BEA, U.S. Treasury, Federal Reserve Board and the New York Fed. Agent402 is not affiliated with them.";
 // The computed macro tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds
 // in src/tools/macro-kit.js) read the same publishers through
 // src/tools/us-macro-series.js: each answer's `credit` opens with its
@@ -112,6 +124,11 @@ export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
 // every answer name the source with its link and license.
 export const WIKIPEDIA_ATTRIBUTION = "Suggestions from Wikipedia (CC BY-SA 4.0).";
 export const WIKIPEDIA_CREDIT = "Suggestions from Wikipedia (https://en.wikipedia.org), CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).";
+// The same answers carry the license link as its own field and say that this
+// service is not affiliated with the Wikimedia Foundation (its API usage
+// guidelines bar a client that obscures the Foundation as the provider).
+export const CC_BY_SA_4_URL = "https://creativecommons.org/licenses/by-sa/4.0/";
+export const WIKIPEDIA_LICENSE_FIELDS = Object.freeze({ licenseUrl: CC_BY_SA_4_URL, sourceUrl: "https://en.wikipedia.org", affiliation: "Not affiliated with or endorsed by the Wikimedia Foundation." });
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
@@ -155,9 +172,7 @@ export const COUNTRIES_ODBL_NOTICE = "Contains information from world-countries,
 export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "https://agent402.tools").replace(/\/+$/, "")}${COUNTRIES_DATABASE_PATH}`;
 
 // Chain and crypto data sources, each credited with a link wherever its data
-// is served. GoPlus's API terms ask for attribution "via a backlink or a
-// mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,
-// Hyperliquid's info API and Sourcify (verified source and its signature
+// is served. The EAS indexer, RugCheck, Hyperliquid's info API and Sourcify (verified source and its signature
 // database) are public services for builders, credited by name and link
 // (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
 // contract-kit.js). Each is credited on the answers it serves, in the `credit`
@@ -167,7 +182,6 @@ export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "htt
 // (addCredit). They have no key in ATTRIBUTIONS: a tool's catalog text and
 // its listing are unchanged, and the 402 sample is read without the field
 // (withoutAnswerOnlyFields below).
-export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
 export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
 export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
 export const HYPERLIQUID_ATTRIBUTION = "Data from Hyperliquid (https://hyperliquid.xyz).";
@@ -176,7 +190,6 @@ export const SOURCIFY_SIGDB_ATTRIBUTION = "Signatures from the Sourcify signatur
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
-  fred: FRED_NOTICE,
   coingecko: COINGECKO_ATTRIBUTION,
   jupiter: JUPITER_ATTRIBUTION,
   "open-meteo": OPEN_METEO_ATTRIBUTION,
@@ -197,6 +210,13 @@ export const ATTRIBUTIONS = Object.freeze({
 
 /** Every sentence the listing cut keeps when a description ends with it. */
 export const ATTRIBUTION_TAILS = Object.freeze(Object.values(ATTRIBUTIONS));
+// Credit sentences a source's terms had us print before their current wording,
+// each with the sentence that replaced it (CoinGecko's "Data provided by",
+// replaced by its section 4.3 "Powered by"): the listing parity check
+// (scripts/test-bazaar-listing-parity.js) reads a base listing with the
+// current wording, so a credit reworded is not read as a listing that lost
+// its description. Never printed.
+export const REWORDED_ATTRIBUTIONS = Object.freeze([[`Data provided by CoinGecko (${COINGECKO_API_URL}).`, COINGECKO_ATTRIBUTION]]);
 
 const endsWithSentence = (s, t) => s.endsWith(t) && (s.length === t.length || /\s/.test(s[s.length - t.length - 1]));
 
@@ -266,10 +286,10 @@ const isPlainAnswer = (v) => v !== null && typeof v === "object" && !Array.isArr
  *  (a non-object, a credit that is not a string) is returned as it is. */
 export function withCredit(answer, credit) {
   if (!isPlainAnswer(answer)) return answer;
-  if (!Object.hasOwn(answer, "credit")) return { ...answer, credit };
+  if (!Object.hasOwn(answer, "credit")) return keepAnswerCharges(answer, { ...answer, credit });
   const cur = answer.credit;
   if (typeof cur !== "string" || cur.includes(credit)) return answer;
-  return { ...answer, credit: cur ? `${cur} ${credit}` : credit };
+  return keepAnswerCharges(answer, { ...answer, credit: cur ? `${cur} ${credit}` : credit });
 }
 
 /** The same as withCredit, for a handler crediting a source one of its legs
@@ -307,7 +327,7 @@ export function termsAnswers(tool, terms) {
   if (typeof inner === "function") {
     tool.handler = async function withTerms(...args) {
       const answer = await inner.apply(this, args);
-      return isPlainAnswer(answer) && !Object.hasOwn(answer, "terms") ? { ...answer, terms } : answer;
+      return isPlainAnswer(answer) && !Object.hasOwn(answer, "terms") ? keepAnswerCharges(answer, { ...answer, terms }) : answer;
     };
     // The guards that read a handler's source for the hosts and helpers it
     // names (scripts/test-bazaar-descriptions.js) read the tool's own code.
@@ -328,7 +348,7 @@ export function licensedAnswers(tool, fields) {
   const add = (v) => {
     if (!isPlainAnswer(v)) return v;
     const missing = Object.keys(fields).filter((k) => !Object.hasOwn(v, k));
-    return missing.length ? { ...v, ...Object.fromEntries(missing.map((k) => [k, fields[k]])) } : v;
+    return missing.length ? keepAnswerCharges(v, { ...v, ...Object.fromEntries(missing.map((k) => [k, fields[k]])) }) : v;
   };
   const ex = tool.discovery?.output?.example;
   if (isPlainAnswer(ex)) tool.discovery.output.example = add(ex);
@@ -369,7 +389,13 @@ export function withoutLicenseFields(example) {
 // without them (withoutAnswerOnlyFields), so they never take room from the
 // listing's description or the answer's own fields.
 export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
-const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION]);
+// The ECB sentence ends each FX description (read before payment) and rides
+// every answer, and the government credit lines ride every answer: none of
+// them takes the 402 sample's room either.
+const ANSWER_ONLY_CREDITS = Object.freeze([EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, ECB_ATTRIBUTION, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT]);
+// A disclosure flag every answer of its tools carries, stated in the tool's
+// description before payment (the AI-generated voice, src/ai-voice.js).
+const ANSWER_ONLY_FLAGS = Object.freeze(["aiGeneratedVoice", "aiGenerated"]);
 
 /** `example` without a `credit` made only of the credits above, and without
  *  the source license fields (the note and the per-file map beside it).
@@ -383,5 +409,6 @@ export function withoutAnswerOnlyFields(example) {
     if (!rest.trim()) drop.add("credit");
   }
   if (example.licenseNote === SOURCE_LICENSE_NOTE) { drop.add("licenseNote"); drop.add("licenses"); }
+  for (const k of ANSWER_ONLY_FLAGS) if (example[k] === true) drop.add(k);
   return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
 }

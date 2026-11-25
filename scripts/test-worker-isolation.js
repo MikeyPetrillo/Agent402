@@ -15,7 +15,7 @@ import express from "express";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
-const listen = (app) => new Promise((res) => { const s = app.listen(0, () => res(s)); });
+const listen = (app) => new Promise((res) => { const s = app.listen(0, "127.0.0.1", () => res(s)); });
 
 // --- 1. The real worker: auth + dispatch (no Chromium/ffmpeg needed) ----------
 {

@@ -20,11 +20,12 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { withoutLicenseFields } from "../src/data-attribution.js";
+import { withoutLicenseFields, REWORDED_ATTRIBUTIONS } from "../src/data-attribution.js";
+import { WITHDRAWN_SOURCE_FIELDS } from "../src/resale-terms.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
@@ -96,19 +97,45 @@ const INPUT_CONSTRAINTS = ["enum", "const", "maxLength", "minLength", "maximum",
 const isPointer = (ex) => !!ex && typeof ex === "object" && ex.truncated === true && /openapi\.json/.test(String(ex.note || ""));
 const exampleOf = (pr) => pr?.extensions?.bazaar?.info?.output?.example;
 
-/** What `now` lost against `then` for one route ([] when nothing). */
-export function listingLosses(then, now) {
+// Sample fields an owner decision removed on purpose, by slug: the field is
+// gone from the answer itself, so the sample must not keep it. token-safety
+// dropped its verdict (2026-11-24: no answer may read as a statement that a
+// token is fine); the named facts are listed in `flags` and `unknown` instead.
+export const REMOVED_SAMPLE_FIELDS = Object.freeze({
+  "token-safety": Object.freeze(["verdict", "because", "blocking", "warnings"]),
+});
+
+/** A base listing's text with each reworded source credit in its current
+ *  wording (src/data-attribution.js REWORDED_ATTRIBUTIONS). */
+export function withCurrentCredits(text) {
+  let s = String(text || "");
+  for (const [was, now] of REWORDED_ATTRIBUTIONS) s = s.split(was).join(now);
+  return s;
+}
+
+/** What `now` lost against `then` for one route ([] when nothing). A
+ *  sample field named for the route's slug in `withdrawn` (a source figure a
+ *  tool stopped answering, src/resale-terms.js WITHDRAWN_SOURCE_FIELDS) may
+ *  leave the sample; one still in the sample is a loss of its own (the
+ *  withdrawal did not happen). */
+export function listingLosses(then, now, withdrawn = WITHDRAWN_SOURCE_FIELDS) {
   const lost = [];
   if (!then?.pr) return lost;
   if (!now?.pr) return [`no 402 listing (status ${now?.status ?? now?.err})`];
-  const da = String(then.pr.resource?.description || ""), db = String(now.pr.resource?.description || "");
+  // A source's credit is the source's wording (it may change with its terms):
+  // the base is read with each reworded credit in its current wording.
+  const da = withCurrentCredits(then.pr.resource?.description), db = String(now.pr.resource?.description || "");
   if (db.length < da.length) lost.push(`description ${da.length} -> ${db.length} chars`);
   const ea = exampleOf(then.pr), eb = exampleOf(now.pr);
   if (ea !== undefined && eb === undefined) lost.push("sample output dropped");
   else if (ea !== undefined && !isPointer(ea) && isPointer(eb)) lost.push("sample output became the /openapi.json pointer");
   else if (ea && eb && typeof ea === "object" && typeof eb === "object" && !Array.isArray(ea) && !isPointer(ea)) {
-    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb));
+    const removed = REMOVED_SAMPLE_FIELDS[then.slug] || [];
+    const out = Object.hasOwn(withdrawn || {}, then.slug) ? withdrawn[then.slug] : [];
+    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb) && !removed.includes(k) && !out.includes(k));
     if (gone.length) lost.push(`sample output lost ${gone.join(", ")}`);
+    const kept = out.filter((k) => k in eb);
+    if (kept.length) lost.push(`sample output still carries withdrawn source field ${kept.join(", ")}`);
   }
   // Input fields: each field the base listed is still listed, keeps a
   // description when it had one (it may be shortened), and keeps every bound.
@@ -131,6 +158,13 @@ export function listingLosses(then, now) {
   ok(listingLosses(pr("abcdef", { a: 1 }), pr("abc", { a: 1 }))[0]?.startsWith("description"), "control: a shorter description is a loss");
   ok(/pointer/.test(listingLosses(pr("a", { a: 1 }), pr("a", { truncated: true, note: "full example in /openapi.json" }))[0] || ""), "control: a sample that became the pointer is a loss");
   ok(/lost a/.test(listingLosses(pr("a", { a: 1, b: 2 }), pr("a", { b: 2 }))[0] || ""), "control: a sample missing a field is a loss");
+  ok(listingLosses({ slug: "token-safety", ...pr("a", { verdict: "x", flags: [] }) }, pr("a", { flags: [] })).length === 0 && /lost verdict/.test(listingLosses({ slug: "other", ...pr("a", { verdict: "x" }) }, pr("a", {}))[0] || ""), "control: a field an owner decision removed is excused for its slug only");
+  const slugged = (d, ex) => ({ slug: "z-tool", ...pr(d, ex) });
+  ok(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawShare: 3 }), { "z-tool": ["rawUsd"] }).length === 0, "control: a withdrawn source field may leave the sample");
+  ok(/lost rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1 }), { "other-tool": ["rawUsd"] })[0] || ""), "control: a field withdrawn for another slug is still a loss");
+  ok(/still carries withdrawn source field rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawUsd: 2 }), { "z-tool": ["rawUsd"] }).join() || ""), "control: a withdrawn field left in the sample is a loss");
+  const [was, now] = REWORDED_ATTRIBUTIONS[0];
+  ok(listingLosses(pr(`Prices. ${was}`, { a: 1 }), pr(`Prices. ${now}`, { a: 1 })).length === 0 && /description/.test(listingLosses(pr(`Prices and more. ${was}`, { a: 1 }), pr(`Prices. ${now}`, { a: 1 }))[0] || "") && /description/.test(listingLosses(pr("Prices and a long lead text.", { a: 1 }), pr(`Prices. ${now}`.slice(0, 20), { a: 1 }))[0] || ""), "control: a reworded source credit is not a lost description; a shorter text before it still is");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
   const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
   const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };
@@ -150,7 +184,16 @@ if (!ref) {
   const baseDir = mkdtempSync(join(tmpdir(), "a402-listing-parity-"));
   try {
     execFileSync("sh", ["-c", `git archive ${ref} | tar -x -C "${baseDir}"`], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
-    if (existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(baseDir, "node_modules"), "dir");
+    // The base boots on its own dependencies: the head's node_modules only when
+    // both lockfiles are the same, else a clean install of the base lockfile
+    // (a dependency move can drop an export the base imports, so the head's
+    // packages would not boot the base at all).
+    const sameLock = existsSync(join(baseDir, "package-lock.json")) && readFileSync(join(baseDir, "package-lock.json"), "utf8") === readFileSync(join(ROOT, "package-lock.json"), "utf8");
+    if (sameLock && existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(baseDir, "node_modules"), "dir");
+    else {
+      console.log("base lockfile differs from the head's: installing the base's dependencies");
+      execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: baseDir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" } });
+    }
     console.log(`base ${ref.slice(0, 9)}; head ${git("rev-parse", "--short", "HEAD")} (working tree)`);
     const then = await dump(baseDir, "base");
     const now = await dump(ROOT, "head");

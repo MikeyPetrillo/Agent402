@@ -3,8 +3,8 @@
 Strands agent on Amazon Bedrock AgentCore that buys an Agent402 tool over x402.
 
 This is the SHOWCASE: a Strands agent with the AgentCore Payments plugin and an
-HTTP tool. You prompt it to run a web search and then a cited answer, two paid
-Agent402 tools; when each endpoint returns HTTP
+HTTP tool. You prompt it to list a company's SEC filings and then its filed
+revenue and total assets, two paid Agent402 tools; when each endpoint returns HTTP
 402, the plugin signs the x402 micropayment (from the AgentCore-managed wallet),
 retries, and the agent gets the paid result - no payment code in the agent.
 
@@ -58,10 +58,11 @@ if __name__ == "__main__":
         prompt = f"GET {TARGET_URL} and report the JSON you get back."
     else:
         prompt = (
-            f"First GET {BASE_URL}/api/search?q=x402+payment+protocol+adoption&count=5 "
-            f"and list the result titles. Then GET "
-            f"{BASE_URL}/api/answer?q=what+is+the+x402+payment+protocol%3F "
-            f'and report the "answer" field with its citations.'
+            f"First GET {BASE_URL}/api/edgar-filings?ticker=AAPL&form=10-K&limit=5 "
+            f"and list the filing dates. Then GET "
+            f"{BASE_URL}/api/edgar-company-facts?ticker=AAPL&tags=RevenueFromContractWithCustomerExcludingAssessedTax,Assets "
+            f"and report the revenue and total assets of the latest fiscal year "
+            f"filed on a 10-K."
         )
     print(f"Prompt: {prompt}\n")
     response = agent(prompt)

@@ -16,7 +16,7 @@ gasless for the buyer) and a little ETH on Base for the deployment gas
 What the script does:
 
 1. Wraps the key in AgentKit's `ViemWalletProvider` and hands it to
-   [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit), the
+   [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider), the
    Agent402 action provider.
 2. `agent402_find` picks `crypto-price` for "live ETH price in USD".
 3. `agent402_call` buys it. The x402 payment is signed by the wallet provider,

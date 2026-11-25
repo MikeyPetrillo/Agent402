@@ -1,4 +1,4 @@
-// Type declarations for agent402-openclaw/proxy: the local OpenAI- and
+// Type declarations for agent402-model-provider/proxy: the local OpenAI- and
 // Anthropic-compatible proxy that pays each call.
 import type { RouteTable } from "./models.js";
 

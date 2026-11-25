@@ -56,6 +56,8 @@ const h1Count = (html) => (html.match(/<h1\b/gi) || []).length;
   ok(objectFieldsSample({ a: 1 }) === "1 field: a" && objectFieldsSample({ a: 1, bb: 2 }) === "2 fields: a, bb" && objectFieldsSample({}) === "0 fields", "a short list is given whole");
   const eight = Object.fromEntries(Array.from({ length: 8 }, (_, k) => [`k${k}`, k]));
   ok(objectFieldsSample(eight) === "8 fields: k0, k1, k2, k3, k4, k5 and 2 more", "at most six names are listed, and the rest are counted");
+  const usage = objectFieldsSample({ promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 });
+  ok(usage === "3 fields: promptTokenCount, candidatesTokenCount and 1 more", `a whole list never ends on one long name alone (${usage})`);
   const wide = objectFieldsSample({ ["x".repeat(90)]: 1, y: 2 });
   ok(wide === `2 fields: ${"x".repeat(90)} and 1 more`, "the first name is always given, whatever its length");
   for (const o of [five, eight, { alphaBetaGammaDelta: 1, epsilonZetaEtaTheta: 2, iotaKappaLambdaMu: 3, nuXiOmicronPi: 4 }]) {

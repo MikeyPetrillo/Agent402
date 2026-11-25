@@ -16,8 +16,11 @@
 // committed outside dataset under its own license (COMMITTED_DATASET_SLUGS)
 // or carries a source's attribution, or answers this server's read of other
 // sellers (SELLER_DATA_SLUGS): the compute family's basis is our own
-// computation, some of it over public facts (exchange calendars typed in
-// from each exchange's page), with no credit line to keep.
+// computation. A proof-of-work tool whose facts come from outside sources
+// (markContentSources, src/resale-terms.js) is listed only when every one of
+// those sources' licenses allows the facts to be passed on, and its row says
+// so per source (`sources`: name, address, license, redistribution) with the
+// credit lines they ask for.
 //
 // Whether a failed call was charged depends on the rail (a Tempo push
 // transfer is final before the call runs), so the error codes carry no such
@@ -61,7 +64,7 @@ export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prep
  *  carries its own), and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
-    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts (published exchange calendars)",
+    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts from outside sources (public holiday calendars), and each such tool's row lists those sources with their licenses",
     redistribution: "own-computation", credit: null,
     slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s) && !SELLER_DATA_SLUGS.includes(s)),
   },
@@ -132,9 +135,19 @@ export function toolCredit(def, familyCredit = null) {
   return line;
 }
 
+/** A tool's outside sources as its row states them, or null. */
+export function contentSourcesOf(def) {
+  if (!Array.isArray(def?.contentSources) || !def.contentSources.length) return null;
+  return def.contentSources.map((x) => ({ name: x.name, url: x.url, license: x.license, redistribution: x.redistribution ? "allowed with the credit" : "not allowed" }));
+}
+/** May a reseller pass this tool's answers on, by its outside sources' licenses? */
+export const sourcesAllowRedistribution = (def) => !Array.isArray(def?.contentSources) || def.contentSources.every((x) => x.redistribution === true);
+
 /** One tool's wholesale row (pure). */
 export function toolRow(key, def, { baseUrl, outcome, available, familyCredit = null }) {
   const [method, path] = key.split(" ");
+  const sources = contentSourcesOf(def);
+  const sourceCredits = sources ? [...new Set(def.contentSources.map((x) => x.credit).filter(Boolean))].join(" ") : "";
   const quoted = def.quoteRange && Number.isFinite(def.quoteRange.minUsd) && Number.isFinite(def.quoteRange.maxUsd);
   return {
     slug: def.slug, name: def.name, method, path, url: `${baseUrl}${path}`,
@@ -145,7 +158,8 @@ export function toolRow(key, def, { baseUrl, outcome, available, familyCredit = 
     modelBacked: def.modelBacked === true,
     docs: `${baseUrl}/openapi.json`,
     reliability: reliabilityOf(outcome, available),
-    credit: toolCredit(def, familyCredit),
+    credit: sourceCredits || toolCredit(def, familyCredit),
+    ...(sources ? { sources } : {}),
   };
 }
 
@@ -155,7 +169,7 @@ export function toolRow(key, def, { baseUrl, outcome, available, familyCredit = 
 export function familyTools(family, ctx) {
   const wanted = new Set(family.slugs(ctx));
   return Object.entries(ctx.catalog || {})
-    .filter(([, d]) => d && wanted.has(d.slug) && !d.modelBacked && !(family.redistribution === "own-computation" && d.attribution))
+    .filter(([, d]) => d && wanted.has(d.slug) && !d.modelBacked && !(family.redistribution === "own-computation" && (d.attribution || !sourcesAllowRedistribution(d))))
     .sort(([, a], [, b]) => a.slug.localeCompare(b.slug));
 }
 

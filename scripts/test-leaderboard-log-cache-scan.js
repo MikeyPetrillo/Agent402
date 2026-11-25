@@ -39,6 +39,24 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
 const MB = (n) => (n / 1048576).toFixed(1);
 const used = () => { const m = process.memoryUsage(); return m.heapUsed + m.arrayBuffers; };
+// The live heap after a full GC, read once it stops falling. A typed array's
+// backing store is not freed by the GC itself: V8 hands it to a background
+// task, and on a loaded host that task can run after the read, so
+// arrayBuffers still counts the scan's freed sort scratch (two Float64Arrays
+// and three Uint32Arrays a row, 28 bytes: src/leaderboard-log-cache.js
+// orderPart). Each read follows a GC and a turn of the event loop, and stops
+// when one read no longer falls below the one before.
+async function settledUsed() {
+  let last = Infinity;
+  for (let i = 0; i < 40; i++) {
+    globalThis.gc(); globalThis.gc();
+    await new Promise((r) => setTimeout(r, 5 + i * 5));
+    const u = used();
+    if (u >= last - 65536) return Math.min(u, last);
+    last = u;
+  }
+  return last;
+}
 const sha16 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 16);
 
 // ---- store double --------------------------------------------------------
@@ -148,15 +166,16 @@ async function reloads(store, latest, wallets = W) {
   const kept = cache.stats().rows;
   ok(kept > 1_500_000 && kept <= SCALE_CAP, `the synthetic cache holds ${kept} rows in ${cache.stats().segments} segments (cap ${SCALE_CAP})`);
 
-  globalThis.gc(); globalThis.gc();
-  const before = used();
+  const before = await settledUsed();
   let peak = before; const sample = () => { const u = used(); if (u > peak) peak = u; };
   latest += 150;
   store.log.saves.length = 0;
   const r = await cache.scan({ ...base, wallets, start: latest - WIN + 1, latest });
   sample();
   globalThis.gc();
-  const held = used() - before;
+  const atOnce = used() - before;
+  const held = (await settledUsed()) - before;
+  if (process.env.LB_SCAN_DIAG) console.log(`# held read at once ${(atOnce / kept).toFixed(1)} bytes/row, settled ${(held / kept).toFixed(1)}`);
   let n = 0;
   const h = createHash("sha256");
   for (const t of r.transfers) { const f = C.transferForFold(t); h.update(`${f.wallet}|${f.payer}|${f.usd}|${f.pos};`); if (++n % 50_000 === 0) sample(); }

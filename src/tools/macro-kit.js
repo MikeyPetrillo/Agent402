@@ -13,7 +13,7 @@
 //
 //   2. The agencies that publish the US labor, price and rate series
 //      (src/tools/us-macro-series.js: the BLS Public Data API, the New York
-//      Fed's Markets Data API, Treasury Fiscal Data) for fred-series and the
+//      Fed's Markets Data API, Treasury Fiscal Data) for us-macro-series and the
 //      computed tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds).
 //      No FRED data is served.
 //
@@ -22,11 +22,11 @@
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
-import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
-import { notChargedOn } from "../not-charged.js";
+import { attribute, creditAnswers, ECB_ATTRIBUTION, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
+import { notChargedOn, notChargedHere } from "../not-charged.js";
 import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
-import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
-import { markResaleCleared } from "../resale-terms.js";
+import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable, ecbRateBasis } from "./frankfurter.js";
+import { markResaleCleared, markResaleBarred, NYFED_PASS_ON_RESALE_REASON } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -206,7 +206,7 @@ export const TREASURY_YIELD_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
-// fred-series' Treasury constant maturities read the years held here.
+// us-macro-series' Treasury constant maturities read the years held here.
 useHeldTreasuryYields((year) => treasuryYieldYears.get(year) || null);
 export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
 // Moves every held year's read and failure times `ms` into the past.
@@ -290,7 +290,7 @@ export function stopTreasuryYieldRefresh() {
 function treasuryYieldUnavailable(cause) {
   console.warn(`[treasury-yield] answered 503 (${String(cause?.message || cause).slice(0, 120)})`);
   return Object.assign(
-    bad(`The U.S. Treasury yield curve file could not be read in time; nothing was charged - retry in ${TREASURY_YIELD_RETRY_AFTER_S} s`, 503),
+    bad(`The U.S. Treasury yield curve file could not be read in time.${notChargedHere()} Retry in ${TREASURY_YIELD_RETRY_AFTER_S} s.`, 503),
     { retryAfter: TREASURY_YIELD_RETRY_AFTER_S, attribution: "upstream", upstreamFailure: "deadline" },
   );
 }
@@ -374,7 +374,7 @@ export function isFredMaintenancePage(text) {
   return /<html[\s>]/i.test(head) && /maintenance/i.test(head);
 }
 export function fredMaintenanceError() {
-  return Object.assign(bad("FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now. Retry later; you were not charged.", 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
+  return Object.assign(bad(`FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now.${notChargedHere()} Retry later.`, 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
 }
 
 // G10 majors quoted vs USD — the standard FX dashboard most callers want.
@@ -508,7 +508,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02. Source: European Central Bank.",
+      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02.",
     tags: ["forex", "fx", "currency", "historical", "exchange-rate", "ecb", "macro"],
     discovery: {
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
@@ -520,7 +520,7 @@ export const MACRO_TOOLS = [
         },
         required: ["from", "to", "date"],
       },
-      output: { example: { from: "USD", to: "EUR", date: "2024-01-02", rate: 0.9128, source: "ECB via Frankfurter" } },
+      output: { example: { from: "USD", to: "EUR", date: "2024-01-02", rate: 0.9128, source: "ECB via Frankfurter", rateBasis: "inverse of the ECB euro reference rate, computed" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -542,13 +542,13 @@ export const MACRO_TOOLS = [
       if (j == null) throw bad(`No ECB reference rate for ${from}→${to} on or before ${date} (ECB reference currencies only; the series starts 1999-01-04)`, 422);
       const rate = j?.rates?.[to];
       if (typeof rate !== "number") throw bad(`Frankfurter returned no rate for ${from}→${to} on ${date}`, 502);
-      return { from, to, date: j.date ?? date, rate, source: "ECB via Frankfurter (open data)" };
+      return { from, to, date: j.date ?? date, rate, source: "ECB via Frankfurter (open data)", rateBasis: ecbRateBasis(from, to) };
     },
   },
   {
     route: "GET /api/fx-timeseries", name: "FX rate time series", slug: "fx-timeseries", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31. Source: European Central Bank.",
+      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31.",
     tags: ["forex", "fx", "currency", "time-series", "exchange-rate", "ecb", "macro", "history"],
     discovery: {
       input: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31" },
@@ -561,7 +561,7 @@ export const MACRO_TOOLS = [
         },
         required: ["from", "to", "startDate", "endDate"],
       },
-      output: { example: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31", count: 22, series: [{ date: "2024-01-02", rate: 0.9128 }] } },
+      output: { example: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31", count: 22, series: [{ date: "2024-01-02", rate: 0.9128 }], rateBasis: "inverse of the ECB euro reference rate, computed" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -585,18 +585,18 @@ export const MACRO_TOOLS = [
       // input's problem (v1 answered 404 for it), not an outage.
       if (!series.length && endDate < "1999-01-04") throw bad(`No ECB reference rates for ${from}→${to} before 1999-01-04 (the ECB series start)`, 422);
       if (!series.length) throw bad("Frankfurter returned no rates for the requested window", 502);
-      return { from, to, startDate, endDate, count: series.length, series, source: "ECB via Frankfurter (open data)" };
+      return { from, to, startDate, endDate, count: series.length, series, source: "ECB via Frankfurter (open data)", rateBasis: ecbRateBasis(from, to) };
     },
   },
   {
     route: "GET /api/fx-dashboard", name: "G10 FX dashboard vs USD", slug: "fx-dashboard", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params. Source: European Central Bank.",
+      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params.",
     tags: ["forex", "fx", "dashboard", "g10", "dxy", "usd-strength", "ecb", "macro"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)" } },
+      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)", rateBasis: "rates against USD computed from ECB euro reference rates" } },
     },
     handler: async () => {
       // OBSERVED failing from prod (4× 504 on 2026-07-23; sub-second from a
@@ -634,6 +634,7 @@ export const MACRO_TOOLS = [
         rates: Object.fromEntries(have.map((c) => [c, rates[c]])),
         usdStrengthIndex,
         source: ECB_FX_SOURCE,
+        rateBasis: "rates against USD computed from ECB euro reference rates",
       };
       fxDashCache = { at: Date.now(), value };
       return value;
@@ -814,7 +815,7 @@ const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "lo
 // --- series with a copyright notice ---------------------------------------------
 // FRED's Terms of Use: a series whose notes carry a copyright notice needs
 // the copyright owner's permission for use beyond personal use.
-// No tool here reads FRED: fred-series and the computed tools read the
+// No tool here reads FRED: us-macro-series and the computed tools read the
 // publishing agencies. fredCopyrightOf is the rule a tool that serves a
 // caller-chosen FRED series applies to the series' notes first.
 
@@ -845,18 +846,19 @@ export function fredCopyrightOf(notes) {
 
 MACRO_TOOLS.push(
   {
-    // Served from the agencies that publish each series (src/tools/us-macro-series.js),
-    // never from FRED: the route keeps FRED's series IDs, inputs and answer shape.
-    route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
+    // Served from the agencies that publish each series (src/tools/us-macro-series.js).
+    // The route keeps the common series IDs, inputs and answer shape it served
+    // as fred-series (retired to this route, src/retired-tools.js).
+    route: "GET /api/us-macro-series", name: "US economic time series by series ID", slug: "us-macro-series", category: "data", attribution: "us-agencies", price: "$0.001",
     upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      `US economic series by FRED ID, from the agency that publishes each: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10, T10YIE), money (M2SL), FX (DEXUSEU), rates (FEDFUNDS). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
-    tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
+      `US economic series by series ID, from the agency that publishes each; accepts the common series IDs: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10, T10YIE), money (M2SL), FX (DEXUSEU), rates (FEDFUNDS). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
+    tags: ["series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
       inputSchema: {
         properties: {
-          seriesId: { type: "string", maxLength: 40, description: `FRED series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
+          seriesId: { type: "string", maxLength: 40, description: `series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional; without one a Bureau of Labor Statistics series answers its last 10 years, a daily Treasury or exchange-rate series its last 2 calendar years" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
@@ -869,7 +871,7 @@ MACRO_TOOLS.push(
     },
     handler: async (i) => {
       const seriesId = String(i.seriesId ?? "").trim().toUpperCase();
-      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID (e.g. UNRATE, CPIAUCSL)');
+      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a series ID (e.g. UNRATE, CPIAUCSL)');
       const startDate = i.startDate ? String(i.startDate).trim() : undefined;
       const endDate = i.endDate ? String(i.endDate).trim() : undefined;
       if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');
@@ -903,7 +905,7 @@ MACRO_TOOLS.push(
     handler: async () => {
       const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(30), limit: 100000 });
       const out = sahmFromMonthly(got.observations);
-      if (!out) throw bad("The U.S. Bureau of Labor Statistics unemployment series has too few recent months to compute the Sahm Rule right now; retry later. Nothing was charged.", 503);
+      if (!out) throw bad(`The U.S. Bureau of Labor Statistics unemployment series has too few recent months to compute the Sahm Rule right now; retry later.${notChargedHere()}`, 503);
       return {
         date: out.date, value: out.value,
         triggered: out.value >= 0.5,
@@ -933,7 +935,7 @@ MACRO_TOOLS.push(
     handler: async () => {
       const got = await usMacroSeries({ seriesId: "CPIAUCSL", units: "pc1", startDate: monthsBack(26), limit: 100000 });
       const obs = got.observations;
-      if (!obs.length) throw bad("The U.S. Bureau of Labor Statistics CPI series returned no recent months; retry later. Nothing was charged.", 503);
+      if (!obs.length) throw bad(`The U.S. Bureau of Labor Statistics CPI series returned no recent months; retry later.${notChargedHere()}`, 503);
       const last = obs[obs.length - 1];
       // The 12 calendar months ending at the latest; a month with no
       // published value is reported, never dropped silently.
@@ -973,7 +975,7 @@ MACRO_TOOLS.push(
       const months = Math.min(Math.max(parseInt(i.months, 10) || 12, 1), 120);
       const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(months + 3), limit: 100000 });
       const all = got.observations;
-      if (!all.length) throw bad("The U.S. Bureau of Labor Statistics unemployment series returned no recent months; retry later. Nothing was charged.", 503);
+      if (!all.length) throw bad(`The U.S. Bureau of Labor Statistics unemployment series returned no recent months; retry later.${notChargedHere()}`, 503);
       const last = all[all.length - 1];
       const window = monthRange(addMonthsIso(last.date, -(months - 1)), last.date);
       const obs = all.filter((o) => o.date >= window[0]);
@@ -1009,7 +1011,7 @@ MACRO_TOOLS.push(
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 365);
       const got = await usMacroSeries({ seriesId: "EFFR", startDate: daysBack(days + 21), limit: 100000 });
       const daily = got.observations;
-      if (!daily.length) throw bad("The New York Fed's EFFR returned no recent business days; retry later. Nothing was charged.", 503);
+      if (!daily.length) throw bad(`The New York Fed's EFFR returned no recent business days; retry later.${notChargedHere()}`, 503);
       const last = daily[daily.length - 1];
       const history = carryCalendarDays(daily, days);
       return {
@@ -1030,6 +1032,8 @@ MACRO_TOOLS.push(
 // (src/data-attribution.js): BLS for the labor and price series, the New York
 // Fed for the funds rate.
 for (const t of MACRO_TOOLS) if (t.attribution === "bls" || t.attribution === "nyfed") attribute(t, t.attribution);
+// The ECB sentence ends each FX description (read before payment) and rides every FX answer.
+for (const t of MACRO_TOOLS) if (t.attribution === "ecb") { attribute(t, "ecb"); creditAnswers(t, ECB_ATTRIBUTION); }
 
 // ---- month and day helpers for the computed tools ----------------------------
 const isoMonth = (y, m) => new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
@@ -1088,6 +1092,11 @@ export function carryCalendarDays(daily, days) {
 // run's ceiling when one is set (src/run-ceiling.js): a caller that stops
 // waiting at a deadline of its own can serve them.
 markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);
+
+// The New York Fed's pass-on rule (https://www.newyorkfed.org/privacy/termsofuse):
+// the tools that serve its rates (fed-funds; us-macro-series' SOFR, EFFR and
+// OBFR) are never sold through a third party's marketplace.
+markResaleBarred(MACRO_TOOLS, ["fed-funds", "us-macro-series"], NYFED_PASS_ON_RESALE_REASON);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(MACRO_TOOLS, ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"], "US Treasury public data");

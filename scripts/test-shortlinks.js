@@ -35,7 +35,7 @@ try {
   const inst = await fetch(`${base}/install`);
   const body = await inst.text();
   ok(inst.status === 200 && /text\/x-shellscript/.test(inst.headers.get("content-type") || ""), "/install is served as a shell script");
-  ok(body.startsWith("#!/bin/sh") && body.includes("set -eu") && body.includes("claude mcp add --transport http -s user agent402") && body.includes("npx agent402-openclaw setup") && body.includes("/guides/agent-hosts"), "script wires Claude Code, points OpenClaw and Cursor at their setup, and links the guide");
+  ok(body.startsWith("#!/bin/sh") && body.includes("set -eu") && body.includes("claude mcp add --transport http -s user agent402") && body.includes("npx agent402-model-provider setup") && body.includes("/guides/agent-hosts"), "script wires Claude Code, points OpenClaw and Cursor at their setup, and links the guide");
   ok(!/^\s*sudo |rm -rf|curl [^|\n]*\| *sh/m.test(body), "script never runs sudo, deletes, or pipes another download into sh");
   const f = join(mkdtempSync(join(tmpdir(), "a402-install-")), "install.sh"); try { writeFileSync(f, body); execFileSync("sh", ["-n", f]); ok(true, "script passes sh -n"); } catch (e) { ok(false, `sh -n: ${e.message}`); }
   // Canonical host: www.<host> is a 301 to the apex with path + query kept; a
@@ -160,6 +160,28 @@ try {
     ok(h.status === 301 && h.headers.get("location") === "/docs", "/docs/Home -> /docs");
     const g = await fetch(`${base}/docs/Getting-Started`, { redirect: "manual" });
     ok(g.status === 200, "other wiki pages still render");
+    // A docs slug in another case 301s to its canonical path, query kept;
+    // only a known slug is redirected, and only to a path of this host.
+    const loc = async (p) => { const r = await fetch(`${base}${p}`, { redirect: "manual" }); return `${r.status} ${r.headers.get("location") || ""}`.trim(); };
+    for (const [from, to] of [
+      ["/docs/solana", "/docs/Solana"], ["/docs/ARC", "/docs/Arc"], ["/docs/stellar?x=1&y=2", "/docs/Stellar?x=1&y=2"],
+      ["/docs/algorand", "/docs/Algorand"], ["/docs/getting-started", "/docs/Getting-Started"], ["/docs/ADAPTERS", "/docs/adapters"], ["/docs/home", "/docs"],
+    ]) ok((await loc(from)) === `301 ${to}`, `${from} -> ${to} (got ${await loc(from)})`);
+    const head = await fetch(`${base}/docs/solana`, { method: "HEAD", redirect: "manual" });
+    ok(head.status === 301 && head.headers.get("location") === "/docs/Solana", `HEAD /docs/solana -> /docs/Solana (got ${head.status})`);
+    ok((await loc("/docs/Solana")) === "200", "the canonical path itself answers 200");
+    // With a trailing slash, one hop straight to the canonical path (never slashless first, then canonical).
+    const path1 = (l) => { try { return new URL(l.replace(/^301 /, "")).pathname + new URL(l.replace(/^301 /, "")).search; } catch { return l; } };
+    for (const [from, to] of [["/docs/solana/", "/docs/Solana"], ["/docs/ARC/?x=1", "/docs/Arc?x=1"], ["/docs/home/", "/docs"]]) {
+      const got = await loc(from);
+      ok(got.startsWith("301 ") && path1(got) === to, `${from} -> ${to} in one hop (got ${got})`);
+    }
+    const unknownSlash = await loc("/docs/no-such-doc/");
+    ok(unknownSlash.startsWith("301 ") && path1(unknownSlash) === "/docs/no-such-doc", `an unknown docs slug with a slash only loses the slash (got ${unknownSlash})`);
+    for (const p of ["/docs/no-such-doc", "/docs//evil.com", "/docs/%2F%2Fevil.com", "/docs/sol%61na", "/docs/solana%2F..%2Fevil", "/docs/solana/extra"]) {
+      const got = await loc(p);
+      ok(got === "404", `${p} answers 404, never a redirect (got ${got})`);
+    }
   }
   // A skill pack's /tools/skill-<pack> page canonicalises to /skills/<pack>,
   // and the two carry different descriptions.

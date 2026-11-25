@@ -35,7 +35,7 @@ import { assertRobotsAllow } from "./robots-gate.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
-import { withoutChargeClaim } from "../not-charged.js";
+import { withoutChargeClaim, notChargedHere, runAsStep } from "../not-charged.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -237,7 +237,7 @@ export const PACK_STEPS = {
       // advertised in toolSlugs and never run until 2026-09-02. Runs ONLY
       // when stock-history served nothing (a FRED id is not a ticker), so an
       // equity run does not pay for a leg that cannot apply.
-      { slug: "fred-series", when: (_a, p) => !((p["stock-history"]?.bars ?? []).length), skipReason: "series was served as an equity ticker by stock-history",
+      { slug: "us-macro-series", when: (_a, p) => !((p["stock-history"]?.bars ?? []).length), skipReason: "series was served as an equity ticker by stock-history",
         mapInput: (a) => ({ seriesId: a.series }) },
       // Every downstream step reads the values from whichever fetcher served.
       { slug: "stats-summary",   mapInput: (_a, p) => ({ values: bakeOffValues(p) }) },
@@ -253,12 +253,12 @@ export const PACK_STEPS = {
       // correlation step passed the series against ITSELF (r = 1 on every run).
       { slug: "stock-history", as: "benchmark-stock", when: (a) => !!benchmarkOf(a), skipReason: "no benchmark was given",
         mapInput: (a) => ({ symbol: benchmarkOf(a), days: sessionsFor(a.horizon, 250) }) },
-      { slug: "fred-series", as: "benchmark-fred",
+      { slug: "us-macro-series", as: "benchmark-macro",
         when: (a, p) => !!benchmarkOf(a) && !((p["benchmark-stock"]?.bars ?? []).length), skipReason: "no benchmark was given, or it was served as an equity ticker",
         mapInput: (a) => ({ seriesId: benchmarkOf(a) }) },
       { slug: "correlation", when: (a) => !!benchmarkOf(a), skipReason: "no benchmark was given",
         mapInput: (_a, p) => {
-          const [x, y] = alignTails(bakeOffValues(p), seriesValues(p, "benchmark-stock", "benchmark-fred"));
+          const [x, y] = alignTails(bakeOffValues(p), seriesValues(p, "benchmark-stock", "benchmark-macro"));
           if (x.length < 3) throw Object.assign(new Error(`need at least 3 paired observations of the series and its benchmark, got ${x.length}`), { statusCode: 424 });
           return { x, y };
       } },
@@ -316,7 +316,7 @@ export const PACK_STEPS = {
       // FRED needs an explicit series id - fed funds is the default macro
       // signal. The key is `seriesId`; this sent `series`, so the step 400'd
       // on every call (2 of 2 in 60 days of telemetry).
-      { slug: "fred-series",         mapInput: () => ({ seriesId: "FEDFUNDS" }) },
+      { slug: "us-macro-series",         mapInput: () => ({ seriesId: "FEDFUNDS" }) },
     ],
   },
 
@@ -842,7 +842,7 @@ export const PACK_STEPS = {
     steps: [
       { slug: "edgar-company-lookup",  mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-filings",         mapInput: (a) => ({ ticker: a.ticker, limit: 25 }) },
-      { slug: "edgar-company-facts",   mapInput: (a) => ({ ticker: a.ticker, tags: "Revenues,NetIncomeLoss,Assets" }) },
+      { slug: "edgar-company-facts",   mapInput: (a) => ({ ticker: a.ticker, tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Revenues,NetIncomeLoss,Assets" }) },
       { slug: "edgar-company-concept", mapInput: (a) => ({ ticker: a.ticker, taxonomy: "us-gaap", tag: "Revenues" }) },
       { slug: "edgar-insider-trades",  mapInput: (a) => ({ ticker: a.ticker, days: 90, limit: 25 }) },
       { slug: "edgar-search",          mapInput: (a) => ({ q: "going concern", ticker: a.ticker, limit: 5 }) },
@@ -984,7 +984,7 @@ export const PACK_STEPS = {
   },
 
   // Bake-off: backtest 4 methods, then forecast forward with all 4. Both
-  // fetchers fire — stock-history wins for tickers, fred-series wins for
+  // fetchers fire — stock-history wins for tickers, us-macro-series wins for
   // FRED series ids; the loser fails cleanly. forecast-eval is called 4×
   // (one per method); the envelope preserves all 4 RMSE/MAPE rows for the
   // agent to rank. Then all 4 forward forecasts run, so the agent has the
@@ -995,7 +995,7 @@ export const PACK_STEPS = {
     mode: "chain",
     steps: [
       { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, days: sessionsFor("2y") }) },
-      { slug: "fred-series",   mapInput: (a) => ({ seriesId: a.series }) },
+      { slug: "us-macro-series",   mapInput: (a) => ({ seriesId: a.series }) },
       // Helper: closes from whichever fetcher succeeded.
       ...["naive", "ses", "holt", "holt-winters"].map((method) => ({
         slug: "forecast-eval",
@@ -1588,16 +1588,16 @@ export const PACK_STEPS = {
   },
 
   // Fed economic snapshot: FEDFUNDS + UNRATE + CPIAUCSL.
-  // Every step sent `series` where fred-series requires `seriesId`, so all
+  // Every step sent `series` where us-macro-series requires `seriesId`, so all
   // three 400'd on every call - 33 of 33 step calls in 60 days of PRODUCTION
   // telemetry, where the FRED key exists. The pack has no promptArgs, so this
   // was not a bad caller input: it could never have worked for anyone.
-  "fred-snapshot": {
+  "macro-snapshot": {
     mode: "fanout",
     steps: [
-      { slug: "fred-series", mapInput: () => ({ seriesId: "FEDFUNDS" }) },
-      { slug: "fred-series", mapInput: () => ({ seriesId: "UNRATE" }) },
-      { slug: "fred-series", mapInput: () => ({ seriesId: "CPIAUCSL" }) },
+      { slug: "us-macro-series", mapInput: () => ({ seriesId: "FEDFUNDS" }) },
+      { slug: "us-macro-series", mapInput: () => ({ seriesId: "UNRATE" }) },
+      { slug: "us-macro-series", mapInput: () => ({ seriesId: "CPIAUCSL" }) },
     ],
   },
 
@@ -1885,14 +1885,14 @@ function firstUrl(urls) {
 
 // Pull a closes/values series out of whichever fetcher succeeded in the
 // forecasting-bake-off chain. stock-history wins for tickers (returns bars
-// with .close); fred-series wins for FRED ids (returns observations with
+// with .close); us-macro-series wins for series ids (returns observations with
 // .value). Returns the first non-empty source.
 function bakeOffValues(prior) {
-  return seriesValues(prior, "stock-history", "fred-series");
+  return seriesValues(prior, "stock-history", "us-macro-series");
 }
 
 // Closes from a stock-history result stored under `stockKey`, else values
-// from a fred-series result under `fredKey`.
+// from a us-macro-series result under `fredKey`.
 function seriesValues(prior, stockKey, fredKey) {
   const fromStock = (prior?.[stockKey]?.bars ?? [])
     .map((b) => Number(b?.close))
@@ -2090,7 +2090,7 @@ async function runPack(packSlug, args, ctx) {
     // (e.g. Brave answer) to pack fan-out. Fire-and-forget, never throws.
     const startedAt = Date.now();
     // A step may declare `when(args, prior)`: false = this leg does not apply
-    // to THIS input (trend-analysis: fred-series when the series was an equity
+    // to THIS input (trend-analysis: us-macro-series when the series was an equity
     // ticker that stock-history already served). A skipped leg is reported as
     // skipped, never as a failure the buyer paid for, and never counts toward
     // "N/M succeeded" (2026-09-02; before this the only way to express a
@@ -2133,7 +2133,7 @@ async function runPack(packSlug, args, ctx) {
       let lastErr;
       for (const input of inputs) {
         try {
-          const result = await handler(input);
+          const result = await runAsStep(() => handler(input));
           prior[keyOf(step)] = result;
           capturePostHogPackStep({ pack: packSlug, slug: step.slug, ok: true, ms: Date.now() - startedAt });
           return { slug: step.slug, ...tag(step), ok: true, result };
@@ -2177,7 +2177,7 @@ async function runPack(packSlug, args, ctx) {
     const allClientErrors = attempted.every((s) => s.statusCode >= 400 && s.statusCode < 500);
     const reasons = attempted.map((s) => `${s.slug}: ${s.error}`).join("; ");
     throw Object.assign(
-      new Error(`No step in the "${packSlug}" pack succeeded, so there is nothing to return (not charged). ${reasons}`),
+      new Error(`No step in the "${packSlug}" pack succeeded, so there is nothing to return.${notChargedHere()} ${reasons}`),
       { statusCode: allClientErrors ? 400 : 502 }
     );
   }

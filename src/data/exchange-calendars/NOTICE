@@ -1,0 +1,19 @@
+exchange_calendars
+https://github.com/gerrymanoim/exchange_calendars (release 4.13.3,
+commit 3ea2521554946e3a02f575abd262414a46d0beb2)
+Copyright 2018 Quantopian, Inc., and the exchange_calendars contributors.
+Licensed under the Apache License, Version 2.0 (LICENSE in this directory).
+
+Used in src/tools/exchange-calendars.js (the market-calendar tool). Taken
+from the project's calendar definitions for XLON, XTKS, XHKG and XNYS:
+  - session hours: XLON 08:00-16:30; XTKS 09:00-11:30 and 12:30-15:30;
+    XHKG 09:30-12:00 and 13:00-16:00;
+  - half days: XLON closes 12:30 on 24 and 31 December (the preceding
+    Friday when that day falls on a weekend); XHKG closes 12:00 on the
+    weekday eves of Christmas, New Year and Lunar New Year;
+  - XTKS year-end closures on 31 December and 2 and 3 January;
+  - XNYS early closes at 13:00 on 3 July when it is a Monday to Thursday,
+    on the day after Thanksgiving, and on 24 December when it is a Monday
+    to Thursday.
+Changes: the rules were restated as JavaScript data and functions; no code
+of the project is included.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The plain-language guide (ask402.ai, a site this project's maintainer also
+// The guide to x402 and MPP (ask402.ai, a site this project's maintainer also
 // operates) and this site's own explainer pages.
 //
 //   node scripts/test-guide-site-links.js
@@ -44,8 +44,8 @@ for (const [path, html] of Object.entries(PAGES)) {
   const d = doc(html);
   const desktop = guideLinks(d).filter((a) => a.classList.contains("mlnav-row"));
   const mobile = guideLinks(d).filter((a) => a.classList.contains("ml-mm-link"));
-  ok(desktop.length === 1 && desktop[0].getAttribute("href") === GUIDE_SITE && text(desktop[0]) === "ask402.aiplain-language guide", `${path}: the menu names the guide once (${desktop.map(text).join(" | ")})`);
-  ok(mobile.length === 1 && mobile[0].getAttribute("href") === GUIDE_SITE && text(mobile[0]) === "ask402.ai · plain-language guide", `${path}: the phone menu names it once (${mobile.map(text).join(" | ")})`);
+  ok(desktop.length === 1 && desktop[0].getAttribute("href") === GUIDE_SITE && text(desktop[0]) === "ask402.aix402 and MPP guide", `${path}: the menu names the guide once (${desktop.map(text).join(" | ")})`);
+  ok(mobile.length === 1 && mobile[0].getAttribute("href") === GUIDE_SITE && text(mobile[0]) === "ask402.ai · x402 and MPP guide", `${path}: the phone menu names it once (${mobile.map(text).join(" | ")})`);
 }
 {
   // Beside the other "what this is" entries, where a reader looks for an explainer.
@@ -59,9 +59,9 @@ for (const [path, html] of Object.entries(PAGES)) {
 {
   const inBody = (html) => guideLinks(doc(html)).filter((a) => !a.classList.contains("mlnav-row") && !a.classList.contains("ml-mm-link"));
   const learn = inBody(PAGES["/learn"]);
-  ok(learn.length === 1 && learn[0].getAttribute("href") === GUIDE_SITE && /For x402 and MPP in plain language, read ask402\.ai\./.test(text(learn[0].closest("p"))), `/learn names the guide in its opening (${learn.map((a) => text(a.closest("p"))).join(" | ").slice(-90)})`);
+  ok(learn.length === 1 && learn[0].getAttribute("href") === GUIDE_SITE && /For an explainer on x402 and MPP, read ask402\.ai\./.test(text(learn[0].closest("p"))), `/learn names the guide in its opening (${learn.map((a) => text(a.closest("p"))).join(" | ").slice(-90)})`);
   const pay = inBody(PAGES["/how-to-pay"]);
-  ok(pay.length === 1 && pay[0].getAttribute("href") === GUIDE_SITE && /New to x402 or MPP\? ask402\.ai explains both in plain language\./.test(text(pay[0].closest("p"))), `/how-to-pay names the guide in its opening (${pay.map((a) => text(a.closest("p"))).join(" | ").slice(-90)})`);
+  ok(pay.length === 1 && pay[0].getAttribute("href") === GUIDE_SITE && /New to x402 or MPP\? ask402\.ai explains both\./.test(text(pay[0].closest("p"))), `/how-to-pay names the guide in its opening (${pay.map((a) => text(a.closest("p"))).join(" | ").slice(-90)})`);
   ok(inBody(PAGES["/privacy"]).length === 0 && inBody(PAGES["/learn/agent-payments"]).length === 0, "a page that is not about learning the protocols carries the menu entry only");
 }
 
@@ -74,10 +74,10 @@ for (const [path, html] of Object.entries(PAGES)) {
   const hostOf = (w) => { try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(w) ? w : `https://${w}`).hostname; } catch { return null; } };
   const wordsOf = (l) => l.split(/[\s()[\]<>"']+/).map((w) => w.replace(/[.,:;!?]+$/, "")).filter(Boolean);
   const named = (txt) => txt.split("\n").filter((l) => wordsOf(l).some((w) => guideHosts.has(hostOf(w))));
-  const TAIL = " x402 and MPP in plain language, for people: https://www.ask402.ai.";
+  const TAIL = " x402 and MPP explained, for people: https://www.ask402.ai.";
   const short = named(llmsTxt(B, {})), full = named(llmsFullTxt(B, {}));
   ok(short.length === 1 && short[0].slice(-TAIL.length) === TAIL, `/llms.txt names the guide once, with its other pointers (${short.map((l) => l.slice(-80)).join(" | ")})`);
-  ok(full.length === 1 && full[0] === "- [ask402.ai](https://www.ask402.ai): x402 and MPP explained in plain language, for people", `/llms-full.txt lists the guide on one line (${full.join(" | ")})`);
+  ok(full.length === 1 && full[0] === "- [ask402.ai](https://www.ask402.ai): x402 and MPP explained, for people", `/llms-full.txt lists the guide on one line (${full.join(" | ")})`);
 }
 
 // ---- plain links ---------------------------------------------------------------------------
@@ -96,17 +96,17 @@ for (const [path, html] of Object.entries({ ...PAGES, "/what-is-x402": whatIsX40
   const { guidePage } = await import("../src/guides.js");
   const X = GUIDE_EXPLAINERS.x402, M = GUIDE_EXPLAINERS.mpp;
   const EXPLAINERS = [
-    { path: "/what-is-x402", html: whatIsX402Page(B), route: 'app.get("/what-is-x402"', title: "x402 on Agent402: how an x402 paid request settles", links: [[X, "What is x402?"], [M, "What is MPP?"]], sentence: "For each protocol in plain language, read What is x402? and What is MPP? on ask402.ai." },
-    { path: "/what-is-mpp", html: whatIsMppPage(B, null), route: 'app.get("/what-is-mpp"', title: "MPP on Agent402: how a Machine Payments Protocol payment works", links: [[M, "What is MPP?"]], sentence: "For MPP in plain language, read What is MPP? on ask402.ai." },
-    { path: "/learn/x402", html: learnPage(B, "x402"), route: 'app.get("/learn/:slug"', title: "x402 on Agent402: the headers, the offer and the receipt", links: [[X, "What is x402?"]], sentence: "For x402 in plain language, read What is x402? on ask402.ai." },
-    { path: "/learn/mpp", html: learnPage(B, "mpp"), route: 'app.get("/learn/:slug"', title: "MPP challenges and credentials: the Payment auth scheme by header", links: [[M, "What is MPP?"]], sentence: "For MPP in plain language, read What is MPP? on ask402.ai." },
+    { path: "/what-is-x402", html: whatIsX402Page(B), route: 'app.get("/what-is-x402"', title: "x402 on Agent402: how an x402 paid request settles", links: [[X, "What is x402?"], [M, "What is MPP?"]], sentence: "For an explainer on each protocol, read What is x402? and What is MPP? on ask402.ai." },
+    { path: "/what-is-mpp", html: whatIsMppPage(B, null), route: 'app.get("/what-is-mpp"', title: "MPP on Agent402: how a Machine Payments Protocol payment works", links: [[M, "What is MPP?"]], sentence: "For an explainer on MPP, read What is MPP? on ask402.ai." },
+    { path: "/learn/x402", html: learnPage(B, "x402"), route: 'app.get("/learn/:slug"', title: "x402 on Agent402: the headers, the offer and the receipt", links: [[X, "What is x402?"]], sentence: "For an explainer on x402, read What is x402? on ask402.ai." },
+    { path: "/learn/mpp", html: learnPage(B, "mpp"), route: 'app.get("/learn/:slug"', title: "MPP challenges and credentials: the Payment auth scheme by header", links: [[M, "What is MPP?"]], sentence: "For an explainer on MPP, read What is MPP? on ask402.ai." },
   ];
   for (const e of EXPLAINERS) {
     const d = doc(e.html);
     const title = d.querySelector("title")?.textContent || "";
     const desc = d.querySelector('meta[name="description"]')?.getAttribute("content") || "";
     ok(title === e.title && title.length <= META_TITLE_MAX, `${e.path}: titled for the protocol on this server (${title})`);
-    ok(!/^what (is|are)\b/i.test(title) && !/plain-language guide|explained$/i.test(title), `${e.path}: the title does not claim the general question`);
+    ok(!/^what (is|are)\b/i.test(title) && !/plain[- ]language|explained$/i.test(title), `${e.path}: the title does not claim the general question`);
     ok(/Agent402|this server/.test(desc) && desc.length > 50 && desc.length <= META_DESCRIPTION_MAX + 10, `${e.path}: the description is about this server (${desc.length} chars: ${desc.slice(0, 70)}...)`);
     // The opening (before the first h2) links the guide's explainer by its question.
     const body = guideLinks(d).filter((a) => !a.classList.contains("mlnav-row") && !a.classList.contains("ml-mm-link"));
@@ -129,9 +129,9 @@ for (const [path, html] of Object.entries({ ...PAGES, "/what-is-x402": whatIsX40
   ok(learnUrls.includes(`${B}/learn/x402`) && learnUrls.includes(`${B}/learn/mpp`) && site.includes(`<loc>${B}/what-is-x402</loc>`) && site.includes(`<loc>${B}/what-is-mpp</loc>`), "all four pages stay in the sitemap");
   const full = llmsFullTxt(B, {});
   ok(full.includes(`- [x402 and MPP on Agent402](${B}/what-is-x402) / [MPP on Agent402](${B}/what-is-mpp): how each payment wire runs on this server`), "/llms-full.txt lists both pages by what they cover");
-  // A guide that explains the protocol in a paragraph points to the plain-language explainer too.
+  // A guide that explains the protocol in a paragraph points to the explainer too.
   const five = guideLinks(doc(guidePage(B, "x402-in-5-minutes"))).filter((a) => !a.classList.contains("mlnav-row") && !a.classList.contains("ml-mm-link"));
-  ok(five.length === 1 && five[0].getAttribute("href") === X && /In plain language: What is x402\? on ask402\.ai\.$/.test(text(five[0].closest("p"))), `the five-minute guide links the guide's x402 explainer where it sums up the protocol (${five.map((a) => text(a.closest("p")).slice(-60)).join(" | ")})`);
+  ok(five.length === 1 && five[0].getAttribute("href") === X && /The explainer: What is x402\? on ask402\.ai\.$/.test(text(five[0].closest("p"))), `the five-minute guide links the guide's x402 explainer where it sums up the protocol (${five.map((a) => text(a.closest("p")).slice(-60)).join(" | ")})`);
 }
 
 // --- a link to one of this site's explainers is anchored for what the page is ---

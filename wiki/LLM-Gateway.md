@@ -28,9 +28,9 @@ simplest is the local wallet proxy, which signs an x402 payment per call from a
 wallet you hold and forwards to the gateway:
 
 ```bash
-npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+npm i agent402-model-provider @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
-npx agent402-openclaw proxy        # run from that folder; serves http://127.0.0.1:8412/v1
+npx agent402-model-provider proxy        # run from that folder; serves http://127.0.0.1:8412/v1
 ```
 
 Install the four packages together and start the proxy from that folder: the
@@ -75,7 +75,7 @@ The flat tiers: one price per call whatever the length, for a buyer who wants a 
 
 Each tier also answers Google's generateContent wire (`/v1/nano/gemini`, `/v1/gemini`, `/v1/pro/gemini`, `/v1/premium/gemini`, `/v1/metered/gemini`, `/v1/auto/gemini`). A Gemini-wire call that names no model is served by a Gemini model the tier admits: gemini-3.1-flash-lite on nano, gemini-3.5-flash-lite on base and metered, gemini-3.6-flash on pro and gemini-3.1-pro on premium; the auto tier routes. On the premium tier a reasoning model keeps its own effort unless the call's output budget is under the tier's default, in which case the gateway asks for effort `low` so the thinking leaves room for the answer (an effort or thinking setting you send is used instead, fitted to a small cap as **Reasoning that fits the output cap** describes).
 
-Bare OpenAI-style names (`gpt-4o-mini`) are accepted and mapped; requesting a model that another flat tier serves is priced at that tier: the 402 quotes its price, the paid call is served under its caps and failover, and the answer says so in `agent402_tier`. All tiers are **wallet-only** - every call burns real upstream credit, so there is no proof-of-work free tier (see [[Security Model]]). The pro and premium chat tiers also accept three upstream server tools under a server-owned bound (`openrouter:web_search`, `openrouter:web_fetch`, `openrouter:datetime`, each with a hard use cap that `GET /v1/models` lists per tier); other server tools are refused by name.
+Bare OpenAI-style names (`gpt-4o-mini`) are accepted and mapped to the same model under its provider prefix (`openai/gpt-4o-mini`); requesting a model that another flat tier serves is priced at that tier: the 402 quotes its price, the paid call is served under its caps and failover, and the answer says so in `agent402_tier`. All tiers are **wallet-only** - every call burns real upstream credit, so there is no proof-of-work free tier (see [[Security Model]]). The pro and premium chat tiers also accept three server tools (web search, web fetch and the current date) under a server-owned bound, each with a hard use cap; `GET /v1/models` names their types and caps per tier; other server tools are refused by name.
 
 ## Typed judgment (`/v1/judge`, `/v1/decisions`)
 
@@ -133,9 +133,9 @@ Set a client timeout of at least 120 s: the answer is generated and the payment 
 
 The field is absent when metered would not be materially cheaper, on the metered tier itself, and on streamed responses (a stream has no envelope to carry it). It is not part of the documented response shape, so nothing should depend on its presence.
 
-## OpenClaw provider plugin (`agent402-openclaw`)
+## OpenClaw provider plugin (`agent402-model-provider`)
 
-[OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through one block in `openclaw.json`, and the [`agent402-openclaw`](https://www.npmjs.com/package/agent402-openclaw) npm plugin writes that block for this gateway: `AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` stores a prepaid credits key ([`/credits`](https://agent402.tools/credits) says whether packs are on sale) and starts a loopback proxy that carries it, so OpenClaw itself never holds a payment credential. `auto` (routed per prompt, flat $0.01 per call) is offered beside every id on `GET /v1/models`; explicit models ride the metered route by default (`--flat` keeps them on their flat tiers), and `setup` picks the cheapest preferred metered model whose input cap holds OpenClaw's own system prompt as the primary. A wallet can pay instead of a credits key (`AGENT402_WALLET_KEY`, an EVM key holding USDC on Base): exact by default, or `upto` after a one-time `agent402-openclaw permit2-approve`, so the wallet settles actual usage; `agent402-openclaw doctor` reports which mode it is in. Full guide: [agent402.tools/guides/openclaw-model-provider](https://agent402.tools/guides/openclaw-model-provider).
+[OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through one block in `openclaw.json`, and the [`agent402-model-provider`](https://www.npmjs.com/package/agent402-model-provider) npm plugin writes that block for this gateway: `AGENT402_CREDITS_KEY=a402_... npx agent402-model-provider setup --write` stores a prepaid credits key ([`/credits`](https://agent402.tools/credits) says whether packs are on sale) and starts a loopback proxy that carries it, so OpenClaw itself never holds a payment credential. `auto` (routed per prompt, flat $0.01 per call) is offered beside every id on `GET /v1/models`; explicit models ride the metered route by default (`--flat` keeps them on their flat tiers), and `setup` picks the cheapest preferred metered model whose input cap holds OpenClaw's own system prompt as the primary. A wallet can pay instead of a credits key (`AGENT402_WALLET_KEY`, an EVM key holding USDC on Base): exact by default, or `upto` after a one-time `agent402-model-provider permit2-approve`, so the wallet settles actual usage; `agent402-model-provider doctor` reports which mode it is in. Full guide: [agent402.tools/guides/openclaw-model-provider](https://agent402.tools/guides/openclaw-model-provider).
 
 ## Image generation
 
@@ -205,16 +205,16 @@ Every chat call asks the upstream to cache the prompt prefix (a top-level `cache
 
 `POST /v1/rerank` ($0.002) speaks the Cohere rerank wire: `{query, documents[], top_n}` in, `results[{index, relevance_score, document}]` out, served by `cohere/rerank-v3.5`. Up to 50 documents (1,600 chars each, 40k total) and a 500-char query per call. Deterministic, so a byte-identical repeat within 10 minutes is served free from cache to the payer that paid for it, under the rules in [Response caching](#response-caching) (`cache:false` opts out). Pair it with `/v1/embeddings`: embed, recall your top candidates, rerank them.
 
-## Anthropic Messages API
+## Anthropic Messages wire format
 
 The same five tiers also speak the Anthropic Messages wire: `POST /v1/nano/messages`, `/v1/auto/messages`, `/v1/messages`, `/v1/pro/messages`, `/v1/premium/messages` (same prices, models, caps and failover as each tier's chat route). Point the Anthropic SDK, Claude Code or the Agent SDK at `https://agent402.tools/v1` (or `/v1/pro`, `/v1/premium`) with an x402-paying fetch and call `messages.create` as usual: `system`, content blocks (text, image, tool_use, tool_result), client tools, `thinking`, `stop_sequences`, streaming (`message_start` … `message_stop`). Any model on the tier is served through this wire (Claude natively, others translated upstream). `max_tokens` is required by the wire and clamped to the tier cap; a reply that spends its whole cap thinking and says nothing is not served (the same model gets one retry at its lowest depth, then the failover chain walks on, and an exhausted chain is a 502, not settled on x402; see **Reasoning that fits the output cap**). On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) the depth control is top-level `effort` (low, medium, high, xhigh, max), validated against the model's own list from `/v1/models` and refused with that list; older Claude takes `thinking.budget_tokens` instead. `speed` other than `standard` is refused: the priority endpoint bills twice the model's list price and sits outside every tier's price.
 
-## OpenAI Responses API
+## OpenAI Responses wire format
 
 The same five tiers also speak the OpenAI Responses wire: `POST /v1/nano/responses`, `/v1/auto/responses`, `/v1/responses`, `/v1/pro/responses`, `/v1/premium/responses`. Point `responses.create()` (or the OpenAI Agents SDK) at `https://agent402.tools/v1` (or a tier prefix) through an x402-paying fetch. `input` as a string or item list, `instructions`, function tools, `text.format`, `reasoning`, streaming (`response.created` … `response.completed`) all work; server-side tools (web search, file search, computer use, MCP) are not served, and there is no stored conversation state (`store` is always false, `previous_response_id` is refused) - send the full input each call.
 
 ## Grounded answers (web search)
 
-`POST /v1/grounded/chat/completions` ($0.03) is the auto router plus a live web search on every call (up to 5 results): the model answers from the results and the reply carries `url_citation` annotations. Omit `model` (or send `auto`) and the gateway picks the model by task type; the response adds `agent402_router`. `:online` model variants are refused on the other tiers (pro and premium accept the bounded `openrouter:web_search` server tool instead), and here search is part of the flat price. Never cached.
+`POST /v1/grounded/chat/completions` ($0.03) is the auto router plus a live web search on every call (up to 5 results): the model answers from the results and the reply carries `url_citation` annotations. Omit `model` (or send `auto`) and the gateway picks the model by task type; the response adds `agent402_router`. `:online` model variants are refused on the other tiers (pro and premium accept the bounded `agent402:web_search` server tool instead), and here search is part of the flat price. Never cached.
 
 Other hosts (Claude Code, Cursor, Continue, ElizaOS, AgentCore, any OpenAI SDK): https://agent402.tools/guides/agent-hosts

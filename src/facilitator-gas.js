@@ -26,6 +26,7 @@
 // word through the tool-failure monitor (noteRelayerGas), which shares them
 // across replicas.
 import { positiveNum as num } from "./env-num.js";
+import { paysL1DataFee, readL1FeeUpperBound } from "./op-stack-l1-fee.js";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const MAX_SIGNERS = 5;
@@ -78,9 +79,10 @@ export function signersFromSupported(body, network) {
   return out.slice(0, MAX_SIGNERS);
 }
 
-/** Settlements a balance still pays for: floor(balance / (gasPrice x gas)). */
-export function runwayOf(balanceWei, gasPriceWei, gasPerSettlement) {
-  const per = BigInt(gasPriceWei) * BigInt(Math.max(1, Math.round(gasPerSettlement)));
+/** Settlements a balance still pays for: floor(balance / (gasPrice x gas +
+ *  the L1 data fee one settlement pays on an OP Stack chain, else 0)). */
+export function runwayOf(balanceWei, gasPriceWei, gasPerSettlement, l1FeeWei = 0n) {
+  const per = BigInt(gasPriceWei) * BigInt(Math.max(1, Math.round(gasPerSettlement))) + BigInt(l1FeeWei || 0n);
   if (per <= 0n) return null;
   const r = BigInt(balanceWei) / per;
   return r > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(r);
@@ -107,7 +109,8 @@ export function floorGasSettings(env = process.env) {
  * Settlement gas against the chain's price floor. A floored chain's calls are
  * priced at least the floor in USD, but the gas one settlement burns is paid
  * in ETH, so its USD cost moves with ETH's price. Each check prices one
- * settlement (gas units x gas price x ETH/USD) and reads "low" with reason
+ * settlement (gas units x gas price, plus the L1 data fee on an OP Stack
+ * chain, x ETH/USD) and reads "low" with reason
  * gasNearFloor once that passes `share` of the floor. A failed ETH price read
  * keeps the last good price for `priceMaxAgeMs`, then reads "unknown" (never
  * a page by itself). One log line per state change.
@@ -121,7 +124,7 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
   let lastState = null;
   let lastKnownNear = false;
   const row = (fields) => ({ network, facilitator: "price floor", signer: null, balanceEth: null, runway: null, ...fields });
-  async function check(gasPriceWei) {
+  async function check(gasPriceWei, l1FeeWei = 0n) {
     const at = now();
     const floor = Number(typeof floorUsd === "function" ? floorUsd() : floorUsd) || 0;
     if (!(floor > 0)) return null;
@@ -141,7 +144,7 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
     } else if (gasPriceWei === null || gasPriceWei === undefined) {
       reading = row({ status: "unknown", reason: "gasPriceUnread", floorUsd: floor, ethUsd: lastPrice.usd, at });
     } else {
-      const gasUsd = (Number(BigInt(gasPriceWei) * BigInt(Math.round(settings.gasUnits))) / 1e18) * lastPrice.usd;
+      const gasUsd = (Number(BigInt(gasPriceWei) * BigInt(Math.round(settings.gasUnits)) + BigInt(l1FeeWei || 0n)) / 1e18) * lastPrice.usd;
       // Near once past the share; a near reading clears only once the gas is
       // under the share by the clear margin (the price of ETH and of gas both
       // move it, so one threshold flapped).
@@ -179,7 +182,7 @@ const hostOf = (url) => { try { return new URL(url).host; } catch { return Strin
  * @param {Array<{label: string, signer: string}>} [o.ownSigners] - signers we
  *   run ourselves (our own relayer), read directly with no /supported
  */
-export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn, ownSigners = [], floorCheck = null } = {}) {
+export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch, settings = gasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn, ownSigners = [], floorCheck = null, l1FeeReader = paysL1DataFee(network) ? (rpc) => readL1FeeUpperBound(rpc) : null } = {}) {
   const namedNoSigner = new Set(); // urls already logged as publishing no signer
   const signersByUrl = new Map(); // url -> last signers read from /supported
   const state = new Map(); // `${url}|${signer}` -> { failures, last }
@@ -201,11 +204,17 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
   /** Read every signer once; resolves to the readings (never throws). */
   async function check() {
     const at = now();
-    let gasPrice = null, gasError = null;
+    let gasPrice = null, gasError = null, l1Fee = 0n;
     try { gasPrice = await rpc("eth_gasPrice", []); } catch (e) { gasError = String(e?.message || e).slice(0, 120); }
+    // An OP Stack chain (Ink): one settlement also pays an L1 data fee, read
+    // as the oracle's upper bound for a settlement's size. A fee that cannot
+    // be read leaves the gas unknown, as a failed gas price read does.
+    if (!gasError && l1FeeReader) {
+      try { l1Fee = await l1FeeReader(rpc); } catch (e) { gasError = `L1 data fee: ${String(e?.message || e).slice(0, 100)}`; gasPrice = null; }
+    }
     const readings = [];
     if (floorCheck) {
-      try { const f = await floorCheck.check(gasPrice); if (f) readings.push(f); } catch { /* the floor row is advisory */ }
+      try { const f = await floorCheck.check(gasPrice, l1Fee); if (f) readings.push(f); } catch { /* the floor row is advisory */ }
     }
     // Our own relayer is a facilitator of its own: its signer is known, so
     // there is no /supported to read, only its balance.
@@ -217,13 +226,17 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
         // price sold on this chain (src/payments.js ownRelayerCoversLowestPrice).
         let covers = {};
         if (typeof url.own.coversLowestPrice === "function") { try { covers = { coversLowestPrice: url.own.coversLowestPrice() === true }; } catch { covers = { coversLowestPrice: false }; } }
+        // Whether our relayer is reached after a listed facilitator's
+        // ambiguous answer (a 5xx, a timeout), read on chain first: false on a
+        // network where only a refusal that moved nothing reaches it (Ink).
+        if (typeof url.own.followsAmbiguous === "boolean") covers.followsAmbiguous = url.own.followsAmbiguous;
         const key = `own:${label}|${signer}`;
         const s = state.get(key) || { failures: 0, last: null };
         let error = gasError, reading = null;
         if (!error) {
           try {
             const balance = await rpc("eth_getBalance", [signer, "latest"]);
-            const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement);
+            const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement, l1Fee);
             reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runwayStatus(runway, settings.minRunway, s.last?.status, settings.clearMargin), ...covers, at };
           } catch (e) { error = String(e?.message || e).slice(0, 120); }
         }
@@ -263,7 +276,7 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
         if (!error) {
           try {
             const balance = await rpc("eth_getBalance", [signer, "latest"]);
-            const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement);
+            const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement, l1Fee);
             reading = {
               network, facilitator, signer,
               balanceEth: Number(balance) / 1e18,

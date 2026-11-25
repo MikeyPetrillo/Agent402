@@ -153,7 +153,7 @@ const listPriceUsd = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g
  */
 /** Jobs one client address may have running at once (the default below). */
 export const ASYNC_JOBS_PER_CLIENT = 4;
-export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = ASYNC_JOBS_PER_CLIENT, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null,
+export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = ASYNC_JOBS_PER_CLIENT, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null, pushException = (req, message) => message,
   quoteOf = listPriceUsd, paidOf = ({ basePriceUsd, meteredUsd }) => (Number(meteredUsd) > 0 ? Number(meteredUsd) : basePriceUsd) }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
@@ -186,7 +186,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     // replayed, so it is refused here rather than held as a job that fails.
     const target = String(req.originalUrl || "");
     if (!target.startsWith("/") || target.startsWith("//")) {
-      return res.status(400).json({ error: "request_target_not_origin_form", hint: "Send the request target as a path (POST /route), not as an absolute URL. Nothing was charged." });
+      return res.status(400).json({ error: "request_target_not_origin_form", hint: pushException(req, `Send the request target as a path (POST /route), not as an absolute URL. ${NOT_CHARGED}`) });
     }
     // The replay sends the parsed JSON body; any other body (a multipart
     // upload) is served synchronously rather than replayed without its bytes.
@@ -196,9 +196,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     // Async is for a call that is ready to pay, so a job is never created for
     // a request that could not settle anything.
     if (!carriesPaymentAttempt(req)) return next();
-    if (store.atCapacity()) return res.status(503).set("Retry-After", "30").json({ error: "async_capacity", hint: "Too many jobs are running right now. Retry in a minute, or send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait for the answer on this connection. Nothing was charged." });
+    if (store.atCapacity()) return res.status(503).set("Retry-After", "30").json({ error: "async_capacity", hint: pushException(req, `Too many jobs are running right now. Retry in a minute, or send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait for the answer on this connection. ${NOT_CHARGED}`) });
     const ip = String(req.ip || "");
-    if ((perIp.get(ip) || 0) >= maxPerIp) return res.status(429).set("Retry-After", "30").json({ error: "async_jobs_per_client", hint: `At most ${maxPerIp} jobs may run at once per client. Collect a finished one first. Nothing was charged.` });
+    if ((perIp.get(ip) || 0) >= maxPerIp) return res.status(429).set("Retry-After", "30").json({ error: "async_jobs_per_client", hint: pushException(req, `At most ${maxPerIp} jobs may run at once per client. Collect a finished one first. ${NOT_CHARGED}`) });
 
     const ctl = new AbortController();
     let rec = null;
@@ -207,7 +207,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     // (src/mcp-tasks.js).
     const runKey = newRunKey();
     try { rec = await store.create({ slug: def.slug, controller: ctl, runKey }); } catch { rec = null; }
-    if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait on this connection. Nothing was charged." });
+    if (!rec) return res.status(503).json({ error: "async_unavailable", hint: pushException(req, `A job could not be recorded. Send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait on this connection. ${NOT_CHARGED}`) });
     perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
     const headers = {};

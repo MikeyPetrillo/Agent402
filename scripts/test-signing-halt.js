@@ -39,12 +39,13 @@ ok(halted("disabled") === true, "a MALFORMED value HALTS - fails closed, never o
 ok(halted("no-really-off") === true, "an almost-off value halts");
 
 process.env.SIGNING_HALTED = "1";
-try { assertSigningAllowed("a test payment"); ok(false, "halted state throws"); }
+const { runAsRouteCall } = await import("../src/not-charged.js");
+try { runAsRouteCall(() => assertSigningAllowed("a test payment")); ok(false, "halted state throws"); }
 catch (e) {
   // 503 and not 4xx: a halt is our configuration, not the caller's error, and a
   // status >= 400 already cancels settlement so nobody pays to meet it.
   ok(e.statusCode === 503, `the refusal is 503, not ${e.statusCode}`);
-  ok(/not attempted/i.test(e.message) && /Nothing was charged/i.test(e.message),
+  ok(/not attempted/i.test(e.message) && / Nothing was charged\. Try again later/.test(e.message),
     "the refusal states nothing was charged");
 }
 process.env.SIGNING_HALTED = "";

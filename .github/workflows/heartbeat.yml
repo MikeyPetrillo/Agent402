@@ -383,6 +383,40 @@ jobs:
             [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           fi
 
+      # Holiday source sponsorship: the holiday tools' source allows commercial
+      # use only while the sponsorship is active (src/tools/holiday-source.js).
+      # Reads it with SPONSORSHIP_READ_TOKEN (the sponsoring account, read:user;
+      # sees a private sponsorship) when set, else the public sponsorship flag
+      # with the workflow token. Fixed-text issues: one when not active, one
+      # when unreadable; each closes on the next active read.
+      - name: Holiday source sponsorship check (alarm when it is not active)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPONSORSHIP_READ_TOKEN: ${{ secrets.SPONSORSHIP_READ_TOKEN }}
+          SPONSOR_LOGIN: ${{ github.repository_owner }}
+        run: |
+          TITLE="Scheduled check needs review: holiday-source-sponsorship"
+          TITLE2="Scheduled check needs review: holiday-source-sponsorship-read"
+          CODE=0
+          node scripts/holiday-sponsorship-check.js || CODE=$?
+          find_open() {
+            ALARM_NAME="$1" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty' 2>/dev/null || echo ""
+          }
+          OPEN=$(find_open "$TITLE")
+          OPEN2=$(find_open "$TITLE2")
+          if [ "$CODE" = "0" ]; then
+            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          elif [ "$CODE" = "1" ]; then
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+          else
+            echo "::warning::holiday source sponsorship check UNREADABLE (exit $CODE) - not silently passing"
+            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+          fi
+
       # Canary burner balance watch: an empty burner once read as a settlement
       # outage on the status page. Warn before it runs dry. Public RPC, no keys;
       # an unreadable balance warns loudly rather than silently passing.
@@ -1452,6 +1486,35 @@ jobs:
               fi
               ;;
             ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # Sanctions reports (src/sanctions-events.js): one word on
+      # /api/gateway-status. due (a sanctions event needs a report and is not
+      # marked filed) and attention (the regional block is on and cannot fire,
+      # src/sanctioned-regions.js sanctionsReportWord) page; clear closes;
+      # unknown does neither. The status Worker runs the same check under the
+      # same title.
+      - name: Sanctions report check (alarm while a report is due)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctionsReport.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "sanctions report: $WORD"
+          TITLE="Scheduled check needs review: sanctions-report"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            due|attention)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+            clear)
               if [ -n "$OPEN" ]; then
                 gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi

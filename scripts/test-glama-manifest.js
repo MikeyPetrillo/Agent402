@@ -88,8 +88,8 @@ try {
   ok(await waitUp(3089), "server up on :3089 without GLAMA_MAINTAINER_EMAIL");
   const defaultManifest = await (await fetch("http://127.0.0.1:3089/.well-known/glama.json")).json();
   ok(
-    defaultManifest.maintainers[0]?.email === "mike@agent402.tools",
-    `without env: maintainers[0].email falls back to 'mike@agent402.tools' (got ${defaultManifest.maintainers[0]?.email})`
+    defaultManifest.maintainers[0]?.email === "help@agent402.tools",
+    `without env: maintainers[0].email falls back to 'help@agent402.tools' (got ${defaultManifest.maintainers[0]?.email})`
   );
 
   console.log(`\n${pass} passed`);

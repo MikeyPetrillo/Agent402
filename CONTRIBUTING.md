@@ -48,8 +48,8 @@ Your contribution is also licensed under the license of the component you
 change: AGPL-3.0-or-later for the server (the repository root, where most
 tool contributions land) and MIT for the packages that carry their own MIT
 `LICENSE` (`client/`, `mcp/`, `tollbooth/`, `openclaw/`, `adapters/*` and
-`facilitator/`). The "Agent402" name and logo are trademarks of Havok
-Holdings LLC; see [TRADEMARKS.md](TRADEMARKS.md). Ownership and third-party
+`facilitator/`). The "Agent402" name and logo are trademarks of Cardhavok
+LLC (doing business as Havok Holdings LLC); see [TRADEMARKS.md](TRADEMARKS.md). Ownership and third-party
 notices are in [NOTICE](NOTICE).
 
 ## List your x402 seller

@@ -122,7 +122,7 @@ ${pre(`{ "mcpServers": { "agent402": { "url": "${baseUrl}/mcp" } } }`)}
 ${pre(`claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`)}
 <p>${getWalletHtml()}</p>
 <h2>What the agent sees</h2>
-<p>${c("catalog.search")}, ${c("catalog.find")} and ${c("catalog.call")} reach every tool by task or slug, and ${c("payment.info")} says how to pay.${named.length ? ` Common tools also have their own names: ${named.map(c).join(", ")}.` : ""}</p>
+<p>${c("catalog.search")}, ${c("catalog.find")} and ${c("catalog.call")} reach every tool by task or slug, and ${c("payment.info")} says how to pay.${named.length ? ` Common tools also have their own names: ${named.length > 1 ? `${named.slice(0, -1).map(c).join(", ")} and ${c(named[named.length - 1])}` : c(named[0])}.` : ""}</p>
 <h2>How a paid tool is paid</h2>
 <p>${payText}</p>
 <h2>More</h2>

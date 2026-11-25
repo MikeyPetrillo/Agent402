@@ -1802,11 +1802,11 @@ const fakeRouter = () => {
   // A package built on the SDK names itself first, on both paths; anything
   // that is not one well-formed token is dropped.
   uas.length = 0;
-  const a = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, userAgent: "agent402-strands/0.1.13" });
+  const a = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, userAgent: "agent402-agent-loop-tools/0.1.13" });
   await a._loadCatalog();
   a._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
   await a.call("cheap");
-  ok(uas.length >= 2 && uas.every((u) => u === `agent402-strands/0.1.13 ${expectedUa}`), `userAgent puts the adapter's token first on every request (got ${JSON.stringify(uas)})`);
+  ok(uas.length >= 2 && uas.every((u) => u === `agent402-agent-loop-tools/0.1.13 ${expectedUa}`), `userAgent puts the adapter's token first on every request (got ${JSON.stringify(uas)})`);
   ok(new Agent402({ fetchImpl: grab, userAgent: "two tokens/1" }).userAgent === expectedUa && new Agent402({ fetchImpl: grab, userAgent: 7 }).userAgent === expectedUa, "a malformed userAgent is ignored");
 }
 

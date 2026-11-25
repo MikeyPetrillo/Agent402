@@ -193,7 +193,7 @@ authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
 ${SETTLE_FIRST_SENTENCE}
 The headers, step
-by step: [how x402 works](/learn/x402). In plain language: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
+by step: [how x402 works](/learn/x402). The explainer: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
 ## See a quote (free)
 
@@ -277,7 +277,9 @@ agent402-client has no dependencies: install viem for \`privateKeyToAccount\`, o
 
 Off by default; a 402 with no batched accept falls back to the plain payment
 fetch. The mechanism, the pending-settlement resend and the signing helpers:
-[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway).
+[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway). Circle Gateway, Arc and USDC are trademarks of
+Circle Internet Group, Inc. and/or its affiliates; Agent402 is not affiliated
+with or endorsed by Circle.
 
 ## Or from the command line
 
@@ -311,7 +313,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.17.0\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.17.1\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -511,7 +513,7 @@ npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 
 ${getWalletMarkdown()}
 
-**agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
+**agent402-model-provider.** \`maxPerCallUsd\` in the plugin config, or
 \`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
 
 In both packages a value that is not a USD amount keeps the default ceiling
@@ -1153,7 +1155,7 @@ on-chain customer detector - is in
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
-      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism and Ethereum. These tools never touch funds.",
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum One, OP Mainnet and Ethereum. These tools never touch funds.",
     md: `
 An autonomous agent that can *pay* is far more useful than one that can't - but
 you don't want a middleman holding your money. Agent402's payments tools are
@@ -1162,7 +1164,7 @@ These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
 the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is an ordinary card
 charge, taken at checkout; if the report fails to generate, the charge is refunded to the card automatically.) Everything below works on
-**Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
+**Base, Polygon, Arbitrum One, OP Mainnet and Ethereum** (\`network\` param, default
 base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
 needs an API key.
 
@@ -1683,9 +1685,9 @@ exists:
 
 - **Base** - the primary rail, and where the x402 Bazaar discovery listing
   lives.
-- **Solana, Polygon, Arbitrum, Avalanche, Sei, Monad, Celo** - USDC, each
-  through a facilitator that settles that network.
-- **Optimism** - USDC; its settlement carries a fee, so its quote carries a
+- **Solana, Polygon, Arbitrum One, Avalanche C-Chain, Sei, Monad, Celo** -
+  USDC, each through a facilitator that settles that network.
+- **OP Mainnet** - USDC; its settlement carries a fee, so its quote carries a
   small network premium, shown in the \`402\`. What you're quoted is what
   actually clears.
 - **Arc** - USDC, through the facilitator that settles that network; Arc pays
@@ -1723,8 +1725,8 @@ routing everything through one chain regardless of what you sent.
   },
   {
     slug: "pay-with-coinbase-agentic-wallet",
-    title: "Pay Agent402 from Coinbase's own agent tooling: Agentic Wallet CLI, Agentic Wallet MCP, purl, and the CDP SDK",
-    seoTitle: "Pay Agent402 from Coinbase's agent tooling",
+    title: "Pay Agent402 with an Agentic Wallet, purl or the CDP SDK",
+    seoTitle: "Pay Agent402 with an Agentic Wallet, purl or the CDP SDK",
     description:
       "Already holding a Coinbase Agentic Wallet, the Agentic Wallet MCP tools, Stripe's purl, or a CDP-managed wallet in code? Every Agent402 endpoint is a plain x402 resource on Base, so those pay it unchanged - here are the exact commands, the spend caps to set, and the two extensions we honor (payment-identifier, bazaar).",
     md: `
@@ -1733,6 +1735,9 @@ plain x402 v2 resource settling USDC on Base (plus {{railsMore}} more rails). So
 buyer tooling Coinbase and Stripe ship for x402 pays it with no Agent402-specific
 setup. This guide is the command sheet. Nothing here needs an API key from us:
 the payment is the identity.
+
+Coinbase, Coinbase Business, Agentic Wallet and CDP are trademarks of Coinbase,
+Inc.; Agent402 is not affiliated with or endorsed by Coinbase.
 
 ## Agentic Wallet CLI (\`awal\`)
 
@@ -1841,17 +1846,20 @@ carries a \`WWW-Authenticate: Payment\` challenge - see
   },
   {
     slug: "coinbase-business-get-paid-by-agents",
-    title: "Get paid by AI agents into your Coinbase Business account with agent402-tollbooth",
-    seoTitle: "Get paid by AI agents into Coinbase Business",
+    title: "agent402-tollbooth: get paid by AI agents into a Coinbase Business account",
+    seoTitle: "agent402-tollbooth: get paid into a Coinbase Business account",
     description:
-      "Coinbase Business accounts receive x402 payments from AI agents. agent402-tollbooth is the one-middleware way to put a USDC price on your API or site, settle through Coinbase's facilitator, and land every payment in that account. Three env vars, one command, one example server.",
+      "Coinbase Business accounts receive x402 payments from AI agents. agent402-tollbooth is the one-middleware way to put a USDC price on your API or site, settle through the facilitator your CDP keys authorize, and land every payment in that account. Three env vars, one command, one example server.",
     md: `
 Coinbase Business now takes payments from AI agents over x402: an agent pays
 your x402 URL in USDC and the funds settle into your Coinbase Business account,
 where you reconcile, withdraw, or hold them. Coinbase's own path is a hosted
-checkout that returns an x402 URL. If you sell an API and want a price on every
+checkout that returns an x402 URL ([Accept Agentic Payments with x402](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/accept-x402-payments)). If you sell an API and want a price on every
 request, this guide puts x402 in front of the API itself and settles into the
 same account.
+
+Coinbase, Coinbase Business and CDP are trademarks of Coinbase, Inc.; Agent402
+is not affiliated with or endorsed by Coinbase.
 
 [agent402-tollbooth](https://www.npmjs.com/package/agent402-tollbooth) is an
 open-source (MIT) gate for Express, Next.js, Cloudflare or a plain reverse
@@ -1866,10 +1874,9 @@ it at your Coinbase Business address and every settled call lands there.
    the programmatic route to a receive address). This is the \`payTo\` on
    every 402 you serve, so funds settle straight into the account.
 2. A **CDP API key** (id + secret) from the Coinbase Developer Platform. The
-   tollbooth uses it to sign requests to Coinbase's x402 facilitator, which
-   verifies and settles each payment. On Base no fee is taken from the payment
-   itself; the facilitator's own usage pricing is on Coinbase's developer
-   platform pages.
+   tollbooth uses it to sign requests to the x402 facilitator that verifies
+   and settles each payment; that facilitator's own usage pricing is on the
+   Coinbase Developer Platform's pages.
 
 ## 2. One command in front of anything
 
@@ -1930,9 +1937,9 @@ runnable example is in the repo:
 
 We ran exactly this path with real money before publishing: the CLI's own
 middleware built from CDP keys, paid $0.001 by a stock x402 client, settled
-through Coinbase's facilitator on Base
+through the facilitator those keys authorize, on Base
 ([transaction](https://basescan.org/tx/0x8175178ac4e2229dfd9385a3c78c491ffe554b08fdf52cf92f99425c983ec5d1)).
-One rule to know: Coinbase's facilitator refuses a payment whose payer is the
+One rule to know: that facilitator refuses a payment whose payer is the
 payTo (\`self_send_not_allowed\`), so test from a second wallet, never from the
 receiving address.
 
@@ -1967,7 +1974,7 @@ its normal schedule.
 Agent402 opens two doors to an agent host:
 
 - **Models**: an OpenAI-compatible gateway. Run the local wallet proxy
-  (\`agent402-openclaw proxy\`, below) and point any client that accepts a
+  (\`agent402-model-provider proxy\`, below) and point any client that accepts a
   base URL at \`http://127.0.0.1:8412/v1\`: it pays each call from your wallet
   over x402. With ${CREDITS_ON ? "a credits key" : "a credits key you already hold"}, a client can instead use
   \`https://agent402.tools/v1/metered\` directly with the key as its API key. Each request is quoted from its own
@@ -1998,10 +2005,10 @@ wallet you hold (the key never leaves the machine), and forwards to the
 gateway. Any OpenAI-compatible client then uses it as its base URL:
 
 \`\`\`bash
-npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+npm i agent402-model-provider @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
-npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1
+npx agent402-model-provider proxy           # run from that folder; serves http://127.0.0.1:8412/v1
 \`\`\`
 
 Install the four packages together and run the proxy from the same folder: the
@@ -2009,7 +2016,7 @@ wallet packages are optional peers, so a proxy started without them runs unpaid
 and logs that x402 payment is unavailable.
 
 Use model \`auto\` or any id from \`GET /v1/models\`. Run
-\`npx agent402-openclaw permit2-approve\` once to settle metered calls at actual
+\`npx agent402-model-provider permit2-approve\` once to settle metered calls at actual
 usage instead of the quote. The proxy also answers the Anthropic wire
 (\`POST /v1/messages\`), so Claude Code pays from the same wallet (next section).
 
@@ -2054,7 +2061,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2068,7 +2075,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2091,7 +2098,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2191,9 +2198,9 @@ model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLo
 
 ## ElizaOS
 
-Tools: the [\`elizaos-plugin-agent402\`](https://www.npmjs.com/package/elizaos-plugin-agent402)
+Tools: the [\`agent402-actions-plugin\`](https://www.npmjs.com/package/agent402-actions-plugin)
 plugin adds \`AGENT402_FIND\` / \`AGENT402_CALL\` / \`AGENT402_ABOUT\` actions
-(\`"plugins": ["elizaos-plugin-agent402"]\`, setting \`AGENT402_WALLET_KEY\` to an
+(\`"plugins": ["agent402-actions-plugin"]\`, setting \`AGENT402_WALLET_KEY\` to an
 EVM key holding USDC, or \`AGENT402_CREDITS_KEY\` for a credits key you already hold).
 Models: the OpenAI plugin reads its base URL from the environment, so no code
 changes. With the local wallet proxy running (above):
@@ -2320,7 +2327,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2346,7 +2353,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2373,7 +2380,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2411,7 +2418,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2435,7 +2442,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.17.0"]
+args = ["-y", "agent402-mcp@0.17.1"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2479,7 +2486,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2506,7 +2513,7 @@ result, proven sellers first. Why pay here, with the proof links:
     description:
       CREDITS_ON
         ? "Point OpenClaw at Agent402's OpenAI-compatible gateway with a prepaid credits key: one config block, auto-routed models at a flat per-call price, paid by card. Or pay per call in USDC from a wallet over x402."
-        : "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402: the agent402-openclaw plugin mints the wallet and writes the provider block. A credits key bought earlier still works in the plain config block.",
+        : "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402: the agent402-model-provider plugin mints the wallet and writes the provider block. A credits key bought earlier still works in the plain config block.",
     md: `
 [OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through
 one block in \`openclaw.json\`. Agent402's LLM gateway is one of those. ${CREDITS_ON ? `It can be paid **by card**, through a prepaid credits key, so an agent
@@ -2602,15 +2609,15 @@ tier's price, and the paid call is served under that tier's caps.
 
 Every tier answers an x402 \`402\` (${RAILS_COUNT_MD}) and an MPP challenge, so any
 x402-capable client can pay per call with no key at all. For OpenClaw the
-[\`agent402-openclaw\`](https://www.npmjs.com/package/agent402-openclaw) plugin
+[\`agent402-model-provider\`](https://www.npmjs.com/package/agent402-model-provider) plugin
 runs a loopback proxy that pays and forwards, with a credits key or an x402
 wallet, and writes the provider block for you. Explicit models go to the metered
 route by default (each request quoted from its body, from
 $${TIERS["v1-chat-metered"].price}); \`--flat\` keeps the flat tiers:
 
 \`\`\`bash
-openclaw plugins install agent402-openclaw
-npx agent402-openclaw setup --write        # no key? it mints a wallet and prints the address to fund
+openclaw plugins install agent402-model-provider
+npx agent402-model-provider setup --write        # no key? it mints a wallet and prints the address to fund
 openclaw gateway restart
 \`\`\`
 
@@ -2623,7 +2630,7 @@ provider and a service, and uses no feature OpenClaw keeps for trusted plugins.
 With no credits key and no \`AGENT402_WALLET_KEY\`, \`setup\` generates a wallet
 into \`~/.openclaw/agent402/wallet.key\` (0600, never printed) and tells you the
 address: send it USDC on Base and every call is paid from it over x402, from
-$${TIERS["v1-chat-metered"].price} a call. \`agent402-openclaw wallet\` shows the
+$${TIERS["v1-chat-metered"].price} a call. \`agent402-model-provider wallet\` shows the
 balance; \`--credits-key a402_...\` uses a credits key you already hold instead. Every forwarded
 call carries an \`Idempotency-Key\`, so a retry replays the paid answer instead
 of paying twice. The plain config block above needs no plugin and
@@ -2649,7 +2656,7 @@ receipt shape:
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
   PDFs, OCR, DNS and TLS checks, wallet-keyed memory.
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,
-  domain audits, token risk, deep research, market briefs, a LinkedIn article
+  domain audits, token risk, deep research, market briefs, a professional article
   package; monitors that re-run a report only when the facts change.
 - **Routing that sources from other sellers**: \`POST /api/route/execute\` buys
   the result from the best-matching external seller for a task, proven sellers

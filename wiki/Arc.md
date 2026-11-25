@@ -1,8 +1,10 @@
 # Arc (USDC)
 
+Arc, Circle Gateway and USDC are trademarks of Circle Internet Group, Inc. and/or its affiliates. Agent402 is independent and is not affiliated with or endorsed by Circle.
+
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Agent402 settles x402 payments in **USDC** on **Arc**, an EVM chain with chain
+Agent402 settles x402 payments in **USDC** on **Arc Network** (Arc), an EVM chain with chain
 id **5042** whose gas is paid in USDC. The rail is re-proven daily by an
 automated on-chain canary purchase. The live
 [/arc](https://agent402.tools/arc) page shows the chain's sellers and the
@@ -42,7 +44,7 @@ Sign with an ordinary EOA key.
 
 - **Agent402 server**: set `CIRCLE_FACILITATOR_API_KEY`. Its presence is the
   switch: Arc joins a multi-chain `PAYMENT_NETWORKS` list on its own, settles
-  through Circle's facilitator only, and is offered only while that
+  through the Arc facilitator that key configures, and is offered only while that
   facilitator's `/supported` lists it. Without the key Arc is not configured
   and every other chain keeps serving. See [[Self-Hosting]].
 - **Batched option (optional)**: with `GATEWAY_NANOPAYMENTS=on`, the Arc and

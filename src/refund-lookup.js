@@ -24,6 +24,7 @@
 // own status and amount, and leads with the one furthest from repaid. The
 // nonce is never shown and is never a lookup key: the buyer holds the tx.
 import { refundsByTransaction } from "./refund-ledger.js";
+import { publicRefundStatus } from "./refund-status-word.js";
 
 const KEYED_EVIDENCE = /^(0x[0-9a-fA-F]{64})#0x[0-9a-fA-F]{64}$/;
 /** The settlement transaction a ledger row's evidence names: the evidence
@@ -100,7 +101,11 @@ const NOTES = {
   sending: "The refund is being sent now.",
   paid: "Refunded. refundTx is our transfer back to the paying wallet on the same network.",
   void: "This payment was reviewed and no refund is due (for example, the call was delivered after all).",
+  held: "A refund is recorded and held for review; it has not been paid.",
 };
+// The ledger's status as the public answer names it: a row held as blocked
+// reads `held` (recorded, under review, not paid), never `none`.
+const publicStatusOf = publicRefundStatus;
 
 /** The public answer for one row (or null = none). Same key set always.
  *  `found` is true exactly when status is not "none" (so it says no more than
@@ -108,7 +113,7 @@ const NOTES = {
  *  amount a refund repays (`amountUsd`, kept for earlier readers); `txUrl`
  *  is the payment itself on its explorer. */
 export function publicRefundView(tx, row, rows = row ? [row] : []) {
-  const status = row && NOTES[row.status] ? row.status : "none";
+  const status = row && NOTES[publicStatusOf(row.status)] ? publicStatusOf(row.status) : "none";
   const has = status !== "none";
   const refundTx = has && status === "paid" && row.paidTx ? String(row.paidTx) : null;
   const price = has ? Number(Number(row.priceUsd || 0).toFixed(6)) : null;
@@ -128,17 +133,17 @@ export function publicRefundView(tx, row, rows = row ? [row] : []) {
     note: NOTES[status],
     // Every refund recorded for this transaction (one, except where several
     // payments settled in it), oldest first; empty when there is none.
-    refunds: rows.filter((r) => r && NOTES[r.status] && r.status !== "none").map((r) => {
+    refunds: rows.filter((r) => r && NOTES[publicStatusOf(r.status)] && r.status !== "none").map((r) => {
       const sent = r.status === "paid" && r.paidTx ? String(r.paidTx) : null;
       const p = Number(Number(r.priceUsd || 0).toFixed(6));
-      return { status: r.status, priceUsd: p, amountUsd: p, refundTx: sent, refundTxUrl: sent ? explorerTxUrl(r.network, sent) : null, refundedAt: sent && r.resolvedAt ? new Date(r.resolvedAt).toISOString() : null };
+      return { status: publicStatusOf(r.status), priceUsd: p, amountUsd: p, refundTx: sent, refundTxUrl: sent ? explorerTxUrl(r.network, sent) : null, refundedAt: sent && r.resolvedAt ? new Date(r.resolvedAt).toISOString() : null };
     }),
   };
 }
 
 // The row an answer leads with: the one furthest from repaid, so a
 // transaction with a debt still owed never reads as settled.
-const LEAD_ORDER = ["owed", "sending", "paid", "void"];
+const LEAD_ORDER = ["owed", "sending", "blocked", "paid", "void"];
 
 /** Look one presented transaction up. Throws a 400 for input that is not one
  *  transaction hash; otherwise always answers the same shape. */

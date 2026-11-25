@@ -518,7 +518,11 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
 
 // Code sends: a service-wide hourly budget and a per-address daily total, refused with the same answer.
 {
-  const h = await harness({ table: { sendsGlobalPerHour: 2, sendsPerEmailDay: 1 } });
+  // The block starts several sign-ins from one address and one network; the
+  // pending caps of this run's random table must hold them all (they are not
+  // what this block tests), or the oldest is evicted and its send reads 400.
+  const P = BASE_TABLE.mcpOAuth;
+  const h = await harness({ table: { sendsGlobalPerHour: 2, sendsPerEmailDay: 1, pendingPerAddress: Math.max(P.pendingPerAddress, 16), pendingPerNetwork: Math.max(P.pendingPerNetwork, 32), pendingPerClient: Math.max(P.pendingPerClient, 32) } });
   try {
     const client = await h.client("198.18.60.1");
     const send = async (ip, email) => { const s = await h.start(ip, client); const r = await h.post(s, { action: "email", email }); return { status: r.status, html: await r.text() }; };
@@ -790,6 +794,10 @@ try {
   ok(r.status === 400 && !r.headers.get("location"), "an unknown client is never redirected to");
   r = await get(authUrl({ code_challenge: p1.c, resource: "https://other.example/mcp" }));
   ok(refusedHere(r) && /invalid_target/.test(await r.text()), "a resource that is not this connector is refused on an error page");
+  r = await get(authUrl({ code_challenge: p1.c, resource: `${SITE}/mcp?tool_names=underscore` }));
+  ok(r.status === 303 && /\/oauth\/consent\?rid=/.test(r.headers.get("location") || ""), `the plain-names connector URL (/mcp?tool_names=underscore) is this connector's resource (${r.status})`);
+  r = await get(authUrl({ code_challenge: p1.c, resource: `${SITE}/mcp?tool_names=other` }));
+  ok(refusedHere(r) && /invalid_target/.test(await r.text()), "any other query on the connector URL is refused");
 
   // A started sign-in: cookie, consent page, CSRF token.
   async function start(p, extra = {}) {

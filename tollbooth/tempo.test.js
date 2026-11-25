@@ -37,7 +37,7 @@ ok(mintTempoChallenges({ price: "$0.001", realm: "site.test", secretKey: SECRET,
 
 // credential builder (payload shape a tempo client sends; the stub relay validates it)
 const credFor = (challenge, over = {}) => `Payment ${b64url(JSON.stringify({ challenge: { ...challenge, ...over }, payload: { type: "transaction", signature: `0x${"ab".repeat(70)}` } }))}`;
-const chObj = { id: parsed[0].id, realm: parsed[0].realm, method: "tempo", intent: "charge", request: www.match(/request="([^"]+)"/)[1], expires: parsed[0].expires };
+const chObj = { id: parsed[0].id, realm: parsed[0].realm, method: "tempo", intent: "charge", request: www.match(/request="([^"]+)"/)[1], expires: parsed[0].expires, opaque: parsed[0].opaque };
 const cred = parseTempoCredential(credFor(chObj));
 ok(cred && cred.challenge.id === chObj.id && cred.payload.type === "transaction", "parseTempoCredential: well-formed tempo credential parses");
 ok(parseTempoCredential("Payment zzz") === null && parseTempoCredential(`Payment ${b64url(JSON.stringify({ challenge: { ...chObj, method: "evm" }, payload: { type: "authorization" } }))}`) === null, "parseTempoCredential: garbage and evm credentials are not tempo");
@@ -68,7 +68,7 @@ const r402 = await fetch(`${url}/paid`);
 const wwwLive = r402.headers.get("www-authenticate") || "";
 ok(r402.status === 402 && /method="tempo"/.test(wwwLive) && /realm="site.test"/.test(wwwLive), "gate: unpaid -> 402 with a tempo challenge (realm = resource base host), no x402 middleware needed");
 const liveCh = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": wwwLive }))[0];
-const liveChObj = { id: liveCh.id, realm: liveCh.realm, method: "tempo", intent: "charge", request: wwwLive.match(/request="([^"]+)"/)[1], expires: liveCh.expires };
+const liveChObj = { id: liveCh.id, realm: liveCh.realm, method: "tempo", intent: "charge", request: wwwLive.match(/request="([^"]+)"/)[1], expires: liveCh.expires, opaque: liveCh.opaque };
 const paid = await fetch(`${url}/paid`, { headers: { Authorization: credFor(liveChObj) } });
 const paidBody = await paid.json();
 ok(paid.status === 200 && paidBody.result === "ok" && paid.headers.get("x-tollbooth-paid") === "mpp-tempo", `gate: a bound tempo credential is validated, served and broadcast (got ${paid.status})`);
@@ -92,7 +92,7 @@ const again = await fetch(`${url}/paid`, { headers: { Authorization: credFor(liv
 const againBody = await again.json();
 ok(again.status === 402 && againBody.problem?.type === "https://paymentauth.org/problems/invalid-challenge" && /already used/.test(againBody.problem.detail) && handlerRuns === 1 && calls.broadcast.length === 1, "gate: replaying a spent credential -> 402 invalid-challenge problem, handler not run, nothing broadcast");
 // handler failure -> no broadcast
-const fresh = async () => { const r = await fetch(`${url}/paid`); const w = r.headers.get("www-authenticate"); const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0]; return { id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires }; };
+const fresh = async () => { const r = await fetch(`${url}/paid`); const w = r.headers.get("www-authenticate"); const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0]; return { id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }; };
 handlerStatus = 500;
 const failed = await fetch(`${url}/paid`, { headers: { Authorization: credFor(await fresh()) } });
 ok(failed.status === 500 && calls.broadcast.length === 1, "gate: a failing handler is never broadcast (buyer not charged), its own status passes through");
@@ -101,7 +101,7 @@ handlerStatus = 200;
 broadcastOk = false;
 const bfail = await fetch(`${url}/paid`, { headers: { Authorization: credFor(await fresh()) } });
 const bfailBody = await bfail.json();
-ok(bfail.status === 402 && bfailBody.problem?.type === "https://paymentauth.org/problems/verification-failed" && bfailBody.result === undefined && /temporarily_unavailable/.test(bfailBody.problem.detail), "gate: broadcast failure after a successful handler -> 402 verification-failed, handler body discarded, relay reason surfaced");
+ok(bfail.status === 402 && bfailBody.problem?.type === "https://paymentauth.org/problems/verification-failed" && bfailBody.result === undefined && /temporarily_unavailable/.test(bfailBody.problem.detail), `gate: broadcast failure after a successful handler -> 402 verification-failed, handler body discarded, relay reason surfaced (${bfail.status} ${JSON.stringify(bfailBody).slice(0, 300)})`);
 broadcastOk = true;
 // validate failure -> 402, handler never runs
 validateOk = false;
@@ -113,6 +113,32 @@ validateOk = true;
 // tampered / insufficient
 const tampered = await fetch(`${url}/paid`, { headers: { Authorization: credFor(await fresh(), { id: "y".repeat(43) }) } });
 ok(tampered.status === 402 && (await tampered.json()).problem?.type === "https://paymentauth.org/problems/invalid-challenge" && /method="tempo"/.test(tampered.headers.get("www-authenticate") || ""), "gate: tampered credential -> 402 invalid-challenge WITH fresh challenges");
+// Same-millisecond mints: each challenge carries its own random opaque, so the
+// ids differ and spending one never refuses the other as "already used".
+{
+  const realNow = Date.now;
+  const frozen = realNow();
+  Date.now = () => frozen;
+  let wA, wB, mA, mB;
+  try {
+    mA = mintTempoChallenges({ price: "$0.001", realm: "site.test", secretKey: SECRET, tempo: cfg });
+    mB = mintTempoChallenges({ price: "$0.001", realm: "site.test", secretKey: SECRET, tempo: cfg });
+    wA = (await fetch(`${url}/paid`)).headers.get("www-authenticate");
+    wB = (await fetch(`${url}/paid`)).headers.get("www-authenticate");
+  } finally { Date.now = realNow; }
+  const idOf = (w) => w.match(/id="([^"]+)"/)[1];
+  const expOf = (w) => w.match(/expires="([^"]+)"/)[1];
+  ok(expOf(mA) === expOf(mB) && idOf(mA) !== idOf(mB) && /opaque="[^"]+"/.test(mA), "mint: two challenges minted in the same millisecond share expires but get distinct ids (random opaque)");
+  const objOf = (w) => { const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0]; return { id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }; };
+  const a = objOf(wA), b = objOf(wB);
+  ok(a.expires === b.expires && a.id !== b.id, "gate: two 402s in the same millisecond carry distinct challenge ids");
+  const runsBefore = handlerRuns;
+  const pa = await fetch(`${url}/paid`, { headers: { Authorization: credFor(a) } });
+  const pb = await fetch(`${url}/paid`, { headers: { Authorization: credFor(b) } });
+  ok(pa.status === 200 && pb.status === 200 && handlerRuns === runsBefore + 2, `gate: both same-millisecond credentials are accepted (${pa.status}, ${pb.status})`);
+  const pc = await fetch(`${url}/paid`, { headers: { Authorization: credFor(a, { opaque: b.opaque }) } });
+  ok(pc.status === 402 && (await pc.json()).problem?.type === "https://paymentauth.org/problems/invalid-challenge", "gate: a credential whose opaque was swapped no longer HMAC-verifies");
+}
 server.close();
 
 // ---- stats + x402 coexistence: tempoPaid counted; evm + tempo challenges side by side ----
@@ -125,7 +151,7 @@ server.close();
   const r = await fetch(`${s2.url}/p`);
   const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": r.headers.get("www-authenticate") }))[0];
   const w = r.headers.get("www-authenticate");
-  await fetch(`${s2.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires }) } });
+  await fetch(`${s2.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }) } });
   ok(gate.stats().tempoPaid === 1, `stats: tempoPaid counted (${gate.stats().tempoPaid})`);
   s2.server.close();
 }
@@ -191,7 +217,7 @@ server.close();
     const r = await fetch(`${s3.url}/p`);
     const w = r.headers.get("www-authenticate");
     const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0];
-    const res3 = await fetch(`${s3.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires }) } });
+    const res3 = await fetch(`${s3.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }) } });
     const body3 = await res3.json();
     const receipt = JSON.parse(Buffer.from(res3.headers.get("payment-receipt") || "", "base64url").toString());
     ok(res3.status === 200 && body3.result === "ok" && res3.headers.get("x-tollbooth-paid") === "mpp-tempo", "gate: relay-failed but chain-confirmed -> 200, served as paid");
@@ -208,7 +234,7 @@ server.close();
     const r = await fetch(`${s4.url}/p`);
     const w = r.headers.get("www-authenticate");
     const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0];
-    const res4 = await fetch(`${s4.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires }) } });
+    const res4 = await fetch(`${s4.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }) } });
     ok(res4.status === 402 && (await res4.json()).problem?.type === "https://paymentauth.org/problems/verification-failed", "gate: confirm:false disables the fallback entirely (402 as before)");
     s4.server.close();
   }
@@ -223,7 +249,7 @@ server.close();
     const r = await fetch(`${s5.url}/p`);
     const w = r.headers.get("www-authenticate");
     const c = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": w }))[0];
-    const res5 = await fetch(`${s5.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires }) } });
+    const res5 = await fetch(`${s5.url}/p`, { headers: { Authorization: credFor({ id: c.id, realm: c.realm, method: "tempo", intent: "charge", request: w.match(/request="([^"]+)"/)[1], expires: c.expires, opaque: c.opaque }) } });
     ok(res5.status === 402 && rpcCalls === 0, "gate: default confirm derives no candidates from a non-0x76 signature and never touches the RPC (offline-safe)");
     s5.server.close();
   }

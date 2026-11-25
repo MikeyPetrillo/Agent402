@@ -216,7 +216,7 @@ ok(emNoBase.html.includes("https://agent402.tools/monitors?product=insider-monit
 
 const MANAGE = "https://agent402.tools/monitors/manage?report=abc123&k=SIGNED";
 const mon = buildMonitorEmail({ reason: "change", label: "Domain security monitor", target: "example.com", changes: ["DMARC changed"], reportUrl: "https://agent402.tools/m/abc123", manageUrl: MANAGE });
-ok(mon.text.includes("You are getting this because you subscribed"), "monitor mail says in plain language why it arrived");
+ok(mon.text.includes("You are getting this because you subscribed"), "monitor mail says why it arrived");
 ok(mon.html.includes("You are getting this because you subscribed"), "the HTML monitor mail carries the same line");
 ok(mon.html.includes(MANAGE.replace(/&/g, "&amp;")) && mon.text.includes(MANAGE), "the keyed manage link is carried through unchanged");
 ok(/manage or cancel/i.test(mon.html) && /Manage or cancel/.test(mon.text), "monitor mail keeps an explicit manage or cancel link");

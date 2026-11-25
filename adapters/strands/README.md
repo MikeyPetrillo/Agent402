@@ -1,20 +1,23 @@
-# agent402-strands
+# agent402-agent-loop-tools
 
-Drop-in [Strands Agents](https://strandsagents.com) (TypeScript) tools for
-[Agent402](https://agent402.tools) - turn 500+ pay-per-call web tools into
+[Agent402](https://agent402.tools) tools for use with [Strands Agents](https://strandsagents.com) (TypeScript):
+turn 500+ pay-per-call web tools into
 Strands `tool({...})` instances your agent can invoke. Payment is handled
 underneath: proof-of-work for the compute-payable tools (no wallet), and the
 payment-wrapped fetch you pass (x402 in USDC on 13 chains or USDG on Robinhood
 Chain, or a stock `mppx` fetch) for wallet-only tools.
 
+Works with Strands Agents (`@strands-agents/sdk`) wherever it runs, including on Amazon Bedrock AgentCore. Agent402 is not affiliated with or endorsed by Amazon Web Services.
+
+Formerly `agent402-strands`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
+
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
-Works in a Strands agent anywhere it runs, including on Amazon Bedrock AgentCore.
 
 ## Install
 
 ```bash
-npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem
+npm install agent402-agent-loop-tools @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem
 ```
 
 The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first three.
@@ -23,7 +26,7 @@ The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the fr
 
 ```ts
 import { Agent } from "@strands-agents/sdk";
-import { agent402Tools } from "agent402-strands";
+import { agent402Tools } from "agent402-agent-loop-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
@@ -76,7 +79,7 @@ const { tools, execute } = await agent402Tools({
 
 `agent402Execute` takes the same options.
 
-## On Amazon Bedrock AgentCore
+## Using it with Amazon Bedrock AgentCore
 
 Two ways in:
 
@@ -85,7 +88,7 @@ Two ways in:
 2. Or use this adapter to pull a *curated subset* of tools and embed them
    directly in a Strands agent running on AgentCore.
 
-See the [Amazon Bedrock AgentCore integration guide](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore)
+See [Using Agent402 with Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore)
 for the end-to-end recipe.
 
 ## API
@@ -124,11 +127,11 @@ disk-touching ones, and most skill packs). The live split is on
 
 Same shape, different framework:
 
-- [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) - OpenAI function-calling
-- [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) - Anthropic Messages
-- [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) - Vercel AI SDK
-- [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) - LangChain JS / LangGraph
-- [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) - LlamaIndex TS
+- [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) - OpenAI function-calling
+- [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools) - Anthropic Messages
+- [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) - Vercel AI SDK
+- [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) - LangChain JS / LangGraph
+- [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) - LlamaIndex TS
 
 Source: [`adapters/strands/`](https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/strands).
 Issues + PRs welcome on the [main repo](https://github.com/MikeyPetrillo/Agent402).

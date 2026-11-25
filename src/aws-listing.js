@@ -57,9 +57,9 @@ export const AWS_LISTING_GROUPS = Object.freeze([
   },
   {
     id: "calendars",
-    title: "Calendars and settlement",
+    title: "Calendars",
     slugs: ["next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"],
-    notice: "Holiday data from Nager.Date. Settlement dates are expected dates from each rail's published rules; confirm with your bank.",
+    notice: "Holiday data from Nager.Date. Settlement dates follow each rail's rules as its public sources state them, named in every answer; for planning, not a guarantee of settlement.",
   },
   {
     id: "network",

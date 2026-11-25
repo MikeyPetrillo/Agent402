@@ -4,8 +4,9 @@
 //   1. agent402Tools() returns Strands tool({...}) instances ready for `new Agent({tools})`.
 //   2. The tool callback talks to a live Agent402 instance (default: agent402.tools).
 //   3. Payment is handled underneath:
-//      - with AGENT_KEY set (an EVM key holding USDC on Base), the agent runs a
-//        web search and then a cited answer, each paid per call over x402;
+//      - with AGENT_KEY set (an EVM key holding USDC on Base), the agent lists
+//        Apple's latest 10-K filings, then its filed revenue and total assets
+//        (SEC EDGAR, public domain), each paid per call over x402;
 //      - with no wallet, it falls back to a pure-CPU tool paid with a
 //        sub-second proof-of-work: no wallet, no API key, no AWS account.
 //
@@ -27,7 +28,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // --- will provide the real implementations.
 const stubDir = join(HERE, "node_modules", "@strands-agents", "sdk");
 const STUB = `
-    // agent402-demo-stub v2
+    // agent402-demo-stub v3
     export function tool(def) {
       return { __isStrandsTool: true, name: def.name, description: def.description,
                inputSchema: def.inputSchema, callback: def.callback };
@@ -48,7 +49,10 @@ const STUB = `
         for (const picked of named) {
           const m = text.slice(text.toLowerCase().indexOf(picked.name)).match(/['"]([^'"]+)['"]/);
           const input = m ? m[1] : "hello world";
-          const args = picked.name === "hash" ? { text: input, algo: "sha256" } : { q: input };
+          const args = picked.name === "hash" ? { text: input, algo: "sha256" }
+            : picked.name === "edgar-filings" ? { ticker: input, form: "10-K", limit: 5 }
+            : picked.name === "edgar-company-facts" ? { ticker: input, tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Assets" }
+            : { q: input };
           steps.push({ tool: picked.name, args, result: await picked.callback(args) });
         }
         return { steps };
@@ -56,7 +60,7 @@ const STUB = `
     }
   `;
 const stubFile = join(stubDir, "index.js");
-if (!existsSync(stubFile) || !readFileSync(stubFile, "utf8").includes("agent402-demo-stub v2")) {
+if (!existsSync(stubFile) || !readFileSync(stubFile, "utf8").includes("agent402-demo-stub v3")) {
   mkdirSync(stubDir, { recursive: true });
   writeFileSync(join(stubDir, "package.json"), JSON.stringify({
     name: "@strands-agents/sdk", version: "0.0.0-stub", type: "module", main: "index.js",
@@ -65,7 +69,7 @@ if (!existsSync(stubFile) || !readFileSync(stubFile, "utf8").includes("agent402-
 }
 
 const { Agent } = await import("@strands-agents/sdk");
-const { agent402Tools } = await import("agent402-strands");
+const { agent402Tools } = await import("agent402-agent-loop-tools");
 
 const BASE = process.env.AGENT402_BASE_URL || "https://agent402.tools";
 console.log(`[demo] Agent402 catalog: ${BASE}`);
@@ -73,7 +77,7 @@ console.log(`[demo] Agent402 catalog: ${BASE}`);
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(1); };
 
 if (process.env.AGENT_KEY) {
-  // Web search, then a cited answer: both wallet-only, paid per call over x402.
+  // SEC filings, then the filed financials: both wallet-only, paid per call over x402.
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const { x402Client } = await import("@x402/core/client");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
@@ -87,24 +91,31 @@ if (process.env.AGENT_KEY) {
 
   const { tools } = await agent402Tools({
     baseUrl: BASE,
-    slugs: ["search", "answer"],
+    slugs: ["edgar-filings", "edgar-company-facts"],
     freeOnly: false,
     fetch: payFetch,
   });
   console.log(`[demo] catalog: ${tools.length} Agent402 tools wired into Strands`);
 
   const agent = new Agent({ tools });
-  const out = await agent.invoke("Use search on 'x402 payment protocol adoption', then answer 'what is the x402 payment protocol?'");
-  for (const s of out.steps) console.log(`[demo] ${s.tool}(${JSON.stringify(s.args)}):`, s.result);
+  const out = await agent.invoke("Use edgar-filings on 'AAPL', then edgar-company-facts on 'AAPL'");
 
-  const search = out.steps.find((s) => s.tool === "search")?.result;
-  const answer = out.steps.find((s) => s.tool === "answer")?.result;
-  if (!Array.isArray(search?.results) || !search.results.length) fail("expected search results");
-  if (typeof answer?.answer !== "string" || !answer.answer) fail("expected a cited answer");
-  console.log("PASS: Strands → Agent402 web search and answer, paid from the wallet.");
+  const filings = out.steps.find((s) => s.tool === "edgar-filings")?.result;
+  const facts = out.steps.find((s) => s.tool === "edgar-company-facts")?.result;
+  if (!Array.isArray(filings?.filings) || !filings.filings.length) fail("expected a list of 10-K filings");
+  console.log(`[demo] edgar-filings: ${filings.name}, 10-K filed ${filings.filings.map((f) => f.filingDate).join(", ")}`);
+  // The newest full fiscal year a concept reports in a 10-K.
+  const latestYear = (tag) => (facts?.taxonomies?.["us-gaap"]?.[tag]?.units?.USD || [])
+    .filter((r) => r.form === "10-K" && r.fp === "FY" && (!r.start || Date.parse(r.end) - Date.parse(r.start) > 300 * 86400000))
+    .sort((a, b) => (a.end < b.end ? -1 : 1)).at(-1);
+  const revenue = latestYear("RevenueFromContractWithCustomerExcludingAssessedTax");
+  const assets = latestYear("Assets");
+  if (!revenue || !assets) fail("expected revenue and total assets from the filed financials");
+  console.log(`[demo] edgar-company-facts: revenue $${revenue.val.toLocaleString()} (fiscal year ending ${revenue.end}), total assets $${assets.val.toLocaleString()} (at ${assets.end})`);
+  console.log("PASS: Strands → Agent402 SEC filings and filed financials, paid from the wallet.");
 } else {
   // No wallet yet? The pure-CPU tools run free with proof-of-work.
-  console.log("[demo] no AGENT_KEY set: running the proof-of-work free tier (set AGENT_KEY for web search + answer)");
+  console.log("[demo] no AGENT_KEY set: running the proof-of-work free tier (set AGENT_KEY for the SEC filings tools)");
   const { tools } = await agent402Tools({
     baseUrl: BASE,
     slugs: ["hash", "token-count", "json-validate", "text-stats"],

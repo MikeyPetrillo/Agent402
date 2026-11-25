@@ -8,7 +8,7 @@ import { Agent402 } from "agent402-client";
 
 const a = new Agent402(); // → https://agent402.tools, free proof-of-work tier
 
-// 1. Discover — describe a task in plain language, get ranked matching tools.
+// 1. Discover — describe a task, get ranked matching tools.
 const matches = await a.find("compound interest calculator");
 console.log("top matches:", matches.slice(0, 3).map((m) => m.slug).join(", "));
 

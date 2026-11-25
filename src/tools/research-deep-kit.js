@@ -17,6 +17,7 @@ import { extractArticle } from "./extract.js";
 import { stepProgress } from "../job-progress.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Per-buyer OpenRouter `user` id, so one abusive buyer can't get our whole
 // account provider-blocked (matches every gateway tier). Never throws.
@@ -174,7 +175,7 @@ function makeResearchHandlerInner(tierSlug) {
     // report also disarmed the guard meant to catch it. A >= 400 cancels
     // settlement, so refusing here costs the buyer nothing and they retry.
     if (plannerFellBack && t.subQ > 1) {
-      throw bad(`Research planning failed for this question, so the ${t.subQ}-part decomposition this tier is priced for could not be built${planError ? ` (${planError})` : ""}. Not charged; please retry.`, 502);
+      throw bad(`Research planning failed for this question, so the ${t.subQ}-part decomposition this tier is priced for could not be built${planError ? ` (${planError})` : ""}.${notChargedHere()} Please retry.`, 502);
     }
     const outline = Array.isArray(plan?.outline) ? plan.outline.filter((s) => typeof s === "string").slice(0, 8) : [];
 
@@ -207,7 +208,7 @@ function makeResearchHandlerInner(tierSlug) {
     // Dedupe sources by URL across all searches.
     const byUrl = new Map();
     for (const r of good) for (const s of r.sources) if (s.url && !byUrl.has(s.url)) byUrl.set(s.url, s);
-    if (good.length < need || byUrl.size < Math.min(3, toRun.length)) throw bad(`Only ${good.length} of ${toRun.length} grounded searches returned cited evidence (${byUrl.size} distinct sources) - not enough for this report. Not charged; please retry.`, 502);
+    if (good.length < need || byUrl.size < Math.min(3, toRun.length)) throw bad(`Only ${good.length} of ${toRun.length} grounded searches returned cited evidence (${byUrl.size} distinct sources) - not enough for this report.${notChargedHere()} Please retry.`, 502);
     let sources = [...byUrl.values()];
 
     // 3) RERANK the pooled sources against the ORIGINAL question, keep top-K.
@@ -260,7 +261,7 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: synthModel, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose0 = proseOf(sd, cutShort);
-    if (!prose0) throw bad("Synthesis produced no report - not charged", 502);
+    if (!prose0) throw bad(`Synthesis produced no report.${notChargedHere()}`, 502);
     const audit = auditCitations(prose0, sources, good.map((r) => r.answer).join(" "));
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(audit.prose, sources);
@@ -313,28 +314,28 @@ const OUT_EXAMPLE = {
 export const RESEARCH_DEEP_TOOLS = [
   {
     route: "POST /v1/research", name: "Deep research report (grounded, cited)", slug: "research", category: "llm", price: RESEARCH_TIERS["research"].price,
-    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves).",
+    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves). Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeResearchHandler("research"),
   },
   {
     route: "POST /v1/research/pro", name: "Deep research report - PRO (premium synthesis)", slug: "research-pro", category: "llm", price: RESEARCH_TIERS["research-pro"].price,
-    description: "The deeper research tier: more sub-questions, more grounded searches, wider reranked source set, and a premium (Claude Opus class) synthesis into a ~2,200-word cited report with structured findings. For questions worth a real dossier. USDC or card (Stripe). Not cached.",
+    description: "The deeper research tier: more sub-questions, more grounded searches, wider reranked source set, and a premium (Claude Opus class) synthesis into a ~2,200-word cited report with structured findings. For questions worth a real dossier. USDC or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "research-pro", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("research-pro"),
   },
   {
     route: "POST /v1/research/max", name: "Deep research report - MAX (exhaustive)", slug: "research-max", category: "llm", price: RESEARCH_TIERS["research-max"].price,
-    description: "The exhaustive tier: up to a dozen sub-questions and grounded searches, the widest reranked source set, premium synthesis into a ~2,800-word cited report with a full source table. Our most thorough single-call research report. USDC or card (Stripe). Not cached.",
+    description: "The exhaustive tier: up to a dozen sub-questions and grounded searches, the widest reranked source set, premium synthesis into a ~2,800-word cited report with a full source table. Our most thorough single-call research report. USDC or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "research-max", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("research-max"),
   },
   {
     route: "POST /v1/research/market-brief", name: "Market / competitor brief (grounded)", slug: "market-brief", category: "llm", price: RESEARCH_TIERS["market-brief"].price,
-    description: "Name a market, category or company and get one cited, model-backed MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Name a market, category or company and get one cited, model-backed MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "market-brief", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("market-brief"),

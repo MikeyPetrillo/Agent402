@@ -35,7 +35,7 @@ const MEMO_MAX_BYTES = 400;
 // for is $1.60, and a bigger send should mean editing this line in a reviewed
 // commit, never a bigger number in a dispatch box.
 const ABSOLUTE_MAX_USD = 2;
-const RPC = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC = process.env.SOLANA_RPC_URL || "https://solana-rpc.publicnode.com";
 
 const arg = (n, d = null) => {
   const i = process.argv.indexOf(`--${n}`);

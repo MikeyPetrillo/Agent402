@@ -39,8 +39,8 @@ const init = await rpc("initialize", {
 });
 assert(init.result?.serverInfo?.name === "agent402", `initialize returns serverInfo.name=agent402 (got ${JSON.stringify(init.result?.serverInfo)})`);
 assert(
-  typeof init.result?.instructions === "string" && init.result.instructions.includes("web.search") && init.result.instructions.includes("claude mcp add"),
-  "initialize.instructions orients with web.search front door + install one-liners"
+  typeof init.result?.instructions === "string" && init.result.instructions.includes("pdf.markdown") && !/web\.(search|news|answer)/.test(init.result.instructions) && init.result.instructions.includes("claude mcp add"),
+  "initialize.instructions names the flagships (pdf.markdown first, no former flagship) + install one-liners"
 );
 
 const list = await rpc("tools/list", {});
@@ -88,6 +88,7 @@ assert(
     !names.includes("search_tools") && !names.includes("call_tool"),
   "legacy snake/digit names are aliases only, not listed"
 );
+assert(!names.includes("web.search") && !names.includes("web.news") && !names.includes("web.answer"), "the former flagships (web.search, web.news, web.answer) are not listed");
 assert(
   names.every((n) => /^[a-z]+(\.[a-z]+)+$/.test(n)),
   "every listed tool name is dotted domain.action for Smithery Naming"
@@ -142,8 +143,8 @@ for (const t of (list.result?.tools ?? [])) {
     for (const [k, v] of Object.entries(NET_HINTS)) assert(t.annotations[k] === v, `${t.name} ${k} is ${v} (got ${t.annotations[k]})`);
   }
 }
-assert(chargers >= 2 && canCharge("web.search") && canCharge("memory.read") && !canCharge("catalog.search"), `the derivation finds the tools that can charge (${chargers})`);
-assert(tool("catalog.search")?.annotations.readOnlyHint === true && tool("web.search")?.annotations.readOnlyHint === false, "catalog.search is read-only and web.search is not");
+assert(chargers >= 2 && canCharge("pdf.markdown") && canCharge("memory.read") && !canCharge("catalog.search"), `the derivation finds the tools that can charge (${chargers})`);
+assert(tool("catalog.search")?.annotations.readOnlyHint === true && tool("pdf.markdown")?.annotations.readOnlyHint === false, "catalog.search is read-only and pdf.markdown is not");
 void served;
 {
   const ann = tool("memory.write")?.annotations || {};
@@ -187,7 +188,7 @@ const webSearch = await rpc("tools/call", { name: "search_tools", arguments: { q
 const webText = webSearch.result?.content?.[0]?.text ?? "";
 assert(webText.includes('"slug": "search"') || webText.includes('"slug":"search"'), `search_tools front-door lands on search (got ${webText.slice(0, 200)})`);
 
-// find_tool: resolve a plain-language task to a ready-to-call tool.
+// find_tool: resolve a task description to a ready-to-call tool.
 const find = await rpc("tools/call", { name: "find_tool", arguments: { task: "convert kilometers to miles", limit: 3 } });
 const findText = find.result?.content?.[0]?.text ?? "";
 assert(!find.result?.isError && findText.includes("unit-convert") && findText.includes("callWith"), "find_tool resolves a long-tail task with a ready call_tool invocation");
@@ -258,19 +259,30 @@ function paidRefusalKind(resp) {
 }
 /** The bypass check: no tool output came back, whatever the shape. The x402
  *  offer's own block is left out: its discovery extension carries an example
- *  output, which is a description of the tool, not a run of it. */
+ *  output, which is a description of the tool, not a run of it. So is a
+ *  structuredContent that is that same offer (the transport's structured
+ *  copy); any other structuredContent is tool output. */
 function ranForFree(resp) {
   const texts = (resp?.result?.content || []).map((c) => (c && typeof c.text === "string" ? c.text : ""));
   let first = null;
   try { first = JSON.parse(texts[0] || ""); } catch { first = null; }
-  const all = (first?.x402Version === 2 && Array.isArray(first.accepts) ? texts.slice(1) : texts).join("\n");
-  return Boolean(resp?.result?.structuredContent) || all.includes("<html") || /"results"\s*:/.test(all);
+  const offer = first?.x402Version === 2 && Array.isArray(first.accepts);
+  const all = (offer ? texts.slice(1) : texts).join("\n");
+  const sc = resp?.result?.structuredContent;
+  const scIsOffer = offer && sc !== undefined && JSON.stringify(sc) === texts[0];
+  return (Boolean(sc) && !scIsOffer) || all.includes("<html") || /"results"\s*:/.test(all);
 }
-const paid = await rpc("tools/call", { name: "web.search", arguments: { q: "x402" } });
+const paid = await rpc("tools/call", { name: "pdf.markdown", arguments: { url: "https://example.com/a.pdf" } });
 const paidKind = paidRefusalKind(paid);
 assert(paidKind !== null,
-  `flagship wallet-only tool (web.search) is refused in a shape the connector serves: ${paidKind} (got ${JSON.stringify(paid).slice(0, 200)})`);
+  `flagship wallet-only tool (pdf.markdown) is refused in a shape the connector serves: ${paidKind} (got ${JSON.stringify(paid).slice(0, 200)})`);
 assert(!ranForFree(paid), "wallet-only tool did NOT execute");
+// A former flagship, by its old listed name and its snake alias: unlisted,
+// still the same tool, refused the same way (never "Unknown tool").
+for (const former of ["web.search", "search_web"]) {
+  const r = await rpc("tools/call", { name: former, arguments: { q: "x402" } });
+  assert(paidRefusalKind(r) !== null && !ranForFree(r) && !/Unknown tool/.test(JSON.stringify(r)), `former flagship name ${former} still reaches its tool and is refused unpaid (${paidRefusalKind(r)})`);
+}
 
 // The paid boot: the refusal a server with a paywall and the MPP gates (the
 // production configuration) answers, read by the same function. The target's
@@ -329,9 +341,9 @@ assert(!ranForFree(paid), "wallet-only tool did NOT execute");
         return JSON.parse(data);
       };
       await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test-mcp-http-paid", version: "0.0.0" } } });
-      const ask = await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "web.search", arguments: { q: "x402" } } });
+      const ask = await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "pdf.markdown", arguments: { url: "https://example.com/a.pdf" } } });
       assert(paidRefusalKind(ask) === "mpp+x402",
-        `paid boot (paywall and MPP gates, as production): web.search's refusal carries the x402 offer and the MPP challenges (${paidRefusalKind(ask)}: ${JSON.stringify(ask).slice(0, 160)})`);
+        `paid boot (paywall and MPP gates, as production): pdf.markdown's refusal carries the x402 offer and the MPP challenges (${paidRefusalKind(ask)}: ${JSON.stringify(ask).slice(0, 160)})`);
       assert(!ranForFree(ask), "paid boot: wallet-only tool did NOT execute");
     } finally {
       if (srv) await srv.stop();

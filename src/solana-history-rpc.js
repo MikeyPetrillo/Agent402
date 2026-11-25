@@ -43,10 +43,12 @@
 //     failing).
 //
 // Lane order (SOLANA_HISTORY_ALCHEMY_FIRST=on restores keyed-first):
-//   1. SOLANA_HISTORY_PUBLIC_RPCS (default: the public mainnet RPC),
+//   1. SOLANA_HISTORY_PUBLIC_RPCS (default: PublicNode's public Solana RPC,
+//      whose terms permit commercial use; src/rpc-terms.js),
 //   2. the keyed lanes: SOLANA_RPCS entries on alchemy.com, plus SOLANA_RPC_URL
 //      when it is set to anything other than a public lane,
 //   3. the remaining SOLANA_RPCS entries (fallback only).
+import { PUBLICNODE_RPCS, defaultSolanaRpcs } from "./rpc-terms.js";
 import { redactSecrets } from "./tools/redact.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { positiveNum as num } from "./env-num.js";
@@ -56,16 +58,12 @@ import { egressCaller } from "./upstream-call-days.js";
 /** The share of the keyed provider's daily ceiling that background reads may use. */
 export const BACKGROUND_SHARE = "history-background";
 
-const PUBLIC_MAINNET = "https://api.mainnet-beta.solana.com";
+const PUBLIC_MAINNET = PUBLICNODE_RPCS.solana;
 
 // The shared Solana JSON-RPC list (revenue-live re-exports it). Keyed first for
 // live head reads: the balance read timed out against the rate-limited public
 // RPCs from the datacenter, so getTokenAccountsByOwner and friends stay on it.
-export const SOLANA_RPCS = (process.env.SOLANA_RPCS || [
-  ...(process.env.ALCHEMY_API_KEY ? [`https://solana-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-  PUBLIC_MAINNET,
-  "https://solana-rpc.publicnode.com",
-].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+export const SOLANA_RPCS = (process.env.SOLANA_RPCS || defaultSolanaRpcs().join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 
 const list = (v) => String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
 const isKeyedUrl = (u) => /alchemy\.com/i.test(u);

@@ -21,13 +21,10 @@
 //
 //   node scripts/test-direct-upstream.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { urlMatches } from "./lib/url-host.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
@@ -826,26 +823,19 @@ ok(direct.hits.length >= N * 0.4 && direct.hits.length <= N * 0.6, `share 50: th
 
 // ---- booted: operator view and privacy page -------------------------------------
 setEnv({});
-const PORT = await getFreePort();
 const TOKEN = "direct-upstream-test-operator-token-0123456789";
+// PORT=0, the port read back from the listening line (scripts/lib/boot-server.js).
+// Readiness is polled here with the real fetch: the global one is the stub above.
 async function boot(extraEnv) {
-  const log = [];
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, ...ownStoreEnv("direct-upstream"), PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...extraEnv },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (d) => log.push(String(d)));
-  child.stderr.on("data", (d) => log.push(String(d)));
-  const url = `http://127.0.0.1:${PORT}`;
+  const srv = await bootServer({ env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...extraEnv }, stores: "direct-upstream", readyPath: null });
   let up = false;
   for (let i = 0; i < 240 && !up; i++) {
-    try { up = (await realFetch(`${url}/health`)).ok; } catch { /* booting */ }
+    try { up = (await realFetch(`${srv.url}/health`)).ok; } catch { /* booting */ }
     if (!up) await new Promise((r) => setTimeout(r, 500));
   }
-  return { child, url, up, log };
+  return { child: srv.child, url: srv.url, up, log: { join: () => srv.log() }, srv };
 }
-const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { b.child.once("exit", r); setTimeout(r, 5000); }); };
+const stop = (b) => b.srv.stop();
 {
   const b = await boot({ ...ON, ...BOOT_STUBS, DIRECT_UPSTREAM_SINCE: "2026-01-01", DIRECT_UPSTREAM_NAME: "Example <Inference> & Co", DIRECT_UPSTREAM_POLICY_URL: "https://example.com/privacy?a=1&b=2" });
   try {
@@ -860,7 +850,7 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
     ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
     const item = (html.match(/<li id="direct-inference">([\s\S]*?)<\/li>/) || [])[1] || "";
     ok(item.includes("Example &lt;Inference&gt; &amp; Co") && item.includes('<a href="https://example.com/privacy?a=1&amp;b=2" rel="noopener">its privacy policy</a>') && /zero data retention is requested on every such call/.test(item) && !html.includes("<Inference>"), `/privacy Third parties names the provider, escaped, with its policy link (${item.slice(0, 80)})`);
-    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere\./.test(html) && !/as noted there/.test(html), "/privacy: the location sentence carries its exception while configured, pointing at nothing the item does not say");
+    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere, and AI model requests/.test(html) && !/as noted there/.test(html), "/privacy: the location sentence carries its exception while configured, pointing at nothing the item does not say");
     ok(/Zero data retention is requested on every such call\./.test(html) && !/the provider's gateway stores no prompts|keep no prompts or outputs|or refuses it/.test(html), "/privacy claims the zero-retention request and nothing about how the provider serves or refuses");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
@@ -869,7 +859,7 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
   const b = await boot({});
   try {
     const html = await (await realFetch(`${b.url}/privacy`)).text();
-    ok(b.up && !html.includes("direct inference provider") && !html.includes('id="direct-inference"') && /processed and stored there\.<\/p>/.test(html), "/privacy leaves the sentence, the Third parties item and the location exception out while unconfigured");
+    ok(b.up && !html.includes("direct inference provider") && !html.includes('id="direct-inference"') && /processed and stored there, except AI model requests/.test(html), "/privacy leaves the sentence, the Third parties item and the location exception out while unconfigured");
     const r = await realFetch(`${b.url}/__operator/direct-upstream.json`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     ok((await r.json()).configured === false, "the operator view reads configured false while off");
   } finally { await stop(b); }

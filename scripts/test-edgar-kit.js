@@ -304,9 +304,22 @@ await live("edgar-company-facts", { ticker: "AAPL" },
   (r) => r.cik === "0000320193" && r.mode === "summary" && r.taxonomies && r.taxonomies["us-gaap"] && r.taxonomies["us-gaap"].count > 0,
   "edgar-company-facts AAPL summary mode");
 
-await live("edgar-company-facts", { ticker: "AAPL", tags: "Revenues,Assets" },
-  (r) => r.mode === "full" && r.taxonomies && r.taxonomies["us-gaap"] && r.taxonomies["us-gaap"].Revenues && r.taxonomies["us-gaap"].Assets,
-  "edgar-company-facts AAPL full mode (tags=Revenues,Assets)");
+// Apple's Revenues series stops at fiscal 2018; its ASC 606 revenue concept,
+// which the description names, does not.
+await live("edgar-company-facts", { ticker: "AAPL", tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Assets" },
+  (r) => {
+    const g = r.taxonomies?.["us-gaap"];
+    const newestFy = (t) => Math.max(0, ...(g?.[t]?.units?.USD || []).filter((o) => o.form === "10-K").map((o) => Number(o.fy) || 0));
+    return r.mode === "full" && newestFy("RevenueFromContractWithCustomerExcludingAssessedTax") >= new Date().getUTCFullYear() - 2 && newestFy("Assets") >= new Date().getUTCFullYear() - 2;
+  },
+  "edgar-company-facts AAPL full mode: the ASC 606 revenue concept the description names reaches the last two fiscal years");
+// The published example (a bank) answers current years on Revenues.
+await live("edgar-company-facts", { ticker: "JPM", tags: "Revenues,Assets" },
+  (r) => {
+    const rows = r.taxonomies?.["us-gaap"]?.Revenues?.units?.USD || [];
+    return r.mode === "full" && Math.max(0, ...rows.filter((o) => o.form === "10-K").map((o) => Number(o.fy) || 0)) >= new Date().getUTCFullYear() - 2;
+  },
+  "edgar-company-facts JPM (the published example): Revenues reaches the last two fiscal years");
 
 // XBRL frames — pick a period far enough in the past that filings are
 // definitely settled. CY2022Q4 is safe.

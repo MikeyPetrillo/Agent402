@@ -71,6 +71,7 @@ import { evmRpcFor } from "./evm-rpcs.js";
 import { positiveNum as num } from "./env-num.js";
 import { settleClaimStateOf } from "./settlement-claims.js";
 import { isComplianceSettleRefusal } from "./settle-compliance.js";
+import { refundAnswerStatus } from "./refund-status-word.js";
 
 /** The networks the table covers, by name (CAIP-2). Every one settles USDC
  *  (6 decimals) with EIP-3009 and has an RPC the late book reads. */
@@ -538,10 +539,13 @@ export async function cappedResendVerdict(p, deps) {
       hint: "This payment's transfer landed and the answer it bought is stored; the ledger has not yet confirmed it as served. Nothing more is charged. Retry shortly with the same payment to receive it.",
     } };
   }
-  const st = ["owed", "sending", "paid"].includes(v?.row?.status) ? v.row.status : "owed";
+  // A row held as blocked reads `held`, as the refund lookup names it.
+  const st = refundAnswerStatus(v?.row?.status);
   return { serve: false, status: 402, body: {
     error: "payment_refunded",
-    hint: "The payment this request carries was refunded (or is being refunded) because its settlement did not confirm in time, so it no longer pays for a request. Request the resource again with a fresh payment.",
+    hint: st === "held"
+      ? "The payment this request carries no longer pays for a request: its settlement did not confirm in time, and a refund of it is recorded and held for review; it has not been paid. Request the resource again with a fresh payment."
+      : "The payment this request carries was refunded (or is being refunded) because its settlement did not confirm in time, so it no longer pays for a request. Request the resource again with a fresh payment.",
     refund: { status: st, lookup: deps.refundLookup(tx) },
   } };
 }

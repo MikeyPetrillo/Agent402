@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (172 scripts, one process each)
+# @step 1: Offline suites (174 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -69,9 +69,9 @@ t node scripts/test-ga-snippet.js
 t node scripts/test-ga-key-events.js
 # Prefilled storefront link (/reports?product=&input=): the page's own script selects the card and fills the field in a DOM, never submits, unknown product is the plain page, the server never writes the value into the HTML
 t node scripts/test-reports-prefill.js
-# The plain-language guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
+# The guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
 t node scripts/test-guide-site-links.js
-# Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
+# Page analytics in a DOM: one consent decision, nothing loads in Europe before Allow (time zone or the CDN country), PostHog in memory, equal buttons, GPC loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
 t node scripts/test-compliance-surfaces.js
@@ -176,6 +176,14 @@ t node scripts/test-stt-cap.js
 # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
 t node scripts/test-tts-lite.js
 t node scripts/test-tts-elevenlabs.js
+# AI-generated voice disclosure: every speech tool says so before payment and in every answer (field or header) (offline)
+t node scripts/test-ai-voice.js
+# AI-generated mark: every model-backed answer carries X-AI-Generated (and aiGenerated on JSON), bytes untouched; the whole catalog on a booted server
+t node scripts/test-ai-generated.js
+t node scripts/test-answer-charges.js
+t node scripts/test-answer-charges-paid.js
+# The Data Processing Addendum: offered on request, entity, roles, SCC modules and UK Addendum by reference, the /trust sub-processors, other recipients, breach notice, links, sitemap and date
+t node scripts/test-dpa-page.js
 # TTS per-request quote: anchors, round-up, floor, the served body, refusals before any spend (offline); the margin at every length against the private rows
 t node scripts/test-tts-quote.js
 t node scripts/test-tts-margins.js
@@ -187,14 +195,19 @@ t node scripts/test-redact-chat-kit.js
 t node scripts/test-stellar-confirm.js
 # Stellar one payment, one answer: the signed entry claimed before settle, a re-encoded copy refused, the success-path tx claim, the replay key (offline)
 t node scripts/test-stellar-nonce-claim.js
+# Stellar readers on XDR the previous SDK wrote: payer, screen list, signed payment, nonces, expiry and confirm answer as 16.4.1 did; the V2 credential arm read (offline)
+t node scripts/test-stellar-xdr-fixtures.js
 # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
 t node scripts/test-svm-clarify.js
 # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
 t node scripts/test-refund-ledger.js
+# Money records past retention (sales and resolved refunds 7 years, sanctions 10; dry run unless LEDGER_RETENTION=apply; owed and blocked refunds never removed - offline)
+t node scripts/test-ledger-retention.js
 # Outbound new-destination watch (first sighting per chain+recipient, ok/new/burst words, window expiry, file-mode persistence across a restart, word-only public field - offline +
 t node scripts/test-outbound-destinations.js
 # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
 t node scripts/test-refund-lookup.js
+t node scripts/test-refund-status-word.js
 # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
 t node scripts/test-refund-ledger-limiter.js
 # Operator refund update: 409 only for a state conflict, 503 when the store refuses the write, 400 for missing evidence (boots its own server)
@@ -230,6 +243,12 @@ t node scripts/test-burner-log-guard.js
 t node scripts/test-algorand-canary-classify.js
 # Catalog floor invariant (floorViolation — null at ≥400, kit-missing message)
 t node scripts/test-sync-count-floor.js
+# Class guard, typed counts: a number compared against a catalog collection in a test, or typed before what the catalog counts in public markdown (README, wiki, docs, package READMEs), is derived or imported from sync-count; the baseline of what is left only shrinks (offline)
+t node scripts/test-typed-counts.js
+# Class guard, tests that miss a mutation: each mutation a review found (survived or caught) is applied in an export copy and its suite must fail there; each suite first passes unmutated (about 40 s, offline)
+t node scripts/mutation-smoke.js
+# mutation-smoke's verdict: a catch is a numeric non-zero exit with a failing check; a timeout, a kill or a crash with none is not (offline)
+t node scripts/test-mutation-smoke-verdict.js
 # Self-check semantic invariants are meaningful (good passes, broken fails)
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
@@ -260,6 +279,8 @@ t node scripts/test-package-shed-retry.js
 t node scripts/test-skill-pack-steps.js
 # Every skill-pack step sends only input keys its tool declares (boots its own FREE_MODE server on port 0)
 t node scripts/test-skill-step-inputs.js
+# The charge sentence prints on a route call and never inside a step (marks offline, then its own FREE_MODE server on port 0)
+t node scripts/test-not-charged-scope.js
 # A pack's copy matches its run mode (chain vs fanout); wallet-audit reads a token the wallet holds (offline)
 t node scripts/test-pack-copy-modes.js
 # The content-pipeline guide and wiki derive the EVM-only, no-Tempo stages from isLongRunningSlug (offline)
@@ -368,6 +389,8 @@ t node scripts/test-mppx-production-store.js
 t node scripts/test-sanctions-screen.js
 # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-x402-payer-screen.js
+# Sanctioned regions answer 451 before any payment work (a payment from one is never verified or settled; live control from an allowed country); the sanctions events store keeps each event and reads due until filed (paid-mode boot vs stub facilitator - offline)
+t node scripts/test-sanctioned-regions.js
 # Every rail that carries a payer address screens it (x402 EVM, Gateway, MPP evm, Solana, Stellar, Algorand, Tempo relay); a payer not listed is served; card and credits name no address (offline)
 t node scripts/test-payer-screen-rails.js
 # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)

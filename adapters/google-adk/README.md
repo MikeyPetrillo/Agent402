@@ -1,15 +1,19 @@
-# agent402-google-adk
+# agent402-dev-kit-tools
 
-Google ADK (Agent Development Kit) tools for [Agent402](https://agent402.tools) -
+[Agent402](https://agent402.tools) tools for use with the Agent Development Kit (ADK) from Google. Agent402 is
 the open-source x402 + MCP server with 500+ pay-per-call web tools (browser, web
 search, OCR, PDFs, durable memory, pure-CPU utilities) **and** the
 cross-seller [Smart Order Router](https://agent402.tools/marketplace) that ranks
 tools across the x402 sellers Agent402 indexes.
 
+Works with the Agent Development Kit for TypeScript (`@google/adk`). Agent402 is not affiliated with or endorsed by Google.
+
+Formerly `agent402-google-adk`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
+
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
 ```bash
-npm install agent402-google-adk @google/adk zod
+npm install agent402-dev-kit-tools @google/adk zod
 ```
 
 Both peers are optional: install them only if you want real ADK `FunctionTool`
@@ -18,7 +22,7 @@ instances. Without them, use `agent402ToolSpecs()` (below), which has no deps.
 ## Quickstart
 
 ```js
-import { agent402Tools } from "agent402-google-adk";
+import { agent402Tools } from "agent402-dev-kit-tools";
 import { LlmAgent } from "@google/adk";
 
 // Free tier (proof-of-work auto-pay, no wallet)
@@ -44,7 +48,7 @@ The LLM picks tasks; the router ranks sellers; the caller handles payment.
 
 | Tool | Purpose |
 |---|---|
-| `agent402_find` | Resolve a plain-language task to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
+| `agent402_find` | Resolve a task description to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
 | `agent402_route` | **Cross-seller x402 router**: rank tools across the x402 sellers Agent402 indexes (its own catalog plus the other sellers it discovers and crawls). Ranked by match score; ties break on health, then buyer count, then price. `include: "external"` excludes Agent402 itself, so it doubles as a neutral discovery API over the rest of the ecosystem. |
 | `agent402_call` | Call a tool by slug. Pays automatically: pure-CPU tools via proof-of-work; wallet-only via your x402 fetch. |
 | `agent402_about` | The Agent402 service manifest - payment options, capability map, MCP connector, trust signals. |
@@ -61,7 +65,7 @@ If you'd rather not pull in `@google/adk` and `zod` (or you want to wrap the
 tools with your own factory), use the framework-agnostic export:
 
 ```js
-import { agent402ToolSpecs } from "agent402-google-adk";
+import { agent402ToolSpecs } from "agent402-dev-kit-tools";
 
 const specs = agent402ToolSpecs();
 // specs = [{ name, description, parametersJsonSchema, execute }, ...]
@@ -107,7 +111,7 @@ Pure-CPU tools are free: `agent402_call` fetches a proof-of-work challenge and
 solves it in-process (a fraction of a second of CPU), so no wallet is needed.
 Wallet-only tools (network, browser, disk, live data) settle in USDC over x402
 on whichever chain your wrapped `fetch` is funded for - Base, Solana, Polygon,
-Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar or Algorand, plus
+Arbitrum, Monad, Celo, Avalanche, Sei, OP Mainnet, Arc, Ink, Stellar or Algorand, plus
 USDG on Robinhood Chain (14 chains in all). Prices come from the live catalog at
 `/api/pricing`; never hardcode one.
 

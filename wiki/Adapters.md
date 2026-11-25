@@ -6,16 +6,18 @@ If your agent isn't an MCP client, there's an npm package that turns the Agent40
 
 | Stack | npm package | Returns |
 |---|---|---|
-| OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) | `tools[]` for the `tools:` param |
-| Anthropic Messages API (`tool_use`) | [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) | `tools[]` for the `tools:` param |
-| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` (four meta tools) |
-| LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` (four meta tools) |
-| LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
-| elizaOS | [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402) | a `Plugin` with `AGENT402_FIND` / `AGENT402_CALL` / `AGENT402_ABOUT` actions and an `AGENT402` provider |
-| Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
-| Strands Agents (Amazon Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
-| Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` (four meta tools) |
-| OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `tool()` instances for `new Agent({ tools })` (four meta tools) |
+| OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) | `tools[]` for the `tools:` param |
+| Anthropic Messages API (`tool_use`) | [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools) | `tools[]` for the `tools:` param |
+| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) | `Record<name, tool()>` (four meta tools) |
+| LangChain JS / LangGraph | [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) | `DynamicStructuredTool[]` (four meta tools) |
+| LlamaIndex TS | [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) | `FunctionTool[]` |
+| elizaOS | [`agent402-actions-plugin`](https://www.npmjs.com/package/agent402-actions-plugin) | a `Plugin` with `AGENT402_FIND` / `AGENT402_CALL` / `AGENT402_ABOUT` actions and an `AGENT402` provider |
+| Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
+| Strands Agents | [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) | `StrandsTool[]` for `new Agent({ tools })` |
+| Google ADK (Agent Development Kit) | [`agent402-dev-kit-tools`](https://www.npmjs.com/package/agent402-dev-kit-tools) | `FunctionTool[]` (four meta tools) |
+| OpenAI Agents SDK | [`agent402-runner-tools`](https://www.npmjs.com/package/agent402-runner-tools) | `tool()` instances for `new Agent({ tools })` (four meta tools) |
+
+Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-messages-tools`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
 
 Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/main/adapters).
 
@@ -25,7 +27,7 @@ Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/mai
 
 The adapters come in two shapes.
 
-**Catalog tools** (`agent402-openai-tools`, `agent402-anthropic-tools`, `agent402-llamaindex`, `agent402-strands`) turn the catalog tools you pick into native tool objects, one per slug:
+**Catalog tools** (`agent402-function-calling`, `agent402-messages-tools`, `agent402-function-tools`, `agent402-agent-loop-tools`) turn the catalog tools you pick into native tool objects, one per slug:
 
 ```ts
 agent402Tools(opts?: {
@@ -42,7 +44,7 @@ agent402Tools(opts?: {
 
 With the default `freeOnly: true`, a wallet-only slug in `slugs` (such as `extract` or `render`) is filtered out, so list compute-payable tools there, or pass `freeOnly: false` with a paying `fetch`. A standalone `agent402Execute({ baseUrl, fetch })` is also exported if you built your tool list a different way and just want the payment-aware executor.
 
-**Meta tools** (`agent402-ai-sdk`, `agent402-langchain`, `agent402-google-adk`, `agent402-openai-agents`) register four tools instead of one per slug: `agent402_find` (resolve a task to a catalog tool), `agent402_route` (the cross-seller router), `agent402_call` (call any tool by slug, paying underneath) and `agent402_about` (the service manifest). The model picks the slug at run time:
+**Meta tools** (`agent402-stream-tools`, `agent402-structured-tools`, `agent402-dev-kit-tools`, `agent402-runner-tools`) register four tools instead of one per slug: `agent402_find` (resolve a task to a catalog tool), `agent402_route` (the cross-seller router), `agent402_call` (call any tool by slug, paying underneath) and `agent402_about` (the service manifest). The model picks the slug at run time:
 
 ```ts
 agent402Tools(opts?: {
@@ -72,7 +74,7 @@ const payFetch = wrapFetchWithPayment(fetch, client);
 
 ```js
 import OpenAI from "openai";
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 
 const openai = new OpenAI();
 // web search, then a cited answer: both paid per call through payFetch (above)
@@ -103,7 +105,7 @@ Same `tools` array works for `assistants.create({ tools })` and `responses.creat
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-anthropic-tools";
+import { agent402Tools } from "agent402-messages-tools";
 
 const anthropic = new Anthropic();
 const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
@@ -125,7 +127,7 @@ for (let turn = 0; turn < 4; turn++) {
 ```js
 import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { agent402Tools } from "agent402-ai-sdk";
+import { agent402Tools } from "agent402-stream-tools";
 
 const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const { text } = await generateText({
@@ -141,7 +143,7 @@ const { text } = await generateText({
 ```js
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
-import { agent402Tools } from "agent402-langchain";
+import { agent402Tools } from "agent402-structured-tools";
 
 const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const agent = createReactAgent({
@@ -158,7 +160,7 @@ const res = await agent.invoke({
 ```js
 import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
-import { agent402Tools } from "agent402-llamaindex";
+import { agent402Tools } from "agent402-function-tools";
 
 const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 const myAgent = agent({ tools, llm: openai({ model: "gpt-6-luna" }) });
@@ -168,28 +170,28 @@ const res = await myAgent.run("Search the web for x402 payment protocol adoption
 ## elizaOS
 
 ```json
-{ "plugins": ["elizaos-plugin-agent402"], "settings": { "AGENT402_CREDITS_KEY": "a402_..." } }
+{ "plugins": ["agent402-actions-plugin"], "settings": { "AGENT402_CREDITS_KEY": "a402_..." } }
 ```
 
-Three actions: `AGENT402_FIND` (free discovery from a plain-language task), `AGENT402_CALL` (`content.slug` + `content.params`; proof-of-work for the free tier, the credits key or an x402 wallet for wallet-only tools, capped by `AGENT402_MAX_PER_CALL_USD`), `AGENT402_ABOUT`. The `AGENT402` provider tells the agent every turn that the catalog exists and which payment mode is configured. No runtime dependency on `@elizaos/core`. Package: [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402).
+Three actions: `AGENT402_FIND` (free discovery from a task description), `AGENT402_CALL` (`content.slug` + `content.params`; proof-of-work for the free tier, the credits key or an x402 wallet for wallet-only tools, capped by `AGENT402_MAX_PER_CALL_USD`), `AGENT402_ABOUT`. The `AGENT402` provider tells the agent every turn that the catalog exists and which payment mode is configured. No runtime dependency on `@elizaos/core`. Package: [`agent402-actions-plugin`](https://www.npmjs.com/package/agent402-actions-plugin).
 
 ## Coinbase AgentKit
 
 ```ts
 import { AgentKit, CdpEvmWalletProvider } from "@coinbase/agentkit";
-import { agent402ActionProvider } from "agent402-agentkit";
+import { agent402ActionProvider } from "agent402-action-provider";
 
 const walletProvider = await CdpEvmWalletProvider.configureWithWallet({ networkId: "base-mainnet" });
 const agentKit = await AgentKit.from({ walletProvider, actionProviders: [await agent402ActionProvider()] });
 ```
 
-Three actions: `agent402_find` (free discovery), `agent402_call` (pays: proof-of-work for the free tier, x402 USDC on Base signed by the wallet provider for wallet-only tools), `agent402_about`. The signer is derived from the wallet provider the way AgentKit's own x402 provider does it, so CDP, Privy, ZeroDev and viem-backed wallets all pay; live-proven against production with a `ViemWalletProvider` ([tx](https://basescan.org/tx/0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59)). Package: [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit).
+Three actions: `agent402_find` (free discovery), `agent402_call` (pays: proof-of-work for the free tier, x402 USDC on Base signed by the wallet provider for wallet-only tools), `agent402_about`. The signer is derived from the wallet provider the way AgentKit's own x402 provider does it, so CDP, Privy, ZeroDev and viem-backed wallets all pay; live-proven against production with a `ViemWalletProvider` ([tx](https://basescan.org/tx/0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59)). Package: [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider).
 
-## Strands Agents (Amazon Bedrock AgentCore)
+## Strands Agents
 
 ```js
 import { Agent } from "@strands-agents/sdk";
-import { agent402Tools } from "agent402-strands";
+import { agent402Tools } from "agent402-agent-loop-tools";
 
 const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 const agent = new Agent({ tools });

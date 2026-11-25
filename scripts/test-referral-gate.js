@@ -634,7 +634,15 @@ if (ONLY_PART !== "2") {
 
 // --- the gate, mounted on a small app --------------------------------------------
 const runs = { echo: 0, slow: 0, boom: 0, busy: 0 };
-const PEG_DEF = (await import("../src/tools/crypto-kit.js")).CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
+// A stub that answers a source's figures beside what it computes, and
+// declares the resale trim that drops them (src/resale-terms.js markRefAnswer):
+// the generic mechanism, held here now that no market-data tool needs it.
+const PEG_RAW = ["price", "high24h", "low24h", "marketCap"];
+const PEG_SAMPLE = { peg: "USD $1.00", count: 2, coins: [
+  { id: "tether", symbol: "USDT", name: "Tether", price: 0.998868, deviationBps: -11.32, high24h: 0.999372, low24h: 0.998674, maxDeviation24hBps: 13.26, marketCap: 184092462233, status: "on-peg" },
+  { id: "usd-coin", symbol: "USDC", name: "USDC", price: 0.999819, deviationBps: -1.81, high24h: 0.999923, low24h: 0.99953, maxDeviation24hBps: 4.7, marketCap: 73033499074, status: "on-peg" },
+], credit: "Data provided by a market source." };
+const PEG_DEF = { refAnswer: (a) => ({ ...a, coins: a.coins.map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => !PEG_RAW.includes(k)))) }), discovery: { output: { example: PEG_SAMPLE } } };
 const seen = { chat: null, budgeted: null, breaker: null, exa: null, chatx: null };
 const TOOLS = {
   echo: { slug: "echo", name: "Echo", category: "test", price: "$0.03", route: "POST /api/echo", handler: async (i) => { runs.echo++; return { echo: i.text ?? null, run: runs.echo }; } },
@@ -644,7 +652,7 @@ const TOOLS = {
   bytes: { slug: "bytes", name: "Bytes", category: "test", price: "$0.03", handler: async () => ({ __binary: Buffer.from("png"), contentType: "image/png" }) },
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
-  // stablecoin-peg's published answer and its own /ref transform (src/tools/crypto-kit.js), on a stub handler.
+  // A stub's answer with source figures and its own /ref transform, on a stub handler.
   peg: { slug: "peg", name: "Peg", category: "test", price: "$0.03", refAnswer: PEG_DEF.refAnswer, handler: async () => { runs.peg = (runs.peg || 0) + 1; return structuredClone(PEG_DEF.discovery.output.example); } },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
   // Refuses its input from inside the handler (a 400 of the caller's own, or a refusal attributed upstream).
@@ -1168,7 +1176,7 @@ try {
     const RAW = ["price", "high24h", "low24h", "marketCap"];
     const pegCoins = pg.json?.coins || [];
     ok(pg.status === 200 && pegCoins.length === 2 && pegCoins.every((c) => RAW.every((k) => !Object.hasOwn(c, k)) && ["id", "symbol", "deviationBps", "maxDeviation24hBps", "status"].every((k) => Object.hasOwn(c, k))) && typeof pg.json?.credit === "string" && pg.json.credit.length > 0 && /^0x/.test(pg.json?.transaction || ""),
-      `stablecoin-peg's /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
+      `a declared /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
     const direct = await TOOLS.peg.handler({});
     ok(direct.coins.every((c) => RAW.every((k) => Object.hasOwn(c, k))), "the same handler's own answer (what the public route serves) keeps every field");
     const o = await send(R("owntx"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
@@ -1281,7 +1289,7 @@ try {
       const ran = runs.echo;
       const r = await send(R("echo"), { body: { text: "d" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
       const entry = app1.book.get(key);
-      const unknown = r.status === 402 && r.json?.success === false && r.json.errorReason === "settle_outcome_unknown" && /Send the same PAYMENT-SIGNATURE again/.test(r.json.errorMessage) && !("echo" in r.json);
+      const unknown = r.status === 402 && r.json?.success === false && r.json.errorReason === "settle_outcome_unknown" && /Send the same request with the same PAYMENT-SIGNATURE again/.test(r.json.errorMessage) && !("echo" in r.json);
       // The payment lands after all: the chain says so on the re-send.
       const tx = "0x" + createHash("sha256").update(name).digest("hex");
       fac.land(p.authorization, tx);
@@ -1753,6 +1761,131 @@ try {
       const again = await send(`${app9.url}/ref/echo`, { body: { text: "kept" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
       ok(again.status === 409 && again.json?.errorReason === "answer_unavailable_refund_owed" && owed.filter((o) => o.tx === row?.tx).length === 1, `the buyer's re-send is told it is owed back, and nothing is owed twice (${again.status})`);
     } finally { await app9.close(); }
+  }
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // A kept answer is served only to the call it was paid for. Every field of
+    // a settled authorization and its signature is public in the settlement
+    // transaction, so the PAYMENT-SIGNATURE can be rebuilt by anyone: the
+    // header alone must never return a buyer's answer, nor close the buyer's
+    // entry. The "attacker" below sends the buyer's exact header bytes (what a
+    // rebuild from the transaction input produces) with another call.
+    ok(typeof gateMod.referralCallDigestOf === "function", "the gate exports the call digest a kept answer is bound to");
+    const store = createReferralAnswerStore({ now: () => Date.now() + skew.ms });
+    const appC = await mount({}, { answers: store });
+    const at = (path) => `${appC.url}${path}`;
+    try {
+      // (A) settled and delivered: another body, another query, another method -> 409, never the answer.
+      fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()) } });
+      const victim = newAccount();
+      const p = await signPayment(accept, { account: victim, validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+      const ran = runs.echo;
+      const first = await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT A" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const settlesA = settles();
+      const salesA = sales.length;
+      const otherBody = await send(at("/ref/echo"), { body: { text: "attacker sends a different body" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const otherQuery = await send(at("/ref/echo?x=1"), { body: { text: "VICTIM PRIVATE INPUT A" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const noBody = await send(at("/ref/echo"), { method: "POST", headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const asGet = await send(at("/ref/echo?text=VICTIM%20PRIVATE%20INPUT%20A"), { method: "GET", headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const refused = [otherBody, otherQuery, noBody, asGet];
+      ok(first.status === 200 && first.json?.echo === "VICTIM PRIVATE INPUT A" && refused.every((r) => r.status === 409 && r.json?.reason === "consumed" && r.headers.get("x-payment-replay") === "consumed" && !r.text.includes("VICTIM") && !r.text.includes(first.json.transaction)) && settles() === settlesA && runs.echo === ran + 1 && sales.length === salesA,
+        `(A) the same PAYMENT-SIGNATURE with another body, query, empty body or method is a 409 consumed with nothing of the answer: no run, no settle, no sale (${refused.map((r) => r.status).join(",")})`);
+      const buyerAgain = await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT A" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      await quietLedger();
+      ok(buyerAgain.status === 200 && buyerAgain.json?.echo === "VICTIM PRIVATE INPUT A" && buyerAgain.json.transaction === first.json.transaction && runs.echo === ran + 1 && settles() === settlesA && sales.filter((s) => s.tx === first.json.transaction).length === 1,
+        `(A) the buyer's own re-send of the same call, from another address, is still served the kept answer with no second run or sale (${buyerAgain.status})`);
+      ok(appC.gate.stats().resendOtherCall === refused.length, `(A) each refused re-send of another call is counted (${appC.gate.stats().resendOtherCall})`);
+
+      // (B) settle in doubt: a re-send of another call is refused and leaves the entry the buyer's.
+      fac.mode.settle = () => ({ status: 500, body: {} });
+      const pB = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+      const keyB = gateMod.referralReplayKey(pB.authorization);
+      const ranB = runs.echo;
+      const rB = await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT B" }, headers: { "payment-signature": pB.header, "x-test-ip": freshIp() } });
+      const txB = "0x" + "1a2b".repeat(16);
+      fac.land(pB.authorization, txB);
+      const settlesB = settles();
+      const rpcB = fac.rpcCalls.length;
+      const attackB = await send(at("/ref/echo"), { body: { text: "attacker" }, headers: { "payment-signature": pB.header, "x-test-ip": freshIp() } });
+      const entryB = appC.book.get(keyB);
+      ok(rB.status === 402 && rB.json?.errorReason === "settle_outcome_unknown" && attackB.status === 409 && attackB.json?.reason === "consumed" && !attackB.text.includes("VICTIM") && entryB?.state === "in-doubt" && entryB.delivered !== true && settles() === settlesB && fac.rpcCalls.length === rpcB && sales.length === salesA,
+        `(B) in doubt, the same payment with another body is refused before any chain read or settle: the entry stays in doubt and undelivered, nothing booked (${attackB.status}, ${entryB?.state})`);
+      const buyerB = await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT B" }, headers: { "payment-signature": pB.header, "x-test-ip": freshIp() } });
+      await quietLedger();
+      ok(buyerB.status === 200 && buyerB.json?.echo === "VICTIM PRIVATE INPUT B" && buyerB.json.transaction === txB && runs.echo === ranB + 1 && sales.filter((s) => s.tx === txB).length === 1,
+        `(B) the buyer's later re-send of the paid call gets the answer with the chain's transaction, booked once (${buyerB.status})`);
+
+      // (B') in doubt, refused re-sends of another call only: past the retention the sweep owes the buyer back.
+      const victimB2 = newAccount();
+      const pB2 = await signPayment(accept, { account: victimB2, validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+      const keyB2 = gateMod.referralReplayKey(pB2.authorization);
+      await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT B2" }, headers: { "payment-signature": pB2.header, "x-test-ip": freshIp() } });
+      const txB2 = "0x" + "1a2c".repeat(16);
+      fac.land(pB2.authorization, txB2);
+      const attackB2 = await send(at("/ref/echo"), { body: { text: "attacker" }, headers: { "payment-signature": pB2.header, "x-test-ip": freshIp() } });
+      const attackB2q = await send(at("/ref/echo?text=VICTIM%20PRIVATE%20INPUT%20B2"), { method: "GET", headers: { "payment-signature": pB2.header, "x-test-ip": freshIp() } });
+      skew.ms = 11 * 60_000;
+      await appC.gate.sweepOnce();
+      await quietLedger();
+      const rowB2 = owed.find((o) => o.tx === txB2);
+      const lateB2 = await send(at("/ref/echo"), { body: { text: "VICTIM PRIVATE INPUT B2" }, headers: { "payment-signature": pB2.header, "x-test-ip": freshIp() } });
+      skew.ms = 0;
+      ok(attackB2.status === 409 && attackB2q.status === 409 && rowB2 && rowB2.payer === victimB2.address.toLowerCase() && rowB2.priceUsd === 0.03 && rowB2.wire === "referral" && appC.book.get(keyB2)?.state === "refund-owed" && lateB2.status === 409 && lateB2.json?.errorReason === "answer_unavailable_refund_owed" && owed.filter((o) => o.tx === txB2).length === 1,
+        `(B) when only other calls re-sent the payment, the answer is never marked delivered: past the retention the sweep records the gross owed to the buyer, and the buyer is told so (${rowB2?.priceUsd}, ${appC.book.get(keyB2)?.state}, ${lateB2.json?.errorReason})`);
+    } finally { skew.ms = 0; await appC.close(); }
+  }
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // (C) an answer restored from rest is bound the same way, and one stored
+    // with no call recorded is served to nobody.
+    const file = join(tmp, "call-bound-book.json");
+    const answerDir = join(tmp, "call-bound-answers");
+    const a = await mount({}, { book: createReferralBook({ file, log }), answers: createReferralAnswerStore({ dir: answerDir }) });
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+    const key = gateMod.referralReplayKey(p.authorization);
+    const pL = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+    const keyL = gateMod.referralReplayKey(pL.authorization);
+    const ran = runs.echo;
+    const r1 = await send(`${a.url}/ref/echo`, { body: { text: "VICTIM AT REST" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+    const rL = await send(`${a.url}/ref/echo`, { body: { text: "LEGACY AT REST" }, headers: { "payment-signature": pL.header, "x-test-ip": freshIp() } });
+    await a.close();
+    const idOf = (k) => k.replace(/^referral:/, "");
+    const storedC = JSON.parse(readFileSync(join(answerDir, `${idOf(key)}.json`), "utf8"));
+    // An answer written before the call was recorded: the same record without it.
+    const legacyPath = join(answerDir, `${idOf(keyL)}.json`);
+    const legacy = JSON.parse(readFileSync(legacyPath, "utf8"));
+    delete legacy.callDigest;
+    writeFileSync(legacyPath, JSON.stringify(legacy));
+    ok(r1.status === 402 && rL.status === 402 && typeof storedC.callDigest === "string" && /^[0-9a-f]{64}$/.test(storedC.callDigest) && !JSON.stringify(storedC).includes("attacker") && !("body" in storedC),
+      "(C) the answer at rest carries the digest of its call (a hash, never the request body)");
+    const b = await mount({}, { book: createReferralBook({ file, log }), answers: createReferralAnswerStore({ dir: answerDir, now: () => Date.now() + skew.ms }) });
+    try {
+      const tx = "0x" + "1a2d".repeat(16);
+      const txL = "0x" + "1a2e".repeat(16);
+      fac.land(p.authorization, tx);
+      fac.land(pL.authorization, txL);
+      const settlesC = settles();
+      const attack = await send(`${b.url}/ref/echo`, { body: { text: "attacker" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const entry = b.book.get(key);
+      ok(attack.status === 409 && attack.json?.reason === "consumed" && !attack.text.includes("VICTIM") && b.gate.stats().restoredAnswers === 0 && entry?.state === "in-doubt" && entry.delivered !== true && settles() === settlesC && owed.length === 0,
+        `(C) after a restart, the stored answer is not restored for another call: 409, the entry still in doubt and undelivered (${attack.status}, ${entry?.state})`);
+      const buyer = await send(`${b.url}/ref/echo`, { body: { text: "VICTIM AT REST" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      await quietLedger();
+      ok(buyer.status === 200 && buyer.json?.echo === "VICTIM AT REST" && buyer.json.transaction === tx && runs.echo === ran + 2 && b.gate.stats().restoredAnswers === 1 && sales.filter((s) => s.tx === tx).length === 1,
+        `(C) the buyer's re-send of the paid call restores and serves it, booked once (${buyer.status})`);
+      const legacyBuyer = await send(`${b.url}/ref/echo`, { body: { text: "LEGACY AT REST" }, headers: { "payment-signature": pL.header, "x-test-ip": freshIp() } });
+      const entryL = b.book.get(keyL);
+      ok(legacyBuyer.status === 409 && legacyBuyer.json?.reason === "consumed" && !legacyBuyer.text.includes("LEGACY") && entryL?.state === "in-doubt" && entryL.delivered !== true && b.gate.stats().restoredAnswers === 1,
+        `(C) an answer stored with no call recorded is served to no request, the matching one included, and the entry stays open (${legacyBuyer.status}, ${entryL?.state})`);
+      skew.ms = 11 * 60_000;
+      await b.gate.sweepOnce();
+      await quietLedger();
+      skew.ms = 0;
+      const rowL = owed.find((o) => o.tx === txL);
+      ok(rowL && rowL.payer === pL.authorization.from.toLowerCase() && rowL.priceUsd === 0.03 && b.book.get(keyL)?.state === "refund-owed",
+        `(C) past its retention the sweep records the gross owed to that buyer (${rowL?.priceUsd}, ${b.book.get(keyL)?.state})`);
+    } finally { skew.ms = 0; await b.close(); }
   }
   {
     // One payer's open settlements are its own share; at capacity only an
@@ -2727,10 +2860,11 @@ try {
     const echoRow = usage.bySlug.find((r) => r.slug === "echo");
     const grossSum = receipts.rows.reduce((a, r) => a + r.amountUsd, 0);
     ok(usage.totals.calls === receipts.rows.length && Math.abs(usage.totals.paidUsd - +grossSum.toFixed(4)) < 1e-9 && echoRow && Math.abs(echoRow.usd / echoRow.calls - 0.03) < 1e-9 && usage.recent.every((r) => r.priceUsd !== 0.026298), `the buyer's usage totals are the gross too (${usage.totals.calls} calls, $${usage.totals.paidUsd})`);
-    // Every statement that reads the sales table states which rails it reads.
+    // Every statement that reads the sales table states which rails it reads
+    // (a retention count reads every row past its period, and says so).
     const src = readFileSync(fileURLToPath(new URL("../src/sales-ledger.js", import.meta.url)), "utf8");
     const statements = [...src.matchAll(/(?:db\.prepare\(|const [A-Z_]+ = )\s*(`[^`]*`|"[^"]*")/g)].map((m) => m[1]).filter((q) => /\bFROM sales\b/i.test(q) && /^SELECT\b/i.test(q.replace(/^[`"]\s*/, "")));
-    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
+    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|retention-view|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
     ok(statements.length >= 40 && unmarked.length === 0, `every SELECT on the sales table reads paying rails, the counted rails, a wire of its own, the public rails, or is a marked buyer or private-rail view (${statements.length} statements${unmarked.length ? `; unmarked: ${unmarked.map((q) => q.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
     const pages = [...src.matchAll(/\$\{(WINDOW_PAGE|SCORECARD_ROWS)\}([^`]*)`/g)].filter((m) => m[1] === "WINDOW_PAGE" && !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL/.test(m[2]));
     ok(pages.length === 0 && /SCORECARD_ROWS = `[^`]*COUNTED_RAILS_SQL/.test(src), "and every paged window read names its rails too");

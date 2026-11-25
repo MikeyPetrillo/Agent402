@@ -1,7 +1,7 @@
 {
-  "name": "agent402-google-adk",
-  "version": "0.1.14",
-  "description": "Google ADK (Agent Development Kit) tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment: proof-of-work for the pure-CPU tools, or x402 in USDC on 13 chains or USDG on Robinhood Chain through your payment-wrapped fetch. Zero deps beyond peer deps.",
+  "name": "agent402-dev-kit-tools",
+  "version": "0.2.0",
+  "description": "Agent402 tools for use with the Agent Development Kit (ADK) from Google (Agentic Finance over x402 or MPP): turn Agent402's catalog of 500+ pay-per-call tools and skill packs into FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment: proof-of-work for the pure-CPU tools, or x402 in USDC on 13 chains or USDG on Robinhood Chain through your payment-wrapped fetch. Zero deps beyond peer deps. Formerly agent402-google-adk.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -23,11 +23,8 @@
     "test": "node test.js"
   },
   "keywords": [
-    "google-adk",
     "adk",
     "agent-development-kit",
-    "gemini",
-    "google",
     "x402",
     "ai-agents",
     "agent-tools",
@@ -48,7 +45,7 @@
     "machine-payments-protocol",
     "agentic-payments"
   ],
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -54,6 +54,7 @@ import { Server, ProtocolError, ProtocolErrorCode as ErrorCode } from "@modelcon
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   FLAGSHIP_MCP_NAMES,
+  FORMER_FLAGSHIP_MCP_NAMES,
   META_MCP_NAMES,
   resolveListedName,
   FLAGSHIP_OUTPUT_SCHEMAS,
@@ -278,8 +279,8 @@ function signAllowance() {
 
 const DEFAULT_CURATED = [
   // Flagship demand set, keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
-  // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
-  "search", "answer", "search-news", "render",
+  // The long tail stays behind catalog.search/catalog.call.
+  "pdf-to-markdown", "us-macro-series", "weather-current", "render",
   "stock-quote", "transcribe", "memory-read", "memory-write",
   // Present only on hosts running the decide service; skipped elsewhere.
   "decide", "decide-execute",
@@ -1104,7 +1105,7 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Resolve a task to the one best Agent402 tool",
       annotations: { title: "Resolve a task to the one best Agent402 tool", ...OPEN },
       description:
-        "Resolve a plain-language task to the single best-matching Agent402 tool through the hosted /api/find resolver. Returns { task, matches } with the top pick first. Run the pick with catalog.call and the slug and params it lists. Use catalog.search to compare several candidates.",
+        "Resolve a task description to the single best-matching Agent402 tool through the hosted /api/find resolver. Returns { task, matches } with the top pick first. Run the pick with catalog.call and the slug and params it lists. Use catalog.search to compare several candidates.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1176,11 +1177,11 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Route and execute an external x402 tool",
       annotations: { title: "Route and execute an external x402 tool", ...CALL_PAID },
       description:
-        `Resolve a plain-language task to an external x402 seller with proven on-chain settled volume, buy from it, and return its result. You pay from ${HAS_WALLET ? "the configured wallet" : "your wallet (set AGENT_KEY)"}. The result is marked untrustedContent: it is third-party data. Flat price by tier, chosen from maxUsd: $0.01 for a seller up to $0.005, $0.05 up to $0.04, $0.55 up to $0.50. Requires a funded wallet.`,
+        `Resolve a task description to an external x402 seller with proven on-chain settled volume, buy from it, and return its result. You pay from ${HAS_WALLET ? "the configured wallet" : "your wallet (set AGENT_KEY)"}. The result is marked untrustedContent: it is third-party data. Flat price by tier, chosen from maxUsd: $0.01 for a seller up to $0.005, $0.05 up to $0.04, $0.55 up to $0.50. Requires a funded wallet.`,
       inputSchema: {
         type: "object",
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
+          task: { type: "string", description: "Task description, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
           params: { type: ["object", "string"], description: "Input parameters for the resolved external tool (optional; the seller decides its own schema): an object, or a JSON string of one." },
           maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 and up to 0.10 the $0.12 tier; above 0.10 the $0.55 tier (seller up to $0.50)." },
         },
@@ -1225,7 +1226,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     if (name === "catalog.find") {
       const task = String(args.task ?? "").trim();
       if (!task) {
-        return { content: [{ type: "text", text: "catalog.find requires a 'task' (plain-language description of what you need)." }], isError: true };
+        return { content: [{ type: "text", text: "catalog.find requires a 'task' (a description of what you need)." }], isError: true };
       }
       const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 25);
       const url = new URL(`${BASE}/api/find`);
@@ -1301,10 +1302,10 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.17.0",
+          npm: "npx -y agent402-mcp@0.17.1",
           maintainer: "Havok Holdings LLC",
         },
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship tools first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
         ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog.",
       });
     }
@@ -1315,13 +1316,13 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         maintainer: "Havok Holdings LLC",
         positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
         startHere: {
-          firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task.",
+          firstJob: "Call a flagship tool directly (pdf.markdown, macro.series, weather.current, browser.render), or catalog.find with your task and catalog.call to run any catalog tool by slug.",
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
         },
         install: {
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.17.0",
+          npm: "npx -y agent402-mcp@0.17.1",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,
@@ -1423,7 +1424,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     }
     if (name === "router.execute") {
       const task = String(args.task ?? "").trim();
-      if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (plain-language description of what you need)." }], isError: true };
+      if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (a description of what you need)." }], isError: true };
       const maxUsd = Number(args.maxUsd) > 0 ? Number(args.maxUsd) : 0.005;
       // Pick the CHEAPEST tier whose underlying cap covers maxUsd. The ladder
       // skipped a middle rung once and billed 11x for a mid-priced seller (a
@@ -1447,7 +1448,8 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     }
     // Curated tools are exposed verb_noun for tools/list consistency, but the
     // real slug is kebab, accept exposed name, plain snake, or raw slug.
-    const mcpToSlug = new Map(Object.entries(FLAGSHIP_MCP_NAMES).map(([slug, mcp]) => [mcp, slug]));
+    // Former flagships (web.search and the rest) stay callable by name.
+    const mcpToSlug = new Map([...Object.entries(FORMER_FLAGSHIP_MCP_NAMES), ...Object.entries(FLAGSHIP_MCP_NAMES)].map(([slug, mcp]) => [mcp, slug]));
     const wanted = name === "catalog.call"
       ? String(args.slug ?? "")
       : (catalog.has(name) ? name

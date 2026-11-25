@@ -1010,7 +1010,7 @@ export async function runBundleStubControls() {
   const dir = mkdtempSync(join(tmpdir(), "a402-bundle-grade-"));
   const logPath = join(dir, "failures.jsonl");
   const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
-  const answer = (leg, words) => ({ status: 503, t0: 900, t1: 1100, threw: null, body: { error: `6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, ${leg}: ${words}). Nothing was charged; retry later` } });
+  const answer = (leg, words) => ({ status: 503, t0: 900, t1: 1100, threw: null, body: { error: `6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, ${leg}: ${words}). Nothing was charged. Retry later.` } });
   const t = { slug: "weather-risk-brief", method: "post", path: "/api/weather-risk-brief" };
   const record = (o) => writeFileSync(logPath, `${JSON.stringify({ t: 1000, host: "api.open-meteo.com", method: "GET", keyed: false, status: 429, url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", ...o })}\n`);
   const runnerGets = (status) => ({ logPath, readStatus: async () => status, readFails: async () => status === 0 || status >= 500 || status === 429 });
@@ -1040,7 +1040,7 @@ export async function runBundleStubControls() {
     // token-diligence: the market kit's own rate-limit words, a recorded 429
     // from the keyless market host, and the runner's read of the same request.
     const tk = { slug: "token-diligence", method: "post", path: "/api/token-diligence" };
-    const tkAnswer = { status: 503, t0: 900, t1: 1100, threw: null, body: { error: "4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: Market data upstream rate-limited this request - retry in about 60 seconds). Nothing was charged; retry later" } };
+    const tkAnswer = { status: 503, t0: 900, t1: 1100, threw: null, body: { error: "4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: Market data upstream rate-limited this request - retry in about 60 seconds). Nothing was charged. Retry later." } };
     record({ host: "api.coingecko.com", url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false" });
     const tkRefused = await bundleFailureGrade(tk, tkAnswer, runnerGets(429));
     ok(Boolean(tkRefused?.skip) && /coin-profile/.test(tkRefused.skip), "control (stub): token-diligence's leg was rate-limited (429) and the runner's direct read is refused 429 too: excused, leg named");
@@ -1300,7 +1300,10 @@ async function main() {
     }
 
     const err = r.threw || (r.body && r.body.error) || `HTTP ${r.status}`;
-    const msg = `${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status || "threw"} ${String(typeof err === "object" ? JSON.stringify(err) : err).slice(0, 160)}`;
+    // The verdict's reason rides the failure, as the live path's does, so a
+    // refusal the sweep did not excuse says why (no recorded upstream failure,
+    // the runner's own read answered, a URL the definition does not build).
+    const msg = `${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status || "threw"} ${String(typeof err === "object" ? JSON.stringify(err) : err).slice(0, 160)} [not excused: ${outage.reason}]`;
     liveFails.push(msg);
   });
   process.stdout.write("\n");

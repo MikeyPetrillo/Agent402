@@ -94,7 +94,7 @@ import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.
 
 import { ALGORAND_INDEXERS } from "../src/payment-verify.js";
 
-import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched } from "./avm-canary-classify.js";
+import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched, isCatalogWarming } from "./avm-canary-classify.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "algorand-rail-canary");
 const AVM_CAIP2_PREFIX = "algorand:";
@@ -324,6 +324,10 @@ const report = {
   // A router tier found no outside seller doing its task on Algorand (a 4xx,
   // nothing settled): the seller set, not the rail. Printed, does not fail.
   noSeller: [],
+  // A router tier whose seller list for Algorand was still loading after a
+  // restart (a 503 before any seller was tried; nothing settled). Printed,
+  // does not fail.
+  catalogWarming: [],
   // Refused by OUR OWN breaker before the handler ran: nothing was measured
   // about these tools, so they are neither a pass nor a failure.
   blocked: [], aborted: null,
@@ -616,7 +620,8 @@ for (const t of tools) {
       // The breaker's window is minutes, so it gets the pause IT asks for
       // rather than the burst pause. Bounded, because a long Retry-After on a
       // ~500-tool sweep would otherwise run for hours.
-      const waitMs = out === "breaker" ? Math.min(a.retryAfterMs ?? BREAKER_MAX_WAIT_MS, BREAKER_MAX_WAIT_MS) : THROTTLE_BACKOFF_MS;
+      const waitMs = out === "breaker" ? Math.min(a.retryAfterMs ?? BREAKER_MAX_WAIT_MS, BREAKER_MAX_WAIT_MS)
+        : isCatalogWarming(a.status, a.body) ? Math.min(a.retryAfterMs ?? 30_000, 60_000) : THROTTLE_BACKOFF_MS;
       console.log(`WAIT ${key.padEnd(46)} ${why} - ${step === "read-chain" ? "reading the chain" : "retrying"} in ${waitMs}ms`);
       await sleep(waitMs);
       // No answer, or an edge timeout: the payment's fate decides whether
@@ -669,6 +674,9 @@ for (const t of tools) {
       report.chargedEmpty.push({ key, slug: t.slug, usd, tx: a.tx || null, txid: a.txid || null, reason: `200 with ${a.unreadable ? "a body that could not be read" : "an empty body"}${retried ? " (on the retry)" : ""}` });
       report.spentUsd += usd;
       console.log(`FAIL ${key.padEnd(46)} CHARGED, empty answer: 200 with ${a.unreadable ? "an unreadable" : "an empty"} body · ${t.slug}${a.tx ? ` · tx ${a.tx}` : " · (no receipt header)"}; nothing signed again`);
+    } else if (isCatalogWarming(a.status, a.body)) {
+      report.catalogWarming.push({ key, slug: t.slug, reason: `HTTP ${a.status}: ${a.body.slice(0, 160)}${retried ? " (twice)" : ""}` });
+      console.log(`WARMING ${key.padEnd(42)} HTTP ${a.status}: the server's Algorand seller list was still loading (not charged; no seller tried)`);
     } else if (isNoSellerMatched(a.status, a.body)) {
       report.noSeller.push({ key, slug: t.slug, reason: `HTTP ${a.status}: ${a.body.slice(0, 160)}${retried ? " (twice)" : ""}` });
       console.log(`NO SELLER ${key.padEnd(40)} HTTP ${a.status}: no outside seller does this task on Algorand (not charged; the seller set, not the rail)`);
@@ -802,6 +810,10 @@ if (report.throttled.length) {
 if (report.upstreamFail.length) {
   console.log(`\nTHIRD-PARTY / EDGE OUTAGES (an HTTP error answer that persisted through a fresh retry; a >=400 cancels settlement, so the buyer was NOT charged - their outage or an edge blip, not our rail/tool defect, so these do NOT fail the run):`);
   for (const f of report.upstreamFail) console.log(`  ${f.key} - ${f.reason}`);
+}
+if (report.catalogWarming.length) {
+  console.log(`\nSELLER LIST STILL LOADING (a router tier's 503 before any seller was tried, after waiting its Retry-After once; nothing was settled, so these do NOT fail the run):`);
+  for (const f of report.catalogWarming) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (report.noSeller.length) {
   console.log(`\nNO OUTSIDE SELLER FOR THE TASK (a router tier's 4xx: nothing in the index does its task on Algorand; nothing was settled, and the seller set is not a rail defect, so these do NOT fail the run):`);

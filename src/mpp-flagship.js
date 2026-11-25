@@ -28,7 +28,7 @@ export const MPP_FLAGSHIP = [
   { slug: "asn-info", group: "Network", why: "ASN, prefix, country and registry for an IP address or hostname." },
   { slug: "tls-cert", group: "Network", why: "A host's TLS certificate: issuer, validity window, days left, SANs." },
   { slug: "weather-current", group: "Weather", why: "Current conditions anywhere on Earth, metric or imperial." },
-  { slug: "block-number", group: "Chain", why: "Latest block number on Ethereum, Base, Polygon, Arbitrum or Optimism." },
+  { slug: "block-number", group: "Chain", why: "Latest block number on Ethereum, Base, Polygon, Arbitrum One or OP Mainnet." },
   { slug: "judge", group: "Judgment", why: "A typed judgment about any content (choice, score or yes/no) with probabilities; model-backed." },
   { slug: "time-convert", group: "Utilities", why: "Convert between epoch, ISO 8601 and any IANA timezone." },
   { slug: "hash", group: "Utilities", why: "SHA-256, SHA-512, SHA-1 or MD5 of a text, in hex and base64." },

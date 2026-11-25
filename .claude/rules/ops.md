@@ -38,6 +38,7 @@ paths:
   - "scripts/adopt-issue-titles.js"
   - ".github/workflows/**"
   - "workers/**"
+  - "src/ledger-retention.js"
 ---
 
 # State, scheduled loops, monitoring and operations
@@ -696,3 +697,6 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   0600 file in a per-process mkdtemp directory. Rollback: an older build ignores the document and starts
   with empty memory, so before rolling back read `heldInMemory` and `heldDurable` on
   `/__operator/gateway-pending.json` and resolve what is held.
+
+## Ledger retention
+- `LEDGER_RETENTION`: unset is a daily leased dry run (counts only), `apply` deletes, `off` stops the pass. `LEDGER_RETENTION_SALES_YEARS` and `LEDGER_RETENTION_REFUND_YEARS` (default 7, never under 7). Only resolved refunds (paid, void) are pruned; an owed, sending or blocked row stays at any age (`scripts/test-ledger-retention-pg.js` on real Postgres). Sanctions events follow `SANCTIONS_EVENTS_RETENTION_YEARS` (payments.md).

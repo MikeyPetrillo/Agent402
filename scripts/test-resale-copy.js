@@ -53,7 +53,7 @@ ok(/eligible: "the router will buy from this seller"/.test(dispatch), "the route
 const terms = readFileSync(join(ROOT, "src", "terms.js"), "utf8");
 ok(/Results from other sellers/.test(terms) && /buys that result from the seller for its own account/.test(terms) && /sells it to you/.test(terms),
   "the terms state that Agent402 buys a third-party result for its own account and sells it to the buyer");
-ok(/redeemable only for Agent402 services/.test(terms), "the terms say a route's service credit is redeemable only for Agent402 services");
+ok(/No part of a run's budget is kept as a credit/.test(terms) && !/service credit/.test(terms), "the terms say no part of a run's budget is kept as a credit (decide-execute's unspent part is never charged on upto, repaid on exact)");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

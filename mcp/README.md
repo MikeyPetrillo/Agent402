@@ -11,13 +11,13 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.1
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call. Run setup once:
 
 ```
-npx -y agent402-mcp@0.17.0 setup
+npx -y agent402-mcp@0.17.1 setup
 ```
 
 It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. It sets no daily cap: no daily budget is written or applied by default, and setup prints one line showing how to add `AGENT402_MAX_USD_PER_DAY` if you want one. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
@@ -25,7 +25,7 @@ It asks for the wallet's private key (the input is hidden), stores it in your OS
 No wallet yet? Make one on this computer:
 
 ```
-npx -y agent402-mcp@0.17.0 wallet new
+npx -y agent402-mcp@0.17.1 wallet new
 ```
 
 It makes a new wallet key, stores it the same way (the key is never shown), and prints the wallet's address and the same config. Send a few dollars of USDC on Base to that address, no ETH needed. It never replaces a key already stored.
@@ -37,7 +37,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -48,7 +48,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless your config sets `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts). No daily budget is written or applied by default, for a new setup or an existing one: the config `setup` and `wallet new` print has no cap, they print one line showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily cap says so in one line when it starts.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.0`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.1`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -141,7 +141,7 @@ to the keychain on stdin, never on a command line.
 
 **Hosted connector (no install).** Add `https://agent402.tools/mcp` as a remote MCP server (for example claude.ai → Settings → Connectors → Add custom connector). Pure-CPU tools run free there, rate-limited. Paid tools are payable on the connector over [MPP](https://agent402.tools/what-is-mpp): the connector answers with an `isError` tool result whose text names every way to pay and whose `_meta["org.paymentauth/payment-required"]` carries the challenges. A presented credential that is refused answers JSON-RPC `-32043`, and a call on the tasks path answers `-32042`, both with `data.challenges`. An MCP client wrapped with `mppx`'s `McpClient.wrap()` pays and retries on its own, with the receipt in `_meta`. This package runs locally for no rate limit, or to pay over x402.
 
-**Chains.** With a funded wallet, `AGENT_KEY` pays USDC on any EVM chain the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink) or USDG on Robinhood Chain. `SOLANA_AGENT_KEY` pays USDC on Solana. The service also settles on Stellar and Algorand, which this package does not sign. Restrict or order chains with `AGENT402_NETWORKS`. A paid call names the `AGENT_KEY` wallet in the `X-Agent402-Wallet` request header with a fresh `X-Agent402-Wallet-Proof` (that key's signature for the host and route), so a server that prices a returning wallet lower can quote it on that call; free calls never carry them.
+**Chains.** With a funded wallet, `AGENT_KEY` pays USDC on any EVM chain the server offers (Base, Polygon, Arbitrum One, Monad, Celo, Avalanche C-Chain, Sei, OP Mainnet, Arc, Ink) or USDG on Robinhood Chain. `SOLANA_AGENT_KEY` pays USDC on Solana. The service also settles on Stellar and Algorand, which this package does not sign. Restrict or order chains with `AGENT402_NETWORKS`. A paid call names the `AGENT_KEY` wallet in the `X-Agent402-Wallet` request header with a fresh `X-Agent402-Wallet-Proof` (that key's signature for the host and route), so a server that prices a returning wallet lower can quote it on that call; free calls never carry them.
 
 **Credits key.** A prepaid credits key (`AGENT402_CREDITS_KEY`) pays per successful call on Agent402's own services; the routes that buy from outside sellers (`router.execute`, `seller-payability`, `decide.execute`, the flight tools) need a wallet key. [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale.
 
@@ -150,10 +150,10 @@ to the keychain on stdin, never on a command line.
 ## How it works
 
 - On startup the server reads the live catalog from `https://agent402.tools/api/pricing` + `/openapi.json`.
-- **Flagship tools** are exposed as first-class MCP tools under dotted names - `web.search`, `web.answer`, `web.news`, `browser.render`, `audio.transcribe`, `memory.read`, `memory.write` - search/answer is the front door. Override the set with `AGENT402_TOOLS` (slugs; a non-flagship slug is listed as its snake_case name).
+- **Flagship tools** are exposed as first-class MCP tools under dotted names - `pdf.markdown`, `macro.series`, `weather.current`, `browser.render`, `audio.transcribe`, `memory.read`, `memory.write`. The web search, news and cited-answer tools run through `catalog.call` (slugs `search`, `search-news`, `answer`), and their earlier names (`web.search`, `web.news`, `web.answer`) still work as CallTool aliases. Override the set with `AGENT402_TOOLS` (slugs; a non-flagship slug is listed as its snake_case name).
 - **Decide** (`decide.plan`, `decide.execute`, `decide.feedback`): describe a job and get a call-ready plan over the catalog and outside x402 sellers (tools in order, fallbacks, validated params, chained steps), then run it yourself or through Agent402. Listed when the server offers Decide; see https://agent402.tools/decide.
-- The rest of the 500+ tool catalog is reachable via the meta tools `catalog.search` / `catalog.find` + `catalog.call` - keeping your context window small. The same dotted names are listed on the hosted connector; the older snake names (`search_tools`, `find_tool`, `call_tool`, `get_payment_info`, `describe_server`, `list_top_sellers`, and the flagship `search_web` …) remain accepted as CallTool aliases, so existing configs keep working.
-- When a call hits HTTP 402: with a wallet key set (`AGENT_KEY` for the EVM chains, Robinhood Chain included; `SOLANA_AGENT_KEY` for Solana), the server signs an x402 payment on a chain the seller accepts and retries; with only a credits key it sends `Authorization: Bearer a402_…` and the server debits the balance on success; with neither it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools. (The service settles USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar and Algorand, plus USDG on Robinhood Chain - 14 chains total - for callers using a raw x402 client rather than this package. Where the server also offers a Circle Gateway batched accept on Arc or Base, this package pays the plain accept beside it.)
+- The rest of the 500+ tool catalog is reachable via the meta tools `catalog.search` / `catalog.find` + `catalog.call` - keeping your context window small. The same dotted names are listed on the hosted connector; the older snake names (`search_tools`, `find_tool`, `call_tool`, `get_payment_info`, `describe_server`, `list_top_sellers`, and the earlier flagship `search_web` …) remain accepted as CallTool aliases, so existing configs keep working.
+- When a call hits HTTP 402: with a wallet key set (`AGENT_KEY` for the EVM chains, Robinhood Chain included; `SOLANA_AGENT_KEY` for Solana), the server signs an x402 payment on a chain the seller accepts and retries; with only a credits key it sends `Authorization: Bearer a402_…` and the server debits the balance on success; with neither it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools. (The service settles USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, OP Mainnet, Arc, Ink, Stellar and Algorand, plus USDG on Robinhood Chain - 14 chains total - for callers using a raw x402 client rather than this package. Where the server also offers a Circle Gateway batched accept on Arc or Base, this package pays the plain accept beside it.)
 - Since 0.13.15 the server's requests to the catalog and to sellers (catalog reads, the 402 and the paid retry) refuse a TLS chain through one of the intermediate CAs listed in `networks.js` (keys reported recoverable in Mozilla bug 2083449), keyed on each certificate's SubjectPublicKeyInfo hash, on a dedicated dispatcher. With a proxy or custom dispatcher installed, requests go out through it unchanged.
 - **Slow routes run as jobs** (since 0.13.17): a paid call to a route the catalog marks slow carries `Prefer: respond-async`, answers `202` with a job link, and the server polls `GET /api/jobs/{id}` (free), waiting `Retry-After` seconds between polls, until the answer is ready, reading the job's `state` and falling back to its `status`. The x402 payment settles only on the delivered answer. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A caller that sends a `progressToken` gets `notifications/progress` from the job's stage, steps and ETA. A job still running when `AGENT402_ASYNC_TIMEOUT_MS` ends comes back with its `jobUrl` instead.
 - Proof-of-work challenges are solved on a worker thread, so the server keeps answering while it searches, and a challenge asking for more than 28 bits (the most an Agent402 server asks) is refused rather than searched (since 0.14.0).
@@ -164,7 +164,7 @@ to the keychain on stdin, never on a command line.
 - `payment.info` tells the model which mode it's in and what a wallet or a credits key would unlock.
 - `server.describe` returns orientation (flagship-first tools, install one-liners, free vs paid, discovery URLs). Call it first.
 - `sellers.list` returns the live leaderboards - `wire: "x402"` (default) ranks x402 sellers settling the most USDC (primarily on Base) in the last ~24h from on-chain transfers; `wire: "mpp"` ranks live-verified MPP sellers by inbound USDC.e transfers on Tempo. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 / MPP economy beyond this single service's catalog.
-- `router.execute` (formerly `route_and_execute`, still accepted) reaches tools **outside** this catalog in one call: give it a plain-language `task` and Agent402 resolves a proven external x402 seller (one with real on-chain settled volume), buys the result from that seller and sells it to you, marked `untrustedContent`. Wallet-only. Flat price, cheapest covering tier chosen from `maxUsd`:
+- `router.execute` (formerly `route_and_execute`, still accepted) reaches tools **outside** this catalog in one call: give it a `task` description and Agent402 resolves a proven external x402 seller (one with real on-chain settled volume), buys the result from that seller and sells it to you, marked `untrustedContent`. Wallet-only. Flat price, cheapest covering tier chosen from `maxUsd`:
 
   | Underlying seller price | Fee | Route |
   | --- | --- | --- |

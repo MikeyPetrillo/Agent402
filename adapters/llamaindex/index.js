@@ -1,4 +1,5 @@
-// agent402-llamaindex: drop-in LlamaIndex TS tools for Agent402.
+// agent402-function-tools (formerly agent402-llamaindex): Agent402 tools as
+// FunctionTool instances for use with LlamaIndex TS.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into LlamaIndex
 // `FunctionTool` instances any agent can invoke, with payment handled for you
@@ -7,7 +8,7 @@
 //
 //   import { agent } from "@llamaindex/workflow";
 //   import { openai } from "@llamaindex/openai";
-//   import { agent402Tools } from "agent402-llamaindex";
+//   import { agent402Tools } from "agent402-function-tools";
 //
 //   const { tools } = await agent402Tools({ slugs: ["hash","uuid"] });
 //   const a = agent({ llm: openai({ model: "gpt-4o-mini" }), tools });
@@ -21,7 +22,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-llamaindex/0.2.2";
+const USER_AGENT = "agent402-function-tools/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -150,7 +151,7 @@ async function loadLlamaIndex() {
   try {
     return await import("llamaindex");
   } catch {
-    throw new Error("agent402-llamaindex requires the 'llamaindex' package. Install it with: npm install llamaindex");
+    throw new Error("agent402-function-tools requires the 'llamaindex' package. Install it with: npm install llamaindex");
   }
 }
 

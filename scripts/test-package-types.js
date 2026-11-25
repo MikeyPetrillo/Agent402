@@ -8,29 +8,40 @@
 //      compiles under strict, module and moduleResolution nodenext, against
 //      the package as installed (a node_modules link in a temporary folder,
 //      symlinks preserved, so it resolves only what a buyer's install would);
-//   3. every name the runtime module exports is declared, and every declared
-//      value is exported at runtime (read from the source's export
-//      statements, so the check needs none of the package's peers);
+//   3. every name the runtime module exports is declared as a value, and
+//      every declared value is exported at runtime (the runtime names are
+//      read from the source's export statements, so the check needs none of
+//      the package's peers; the declared ones are `keyof typeof` the module
+//      in a compiled file, whose two lines fail and name the difference);
 //   4. per package, a misuse the declarations must reject (a wrong option
 //      type) fails to compile, so a declaration that collapsed to `any`
 //      fails here.
-// elizaos-plugin-agent402's declarations import its host's @elizaos/core,
+// Every compile is the typescript package's own `tsc` CLI (the package
+// exports no compiler API since 7.0), run by this node with --noEmit on a
+// tsconfig written per consumer; diagnostics are read by file and line.
+// agent402-actions-plugin's declarations import its host's @elizaos/core,
 // which an Eliza project always has and this repository does not install;
 // it gets checks 1 and 3 only. agent402-tollbooth's root and ./edge are
 // typed; its other subpaths (the Worker entry, the replay stores, the MPP
 // helpers, the dashboard and sinks) are listed in UNTYPED_SUBPATHS, and a
 // subpath any package adds outside that list must ship declarations.
 //   node scripts/test-package-types.js
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import { publishedPackageDirs } from "./lib/published-packages.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+
+// The compiler is the pinned devDependency's own bin.
+const require = createRequire(import.meta.url);
+const TS_PKG = require.resolve("typescript/package.json");
+const TSC = join(dirname(TS_PKG), JSON.parse(readFileSync(TS_PKG, "utf8")).bin.tsc);
 
 const HOST_TYPED = new Set(["adapters/eliza"]);
 const UNTYPED_SUBPATHS = { tollbooth: ["./worker", "./worker.js", "./dashboard.js", "./sinks.js", "./replay", "./replay.js", "./mpp", "./mpp.js", "./edge-mpp", "./edge-mpp.js", "./mpp-codec.js"] };
@@ -78,8 +89,46 @@ function runtimeExports(file, seen = new Set()) {
 }
 const dirs = publishedPackageDirs();
 ok(dirs.length >= 14, `the publish job's packages are read (${dirs.length})`);
-const tmp = mkdtempSync(join(tmpdir(), "a402-types-"));
+const tmp = realpathSync(mkdtempSync(join(tmpdir(), "a402-types-")));
+
+const BASE_OPTIONS = {
+  strict: true, noEmit: true, target: "es2022", module: "nodenext", moduleResolution: "nodenext",
+  preserveSymlinks: true, skipLibCheck: false, types: ["node"], typeRoots: [join(ROOT, "node_modules", "@types")], lib: ["es2022", "dom"],
+  pretty: false,
+};
+/**
+ * Compiles `files` with tsc --noEmit -p <a tsconfig written for them>.
+ * Returns { status, diags: [{ file, line, text }] } (file relative to tmp).
+ */
+function compile(name, files, extra = {}) {
+  const config = join(tmp, `tsconfig.${name}.json`);
+  writeFileSync(config, JSON.stringify({ compilerOptions: { ...BASE_OPTIONS, ...extra }, files }, null, 2));
+  const r = spawnSync(process.execPath, [TSC, "-p", config, "--noEmit", "--pretty", "false"], { cwd: tmp, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const diags = [];
+  for (const raw of `${r.stdout || ""}${r.stderr || ""}`.split("\n")) {
+    const m = /^(.+?)\((\d+),\d+\): (?:error|warning) (TS\d+: .*)$/.exec(raw);
+    if (m) diags.push({ file: resolve(tmp, m[1]).replace(tmp + "/", "").replace(ROOT, ""), line: Number(m[2]), text: m[3] });
+    else if (/^error TS\d+/.test(raw)) diags.push({ file: "", line: 0, text: raw });
+    else if (raw.trim() && diags.length) diags[diags.length - 1].text += ` ${raw.trim()}`;
+  }
+  return { status: r.status, error: r.error, diags };
+}
+const show = (d) => `${d.file}:${d.line} ${d.text}`;
+
 try {
+  writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "types-consumer", private: true, type: "module" }));
+  // control: the CLI runs, refuses a known error on the line it is on, and
+  // its output is read (so every "it compiled" below is a real compile).
+  {
+    writeFileSync(join(tmp, "control-ok.ts"), `export const n: number = 1;\n`);
+    writeFileSync(join(tmp, "control-bad.ts"), `export const a = 1;\nexport const n: number = "one";\n`);
+    const good = compile("control-ok", ["control-ok.ts"]);
+    const bad = compile("control-bad", ["control-bad.ts"]);
+    const version = (spawnSync(process.execPath, [TSC, "--version"], { encoding: "utf8" }).stdout || "").trim();
+    ok(!good.error && good.status === 0 && good.diags.length === 0, `control: ${version || "tsc"} compiles a clean file (exit ${good.status})`);
+    ok(bad.status !== 0 && bad.diags.length === 1 && bad.diags[0].file === "control-bad.ts" && bad.diags[0].line === 2 && /TS2322/.test(bad.diags[0].text), `control: tsc refuses a wrong type and its diagnostic is read at control-bad.ts:2 (${bad.diags.map(show).join("; ") || "none"})`);
+  }
+
   const nm = join(tmp, "node_modules");
   mkdirSync(nm);
   const pkgs = dirs.map((dir) => ({ dir, pkg: JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8")) }));
@@ -89,6 +138,7 @@ try {
     symlinkSync(join(ROOT, dir), target, "dir");
   }
   const consumer = [];
+  const parity = [];
   for (const { dir, pkg } of pkgs) {
     // 1. the manifest
     ok(typeof pkg.types === "string" && existsSync(join(ROOT, dir, pkg.types)), `${pkg.name}: package.json names its declarations (${pkg.types ?? "none"})`);
@@ -105,58 +155,70 @@ try {
       ok(typeof types === "string" && existsSync(join(ROOT, dir, types)), `${pkg.name}: exports["${sp}"] has a types condition (${types ?? "none"})`);
       const inFiles = (f) => (pkg.files || []).some((x) => x === f.replace(/^\.\//, "") || x === f);
       if (typeof types === "string") ok(inFiles(types), `${pkg.name}: ${types} is in "files"`);
-      // 3. runtime exports and declared exports agree
+      const spec = sp === "." ? pkg.name : `${pkg.name}${sp.slice(1)}`;
+      // 3. runtime exports and declared values agree: line 4 fails naming
+      // the undeclared runtime names, line 5 the declared values missing at
+      // runtime. The declarations are read through the types condition, so
+      // the file compiled is the one the manifest names.
       if (typeof types === "string" && typeof runtime === "string" && existsSync(join(ROOT, dir, types))) {
-        const rt = runtimeExports(join(ROOT, dir, runtime));
-        const program = ts.createProgram([join(ROOT, dir, types)], { noEmit: true, skipLibCheck: true, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, noResolve: HOST_TYPED.has(dir) });
-        const checker = program.getTypeChecker();
-        const sf = program.getSourceFile(join(ROOT, dir, types));
-        const sym = sf && checker.getSymbolAtLocation(sf);
-        const declared = new Set();
-        const values = new Set();
-        for (const s of sym ? checker.getExportsOfModule(sym) : []) {
-          declared.add(s.getName());
-          const t = s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s;
-          if (t.flags & ts.SymbolFlags.Value) values.add(s.getName());
-        }
-        const undeclared = [...rt].filter((n) => !declared.has(n));
-        const phantom = [...values].filter((n) => !rt.has(n));
-        ok(undeclared.length === 0, `${pkg.name}${sp === "." ? "" : sp.slice(1)}: every runtime export is declared (${rt.size})${undeclared.length ? `; undeclared: ${undeclared.join(", ")}` : ""}`);
-        ok(phantom.length === 0, `${pkg.name}${sp === "." ? "" : sp.slice(1)}: every declared value exists at runtime${phantom.length ? `; missing: ${phantom.join(", ")}` : ""}`);
+        const rt = [...runtimeExports(join(ROOT, dir, runtime))];
+        const f = `parity-${parity.length}.ts`;
+        const union = rt.length ? rt.map((n) => JSON.stringify(n)).join(" | ") : "never";
+        writeFileSync(join(tmp, f), [
+          `import * as m from "${spec}";`,
+          `type Declared = keyof typeof m;`,
+          `type Runtime = ${union};`,
+          `export const undeclared: [Exclude<Runtime, Declared>] extends [never] ? true : { undeclared: Exclude<Runtime, Declared> } = true;`,
+          `export const phantom: [Exclude<Declared, Runtime>] extends [never] ? true : { missing: Exclude<Declared, Runtime> } = true;`,
+          "",
+        ].join("\n"));
+        parity.push({ dir, f, label: `${pkg.name}${sp === "." ? "" : sp.slice(1)}`, count: rt.length });
       }
-      if (!HOST_TYPED.has(dir)) consumer.push({ dir, name: pkg.name, spec: sp === "." ? pkg.name : `${pkg.name}${sp.slice(1)}` });
+      if (!HOST_TYPED.has(dir)) consumer.push({ dir, name: pkg.name, spec });
+    }
+  }
+
+  // 3. One compile per package for its parity files. Library checking is
+  // skipped here (as the strict consumer below does not): a host-typed
+  // package's declarations import a host this repository does not install.
+  for (const d of [...new Set(parity.map((p) => p.dir))]) {
+    const mine = parity.filter((p) => p.dir === d);
+    const { diags, error } = compile(`parity-${d.replace(/\W/g, "_")}`, mine.map((p) => p.f), { skipLibCheck: true });
+    for (const p of mine) {
+      const own = diags.filter((x) => x.file === p.f);
+      const at = (line) => own.filter((x) => x.line === line);
+      ok(!error && own.every((x) => x.line !== 1), `${p.label}: its declarations resolve by the package's own name${own.length && !own.every((x) => x.line !== 1) ? `: ${show(at(1)[0])}` : ""}`);
+      ok(!error && at(4).length === 0, `${p.label}: every runtime export is declared (${p.count})${at(4).length ? `; ${at(4).map((x) => x.text).join(" ")}` : ""}`);
+      ok(!error && at(5).length === 0, `${p.label}: every declared value exists at runtime${at(5).length ? `; ${at(5).map((x) => x.text).join(" ")}` : ""}`);
+      const other = own.filter((x) => ![1, 4, 5].includes(x.line));
+      ok(other.length === 0, `${p.label}: its parity file has no other error${other.length ? `: ${show(other[0])}` : ""}`);
     }
   }
 
   // 2. one strict consumer per package; 4. its misuse must not compile.
-  const options = {
-    strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    preserveSymlinks: true, skipLibCheck: false, types: ["node"], typeRoots: [join(ROOT, "node_modules", "@types")], lib: ["lib.es2022.d.ts", "lib.dom.d.ts"],
-  };
-  const compile = (files) => {
-    const program = ts.createProgram(files, options);
-    return ts.getPreEmitDiagnostics(program).map((d) => {
-      const where = d.file ? `${d.file.fileName.replace(tmp, "").replace(ROOT, "")}:${d.file.getLineAndCharacterOfPosition(d.start ?? 0).line + 1}` : "";
-      return `${where} ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
-    });
-  };
-  writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "types-consumer", private: true, type: "module" }));
   const good = [];
   for (const [i, c] of consumer.entries()) {
-    const f = join(tmp, `use-${i}.ts`);
-    writeFileSync(f, `import * as m from "${c.spec}";\nexport const names: string[] = Object.keys(m);\n`);
-    good.push(f);
+    const f = `use-${i}.ts`;
+    writeFileSync(join(tmp, f), `import * as m from "${c.spec}";\nexport const names: string[] = Object.keys(m);\n`);
+    good.push({ ...c, f });
   }
-  const diags = compile(good);
-  ok(good.length >= 13 && diags.length === 0, `${good.length} strict nodenext consumers compile against the packages as installed${diags.length ? `:\n  ${diags.slice(0, 12).join("\n  ")}` : ""}`);
+  let consumers = 0;
+  for (const d of [...new Set(good.map((g) => g.dir))]) {
+    const mine = good.filter((g) => g.dir === d);
+    const { diags, status, error } = compile(`use-${d.replace(/\W/g, "_")}`, mine.map((g) => g.f));
+    consumers += mine.length;
+    ok(!error && status === 0 && diags.length === 0, `${mine[0].name}: ${mine.length} strict nodenext consumer(s) compile against the package as installed${diags.length ? `:\n  ${diags.slice(0, 12).map(show).join("\n  ")}` : status !== 0 ? ` (tsc exit ${status})` : ""}`);
+  }
+  ok(consumers >= 13, `${consumers} strict nodenext consumers compiled across the packages`);
   for (const [dir, line] of Object.entries(MISUSE)) {
     const c = consumer.find((x) => x.dir === dir && !x.spec.includes("/", x.name.length));
     if (!c) { ok(false, `${dir}: has a consumer for its misuse check`); continue; }
-    const f = join(tmp, `misuse-${dir.replace(/\W/g, "_")}.ts`);
-    writeFileSync(f, `import * as m from "${c.spec}";\n${line}\n`);
-    const d = compile([f]);
+    const f = `misuse-${dir.replace(/\W/g, "_")}.ts`;
+    writeFileSync(join(tmp, f), `import * as m from "${c.spec}";\n${line}\n`);
+    const { diags: d, status } = compile(`misuse-${dir.replace(/\W/g, "_")}`, [f]);
     // Every error is on the misuse line (2): an import that failed would be on line 1.
-    ok(d.length > 0 && d.every((x) => /:2 /.test(x)), `${c.name}: the declarations refuse a misuse (${line.trim()})${d.length ? (d.every((x) => /:2 /.test(x)) ? "" : `: an error off the misuse line: ${d[0]}`) : ": it compiled, so the declarations are too loose"}`);
+    const onLine = d.length > 0 && d.every((x) => x.file === f && x.line === 2);
+    ok(status !== 0 && onLine, `${c.name}: the declarations refuse a misuse (${line.trim()})${d.length ? (onLine ? "" : `: an error off the misuse line: ${show(d.find((x) => !(x.file === f && x.line === 2)))}`) : ": it compiled, so the declarations are too loose"}`);
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true });

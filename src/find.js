@@ -9,6 +9,12 @@ import { toolList } from "./pages.js";
 import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
 import { applySynonyms, FIND_OPERATION_WORDS, FIND_OPERATION_SAME } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
+// An advice disclaimer ("Information, not investment advice.") is a notice,
+// not what a tool does: like an attribution sentence it is left out of the
+// text a tool is ranked on, so "investment decision" never finds a report by
+// the sentence that says it is not investment advice.
+const ADVICE_NOTICE_RE = /\b(?:information, )?not (?:investment|financial|trading|legal|tax|medical)(?:, (?:investment|financial|trading|legal|tax|medical))*(?:,? or (?:investment|financial|trading|legal|tax|medical))? advice\.?/gi;
+export function withoutAdviceNotices(text) { return String(text ?? "").replace(ADVICE_NOTICE_RE, " "); }
 import { rankSkillPacks } from "./skills.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { UNIT_ALIASES } from "./tools/kit2.js";
@@ -444,7 +450,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     // tool also answers to, not a stronger claim than its own name, and the
     // tag cap on the 402 challenge means aliases can never live in `tags`.
     // Attribution notices (src/data-attribution.js) are not ranked on.
-    hay: `${t.name} ${withoutAttributions(t.description)} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
+    hay: `${t.name} ${withoutAdviceNotices(withoutAttributions(t.description))} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
   }));
   const N = all.length || 1;
   // A spelled-out version ("version 7") also reads as the short form a tool
@@ -656,7 +662,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   // Two consequences, and the second is the expensive one:
   //   * a buyer who trusts the top hit pays for a tool that cannot help;
   //   * the demand board's find-miss signal can NEVER fire for a capability
-  //     gap phrased in plain language, so it only ever captured gibberish
+  //     gap phrased in everyday words, so it only ever captured gibberish
   //     ("undefined", "[object object]") and is structurally blind to what we
   //     should build next. "No demand for X" was unfalsifiable.
   //

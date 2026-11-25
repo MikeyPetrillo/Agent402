@@ -49,6 +49,7 @@ import {
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { settleBeforeUpstream } from "../settle-first.js";
+import { notChargedHere } from "../not-charged.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
 const MAX_STOP_SEQUENCES = 8;
@@ -514,7 +515,7 @@ export function makeMessagesHandler(routeTier) {
     if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
       const q = meteredMessagesQuoteUsd(input);
       if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
-        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}.${notChargedHere()} Resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
       }
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the
@@ -671,7 +672,7 @@ export function makeMessagesHandler(routeTier) {
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
           assertUpstreamBody(parsed, { model: sendBody?.model });
-          if (!Array.isArray(parsed?.content)) throw bad("Upstream returned no answer (no content) - not charged", 502);
+          if (!Array.isArray(parsed?.content)) throw bad(`Upstream returned no answer (no content).${notChargedHere()}`, 502);
           return parsed;
         }, { delays: rateLimitDelaysFor(flex) });
         let data = await callOnce(outbound, timeoutMs);
@@ -752,7 +753,7 @@ function describe(tierSlug) {
   if (tierSlug === "v1-chat-metered") {
     return `Anthropic Messages API priced per request from the request itself. The 402 quotes the input (system, messages and tools), estimated from its tokens with headroom, plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto or credits and settle actual usage; a card payment is charged the quote plus the processor fee. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.${compat ? ` ${compat}` : ""}`;
   }
-  const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+ and Haiku 5.5, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+  const base = `Messages-format chat over x402, compatible with the Anthropic Messages wire format: point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+ and Haiku 5.5, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"
     ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.`
     : base + dflt;
@@ -773,7 +774,7 @@ const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : tier
 
 export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([tierSlug, path]) => ({
   route: `POST ${path}`,
-  name: `Messages ${TIER_LABEL[tierSlug]} (Anthropic-compatible)`,
+  name: `Messages ${TIER_LABEL[tierSlug]} (Messages wire format)`,
   slug: `${tierSlug}-messages`,
   category: "llm",
   price: priceString(tierSlug),

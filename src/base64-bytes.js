@@ -1,13 +1,14 @@
 /**
  * The bytes an encoded transaction field stands for, read the way the
- * facilitators read it. Node's base64 decoder (which @x402/avm and the
- * Stellar XDR reader use) skips every character outside the alphabet, reads
- * "-" and "_" as "+" and "/", stops at the first "=", and reads each UTF-16
- * code unit by its low byte; @solana/kit's decoder accepts a subset of those
- * spellings and yields the same bytes for each. So many texts spell one
- * transaction, and only the decoded bytes are its identity: a size cap, a hash
- * or a decode is applied to these bytes, never to the text's own length or
- * characters.
+ * facilitators read it. Node's base64 decoder (which @x402/avm uses, and
+ * which our Stellar readers decode with before stellar-sdk 17's XDR reader,
+ * whose own base64 reader refuses what Node's skips) skips every character
+ * outside the alphabet, reads "-" and "_" as "+" and "/", stops at the first
+ * "=", and reads each UTF-16 code unit by its low byte; @solana/kit's decoder
+ * accepts a subset of those spellings and yields the same bytes for each. So
+ * many texts spell one transaction, and only the decoded bytes are its
+ * identity: a size cap, a hash or a decode is applied to these bytes, never to
+ * the text's own length or characters.
  */
 
 /**

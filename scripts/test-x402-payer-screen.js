@@ -82,9 +82,13 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const SOLANA = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const svmHeader = b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLANA, extra: { feePayer: feePayer.address } }, payload: { transaction: tx } });
   const mw = createX402PayerScreen({ log: () => {} });
-  const run = (headers) => new Promise((resolve) => {
+  const { stashVerifiedPayment } = await import("../src/verified-payment.js");
+  const EVs = await import("../src/sanctions-events.js");
+  // `verified`: the payer the facilitator's verify answered for this request (src/verified-payment.js).
+  const run = (headers, { verified = null } = {}) => new Promise((resolve) => {
     const out = { next: false, code: null, body: null };
     const req = { method: "POST", path: "/api/hash", header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")), payer: verified });
     const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
     mw(req, res, () => { out.next = true; resolve(out); });
   });
@@ -102,6 +106,26 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   ok(noList.next && x402PayerScreenView().servedUnscreened === 1, "no payout list loaded: served unscreened and counted, as the EVM path does");
   const none = await run({});
   ok(none.next && x402PayerScreenView().screened === 2, "no payment header: passes without a screen");
+  {
+    // The signers are read from a transaction nothing verified yet (no marker): no row; once the
+    // facilitator verified the payment on the request, its verified payer is recorded, and a listed
+    // address the transaction names that is not the verified payer never is.
+    K.__seedPayoutListForTests([{ address: buyer.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "7" }]);
+    await new Promise((r) => setTimeout(r, 50));
+    const solRows = async () => (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((x) => !x.aggregate && x.address === buyer.address);
+    const countOf = async (reason) => (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((x) => x.aggregate && x.rail === "x402").reduce((t, x) => t + (x.byReason?.[reason] || 0), 0);
+    const pre = await countOf("before-verify");
+    const r0 = await run({ "payment-signature": svmHeader });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(r0.code === 403 && (await solRows()).length === 0 && await countOf("before-verify") === pre + 1, "Solana, before verification: a listed signer is refused, gets no row, and is counted");
+    const other = await run({ "payment-signature": svmHeader }, { verified: feePayer.address });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(other.code === 403 && (await solRows()).length === 0 && await countOf("not-the-payer") >= 1, "Solana, verified: a listed address the transaction names that is not the verified payer gets no row");
+    const again = await run({ "payment-signature": svmHeader }, { verified: buyer.address });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(again.code === 403 && (await solRows()).length === 1, "Solana, verified: the listed verified payer is recorded");
+    K.__resetPayoutListForTests();
+  }
   // AN SPL MULTISIG IN A LOOKUP TABLE. The listed wallet X is the multisig's
   // signing member; the transfer's authority M is a lookup-table entry, so no
   // single payer reads from it. Every required signer except the fee payer is
@@ -150,6 +174,7 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/const x402PayerScreen = createX402PayerScreen\(\);/.test(server), "server.js mounts the screen with its real signer reader");
+  ok(/function flushStateQueues[\s\S]{0,200}const flushes = \[[^\]]*\bflushSanctionsEvents\b/.test(server) && /\bstartSanctionsJournalReplay\(\)/.test(server), "server.js writes pending sanctions changes on a graceful shutdown and replays the journal at boot");
   __resetX402PayerScreenForTests();
 }
 
@@ -204,6 +229,249 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     delete process.env.WALLET_BLOCKLIST;
     delete process.env.SANCTIONS_SCREEN_FILE;
     SS.__resetSanctionsScreenForTests();
+    __resetX402PayerScreenForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1d. What a refusal RECORDS (src/sanctions-events.js). The screen refuses on
+//     every address a payment names, but a row names an address only for a
+//     payment the facilitator verified on this request (the marker
+//     src/verified-payment.js keeps), and then only its verified payer: one row
+//     per (address, route class) a day, every repeat an attempt on it, with no
+//     cap. Every refusal before verification, or on an address that is not the
+//     verified payer, is counted in the hour's address-free aggregate row.
+{
+  const SS = await import("../src/sanctions-screen.js");
+  const EV = await import("../src/sanctions-events.js");
+  const { createX402PayerScreen, __resetX402PayerScreenForTests, x402PayerScreenView } = await import("../src/x402-payer-screen.js");
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const { PERMIT2_ADDRESS, permit2WitnessTypes, x402ExactPermit2ProxyAddress } = await import("@x402/evm");
+  const dir = mkdtempSync(join(tmpdir(), "x402-screen-records-"));
+  const outerEvents = process.env.SANCTIONS_EVENTS_FILE;
+  process.env.SANCTIONS_EVENTS_FILE = join(dir, "events.jsonl");
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+  const OTHER_PAY_TO = "0x00000000000000000000000000000000000beef0";
+  const accepted = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: USDC, payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const AUTH = [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }];
+  const nonce = () => `0x${Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(32))).toString("hex")}`;
+  // An EIP-3009 payment signed by `account` (to `to`, our payTo by default), with `extra` merged into the payload.
+  const signed3009 = async (account, { primaryType = "TransferWithAuthorization", extra = {}, from = account.address, to = PAY_TO } = {}) => {
+    const t = Math.floor(Date.now() / 1000);
+    const authorization = { from, to, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce: nonce() };
+    const signature = await account.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC }, types: { [primaryType]: AUTH }, primaryType, message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
+    return { "payment-signature": b64({ x402Version: 2, accepted: { ...accepted, payTo: to }, payload: { signature, authorization, ...extra } }) };
+  };
+  const signedPermit2 = async (account, { to = PAY_TO } = {}) => {
+    const t = Math.floor(Date.now() / 1000);
+    const permit2Authorization = { from: account.address, permitted: { token: USDC, amount: "10000" }, spender: x402ExactPermit2ProxyAddress, nonce: String(BigInt(nonce()) >> 8n), deadline: String(t + 300), witness: { to, validAfter: String(t - 60) } };
+    const signature = await account.signTypedData({ domain: { name: "Permit2", chainId: 8453, verifyingContract: PERMIT2_ADDRESS }, types: permit2WitnessTypes, primaryType: "PermitWitnessTransferFrom",
+      message: { permitted: { token: USDC, amount: 10000n }, spender: x402ExactPermit2ProxyAddress, nonce: BigInt(permit2Authorization.nonce), deadline: BigInt(permit2Authorization.deadline), witness: { to, validAfter: BigInt(permit2Authorization.witness.validAfter) } } });
+    return { "payment-signature": b64({ x402Version: 2, accepted: { ...accepted, payTo: to }, payload: { signature, permit2Authorization } }) };
+  };
+  const { stashVerifiedPayment } = await import("../src/verified-payment.js");
+  // `verified`: the facilitator verified this request's payment (the marker src/verified-payment.js
+  // keeps). true: its payer is the payload's signer field; a string: the payer its verify answered.
+  const run = (mw, headers, { path = "/ref/hash", ip = "203.0.113.20", verified = false } = {}) => new Promise((resolve) => {
+    const out = { next: false, code: null, body: null };
+    const req = { method: "POST", path, ip, header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")), payer: typeof verified === "string" ? verified : null });
+    const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
+    mw(req, res, () => { out.next = true; resolve(out); });
+  });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  const allRows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
+  const rows = async () => (await allRows()).filter((r) => !r.aggregate);
+  const aggs = async () => (await allRows()).filter((r) => r.aggregate);
+  const counted = async (reason, routeClass) => (await aggs()).filter((x) => !routeClass || x.routeClass === routeClass).reduce((t, x) => t + (x.byReason?.[reason] || 0), 0);
+  const listedAcct = privateKeyToAccount(generatePrivateKey());
+  const listedP2 = privateKeyToAccount(generatePrivateKey());
+  const throwaway = privateKeyToAccount(generatePrivateKey());
+  const cleanAcct = privateKeyToAccount(generatePrivateKey());
+  const flood = Array.from({ length: 140 }, () => privateKeyToAccount(generatePrivateKey()));
+  const LISTED_SIGNER = listedAcct.address.toLowerCase();
+  const strict = createX402PayerScreen({ log: () => {}, noList: "refuse" });
+  const lenient = createX402PayerScreen({ log: () => {} });
+  try {
+    process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
+    writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED_SIGNER, listedP2.address.toLowerCase(), ...flood.map((a) => a.address.toLowerCase())] }));
+    SS.__resetSanctionsScreenForTests();
+    ok(await SS.loadStoredSanctionsScreen(), "setup: the list loads");
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests(); __resetX402PayerScreenForTests();
+
+    // (a) Before verification, on every shape: refused exactly as before, NO row naming an
+    //     address, one count each. The strict screen (/ref) and a route with no price (the
+    //     middleware passes it here unverified) alike, a real signature by the listed address
+    //     included, and one it gave a DIFFERENT payTo.
+    const pre = [
+      ["EVM exact signed by the listed address (/ref)", strict, () => signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }), "/ref/hash"],
+      ["EVM exact signed by the listed address (a route with no price)", lenient, () => signed3009(listedAcct), "/api/free-tool"],
+      ["Permit2 signed by the listed address (a route with no price)", lenient, () => signedPermit2(listedP2), "/api/free-tool"],
+      ["an authorization the listed address signed for a different payTo", lenient, () => signed3009(listedAcct, { to: OTHER_PAY_TO }), "/api/free-tool"],
+      ["a Permit2 the listed address signed for a different payTo", lenient, () => signedPermit2(listedP2, { to: OTHER_PAY_TO }), "/api/free-tool"],
+      ["channelConfig.payer beside a throwaway's signature", strict, () => signed3009(throwaway, { primaryType: "ReceiveWithAuthorization", extra: { channelConfig: { payer: listedAcct.address, payerAuthorizer: "0x" + "00".repeat(20) } } }), "/ref/hash"],
+      ["a forged `from` naming the listed address", strict, () => signed3009(throwaway, { from: listedAcct.address }), "/ref/hash"],
+    ];
+    let preN = 0;
+    for (const [label, mw, make, path] of pre) {
+      const r = await run(mw, await make(), { path });
+      ok(!r.next && r.code === 403 && r.body?.reason === "payer-not-accepted", `${label}: refused 403 as before (${r.code})`);
+      preN++;
+    }
+    await settle();
+    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === preN && await counted("before-verify") === preN, `...and none of the ${preN} gets a row naming an address; each is counted before verification (${(await rows()).length} rows, ${await counted("before-verify")} counted)`);
+    const ag = await aggs();
+    ok(ag.every((x) => x.kind === "unproven-refusal" && x.address === null && x.report === null) && !JSON.stringify(ag).toLowerCase().includes(LISTED_SIGNER.slice(2)), "the count rows keep no address and are records, not reports");
+    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear");
+
+    // (b) Verified on the request: the verified payer, listed, is recorded.
+    const real = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true });
+    await settle();
+    let r1 = await rows();
+    ok(!real.next && real.code === 403 && r1.length === 1 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1[0].kind === "screen-hit" && r1[0].route === "POST /api/hash" && EV.sanctionsReportStatus() === "due", `EVM exact, verified: the listed payer is refused and recorded once; the word reads due (${real.code}, ${r1.length} row)`);
+    const p2 = await run(lenient, await signedPermit2(listedP2), { path: "/api/hash", verified: true });
+    await settle();
+    ok(!p2.next && p2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === listedP2.address.toLowerCase()), "Permit2, verified: the listed payer is refused and recorded");
+    // Verified, but the listed address is not the verified payer: no row, counted.
+    const notPayer = await run(lenient, await signed3009(cleanAcct, { extra: { channelConfig: { payer: listedAcct.address } } }), { path: "/api/hash", verified: true });
+    await settle();
+    ok(!notPayer.next && notPayer.code === 403 && (await rows()).length === 2 && await counted("not-the-payer") === 1, "verified, with the listed address in a field that is not the verified payer: refused, no row, counted");
+    // The facilitator's own payer wins over the payload's field.
+    const fac = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: cleanAcct.address });
+    await settle();
+    ok(fac.code === 403 && (await rows()).length === 2 && await counted("not-the-payer") === 2, "verified, with the facilitator naming another payer: the payload's listed `from` gets no row");
+
+    // (c) Repeats inside the window add attempts to the row, never a second row, never dropped.
+    const before = (await rows()).length;
+    for (let i = 0; i < 5; i++) { const r = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true }); if (r.code !== 403) ok(false, "a repeat is still refused"); }
+    await settle();
+    const dRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
+    ok((await rows()).length === before && dRow?.attempts === 6 && Date.parse(dRow.lastSeenAt) >= Date.parse(dRow.at), `five more verified refusals of the same listed payer add five attempts to its row (${(await rows()).length - before} new rows, attempts ${dRow?.attempts})`);
+    await run(lenient, await signed3009(listedAcct), { path: "/api/other", verified: true });
+    await settle();
+    ok((await rows()).length === before && (await rows()).find((x) => x.id === dRow.id)?.attempts === 7, "the direct routes are one route class: another direct route is an attempt on the same row");
+    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"attempts":7`), "the attempt count is in the stored file, not only in memory");
+    await EV.markSanctionsEventsFiled({ ids: [dRow.id], reference: "RS-TEST" });
+    await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true });
+    await settle();
+    const dRows = (await rows()).filter((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
+    ok(dRows.length === 2 && dRows.find((x) => x.id === dRow.id)?.attempts === 7 && dRows.find((x) => x.id !== dRow.id)?.attempts === 1, "a filed row keeps the count it was filed with; the next attempt opens a new row");
+
+    // (d) No cap: a flood of distinct verified listed payers is recorded in full, one row each.
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
+    rmSync(process.env.SANCTIONS_EVENTS_FILE, { force: true });
+    EV.__resetSanctionsEventsForTests();
+    const one = await Promise.all(flood.slice(0, 30).map(async (a) => run(lenient, await signed3009(a), { path: "/api/hash", ip: "198.51.100.1", verified: true })));
+    const many = await Promise.all(flood.slice(30).map(async (a, i) => run(lenient, await signed3009(a), { path: "/api/hash", ip: `198.51.${101 + Math.floor(i / 5)}.${i % 5}`, verified: true })));
+    await settle();
+    const flooded = await rows();
+    ok(flood.length === 140 && [...one, ...many].every((r) => r.code === 403) && flooded.length === flood.length && new Set(flooded.map((x) => x.address.toLowerCase())).size === flood.length, `${flood.length} verified listed payers, 30 of them from one client address: all refused, every one recorded (${flooded.length} rows)`);
+    await Promise.all(flood.slice(0, 30).map(async (a) => run(lenient, await signed3009(a), { path: "/api/hash", ip: "198.51.100.1", verified: true })));
+    await settle();
+    const again = await rows();
+    ok(again.length === flood.length && again.filter((x) => x.attempts === 2).length === 30 && again.reduce((t, x) => t + x.attempts, 0) === flood.length + 30, `the same 30 again add one attempt each (${again.reduce((t, x) => t + x.attempts, 0)} attempts in ${again.length} rows)`);
+    ok(EV.sanctionsReportStatus() === "due" && (await EV.sanctionsEventsOperatorView()).writeLimits?.repeats === 30, "the word reads due and the operator view counts the repeats");
+    const before2 = (await aggs()).reduce((t, x) => t + x.count, 0);
+    await Promise.all(Array.from({ length: 200 }, async () => run(strict, await signed3009(flood[0], { primaryType: "ReceiveWithAuthorization" }))));
+    await settle();
+    const ag2 = (await aggs()).filter((x) => x.routeClass === "ref");
+    ok(ag2.length === 1 && ag2[0].count - before2 === 200, `200 refusals before verification: counted in one aggregate row (${ag2.length} rows, count ${ag2[0]?.count})`);
+    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"count":${ag2[0].count}`), "the aggregate count is in the stored file");
+
+    // (f) A contract wallet's signature (EIP-1271 / EIP-6492): before verification never a row;
+    //     verified on the request, its payer is recorded.
+    const smart = privateKeyToAccount(generatePrivateKey());
+    writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [smart.address.toLowerCase()] }));
+    SS.__resetSanctionsScreenForTests();
+    await SS.loadStoredSanctionsScreen();
+    const t6492 = Math.floor(Date.now() / 1000);
+    const contractSig = { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature: "0x" + "ab".repeat(400), authorization: { from: smart.address, to: PAY_TO, value: "10000", validAfter: String(t6492 - 60), validBefore: String(t6492 + 300), nonce: nonce() } } }) };
+    const preRef = await counted("before-verify", "ref"), preDirect = await counted("before-verify", "direct");
+    const sw1 = await run(strict, contractSig);
+    const sw0 = await run(lenient, contractSig, { path: "/api/free-tool" });
+    await settle();
+    ok(!sw1.next && sw1.code === 403 && !sw0.next && sw0.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && await counted("before-verify", "ref") === preRef + 1 && await counted("before-verify", "direct") === preDirect + 1, "a listed contract-wallet signer before verification (/ref, a route with no price): refused, no row, counted");
+    const sw2 = await run(lenient, contractSig, { path: "/api/hash", verified: true });
+    await settle();
+    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "verified on the request: the same listed contract-wallet payer is refused and recorded");
+
+    // (g1) ONE write that fails, with no repeat after it, still lands once the store recovers.
+    {
+      const { mkdirSync } = await import("node:fs");
+      const blocker1 = join(dir, "not-a-dir-1");
+      writeFileSync(blocker1, "x");
+      const keepFile = process.env.SANCTIONS_EVENTS_FILE;
+      const oneAddr = "0x" + "f1".repeat(20);
+      try {
+        process.env.SANCTIONS_EVENTS_FILE = join(blocker1, "events.jsonl");
+        EV.__resetSanctionsEventsForTests();
+        const only = await EV.recordSanctionsEvent({ kind: "screen-hit", address: oneAddr, rail: "x402", route: "POST /api/hash" });
+        ok(only === null && EV.sanctionsEventWriteLimits().pending === 1, "setup: a single write is refused by the store and held pending");
+        rmSync(blocker1, { force: true });
+        mkdirSync(blocker1, { recursive: true });
+        await EV.flushSanctionsEvents();
+        const landedRow = readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.address === oneAddr);
+        ok(landedRow?.attempts === 1 && EV.sanctionsEventWriteLimits().pending === 0, `with no repeat after it, the one refused write lands once the store recovers (${landedRow ? "written" : "missing"})`);
+      } finally { process.env.SANCTIONS_EVENTS_FILE = keepFile; EV.__resetSanctionsEventsForTests(); }
+    }
+
+    // (g) A write that fails is retried, and the attempts it gathered meanwhile are kept.
+    const blocker = join(dir, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const goodFile = process.env.SANCTIONS_EVENTS_FILE;
+    const failAcct = privateKeyToAccount(generatePrivateKey());
+    const failAddr = "0x" + "fa".repeat(20);
+    try {
+      process.env.SANCTIONS_EVENTS_FILE = join(blocker, "events.jsonl");
+      const first = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAddr, rail: "x402", route: "POST /api/hash" });
+      ok(first === null, "setup: the store refuses the first write (its directory is a file)");
+      const second = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAddr, rail: "x402", route: "POST /api/hash" });
+      ok(second?.attempts === 2, `the next refusal of the same payer is an attempt on the unwritten row, not a dropped repeat (attempts ${second?.attempts})`);
+      rmSync(blocker, { force: true });
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(blocker, { recursive: true });
+      await EV.flushSanctionsEvents();
+      const stored = readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.address === failAddr);
+      ok(stored?.attempts === 2 && EV.sanctionsEventWriteLimits().pending === 0, `once the store recovers, the row is written with both attempts (${stored?.attempts})`);
+      const third = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAcct.address, rail: "x402", route: "POST /api/hash" });
+      ok(third && readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(failAcct.address), "and a new refusal after the recovery writes its row at once");
+    } finally { process.env.SANCTIONS_EVENTS_FILE = goodFile; EV.__resetSanctionsEventsForTests(); }
+
+    // (h) A hard kill: a process records a hit, three repeats and an unproven count, is killed
+    //     with SIGKILL before its write-behind flush; the next process reads them all.
+    {
+      const { runRestartCase } = await import("./lib/sanctions-restart.js");
+      const restartFile = join(dir, "restart", "events.jsonl");
+      const addr = "0x" + "4b".repeat(20);
+      const res = runRestartCase({ env: { SANCTIONS_EVENTS_FILE: restartFile }, address: addr });
+      const hitRow = res.rows?.find((x) => x.address === addr);
+      const countRow = res.rows?.find((x) => x.aggregate && x.kind === "unproven-refusal");
+      ok(res.killedBy === "SIGKILL" && hitRow?.attempts === 4 && countRow?.count === 1 && res.rows.length === 2, `after a SIGKILL the next process reads every attempt and the count row (killed by ${res.killedBy}; attempts ${hitRow?.attempts}, count ${countRow?.count}${res.rows ? "" : `; ${res.readerErr || res.writerErr}`})`);
+      const again = runRestartCase({ env: { SANCTIONS_EVENTS_FILE: restartFile }, address: "0x" + "4c".repeat(20) });
+      const first = again.rows?.find((x) => x.address === addr);
+      ok(first?.attempts === 4 && again.rows?.filter((x) => x.aggregate).reduce((t, x) => t + x.count, 0) === 2, `a second kill and replay never counts the first one twice (attempts ${first?.attempts})`);
+    }
+
+    // (i) The store's race, journal bound and filed-row cases, in file mode.
+    {
+      const { runSanctionsStoreCases } = await import("./lib/sanctions-store-cases.js");
+      await runSanctionsStoreCases({ EV, ok, label: "file mode" });
+      EV.__resetSanctionsEventLimitsForTests(); EV.__resetSanctionsEventsForTests();
+    }
+
+    // (e) Live control: a clean signed payment passes and records nothing.
+    const n = (await rows()).length;
+    const clean = await run(strict, await signed3009(cleanAcct, { primaryType: "ReceiveWithAuthorization" }));
+    const cleanDirect = await run(lenient, await signed3009(cleanAcct), { path: "/api/hash" });
+    await settle();
+    ok(clean.next && clean.code === null && cleanDirect.next && (await rows()).length === n, "CONTROL: a clean signed payment passes both screens and records nothing");
+  } finally {
+    delete process.env.SANCTIONS_SCREEN_FILE;
+    if (outerEvents === undefined) delete process.env.SANCTIONS_EVENTS_FILE; else process.env.SANCTIONS_EVENTS_FILE = outerEvents;
+    SS.__resetSanctionsScreenForTests();
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
     __resetX402PayerScreenForTests();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -418,6 +686,20 @@ try {
   await stop();
   facilitator.close(); upstream.close();
   rmSync(TMP, { recursive: true, force: true });
+}
+// The facilitator's own payer is what a verified non-EVM payment records:
+// the stash keeps it from the verify answer, and only a valid verify sets it.
+{
+  const { registerVerifiedPaymentStash } = await import("../src/payments.js");
+  const { verifiedPayerOf } = await import("../src/verified-payment.js");
+  let hook = null;
+  registerVerifiedPaymentStash({ onAfterVerify: (f) => { hook = f; } });
+  const sol = "So1anaPayer11111111111111111111111111111111";
+  const ctxFor = (req, isValid) => ({ result: { isValid, payer: sol }, paymentPayload: { payload: {} }, requirements: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, transportContext: { request: { adapter: { req } } } });
+  const r1 = {}; hook(ctxFor(r1, true));
+  ok(verifiedPayerOf(r1) === sol, "a verified non-EVM payment keeps the facilitator's payer exactly (its record names it)");
+  const r2 = {}; hook(ctxFor(r2, false));
+  ok(verifiedPayerOf(r2) === null, "a verify that did not pass keeps no payer");
 }
 if (fail) for (const l of serverLog().slice(-30)) console.error("  server:", l);
 console.log(`\ntest-x402-payer-screen: ${pass} passed, ${fail} failed`);

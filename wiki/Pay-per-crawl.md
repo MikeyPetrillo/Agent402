@@ -102,7 +102,7 @@ From env on the CLI: `TOLLBOOTH_TEMPO_API_KEY`, `TOLLBOOTH_TEMPO_RECIPIENT` (def
 
 ## Get paid into a Coinbase Business account
 
-Coinbase Business accounts receive x402 payments from AI agents. Set `TOLLBOOTH_PAYTO` to the account's USDC (Base) receive address and `TOLLBOOTH_CDP_API_KEY_ID` / `TOLLBOOTH_CDP_API_KEY_SECRET` (a CDP API key; `npm i @coinbase/x402`) and the CLI settles every payment through Coinbase's facilitator into that account (no fee is taken from the payment itself). Guide with an Express example: [agent402.tools/guides/coinbase-business-get-paid-by-agents](https://agent402.tools/guides/coinbase-business-get-paid-by-agents).
+Coinbase Business accounts receive x402 payments from AI agents ([Accept Agentic Payments with x402](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/accept-x402-payments), Coinbase's documentation). Set `TOLLBOOTH_PAYTO` to the account's USDC (Base) receive address and `TOLLBOOTH_CDP_API_KEY_ID` / `TOLLBOOTH_CDP_API_KEY_SECRET` (a CDP API key; `npm i @coinbase/x402`) and the CLI settles every payment into that account through the facilitator those keys authorize. Coinbase, Coinbase Business and CDP are trademarks of Coinbase, Inc.; Agent402 is not affiliated with or endorsed by Coinbase. Guide with an Express example: [agent402.tools/guides/coinbase-business-get-paid-by-agents](https://agent402.tools/guides/coinbase-business-get-paid-by-agents).
 
 ## Beyond UA detection (the cat-and-mouse answer)
 
@@ -143,8 +143,8 @@ for x402: with `secret`, `payTo` and `verifyX402` set, every 402 carries a
 block, and an `Authorization: Payment` credential whose challenge id
 HMAC-verifies, is unexpired and was minted for that exact resource is
 translated to `PAYMENT-SIGNATURE` and handed to your verifier as if an x402
-client had sent it. Built-in USDC table for Base, Celo, Polygon, Arbitrum,
-Optimism, Avalanche and Sei; `mppAssetAddress` + `mppAssetName` name any other
+client had sent it. Built-in USDC table for Base, Celo, Polygon, Arbitrum One,
+OP Mainnet, Avalanche C-Chain and Sei; `mppAssetAddress` + `mppAssetName` name any other
 token; `mpp: false` turns it off. Settlement authority never moves.
 
 ## Durable stats + edge analytics

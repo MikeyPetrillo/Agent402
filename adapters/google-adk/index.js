@@ -1,5 +1,6 @@
-// agent402-google-adk: turn Agent402 into Google ADK FunctionTool instances
-// the agent can pick up directly. Four meta tools, all free to discover:
+// agent402-dev-kit-tools (formerly agent402-google-adk): Agent402 tools as
+// FunctionTool instances for use with the Agent Development Kit (ADK) from
+// Google, which the agent can pick up directly. Four meta tools, all free to discover:
 //
 //   agent402_find:    local catalog resolver  (GET /api/find)
 //   agent402_route:   cross-seller x402 router  (POST /api/route)
@@ -11,7 +12,7 @@
 // discovery means the LLM picks a task, the router picks the seller, and the
 // caller handles payment.
 //
-//   import { agent402Tools } from "agent402-google-adk";
+//   import { agent402Tools } from "agent402-dev-kit-tools";
 //   import { LlmAgent } from "@google/adk";
 //   const tools = await agent402Tools();              // free tier (PoW)
 //   const agent = new LlmAgent({
@@ -33,7 +34,7 @@ import { createHash } from "node:crypto";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-google-adk/0.1.14";
+const USER_AGENT = "agent402-dev-kit-tools/0.2.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -155,7 +156,7 @@ function perCallCeilingOf(value, warn = (m) => console.warn(m)) {
   const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw !== "" ? Number(raw) : NaN);
   if (Number.isFinite(n) && n >= 0) return n;
   const shown = typeof value === "string" && value.length <= 16 ? JSON.stringify(value) : typeof value;
-  warn(`[agent402-google-adk] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
+  warn(`[agent402-dev-kit-tools] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
   return DEFAULT_MAX_PER_CALL_USD;
 }
 
@@ -209,7 +210,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_find",
       description:
-        "Resolve a plain-language task to the best Agent402 tool: returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
+        "Resolve a task description to the best Agent402 tool: returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
       parametersJsonSchema: {
         type: "object",
         properties: {

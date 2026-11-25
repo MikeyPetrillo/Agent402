@@ -1377,8 +1377,8 @@ async function call(input) {
       const { readFileSync } = await import("node:fs");
       const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
       const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
-      ok(!/[^>] tool\.handler\(input, req\)/.test(server.replace(/runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/g, "")) && /runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/.test(server), "the HTTP tool route runs every handler inside its caller's key");
-      ok(/runAsCallerOf\(callReq, \(\) => entry\.def\.handler\(params, callReq\)\)/.test(mcp) && !/await entry\.def\.handler\(/.test(mcp), "the MCP connector runs every handler inside its caller's key");
+      ok(!/[^>] tool\.handler\(input, req\)/.test(server.replace(/runAsCallerOf\(req, \(\) => runAsRouteCall\(\(\) => tool\.handler\(input, req\)\)\)/g, "")) && /runAsCallerOf\(req, \(\) => runAsRouteCall\(\(\) => tool\.handler\(input, req\)\)\)/.test(server), "the HTTP tool route runs every handler inside its caller's key");
+      ok(/runAsCallerOf\(callReq, \(\) => runAsRouteCall\(\(\) => entry\.def\.handler\(params, callReq\)\)\)/.test(mcp) && !/await entry\.def\.handler\(/.test(mcp), "the MCP connector runs every handler inside its caller's key");
     }
     ok(!L.state().busy && L.state().callers === 0, "every place is released after the caller cases");
   }

@@ -41,7 +41,7 @@ export function trustSubprocessors() {
     { category: "Tool routing", name: "TypeSafe", providers: ["TypeSafe"], gets: "The task text given to route and decide" },
     { category: "Payment verification", name: "Coinbase CDP and per-chain facilitators, Tempo's relay", providers: ["Coinbase CDP", "Tempo's relay"], gets: "The signed payment, to verify and settle it" },
     { category: "Sanctions screening", name: "Tempo's transfer data feed", providers: ["Tempo's transfer data feed"], gets: "A paying wallet address, to read its recent inbound transfers" },
-    { category: "Site analytics", name: "Google Analytics (advertising features off), PostHog", providers: ["Google Analytics", "PostHog"], gets: "Page visits and browser details, relayed to PostHog by our server without your IP address. PostHog also receives the server's service events: tool name, HTTP status, price, settlement chain, the paying wallet address, the first word of the caller's User-Agent, a keyed hash of one declared input field and our error message" },
+    { category: "Site analytics", name: "Google Analytics (advertising features off), PostHog", providers: ["Google Analytics", "PostHog"], gets: "Page visits and browser details, relayed to PostHog by our server without your IP address. PostHog also receives the server's service events: tool name, HTTP status, price, settlement chain, a keyed hash of the paying wallet (never the address), the first word of the caller's User-Agent, a keyed hash of one declared input field and our error message" },
   ];
   if (gatewayOfferPublic()) rows.push({ category: "Batched payments", name: "Circle Gateway", providers: ["Circle Gateway"], gets: "A batched payment, verified and settled off chain" });
   return rows;

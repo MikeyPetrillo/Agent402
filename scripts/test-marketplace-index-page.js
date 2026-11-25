@@ -49,7 +49,7 @@ function chainCard(html, slug) {
   // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
   ok(celoCard && /<span[^>]*color:var\(--ok\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
-  ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === RAILS.length && Object.keys(CHAIN_PAGES).length === RAILS.length, "every chain card renders, one per CHAIN_PAGES entry");
+  ok((html.match(/href="\/[a-z]+" title="[^"]+: Agent402 sellers and settlements"/g) || []).length === RAILS.length && Object.keys(CHAIN_PAGES).length === RAILS.length, "every chain card renders, one per CHAIN_PAGES entry");
 }
 
 // --- grammar: a chain with exactly 1 seller reads "1 seller", not "1 sellers" --
@@ -129,7 +129,7 @@ function chainCard(html, slug) {
 {
   const chainHtml = marketPage("base", BASE_URL, { snapshot: { sellers: [LOCAL] }, rail: null, activity: null, wallet: "0xabc" });
   ok(!chainHtml.includes("Markets by chain"), "a per-chain page does NOT render the all-chains-only 'Markets by chain' grid");
-  ok(chainHtml.includes("The Base x402 marketplace"), "a per-chain page still renders its own real title, unaffected by the all-chains changes");
+  ok(chainHtml.includes("Agent402 on Base"), "a per-chain page still renders its own real title, unaffected by the all-chains changes");
 }
 
 // --- copy hygiene --------------------------------------------------------------

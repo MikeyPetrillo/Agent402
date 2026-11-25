@@ -87,8 +87,9 @@ const deps = (over = {}) => ({
   ok(out.meta.image_files === 5 && out.meta.sources_full_text === 2 && out.meta.tier === "linkedin-article" && !("cost" in out.meta) && !JSON.stringify(out.meta).includes("upstream"), "meta counts files and full-text sources and never carries cost");
   ok(out.post.chars === out.post.caption.length && out.post.hashtags.length === 4, "post caption and hashtags are returned structured");
   // A failed cover is not charged; a failed inline image is reported, not fatal.
-  let e = null; try { await h({ topic: "t" }, { headers: {} }, deps({ generateImage: async () => { throw Object.assign(new Error("upstream down"), { statusCode: 502 }); } })); } catch (x) { e = x; }
-  ok(e && e.statusCode === 502 && /not charged/i.test(e.message), "every image failing with a cover requested -> 502 not charged");
+  const { runAsRouteCall } = await import("../src/not-charged.js");
+  let e = null; try { await runAsRouteCall(() => h({ topic: "t" }, { headers: {} }, deps({ generateImage: async () => { throw Object.assign(new Error("upstream down"), { statusCode: 502 }); } }))); } catch (x) { e = x; }
+  ok(e && e.statusCode === 502 && /Nothing was charged\. Please retry\.$/.test(e.message), "every image failing with a cover requested -> 502 not charged");
   let n = 0;
   const out2 = await h({ topic: "t" }, { headers: {} }, deps({ generateImage: async () => { n++; if (n === 2) throw new Error("second failed"); return { data: [{ b64_json: srcJpeg.toString("base64") }] }; } }));
   ok(out2.images.length === 1 && out2.meta.image_errors.length === 1 && /1 failed/.test(out2.report), "a failed inline image is named in the report, the cover still ships");

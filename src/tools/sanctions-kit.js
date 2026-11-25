@@ -27,6 +27,7 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "../json-document.js";
 import { trackStoreReady } from "../state-db.js";
 import { markResaleCleared } from "../resale-terms.js";
+import { notChargedHere } from "../not-charged.js";
 
 const REFRESH_MS = Math.max(3600_000, Number(process.env.SANCTIONS_REFRESH_MS) || 12 * 3600_000);
 // A parse the payment-party screen fetched within this window is taken as is
@@ -358,7 +359,7 @@ export async function screenAddressForPayment(address) {
 }
 
 /** The message a payout refused for want of a list carries to the buyer. */
-export const PAYOUT_SCREEN_UNAVAILABLE = "Payout screening is temporarily unavailable (the sanctions list is not loaded), so no outside seller is paid. Nothing was signed and nothing is charged. Retry in a few minutes.";
+export const PAYOUT_SCREEN_UNAVAILABLE = "Payout screening is temporarily unavailable (the sanctions list is not loaded), so no outside seller is paid. Nothing was signed.";
 
 /**
  * The gate every external payout path calls on the address it is about to
@@ -372,7 +373,7 @@ export const PAYOUT_SCREEN_UNAVAILABLE = "Payout screening is temporarily unavai
  * Every message says nothing was signed. `label` is the bounded, already
  * validated form of the address for the message.
  */
-export async function assertPayoutScreened(address, { label = null } = {}) {
+export async function assertPayoutScreened(address, { label = null, record = true } = {}) {
   const shown = String(label ?? address ?? "").slice(0, 64);
   let hit;
   try {
@@ -383,9 +384,19 @@ export async function assertPayoutScreened(address, { label = null } = {}) {
       throw Object.assign(new Error("Refusing to pay an unreadable address: the payout address cannot be screened. Nothing was signed."), { statusCode: 502 });
     }
     console.warn(`[sanctions] payout to ${shown.slice(0, 24)} refused: no sanctions list is loaded`);
-    throw Object.assign(new Error(PAYOUT_SCREEN_UNAVAILABLE), { statusCode: 503, screenUnavailable: true, code: "payout_screen_unavailable" });
+    throw Object.assign(new Error(`${PAYOUT_SCREEN_UNAVAILABLE}${notChargedHere()} Retry in a few minutes.`), { statusCode: 503, screenUnavailable: true, code: "payout_screen_unavailable" });
   }
   if (hit) {
+    // The router's own refused payout is kept in the sanctions events store
+    // (src/sanctions-events.js). A script that runs outside the server (the
+    // refund runner) passes record: false and reports through the operator
+    // route instead, since its process holds no store.
+    if (record) {
+      try {
+        const { recordSanctionsEvent } = await import("../sanctions-events.js");
+        recordSanctionsEvent({ kind: "payout-refused", address: String(address), rail: "router", listPublishDate: payout?.publishDate || null, detail: `SDN ${String(hit.sdnId || "?").slice(0, 16)} (${String(hit.entity || "listed entity").slice(0, 80)})` }).catch(() => {});
+      } catch { /* recording never changes the refusal */ }
+    }
     throw Object.assign(new Error(
       `Refusing to pay ${shown}: that address is on the OFAC SDN list ` +
       `(${String(hit.entity || "listed entity").slice(0, 80)}, SDN ${String(hit.sdnId || "?").slice(0, 16)}). Nothing was signed.`,

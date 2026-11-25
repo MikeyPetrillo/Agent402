@@ -1037,7 +1037,7 @@ async function startCli() {
 // is the SYMLINK path while import.meta.url is the realpath - they never match,
 // and the documented install path (`npx agent402-tollbooth`) started nothing at
 // all while `node index.js` worked fine. Exactly the defect found and fixed in
-// agent402-openclaw 0.1.2; it survived here because every test invokes
+// agent402-model-provider 0.1.2; it survived here because every test invokes
 // index.js by path, which is the one way to call it that cannot see the bug.
 // Compare the REALPATH, the way openclaw/cli.js does.
 function invokedDirectly() {

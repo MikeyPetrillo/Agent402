@@ -1,4 +1,5 @@
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { gatewayProductSentence } from "./gateway-product-copy.js";
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT, RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH } from "./receipt-signing.js";
 import { RECEIPT_FETCH_DAYS } from "./receipt-store.js";
@@ -18,7 +19,7 @@ import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE, skillPackOfToolSlug } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { integrationSlugs } from "./integration-pages.js";
-import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { listedPlatformIntegrations } from "./platform-integrations.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
@@ -52,6 +53,7 @@ import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { BASE_NO_GAS_SHORT } from "./base-no-gas.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
+import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -76,7 +78,7 @@ export function reportsParagraph(baseUrl, tools) {
     ["Market / competitor brief", ["market-brief"]],
     ["Solana token brief", ["token-brief"]],
     ["Token risk", ["token-risk", "token-risk-pro"]],
-    ["LinkedIn article, ready to publish", ["linkedin-article"]],
+    ["Professional article, ready to publish", ["linkedin-article"]],
     ["IPO pipeline digest, deterministic", ["ipo-report"]],
   ];
   const groups = groupSlugs.map(([k, slugs]) => [k, list(...slugs)]).filter(([, v]) => v);
@@ -341,6 +343,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/accessibility`, priority: "0.4" },
     { loc: `${baseUrl}/wholesale`, priority: "0.6" },
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
@@ -438,7 +441,7 @@ export function learnIntegrationUrls(baseUrl) {
     { loc: `${baseUrl}/learn`, priority: "0.8" },
     ...learnSlugs().map((s) => ({ loc: `${baseUrl}/learn/${s}`, priority: "0.8" })),
     ...integrationSlugs().map((s) => ({ loc: `${baseUrl}/integrations/${s}`, priority: "0.7" })),
-    ...PLATFORM_INTEGRATIONS.map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
+    ...listedPlatformIntegrations().map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
   ];
 }
 export function sitemapLearn(baseUrl) {
@@ -599,7 +602,7 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> ${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} The applied layer of Agentic Finance (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the catalog via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> ${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} The applied layer of Agentic Finance (explainer: /agentic-finance). **First job: company filings and public data** (\`/api/edgar-filings\`, \`/api/edgar-company-facts\`) - then the catalog via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
@@ -619,7 +622,7 @@ Base URL: ${baseUrl}
 
 ${reportsParagraph(baseUrl, tools)}
 
-**Crypto derivatives, DeFi and Solana intel.** Live perpetuals, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth. Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's risk evidence (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full risk write-up, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}) and \`POST /api/sol-price\` (${priceOfSlug("sol-price")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending and prices. Market context: \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}) and \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}). Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
+**Crypto derivatives, DeFi and Solana intel.** Live perpetuals, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth. Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's on-chain risk facts (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full report's facts, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}) and \`POST /api/sol-price\` (${priceOfSlug("sol-price")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending and prices. Market context: \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}) and \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}). Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
 
 **Images and video, flat per call.** Text-to-image and text-to-video on the OpenAI wire, priced per picture or per clip rather than per token: \`POST /v1/images/fast\` (${priceOfSlug("v1-images-fast")}, budget), \`POST /v1/images/pro\` (${priceOfSlug("v1-images-pro")}, higher fidelity), \`POST /v1/images/generations\` (${priceOfSlug("v1-images")}, flagship), \`POST /v1/images/edits\` (${priceOfSlug("v1-images-edit")}, edit up to four reference images with a prompt) and \`POST /v1/videos/generations\` (${priceOfSlug("v1-videos")}, one silent 4-second 720p clip, MP4 inline base64). Point any OpenAI SDK at base_url ${baseUrl}/v1 and call the path you want. A failed or timed-out generation answers 400 or above, which is not settled on x402; a wallet payer whose video request timed out can send the same request again unchanged within the window the 504 names to collect the same clip.
 
@@ -634,7 +637,7 @@ Determine it from the response you already hold, without asking us:
 
 ${PAYMENT_RETRY_VERBS_NOTE}
 
-Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again.${returningWalletSentence() ? ` ${returningWalletSentence()}` : ""} A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
+Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again.${sanctionsGeoBlockEnabled() ? " A request from a region this service does not serve is answered `451` (reason `unavailable_in_region`) before any payment is verified or settled: an x402 payment is not charged, and a Tempo push transfer it names is not claimed." : ""}${returningWalletSentence() ? ` ${returningWalletSentence()}` : ""} A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-model-provider permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself. ${SETTLE_FIRST_SENTENCE}
 
@@ -656,12 +659,12 @@ ${flatTiersLine()}
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/guides/buying-at-volume](${baseUrl}/guides/buying-at-volume): buying in bursts - the per-address limits and their \`Retry-After\`, retries that never pay twice, async jobs, spend caps and the errors to handle
 - [/guides/content-pipeline](${baseUrl}/guides/content-pipeline): a content pipeline from paid calls - research, script, voiceover, images, transcription, subtitles, dubbing and media checks from one wallet, with the stages that run as jobs and the rail to pay on
-- [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
-- [/api/answer](${baseUrl}/api/answer): **front door** - cited answer grounded in live web search results
+- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
+- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines
-- [/api/find](${baseUrl}/api/find): resolve a plain-language task to the best-matching tools with route, price, input schema, and a ready example (GET \`?q={task}\` or POST \`{"task":"..."}\`) - long-tail discovery behind the flagships. A task that names several steps ("get the price, then compute RSI") also returns a free \`plan\`: each step ranked the same way, with an estimated total
+- [/api/find](${baseUrl}/api/find): resolve a task description to the best-matching tools with route, price, input schema, and a ready example (GET \`?q={task}\` or POST \`{"task":"..."}\`) - long-tail discovery behind the flagships. A task that names several steps ("get the price, then compute RSI") also returns a free \`plan\`: each step ranked the same way, with an estimated total
 - [/api/route](${baseUrl}/api/route): Smart Order Router - rank tools across every x402 seller crawled from public registries; \`include:"external"\` excludes Agent402 for neutral cross-seller discovery
-- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS. Send a task, and Agent402 resolves the best-matching tool, buys the result from the seller over x402 (any proven seller in the open index, not just ours), and sells it to you with a receipt - one payment, one request, one wallet. You never hold a wallet on their chain or sign up with them. \`{"task":"...","include":"external"}\`. Proportional tiers: ${execTierSentence} - an over-cap task gets a self-correcting 409 naming the tier that fits${catalog["POST /api/decide"] ? `\n- [/api/decide](${baseUrl}/api/decide): a paid decision. Describe a job; get a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: steps, fallbacks, params that validate against each tool's schema, cost and latency estimates. Depth quick $${decidePrices().quick} / plan $${decidePrices().plan} / full $${decidePrices().full}. The ranking formula has no first-party term and every tool carries firstParty. The fee returns as a ${decideCreditHours()}-hour credit toward \`POST /api/decide/execute\`, which runs the plan and is paid from a wallet on Base (it buys from outside sellers with our wallet, so a prepaid credits key or a card does not pay it; third-party steps at the seller's price plus a ${decideRoutingFeePct()}% markup). A decisionId is kept 30 days; execute it again with \`"replan":true\` to plan the saved task again on current prices and reliability first (the decision price for its depth is added to the quote; the answer's \`replanned\` field lists each changed step). Report outcomes free at \`POST /api/decide/feedback\`.` : ""}
+- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS. Send a task, and Agent402 resolves the best-matching tool, buys the result from the seller over x402 (any proven seller in the open index, not just ours), and sells it to you with a receipt - one payment, one request, one wallet. You never hold a wallet on their chain or sign up with them. \`{"task":"...","include":"external"}\`. Proportional tiers: ${execTierSentence} - an over-cap task gets a self-correcting 409 naming the tier that fits${catalog["POST /api/decide"] ? `\n- [/api/decide](${baseUrl}/api/decide): a paid decision. Describe a job; get a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: steps, fallbacks, params that validate against each tool's schema, cost and latency estimates. Depth quick $${decidePrices().quick} / plan $${decidePrices().plan} / full $${decidePrices().full}. The ranking formula has no first-party term and every tool carries firstParty. The fee returns as a ${decideCreditHours()}-hour credit toward \`POST /api/decide/execute\`, which runs the plan and is paid from a wallet on Base (it buys from outside sellers with our wallet, so a prepaid credits key or a card does not pay it; third-party steps at the seller's price plus a ${decideRoutingFeePct()}% markup). Its 402 lists \`upto\` first: sign the budget as a ceiling and only what the run spent is charged; \`exact\` follows at the plan's listed step prices, and any part a run does not spend is repaid on chain. A decisionId is kept 30 days; execute it again with \`"replan":true\` to plan the saved task again on current prices and reliability first (the decision price for its depth is added to the quote; the answer's \`replanned\` field lists each changed step). Report outcomes free at \`POST /api/decide/feedback\`.` : ""}
 - [/api/index](${baseUrl}/api/index): the seller index, PAGINATED - one page, 250 max, never the whole set. The response says so: complete false, a Link header with rel=next, and sellerCount for the total. For ONE origin use ?seller=<host>, which pages nothing and returns its full row with crawl history (toolCount is the routes held; toolsTotal and toolsCapped say when a listing was cut at the per-seller cap)
 - [/api/leaderboard](${baseUrl}/api/leaderboard): public on-chain ranking of x402 sellers by Base USDC settled volume, served as the TOP N and never the whole board - 25 rows by default, 50 the ceiling, and \`totalSellers\` carries how many are ranked in all, so a seller you cannot see in the rows may simply rank below them. Only sellers that SETTLED inside \`windowServed\` rank at all (pipeline: public x402 discovery registry → \`eth_getLogs\` on Base USDC → per-call ceiling filter, reported as \`maxCallUsd\` → aggregate by payTo; params \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`) - same data as the MCP tool \`sellers.list\` (listed when a wallet or credits key is set) and the \`agent402-client\` SDK method \`topSellers()\`
 - [/api/mpp-index](${baseUrl}/api/mpp-index): the MPP seller index (live-verified WWW-Authenticate: Payment sellers with the payment offers their real 402 makes: method, recipient, currency, chain)
@@ -674,7 +677,7 @@ ${flatTiersLine()}
 - [/api/reputation](${baseUrl}/api/reputation?seller=): one outside seller's 30-day reputation as this server measured it (\`?seller=<host>\`); each metric and its method in /llms-full.txt
 - [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
-- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links, our \`refundTx\` once sent, and \`refunds\` (every refund recorded for that transaction, where more than one payment settled in it). It answers that one transaction only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
+- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, held, paid, void or none), \`priceUsd\`, \`network\`, explorer links, our \`refundTx\` once sent, and \`refunds\` (every refund recorded for that transaction, where more than one payment settled in it). It answers that one transaction only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool (\`?category=\` or \`?tag=\` for a part; markdown by category: /tools.md)
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
@@ -687,21 +690,21 @@ ${flatTiersLine()}
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0\`
-${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.1\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.1\`
+${listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
-- [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
-- [agent402-anthropic-tools](https://www.npmjs.com/package/agent402-anthropic-tools): Anthropic Messages API \`tool_use\`
-- [agent402-ai-sdk](https://www.npmjs.com/package/agent402-ai-sdk): Vercel AI SDK (\`streamText\` / \`generateText\`)
-- [agent402-langchain](https://www.npmjs.com/package/agent402-langchain): LangChain JS / LangGraph
-- [agent402-llamaindex](https://www.npmjs.com/package/agent402-llamaindex): LlamaIndex TS
-- [agent402-google-adk](https://www.npmjs.com/package/agent402-google-adk): Google ADK (Gemini agents)
-- [agent402-strands](https://www.npmjs.com/package/agent402-strands): AWS Strands agent runtime
-- [agent402-agentkit](https://www.npmjs.com/package/agent402-agentkit): Coinbase AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
-- [agent402-openai-agents](https://www.npmjs.com/package/agent402-openai-agents): OpenAI Agents SDK tools (find, route, call, about)
-- [elizaos-plugin-agent402](https://www.npmjs.com/package/elizaos-plugin-agent402): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
-- [agent402-openclaw](https://www.npmjs.com/package/agent402-openclaw): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
+- [agent402-function-calling](https://www.npmjs.com/package/agent402-function-calling): with OpenAI function calling
+- [agent402-messages-tools](https://www.npmjs.com/package/agent402-messages-tools): with the Claude Messages API \`tool_use\`
+- [agent402-stream-tools](https://www.npmjs.com/package/agent402-stream-tools): with the AI SDK by Vercel
+- [agent402-structured-tools](https://www.npmjs.com/package/agent402-structured-tools): with LangChain.js / LangGraph
+- [agent402-function-tools](https://www.npmjs.com/package/agent402-function-tools): with LlamaIndex TS
+- [agent402-dev-kit-tools](https://www.npmjs.com/package/agent402-dev-kit-tools): with the Agent Development Kit (ADK)
+- [agent402-agent-loop-tools](https://www.npmjs.com/package/agent402-agent-loop-tools): with Strands Agents
+- [agent402-action-provider](https://www.npmjs.com/package/agent402-action-provider): AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
+- [agent402-runner-tools](https://www.npmjs.com/package/agent402-runner-tools): with the OpenAI Agents SDK
+- [agent402-actions-plugin](https://www.npmjs.com/package/agent402-actions-plugin): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
+- [agent402-model-provider](https://www.npmjs.com/package/agent402-model-provider): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
 
 ## Skill packs (a whole job, one payment)
 ${packItems}
@@ -727,17 +730,17 @@ ${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABIL
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
 - [Test your x402 client](${baseUrl}/x402-test): point any client at a real paid route and read why it was refused - which field differs from what was advertised, which schemes and networks are offered, whether the amount or the validity window is wrong. Refusals are free (an error status cancels settlement); every reason this server emits is listed there
-- [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - plain language, speaker notes, and a live demo (402 quote decoded, pay with a puzzle, real receipts)
+- [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - speaker notes and a live demo (402 quote decoded, pay with a puzzle, real receipts)
 - [Glossary](${baseUrl}/glossary): x402, MPP, HTTP 402, facilitator, EIP-3009, receipts, settlement, rails, dual-stack, PoW tier, SOR, tollbooth - every term defined once, with anchors
 - [x402 and MPP on Agent402](${baseUrl}/what-is-x402) / [MPP on Agent402](${baseUrl}/what-is-mpp): how each payment wire runs on this server
-- [${GUIDE_SITE_NAME}](${GUIDE_SITE}): x402 and MPP explained in plain language, for people
+- [${GUIDE_SITE_NAME}](${GUIDE_SITE}): x402 and MPP explained, for people
 - [How to pay](${baseUrl}/how-to-pay): from nothing to a paid call on every rail (x402 on each listed chain, MPP over Tempo, EVM or card, proof-of-work): what you need, the 402 flow, a snippet, the receipt, and what happens to the money when a call fails
 - [Speech](${baseUrl}/speech): the model-backed speech tools (text-to-speech tiers, transcription with speaker labels, the OpenAI-shaped wires) with voices, formats, caps and the fallback chain read from the tools themselves
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
 - [Maintainer](${REPO_URL}): Havok Holdings LLC, help@agent402.tools
-- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at help@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
+- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): ${LEGAL_ENTITY_SENTENCE} owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at help@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
 `;
 }
 
@@ -799,17 +802,23 @@ export function llmsTxt(baseUrl, catalog) {
   // list and shortlinks in the guide.
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
-  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
+  // The npm server's own Claude Code line is in /llms-full.txt (the hosted one-liner above stays).
+  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
+  const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
+  const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
-  const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  // The model gateway follows the tools: the short index leads with the catalog.
+  const keep = ["Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains", "Call a model (metered, the default)"];
   // Key machine surfaces: the short index names each surface in one clause
   // and /llms-full.txt keeps every line whole. An entry below is that
   // surface's own brief; any other line keeps its first clause
   // (surfaceClause), so a surface added later stays short here too.
   const brief = [
-    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): **front door**: live web search (title, URL, snippet)`],
-    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): **front door**: cited answer grounded in live web search results`],
+    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
+    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
+    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example)`],
+    [`- [/.well-known/x402](`, `- [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest`],
     [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
     // Each depth's price stays here (from the decide configuration), and so
     // does the execute route's payment sentence: it is paid from a wallet only
@@ -817,18 +826,18 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/decide](`, (line) => {
       const depth = (line.match(/ Depth quick \$[\d.]+ \/ plan \$[\d.]+ \/ full \$[\d.]+\./) || [""])[0];
       const execute = (line.match(/ The fee returns as a [^.]*`POST \/api\/decide\/execute`, which runs the plan [^.]*\./) || [""])[0];
-      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: describe a job, get a call-ready plan over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}${execute ? `.${execute}` : ""}`;
+      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: a call-ready plan for a job over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}${execute ? `.${execute}` : ""}`;
     }],
     // The tier prices stay here (each tier's route and price, from the catalog).
     [`- [/api/route/execute](`, (line) => {
       const tiers = (line.match(/ Proportional tiers: .* naming the tier that fits/) || [""])[0];
-      return `- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS: buys the best-matching tool's answer from any proven seller over x402 and resells it with a receipt${tiers ? `.${tiers}` : ""}`;
+      return `- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS: buys the best tool's answer from a proven x402 seller and resells it with a receipt${tiers ? `.${tiers}` : ""}`;
     }],
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), the top 25 (\`?top=N\`, \`?sort=usd|calls\`); also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), top 25 (\`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
   ];
   const surfaceBrief = (line) => {
     const hit = brief.find(([prefix]) => line.startsWith(prefix));
@@ -844,14 +853,15 @@ export function llmsTxt(baseUrl, catalog) {
     if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
     if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
     if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
-    if (name === "Connect via MCP") return shortHosts(full.slice(start, end).join("\n").trimEnd());
+    // A platform page keeps its link here; its setup clause is in /llms-full.txt.
+    if (name === "Connect via MCP") return shortPlatforms(shortHosts(full.slice(start, end).join("\n").trimEnd()));
     if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
     return [full[start], `Each in one clause; in full: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
-- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
+- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).` + (sanctionsGeoBlockEnabled() ? "\n- Regions: a request from a region this service does not serve is answered `451` (reason `unavailable_in_region`) before any payment is verified or settled; an x402 payment is not charged, and a Tempo push transfer it names is not claimed." : "");
 
   // The llms.txt order (the llms.txt spec: title, summary blockquote, then
   // plain paragraphs before the first H2): the base URL and the full-text
@@ -864,7 +874,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
+The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP explained, for people: ${GUIDE_SITE}.
 
 ${[
     // The Tempo currencies are named in the MPP methods line just below.
@@ -873,7 +883,7 @@ ${[
     mppMethodsSummary().enabled ? mppOfferGateSentence() : "",
     visaCliMppSentence(),
     // Each price beside its route says where it comes from.
-    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers", " What each answers"),
+    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers is in /llms-full.txt, and the list", " The list"),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),
     ...sections,

@@ -249,7 +249,7 @@ const { messages } = await a.getWorkflowPrompt("security-audit", { domain: "stri
 ## Route a task across sellers
 
 `find()` searches this host's own catalog. `route()` ranks tools for the same
-kind of plain-language task across the eligible, routable seller rows in the
+kind of task description across the eligible, routable seller rows in the
 host's current index: its own tools plus the outside sellers it has indexed and
 holds as routable (not every seller everywhere). It is free and read-only, and
 needs no wallet:
@@ -353,7 +353,7 @@ whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
 | Method | What |
 |---|---|
 | `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs?, walletSigner? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `walletSigner` is the signer of the EVM wallet that `fetch` pays from (a viem account: `address` and `signMessage`), whose address is sent as the `X-Agent402-Wallet` header on paid calls with a fresh `X-Agent402-Wallet-Proof` signed for that host and route, so a server that prices a returning wallet lower can quote it on that call (a Gateway signer that can sign a message is used when omitted; never sent on a free read); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; `maxPerCallUsd` defaults to $5 (`0`, `"off"` or `null` turns it off) and the other two USD caps are optional, none set by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
-| `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on this host (route, price, schema, example) |
+| `await a.find(task, { k = 5 })` | Resolve a task description to the best-matching tools on this host (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller router: ranks eligible, routable seller rows from the host's current index; free and read-only; rows come back as the server wrote them and may carry server-reported `executeVia` |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
@@ -523,8 +523,8 @@ books the amount actually signed.
 `x402Client` is the only mode where the caps are advisory: they are checked on
 an unpaid preflight of the `402`, before your wallet fetch runs, but not on the
 `402` that fetch then signs. The client logs a one-time warning when caps are
-set in this mode. The adapters built on this client (agent402-agentkit,
-elizaos-plugin-agent402) construct their own x402 client and pass it, so their
+set in this mode. The adapters built on this client (agent402-action-provider,
+agent402-actions-plugin) construct their own x402 client and pass it, so their
 caps hold at signing by default.
 
 **How a quote is priced.** An x402 signer signs the option's raw base-unit

@@ -12,6 +12,7 @@ import { ORG_SAME_AS } from "./org-profiles.js";
 import { ERC8004_IDENTITY_REGISTRY, erc8004AgentId } from "./tools/a2a-card.js";
 import { companyPostalLine } from "./email.js";
 import { mppOffered } from "./site-org.js";
+import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
 // The business's public contact points, by role: the help address for
 // support, billing, legal and abuse, the security address for vulnerability
@@ -20,7 +21,7 @@ const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
 // is COMPANY_POSTAL_ADDRESS, the same value every outbound email ends with.
 export const COMPANY_PHONE = Object.freeze({ display: "(704) 313-8483", tel: "+17043138483" });
 export const COMPANY_MAILBOXES = Object.freeze({ operator: "help@agent402.tools", security: "security@agent402.tools", company: "hello@havok.holdings" });
-export const LEGAL_ENTITY_SENTENCE = "Cardhavok LLC (doing business as Havok Holdings LLC)";
+export { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 
 export function companyPage(baseUrl) {
   const canonical = `${baseUrl}/company`;
@@ -74,7 +75,7 @@ export function companyPage(baseUrl) {
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">company</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;text-wrap:balance;">Havok Holdings LLC, the company behind Agent402.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools, the payment and trust layer for agentic commerce, is built and operated by Cardhavok LLC (doing business as <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>), a North Carolina company. We run the hosted service at agent402.tools, publish the server under AGPL-3.0 and the client packages under MIT, and settle paid calls on public blockchains, or by card through Stripe.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools, the payment and trust layer for agentic commerce, is built and operated by ${LEGAL_ENTITY_NAME} (doing business as <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>), a North Carolina company. We run the hosted service at agent402.tools, publish the server under AGPL-3.0 and the client packages under MIT, and settle paid calls on public blockchains, or by card through Stripe.</p>
   </div>
 </header>
 ${row("What we sell", `Per-call tools and metered models to AI agents, paid in USDC over x402 and MPP. Finished, cited reports (${esc(usd0(lo))} to ${esc(usd0(hi))}) and monitors (${esc(monUsd)} a month) to people, by card. An open-source pay-per-crawl gate, the tollbooth, for site owners who want to charge crawlers and agents for their content.`, [["/reports", "Reports"], ["/pricing", "Pricing"], ["/wholesale", "Wholesale"], ["/tollbooth", "Tollbooth"]])}
@@ -109,7 +110,7 @@ ${ledgerFooterCompact()}`;
 .co-contacts td{font-size:var(--fs-lg);line-height:1.55;color:var(--muted);padding:4px 0}
 @media (max-width:600px){.co-contacts tr{display:block;padding:6px 0}.co-contacts th,.co-contacts td{display:block;padding:0}}`;
   const jsonLd = [
-    { "@type": "Organization", "@id": `${baseUrl}/#org`, name: "Havok Holdings LLC", legalName: "Cardhavok LLC", duns: "142233542", foundingLocation: { "@type": "Place", address: { "@type": "PostalAddress", addressRegion: "NC", addressCountry: "US" } }, url: "https://havok.holdings", sameAs: ["https://havok.holdings", ...ORG_SAME_AS], brand: { "@type": "Brand", name: "Agent402", alternateName: "Agent402.Tools", url: baseUrl }, contactPoint: [{ "@type": "ContactPoint", contactType: "customer support", email: op, telephone: COMPANY_PHONE.tel }, { "@type": "ContactPoint", contactType: "security", email: op }, { "@type": "ContactPoint", contactType: "billing support", email: op }, { "@type": "ContactPoint", contactType: "investor relations", email: co }, { "@type": "ContactPoint", contactType: "partnerships", email: co }], telephone: COMPANY_PHONE.tel },
+    { "@type": "Organization", "@id": `${baseUrl}/#org`, name: "Havok Holdings LLC", legalName: LEGAL_ENTITY_NAME, duns: "142233542", foundingLocation: { "@type": "Place", address: { "@type": "PostalAddress", addressRegion: "NC", addressCountry: "US" } }, url: "https://havok.holdings", sameAs: ["https://havok.holdings", ...ORG_SAME_AS], brand: { "@type": "Brand", name: "Agent402", alternateName: "Agent402.Tools", url: baseUrl }, contactPoint: [{ "@type": "ContactPoint", contactType: "customer support", email: op, telephone: COMPANY_PHONE.tel }, { "@type": "ContactPoint", contactType: "security", email: sec }, { "@type": "ContactPoint", contactType: "billing support", email: op }, { "@type": "ContactPoint", contactType: "investor relations", email: co }, { "@type": "ContactPoint", contactType: "partnerships", email: co }], telephone: COMPANY_PHONE.tel },
     { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` }, { "@type": "ListItem", position: 2, name: "Company", item: canonical }] },
   ];
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/company", extraCss, jsonLd, body });

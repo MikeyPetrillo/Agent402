@@ -48,6 +48,7 @@ import { leaderboardCadence } from "../refresh-cadence.js";
 import { createPublicClient, custom } from "viem";
 import { mainnet } from "viem/chains";
 import { normalize as normalizeEns } from "viem/ens";
+import { notChargedHere } from "../not-charged.js";
 
 // ENS (Ethereum mainnet) forward resolution goes through ENS's universal
 // resolver, the path current clients use: a name whose records moved off the
@@ -377,7 +378,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/usdc-balance", name: "USDC balance", slug: "usdc-balance", category: "payments", price: "$0.001",
     description:
-      "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, or Arc (Monad has no read lane). Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
+      "Read the USDC balance of any address on Base, Polygon, Arbitrum One, OP Mainnet, Ethereum, Celo, Avalanche C-Chain, Sei, or Arc (Monad has no read lane). Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
     tags: ["usdc", "balance", "wallet", "erc20", "multichain"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
@@ -397,7 +398,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.001",
     description:
-      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Celo/Avalanche/Sei/Arc/Robinhood Chain (Monad has no read lane): success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
+      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum One/OP Mainnet/Ethereum/Celo/Avalanche C-Chain/Sei/Arc/Robinhood Chain (Monad has no read lane): success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
       // A real Base transaction, so the documented call returns the shown
@@ -425,7 +426,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.001",
     description:
-      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, Arc, or Robinhood Chain (Monad has no read lane) - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
+      "Current gas price on Base, Polygon, Arbitrum One, OP Mainnet, Ethereum, Celo, Avalanche C-Chain, Sei, Arc, or Robinhood Chain (Monad has no read lane) - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
     tags: ["gas", "gas-price", "fees", "gwei", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { network: "base" },
@@ -481,7 +482,7 @@ export const X402_TOOLS = [
   {
     route: "POST /api/transfer-authorization", name: "Build USDC transfer authorization", slug: "transfer-authorization", category: "payments", price: "$0.003",
     description:
-      "Build the EIP-3009 transferWithAuthorization typed data for a gasless USDC transfer on Base/Polygon/Arbitrum/Optimism/Ethereum/Monad/Celo/Avalanche/Sei/Arc - the exact EIP-712 object an agent signs with its OWN key to authorize an x402 payment. We construct it; we never sign or send. Non-custodial.",
+      "Build the EIP-3009 transferWithAuthorization typed data for a gasless USDC transfer on Base/Polygon/Arbitrum One/OP Mainnet/Ethereum/Monad/Celo/Avalanche C-Chain/Sei/Arc - the exact EIP-712 object an agent signs with its OWN key to authorize an x402 payment. We construct it; we never sign or send. Non-custodial.",
     tags: ["x402", "eip-3009", "eip-712", "usdc", "transfer", "authorization", "gasless", "multichain"],
     discovery: {
       bodyType: "json",
@@ -973,7 +974,7 @@ export function computeDemandRadar(agg, input = {}) {
   // the defect in hours rather than six weeks.
   if (!rows.length && Number(agg?.distinctClusters) > 0 && minCount <= 1 && !qualifiedOnly) {
     throw Object.assign(
-      new Error(`the demand board reports ${Number(agg.distinctClusters)} clusters but returned no rows to rank, so this answer would be empty for a reason that is ours, not a reading about demand - not charged, please retry`),
+      new Error(`the demand board reports ${Number(agg.distinctClusters)} clusters but returned no rows to rank, so this answer would be empty for a reason that is ours, not a reading about demand.${notChargedHere()} Please retry.`),
       { statusCode: 502 }
     );
   }

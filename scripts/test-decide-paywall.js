@@ -31,7 +31,8 @@ const facilitator = createServer((req, res) => {
   req.on("end", () => {
     if (req.url === "/supported") {
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+      // exact AND upto on Base, as production offers them (X402_UPTO_NETWORKS below).
+      return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }, { x402Version: 2, scheme: "upto", network: "eip155:8453" }], extensions: [], signers: {} }));
     }
     res.writeHead(404); res.end();
   });
@@ -57,6 +58,7 @@ async function boot(name, extra = {}) {
       STATS_ALLOW_EPHEMERAL: "true",
       DECIDE_SERVICE_URL: `http://127.0.0.1:${deadPort}`, DECIDE_INTERNAL_TOKEN: "t".repeat(32),
       DECIDE_LEDGER_DB: join(dir, `${name}.db`), AGENT402_OPERATOR_TOKEN: TOKEN,
+      X402_UPTO_NETWORKS: "eip155:8453",
       ...extra,
     },
   }).catch((e) => { console.log(e.message); throw new Error(`${name}: server did not boot`); });
@@ -107,6 +109,16 @@ async function checks(s, prices, label) {
   const xe = await post(s.base, "/api/decide/execute", xin);
   const want = Math.round(xin.steps.reduce((a, slug) => a + priceOf(slug), 0) * 1e6) / 1e6;
   ok(xe.status === 402 && baseAmountUsd(offerOf(xe)) === want, `${label}: the execute example is quoted at its steps' list prices (${baseAmountUsd(offerOf(xe))} vs ${want})`);
+  // upto first (the budget as a ceiling, settled at what the run spent), exact
+  // after it at the plan's listed step prices, never a larger maxBudgetUsd.
+  const xb = await post(s.base, "/api/decide/execute", { ...xin, maxBudgetUsd: 0.25 });
+  const xbo = offerOf(xb);
+  const schemes = (xbo?.accepts || []).map((a) => `${a.scheme}@${a.network}`);
+  ok(xb.status === 402 && schemes[0] === "upto@eip155:8453" && schemes.includes("exact@eip155:8453") && schemes.every((x) => x.endsWith("@eip155:8453")), `${label}: decide-execute lists upto on Base first, exact after it, Base only (${schemes.join(", ")})`);
+  const amt = (scheme) => Number(xbo?.accepts?.find((a) => a.scheme === scheme)?.amount) / 1e6;
+  ok(amt("upto") === 0.25 && amt("exact") === want, `${label}: upto carries the asked budget as its ceiling and exact the steps' list prices (${amt("upto")} / ${amt("exact")} vs ${want})`);
+  const plainSchemes = (offerOf(await post(s.base, "/api/decide", { task: "resolve an ENS name", depth: "quick" }))?.accepts || []).map((a) => a.scheme);
+  ok(plainSchemes[0] === "exact", `${label}: a fixed-price route keeps exact first (${plainSchemes.join(", ")})`);
 
   // ---- an unknown decisionId: a free 404 with the way forward ----
   const unk = await post(s.base, "/api/decide/execute", { decisionId: "dec_2b1c9e0f4a7d4c3e9b8a1f00" });

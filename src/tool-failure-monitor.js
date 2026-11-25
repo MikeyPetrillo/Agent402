@@ -229,10 +229,12 @@ const NO_OUTCOME = Symbol.for("agent402.noOutcome");
 
 const FIXED_UPSTREAMS = [
   [/(^|\.)databento\.com$/, "databento"],
-  [/(^|\.)stlouisfed\.org$/, "fred"],
   [/(^|\.)hyperliquid\.xyz$/, "hyperliquid"],
   [/(^|\.)rugcheck\.xyz$/, "rugcheck"],
   [/(^|\.)sec\.gov$/, "edgar"],
+  // The US macro series (src/tools/macro-kit.js) read the BLS API, which
+  // replaced FRED; its keyed daily limit makes its failures worth a word.
+  [/(^|\.)bls\.gov$/, "bls"],
   [/(^|\.)exa\.ai$/, "exa"],
   [/(^|\.)openrouter\.ai$/, "openrouter"],
   // The CDP data API (onchain-sql, balances, onramp). Its facilitator shares
@@ -503,6 +505,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       signer: r?.signer ? String(r.signer).slice(0, 64) : null,
       ...(r?.own === true ? { own: true } : {}),
       ...(r?.own === true && typeof r?.coversLowestPrice === "boolean" ? { coversLowestPrice: r.coversLowestPrice } : {}),
+      ...(r?.own === true && typeof r?.followsAmbiguous === "boolean" ? { followsAmbiguous: r.followsAmbiguous } : {}),
       balanceEth: Number.isFinite(r?.balanceEth) ? r.balanceEth : null,
       // A Solana fee payer's row (createSvmFeePayerGasCheck): its SOL balance,
       // its facilitator's share of Solana quotes, and standby at share 0.
@@ -839,7 +842,12 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // Our relayer takes only sales at or over its minimum price: when that
     // is over the lowest price sold on the chain (coversLowestPrice false),
     // the cheapest sales still need the facilitator, so it covers nothing.
-    const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok" && r.coversLowestPrice !== false).map((r) => r.network));
+    // Our relayer covers only where it follows a listed facilitator's
+    // ambiguous answer (a 5xx, a timeout) too: on a network where only a
+    // refusal that moved nothing reaches it (followsAmbiguous false, Ink), a
+    // dry facilitator that answers a 5xx still turns sales away, so its
+    // wallet is not covered.
+    const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok" && r.coversLowestPrice !== false && r.followsAmbiguous !== false).map((r) => r.network));
     const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "empty" || r.status === "unread") && ownOk.has(r.network));
     // A Solana fee payer whose facilitator takes no share of quotes (standby)
     // is reported and never pages; empty (cannot pay one settlement) reads low.

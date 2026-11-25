@@ -63,6 +63,24 @@ export async function run({ ok, parts, setRig }) {
     return w;
   };
   const llm = (hook) => { rig.st.llmHook = hook; };
+  /** Model calls held open until release(): a burst's balance is moved out
+   *  while every call is inside its model call, whatever the machine's load.
+   *  `inside(n)` waits (bounded) until n model calls have arrived since the
+   *  burst started; a settle-first call has settled by then, since its
+   *  settle call ends before its model call starts. The hold itself is
+   *  bounded too, so a call that never sees release() still ends. */
+  const heldModelCalls = (holdMaxMs = 30_000) => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const from = mark();
+    rig.st.llmHook = async () => { await Promise.race([gate, sleep(holdMaxMs)]); return false; };
+    const inside = async (n, deadlineMs = 20_000) => {
+      const until = Date.now() + deadlineMs;
+      while (upstreamSince(from) < n && Date.now() < until) await sleep(20);
+      return upstreamSince(from);
+    };
+    return { inside, release: () => release() };
+  };
   const owedShape = (row, { slug = "v1-chat", status: st, payer, usd, tx }) => !!row && String(row.note || "").startsWith(CLASS) && row.status === "owed" && row.slug === slug && row.httpStatus === st
     && (payer == null || row.payer === payer) && (usd == null || Math.abs(row.priceUsd - usd) < 1e-9) && (tx == null || String(row.evidence).toLowerCase() === String(tx).toLowerCase());
 
@@ -97,7 +115,8 @@ export async function run({ ok, parts, setRig }) {
   if (parts.includes("2")) {
     await boot("settle-first-a", {
       GATEWAY_SETTLE_FIRST: "always",
-      // The connector's x402 twins (web.search, web.news, web.answer) on a stub search upstream.
+      // The former flagships (web.search, web.news, web.answer), called by name
+      // through the connector and paid on their HTTP routes, on a stub search upstream.
       BRAVE_API_KEY: "stub-brave-key", BRAVE_ANSWERS_API_KEY: "stub-brave-key", UPSTREAM_STUB_HOSTS: "api.search.brave.com",
       AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
     });
@@ -502,11 +521,11 @@ export async function run({ ok, parts, setRig }) {
         } finally { await mcp.close(); }
       }
 
-      // ---- the connector's x402 twins: one settle per payment -------------------
-      // web.search, web.news and web.answer are served by the twins' own HTTP
-      // resource server over the same core server: a new wallet's payment
-      // settles before the search upstream, and the twin's after-handler
-      // settlement answers that settle. A facilitator that refuses a second
+      // ---- the connector, by a tool's MCP name: one settle per payment ---------
+      // web.search, web.news and web.answer (former flagships, still callable
+      // by name) are paid on their HTTP routes through the connector's
+      // loopback: a new wallet's payment settles before the search upstream,
+      // and the route's after-handler settlement answers that settle. A facilitator that refuses a second
       // settle of the same payment (as a used EVM nonce or a processed Solana
       // transaction is) is never asked one.
       {
@@ -621,13 +640,15 @@ export async function run({ ok, parts, setRig }) {
       // ---- concurrency: the balance moved out after the calls were admitted -------
       {
         const { w, price } = await fresh("evm", 8);
-        llm(async () => { await sleep(1000); return false; });
+        const held = heldModelCalls();
         const cFrom = rig.st.completions;
         const p = rig.burst(w, CHAT, 8);
-        await sleep(600);
+        const inside = await held.inside(8);
         rig.accounts.get(w.id).balance = 0n; // moved out while the model calls are still running
+        held.release();
         const rs = await p;
         llm(null);
+        await ok(inside === 8, `all eight calls were inside their model call when the balance moved (${inside})`);
         const o = rig.outcomesOf(w);
         await ok(tallyOf(rs)[200] === 8 && o.settled === 8 && rig.st.completions - cFrom === 8, `a new wallet's eight calls at once, its balance moved out while they run: every one had settled first, so all eight are paid (${JSON.stringify(o)}; ${price} each)`);
       }
@@ -676,13 +697,15 @@ export async function run({ ok, parts, setRig }) {
       await ok(unpaid >= 16, `off, rotation: the same sixteen new wallets are served ${unpaid} model calls that are never paid`);
       {
         const { w: c } = await fresh("evm", 8);
-        rig.st.llmHook = async () => { await sleep(1000); return false; };
+        const held = heldModelCalls();
         const c0 = rig.st.completions;
         const p = rig.burst(c, CHAT, 8);
-        await sleep(600);
+        const inside = await held.inside(8);
         rig.accounts.get(c.id).balance = 0n;
+        held.release();
         const rs = await p;
         rig.st.llmHook = null;
+        await ok(inside === 8, `off: all eight calls were inside their model call when the balance moved (${inside})`);
         await ok(rig.outcomesOf(c).settled === 0 && rig.st.completions - c0 === 8 && !tallyOf(rs)[200], `off, eight calls at once with the balance moved out while they run: all eight model calls ran and none was paid (${JSON.stringify(tallyOf(rs))})`);
       }
       const op = (await status())?.settleFailures?.settleFirst;
@@ -752,13 +775,15 @@ export async function run({ ok, parts, setRig }) {
       // ---- calls in flight together cross the budget -----------------------------
       {
         const { w } = await fresh("evm", 12);
-        llm(async () => { await sleep(1000); return false; });
+        const held = heldModelCalls();
         const cFrom = rig.st.completions;
         const p = rig.burst(w, CHAT, 12);
-        await sleep(600);
+        const inside = await held.inside(12);
         rig.accounts.get(w.id).balance = 0n; // moved out while the model calls run
+        held.release();
         const rs = await p;
         llm(null);
+        await ok(inside === 12, `all twelve calls were inside their model call when the balance moved (${inside})`);
         const o = rig.outcomesOf(w);
         const unpaid = rig.st.completions - cFrom - o.settled;
         await ok(rig.st.completions - cFrom === 12 && o.settled > 0 && unpaid >= 1 && unpaid <= Math.ceil((BUDGET - m0.unsettledUsd24h) / 0.02) && !tallyOf(rs)[429],

@@ -163,7 +163,7 @@ const NETWORK = new Set([
   "/api/treasury-debt", "/api/treasury-avg-rates",
   "/api/fx-historical", "/api/fx-timeseries", "/api/fx-dashboard",
   "/api/world-bank-indicator", "/api/world-bank-search",
-  "/api/fred-series", 
+  "/api/us-macro-series", 
   "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
   
   // EDGAR-kit: every route hits data.sec.gov, www.sec.gov, or efts.sec.gov.
@@ -273,7 +273,7 @@ const NETWORK = new Set([
   "/api/skill/article-digest", "/api/skill/pdf-pipeline", "/api/skill/url-inspector",
   "/api/skill/content-grade", "/api/skill/openapi-audit", "/api/skill/json-pipeline",
   "/api/skill/data-convert", "/api/skill/api-health", "/api/skill/world-data",
-  "/api/skill/fred-snapshot", "/api/skill/contact-verify", "/api/skill/domain-age",
+  "/api/skill/macro-snapshot", "/api/skill/contact-verify", "/api/skill/domain-age",
   "/api/skill/hash-verify", "/api/skill/encoding-suite", "/api/skill/jwt-toolkit",
   "/api/skill/timezone-planner", "/api/skill/text-analyze", "/api/skill/content-clean",
   // The 500 overhaul (2026-07): these 8 packs shipped WITHOUT NETWORK membership,

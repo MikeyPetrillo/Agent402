@@ -212,7 +212,7 @@ const SCHED = { headers: { authorization: "sub:sub_abc123" } };
   ok(JSON.stringify(normForms("8-k, 10-Q ,8-K", "forms")) === JSON.stringify(["8-K", "10-Q"]), "normForms uppercases, trims and de-duplicates");
   ok(JSON.stringify(normForms(["def 14a"], "forms")) === JSON.stringify(["DEF 14A"]), "normForms accepts an array and keeps internal spaces");
   eq(normForms(null, "forms").length, 0, "normForms of null is empty");
-  eq(formLabel("8-K"), "current report (material event)", "8-K carries a plain-language label");
+  eq(formLabel("8-K"), "current report (material event)", "8-K carries a readable label");
   eq(formLabel("NOPE-99"), null, "an unknown form gets NO invented label");
 }
 
@@ -298,7 +298,7 @@ let base = null;
   next.keys = next.filings.map((f) => `${f.accession}|${f.form}`);
   const lines = describeFilingChanges(base, next);
   eq(lines.length, 1, "exactly one new filing is reported");
-  ok(/^8-K \(current report \(material event\)\) filed /.test(lines[0]), "the change line names the form in plain language");
+  ok(/^8-K \(current report \(material event\)\) filed /.test(lines[0]), "the change line names the form in words");
   ok(lines[0].includes("Entry into a Material Definitive Agreement"), "the change line carries EDGAR's own description");
   eq(describeFilingChanges(base, base).length, 0, "an unchanged index reports nothing");
   eq(describeFilingChanges(null, next).length, 0, "the first sight (no prior) reports nothing - that is the welcome run");
@@ -403,13 +403,14 @@ let happy = null;
 }
 
 // ---------------------------------------------------------------------------
+const { runAsRouteCall } = await import("../src/not-charged.js");
 // 8. Thin-evidence refusals - never charged, and NO synthesis call
 // ---------------------------------------------------------------------------
 {
   // (a) nothing filed in the window
   const d = stub({ sub: { ...SUB, filings: [SUB.filings[4]] } });   // only the 140-day-old one
-  const e = await throws(handler({ ticker: "EXMP", days: 30 }, null, d), 422, "no filings in the window");
-  ok(/Not charged/.test(e.message), "the empty-window refusal says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ ticker: "EXMP", days: 30 }, null, d)), 422, "no filings in the window");
+  ok(/Nothing was charged\./.test(e.message), "the empty-window refusal says not charged");
   eq(synthBodies.length, 0, "NO synthesis call on an empty window");
   eq(calls.doc.length, 0, "no document is fetched on an empty window");
   restore();
@@ -425,8 +426,8 @@ let happy = null;
 {
   // (c) every primary document unreadable = an EDGAR incident, not a product
   const d = stub({ docFail: () => { throw new Error("EDGAR document HTTP 503"); } });
-  const e = await throws(handler({ ticker: "EXMP", days: 30 }, null, d), 502, "every primary document unreadable");
-  ok(/Not charged/.test(e.message), "the unreadable-documents refusal says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ ticker: "EXMP", days: 30 }, null, d)), 502, "every primary document unreadable");
+  ok(/Nothing was charged\./.test(e.message), "the unreadable-documents refusal says not charged");
   eq(synthBodies.length, 0, "NO synthesis call when no document could be read");
   eq(calls.doc.length, 3, "all three selected documents were attempted before refusing");
   restore();
@@ -542,8 +543,8 @@ for (const [status, want, label] of [[500, 502, "500"], [502, 502, "502"], [503,
 }
 {
   const d = stub({ synth: { choices: [{ message: { content: "" } }] } });
-  const e = await throws(handler({ ticker: "EXMP", days: 30 }, null, d), 502, "empty synthesis completion");
-  ok(/not charged/i.test(e.message), "empty synthesis says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ ticker: "EXMP", days: 30 }, null, d)), 502, "empty synthesis completion");
+  ok(/Nothing was charged\.$/.test(e.message), "empty synthesis says not charged");
   restore();
 }
 {

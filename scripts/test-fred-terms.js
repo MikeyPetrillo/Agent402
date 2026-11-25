@@ -1,10 +1,10 @@
 // FRED's Terms of Use, as this catalog holds to them (offline, no network):
 //   1. the notice reader a tool serving a caller-chosen FRED series applies;
-//   2. no macro tool serves FRED data: fred-series and the computed tools read
+//   2. no macro tool serves FRED data: us-macro-series and the computed tools read
 //      the publishing agencies, so none carries FRED's terms line or claim.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { MACRO_TOOLS, fredCopyrightOf } from "../src/tools/macro-kit.js";
-import { FRED_TERMS, FRED_TERMS_URL } from "../src/data-attribution.js";
+import * as DA from "../src/data-attribution.js";
 
 let fail = 0, pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -30,14 +30,14 @@ ok(fredCopyrightOf("Copyright.")?.owner === null && fredCopyrightOf("see the cop
 }
 
 // --- no tool serves FRED data ------------------------------------------------------
-// fred-series and the computed tools (sahm-rule, cpi-yoy, unemployment-rate,
+// us-macro-series and the computed tools (sahm-rule, cpi-yoy, unemployment-rate,
 // fed-funds) read the publishing agencies (scripts/test-fred-series-sources.js,
 // scripts/test-macro-computed-sources.js): none is marked as a FRED tool,
 // carries FRED's terms line or makes a FRED API claim.
-ok(FRED_TERMS.includes(FRED_TERMS_URL) && FRED_TERMS_URL === "https://fred.stlouisfed.org/docs/api/terms_of_use.html" && /bound by/.test(FRED_TERMS), "the terms line, kept for a tool that serves FRED data, links the Terms of Use and says users are bound by them");
+ok(!("FRED_NOTICE" in DA) && !("FRED_TERMS" in DA) && !("FRED_TERMS_URL" in DA) && !("fred" in DA.ATTRIBUTIONS), "no FRED notice, terms line or attribution key is kept (no tool serves FRED data)");
 ok(!MACRO_TOOLS.some((t) => t.attribution === "fred"), `no macro tool is marked as serving FRED data (${MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).join(", ") || "none"})`);
-ok(MACRO_TOOLS.every((t) => (t.discovery?.output?.example || {}).terms !== FRED_TERMS), "no macro tool's example carries FRED's terms line");
-for (const slug of ["fred-series", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
+ok(MACRO_TOOLS.every((t) => !/stlouisfed/.test(String((t.discovery?.output?.example || {}).terms || ""))), "no macro tool's example carries FRED's terms line");
+for (const slug of ["us-macro-series", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
   ok(tool(slug) && !/FRED\(R\) API|St\. Louis/.test(tool(slug).description), `${slug}: the description makes no FRED API claim`);
 }
 ok(!/stlouisfed\.org/.test(MACRO_TOOLS.map((t) => String(t.handler)).join("\n")), "no macro handler names a FRED host");

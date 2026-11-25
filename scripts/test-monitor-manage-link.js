@@ -64,10 +64,40 @@ const stripe = {
 const subs = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE });
 await subs.createCheckout("domain-monitor", "example.com");
 const msg = created?.custom_text?.submit?.message;
-ok(typeof msg === "string" && msg.startsWith(RENEWAL_TERMS), "the subscription Checkout Session sets custom_text.submit.message to the renewal sentence");
-ok(msg === renewalCheckoutMessage("https://agent402.tools") && msg.length <= 1200, `the message is the shared one, within Stripe's 1200-character limit (${msg?.length})`);
+const { monitorRenewalStatement, termsAcceptanceMessage } = await import("../src/checkout-consent.js");
+const dm = MONITOR_PRODUCTS["domain-monitor"];
+ok(typeof msg === "string" && msg.startsWith(monitorRenewalStatement(dm.price, "https://agent402.tools")) && msg.includes(RENEWAL_TERMS), "the subscription Checkout Session states the renewal terms with the monthly price above the pay button");
+ok(msg === `${monitorRenewalStatement(dm.price, "https://agent402.tools")} ${renewalCheckoutMessage("https://agent402.tools")}` && msg.length <= 1200, `the message is the shared one, within Stripe's 1200-character limit (${msg?.length})`);
+ok(msg.includes(`$${(dm.price / 100).toFixed(2)} a month`) && /If a promotion code lowers the first month, every later month is \$/.test(msg), "the renewal statement names the monthly price and the price after any promotional first month");
 ok(/\[Terms of Service\]\(https:\/\/agent402\.tools\/terms\)/.test(msg) && /\(https:\/\/agent402\.tools\/monitors#manage\)/.test(msg), "the message links the terms and the manage form");
-ok(!("consent_collection" in created), "no consent_collection (it needs a dashboard terms URL to create a session)");
+ok(created.consent_collection?.terms_of_service === "required" && created.custom_text?.terms_of_service_acceptance?.message === termsAcceptanceMessage("https://agent402.tools") && /arbitration and the class-action waiver\]\(https:\/\/agent402\.tools\/terms#disputes\)/.test(created.custom_text.terms_of_service_acceptance.message), "the Terms checkbox is required, and its line names arbitration and the class waiver with a link");
+{
+  const ar = (created.custom_fields || []).find((f) => f.key === "autorenew");
+  ok(ar && ar.optional === false && ar.type === "dropdown" && ar.dropdown.options.length === 1 && ar.dropdown.options[0].label.includes(`$${(dm.price / 100).toFixed(2)}`) && ar.dropdown.options[0].label.length <= 100 && ar.label.custom.length <= 50, "a separate, required automatic-renewal consent names the monthly price (within Stripe's field limits)");
+  const sn = (created.custom_fields || []).find((f) => f.key === "startnow");
+  ok(sn && sn.optional === false, "the monitor checkout takes the required start-now choice (the withdrawal acknowledgment)");
+  const { buildMonitorEmail } = await import("../src/email.js");
+  const { START_NOW_CONFIRMATION } = await import("../src/checkout-consent.js");
+  const base = { reason: "welcome", label: "Domain monitor", target: "example.com", reportUrl: "https://agent402.tools/m/r1", manageUrl: "https://agent402.tools/monitors/manage?report=r1&k=x", priceCents: dm.price };
+  ok(buildMonitorEmail({ ...base, startNow: true }).text.includes(START_NOW_CONFIRMATION) && !buildMonitorEmail(base).text.includes(START_NOW_CONFIRMATION) && !buildMonitorEmail({ ...base, reason: "scheduled", startNow: true }).text.includes(START_NOW_CONFIRMATION), "the welcome email confirms the start-now choice, only when made and only on the welcome");
+}
+// An account with no Terms URL in its public details: Stripe refuses the
+// checkbox, and the session is made again with a required terms dropdown, so
+// no buyer is turned away for a dashboard setting.
+{
+  const calls = [];
+  const refusing = { ...stripe, checkout: { sessions: { ...stripe.checkout.sessions, create: async (args) => { calls.push(args); if (args.consent_collection?.terms_of_service) throw new Error("You cannot collect consent to your terms of service unless a URL is set in the Stripe Dashboard. Update your public details at https://dashboard.stripe.com/settings/public."); return { id: "cs_fb", url: "https://checkout.stripe.com/pay/cs_fb" }; } } } };
+  const subsFb = createStripeSubscriptions({ stripe: refusing, baseUrl: "https://agent402.tools", storePath: STORE + ".fb" });
+  const r = await subsFb.createCheckout("domain-monitor", "example.com");
+  const second = calls[1] || {};
+  ok(r.id === "cs_fb" && calls.length === 2 && !second.consent_collection?.terms_of_service && second.custom_fields?.some((f) => f.key === "terms" && f.optional === false) && second.custom_fields?.some((f) => f.key === "autorenew") && second.custom_fields?.some((f) => f.key === "startnow") && second.custom_fields.length <= 3, "with no Terms URL set, the session is made with a required terms dropdown and keeps the renewal and start-now consents");
+}
+// The consent is kept with the subscription when it is provisioned.
+{
+  const { consentRecordOf } = await import("../src/checkout-consent.js");
+  const c = consentRecordOf({ id: "cs_x", created: 1_800_000_000, consent: { terms_of_service: "accepted" }, custom_fields: [{ key: "autorenew", dropdown: { value: "agreed" } }] }, { priceCents: 500 });
+  ok(c.terms === "accepted" && c.autoRenew === "agreed" && c.autoRenewPriceCents === 500 && c.session === "cs_x", "the consent record holds the terms, the renewal consent and the price agreed to");
+}
 
 // ---- 3. the manage-link route -----------------------------------------------------
 await subs.recordFromSession("cs_a");
@@ -89,7 +119,7 @@ app.post("/monitors/manage-link", express.urlencoded({ extended: false }), creat
   clientIp: (req) => String(req.get("x-test-ip") || "ip0"),
   page: (title, body) => `<h1>${title}</h1>${body}`,
 }));
-const srv = app.listen(0);
+const srv = app.listen(0, "127.0.0.1");
 await new Promise((r) => srv.once("listening", r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 const post = (email, ip, { form = false } = {}) => fetch(`${base}/monitors/manage-link`, {

@@ -2,6 +2,7 @@
 // the credits gate and before the paywall. Lives here so its tests drive the
 // same code the server runs (scripts/test-idempotency-inflight.js).
 import { createHash } from "node:crypto";
+import { bodyDigestOf } from "./body-digest.js";
 import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS, INFLIGHT_MAX_MS } from "./idempotency-store.js";
@@ -112,17 +113,6 @@ export function unconfirmedKeyOf(req, cred) {
 // while one runs is told to wait (409). A served credit is spent here.
 const CREDIT = "__a402SettledFirstCredit";
 export const CREDIT_TTL_MS = 24 * 3600_000;
-/** A digest of this request's JSON body, worked out once per request (the
- *  explicit or implicit idempotency key, the call digest of a kept answer and
- *  a settle-first credit all bind to it). Throws as JSON.stringify does. */
-const bodyDigests = new WeakMap();
-function bodyDigestOf(req) {
-  const memo = bodyDigests.get(req);
-  if (memo && memo.body === req.body) return memo.digest;
-  const digest = createHash("sha256").update(JSON.stringify(req.body)).digest("hex");
-  bodyDigests.set(req, { body: req.body, digest });
-  return digest;
-}
 /** The body a settle-first credit is bound to: kept in the credit's record
  *  and compared with a resend's ("-" for none, "?" for one that cannot be read). */
 export function settledFirstCreditBodyOf(req) {

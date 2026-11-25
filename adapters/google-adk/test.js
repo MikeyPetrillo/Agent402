@@ -1,4 +1,4 @@
-// Smoke test for agent402-google-adk. Expects a FREE_MODE server reachable
+// Smoke test for agent402-dev-kit-tools. Expects a FREE_MODE server reachable
 // at AGENT402_BASE_URL (defaults to http://localhost:3000). Tests the
 // framework-agnostic spec path only — the @google/adk-native wrapper is
 // verified by the peerDeps install path in consumers' projects.
@@ -91,4 +91,4 @@ ok(call?.hex?.startsWith("b94d27b9"), `agent402_call returns the hash result (go
   ok(decl?.name === "agent402_call" && decl?.parameters?.properties?.slug && (decl.parameters.required || []).includes("slug"), `native FunctionTool declares slug/params to the model (@google/adk@${adkVersion})`);
 }
 
-console.log(`PASS — agent402-google-adk: ${pass} assertions passed against ${BASE}`);
+console.log(`PASS: agent402-dev-kit-tools: ${pass} assertions passed against ${BASE}`);

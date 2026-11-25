@@ -64,6 +64,10 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
   for (const id of A.ADDITION_MODEL_IDS) ok(AUDIO_ZDR_MODELS.has(id) && audioProviderPolicy(id).zdr === true && audioProviderPolicy(id).data_collection === "deny", `${id} is sent under the zdr data policy`);
   ok(A.ADDITION_COST_KEYS.length === 5 && A.ADDITION_COST_KEYS.every(([sec]) => sec === "speech" || sec === "sttPerMinute"), "one cost row per model");
   ok(A.speechAdditionNamed("ELEVEN-V3-CONVERSATIONAL")?.id === EL && A.sttAdditionNamed(" mai-transcribe-2 ")?.id === "microsoft/mai-transcribe-2" && A.speechAdditionNamed("nope") === null && A.sttAdditionNamed("") === null, "names and aliases resolve without regard to case");
+  ok(A.STT_ADDITIONS.every((m) => m.listedPer === undefined || Object.hasOwn(A.LISTED_UNIT_MINUTES, m.listedPer)), "a declared listing unit is one the live guard can convert");
+  ok(A.STT_ADDITIONS.every((m) => typeof m.listedPer === "string"), "every transcription model declares its measured listing unit, so the live guard holds every row");
+  ok(A.sttAdditionNamed("voxtral-mini-transcribe")?.listedPer === "second" && A.sttAdditionNamed("voxtral-small-transcribe")?.listedPer === "second", "the two Voxtral models' measured listing unit is per audio second");
+  ok(A.sttAdditionNamed("mai-transcribe-2")?.listedPer === "hour" && A.LISTED_UNIT_MINUTES.hour === 60 && A.LISTED_UNIT_MINUTES.second * 60 === 1, "mai-transcribe-2's measured listing unit is per audio hour, so the live guard holds its row to it");
   ok(A.withinMargin(10, 1, 100) && !A.withinMargin(10, 8, 100) && !A.withinMargin(10, undefined, 100) && !A.withinMargin(10, 0, 100) && !A.withinMargin(10, NaN, 100) && !A.withinMargin(0, 1, 100), "the bound needs a positive cap, rate and price");
 }
 
@@ -194,7 +198,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
     ok(calls.length === 1 && new URL(calls[0].url).host === "openrouter.ai" && new URL(calls[0].url).pathname === "/api/v1/audio/transcriptions", "a named model goes to the transcription wire, once");
     ok(calls[0].fields.model === MINI && calls[0].fields.response_format === "json" && !("diarize" in calls[0].fields) && !("timestamp_granularities[]" in calls[0].fields), "with its model id and no speaker-label fields");
     ok(JSON.parse(calls[0].fields.provider).zdr === true && JSON.parse(calls[0].fields.provider).data_collection === "deny", "under the zdr data policy");
-    ok(out.model === MINI && out.provider === "openrouter" && out.text === "hello there" && out.language === "en" && out.duration === 3 && !("words" in out) && !("speakers" in out), "the answer names the model that served it and has the transcript fields");
+    ok(out.model === MINI && out.provider === "agent402" && out.text === "hello there" && out.language === "en" && out.duration === 3 && !("words" in out) && !("speakers" in out), "the answer names the model that served it and has the transcript fields");
     // The default call still goes to the tier's own model on its own wire.
     calls.length = 0;
     const own = await tool.handler({ url: AUDIO_URL });
@@ -214,6 +218,40 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
     try { await tool.handler({ url: AUDIO_URL, model: MINI }); } catch (e) { refused = e; }
     ok(refused?.statusCode === 400 && calls.length === 0, "with its row gone the model is refused again");
   } finally { globalThis.fetch = realFetch; S.__setMeasureForTest(null); }
+}
+
+// ---- mai-transcribe-2 switched on by name, as production names it ------------------------
+{
+  const MAI = "microsoft/mai-transcribe-2";
+  const prevSwitch = process.env.NAMED_AUDIO_MODELS;
+  process.env.NAMED_AUDIO_MODELS = MAI;
+  const tiers = Object.keys(S.STT_TIERS);
+  install({ stt: { [MAI]: Math.min(...tiers.map((t) => sttRate(t, 0.5))) } });
+  ok(tiers.every((t) => S.sttAdditions(t).map((m) => m.id).join() === MAI), "named alone with a row inside every tier's bound, mai-transcribe-2 is served on every tier, and no other named model is");
+  ok(S.sttModelOf({ model: "MAI-TRANSCRIBE-2" }, "transcribe") === MAI && thrown(() => S.sttModelOf({ model: STT_IDS[0] }, "transcribe"))?.statusCode === 400, "its alias resolves; a model the switch does not name is refused");
+  const sr = 8000, n = sr * 2, wav = Buffer.alloc(44 + n, 0x80);
+  wav.write("RIFF", 0); wav.writeUInt32LE(36 + n, 4); wav.write("WAVE", 8); wav.write("fmt ", 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sr, 24); wav.writeUInt32LE(sr, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34); wav.write("data", 36); wav.writeUInt32LE(n, 40);
+  const AUDIO_URL = "http://93.184.216.34/mai.wav";
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  // The upstream's own answer shape for this model: the transcript and a usage block, no duration.
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith(AUDIO_URL)) return new Response(wav, { status: 200, headers: { "content-type": "audio/wav" } });
+    if (!(init?.body instanceof FormData)) throw new Error(`unexpected fetch in an offline suite: ${String(url).slice(0, 60)}`);
+    calls.push({ url: String(url), fields: Object.fromEntries([...init.body.entries()].filter(([, v]) => typeof v === "string")) });
+    return new Response(JSON.stringify({ text: "hi, this is the agent", usage: { seconds: 2 } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  S.__setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / sr }));
+  try {
+    for (const slug of ["transcribe", "transcribe-pro"]) {
+      calls.length = 0;
+      const out = await S.STT_TOOLS.find((t) => t.slug === slug).handler({ url: AUDIO_URL, model: "mai-transcribe-2" });
+      ok(calls.length === 1 && new URL(calls[0].url).pathname === "/api/v1/audio/transcriptions" && calls[0].fields.model === MAI && calls[0].fields.response_format === "json" && !("diarize" in calls[0].fields), `${slug}: mai-transcribe-2 goes once to the transcription wire by its id, with no speaker-label fields`);
+      ok(JSON.parse(calls[0].fields.provider).zdr === true, `${slug}: under the zdr data policy`);
+      ok(out.model === MAI && out.text === "hi, this is the agent" && out.duration === 2, `${slug}: the answer names the model, and its duration is the local probe's when the upstream reports none`);
+    }
+  } finally { globalThis.fetch = realFetch; S.__setMeasureForTest(null); process.env.NAMED_AUDIO_MODELS = prevSwitch; }
 }
 
 // ---- per-model caps: a model held to its own cap, under the route's ---------------------

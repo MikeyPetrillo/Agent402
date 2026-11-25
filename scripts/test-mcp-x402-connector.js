@@ -10,7 +10,9 @@
 // official @x402/mcp client over Streamable HTTP:
 //   - a flagship's first ask is one result carrying both wires: the twin's
 //     PaymentRequired (resource /mcp, an MCP discovery extension) as
-//     first text block (never structuredContent) and the MPP challenges in _meta;
+//     first text block (and structuredContent where it validates against the
+//     tool's listed outputSchema: every flagship, never catalog.call's
+//     envelope) and the MPP challenges in _meta;
 //   - the official client pays it and gets the tool output and the settle
 //     receipt in _meta["x402/payment-response"]; one verify, one settle;
 //   - catalog.call and a flagship with no twin are paid on the slug's own
@@ -418,7 +420,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const tool = (route, slug, extra = {}) => ({ route, slug, name: slug, category: "test", price: "$0.001", description: `${slug} test tool`, tags: [slug], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => ({ ok: true }), ...extra });
   const MANY = 6, CACHE_MAX = 4;
   const CAT = {
-    "GET /api/search": tool("GET /api/search", "search"),
+    "GET /api/weather-current": tool("GET /api/weather-current", "weather-current"),
     "POST /api/free-x": tool("POST /api/free-x", "free-x"),
     "POST /api/free-q": tool("POST /api/free-q", "free-q", { quote: () => ({ price: "$0.001" }) }),
   };
@@ -440,8 +442,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   try {
     raw = await clientAt("198.51.100.41");
     rawB = await clientAt("198.51.100.42");
-    const twinPath = `${MCP_X402_PREFIX}search`;
-    const ask = () => raw.callTool({ name: "web.search", arguments: { query: "x" } });
+    const twinPath = `${MCP_X402_PREFIX}weather-current`;
+    const ask = () => raw.callTool({ name: "weather.current", arguments: { lat: 1, lon: 2 } });
     const a1 = await ask(), a2 = await ask(), a3 = await ask();
     ok([a1, a2, a3].every((r) => r.isError === true && Array.isArray(PR(r)?.accepts)) && reads.get(twinPath) === 1,
       `a twin's first ask reads the offer once and reuses it (${reads.get(twinPath)} reads for 3 asks)`);
@@ -587,17 +589,26 @@ try {
   // (STOCK_DATA_PROVIDER with its key; this boot sets neither).
   const stockListed = (await (await fetch(`${B}/api/pricing`)).json()).endpoints.some((e) => e.slug === "stock-quote");
   ok(!stockListed && !listedTools.some((t) => t.name === "market.quote"), `with no stock provider the catalog lists no stock-quote and the connector lists no market.quote (${stockListed}, ${listedTools.map((t) => t.name).join(",")})`);
-  const PAID_ASKS = [["web.search", { q: "x402" }], ["web.news", { q: "x402" }], ["web.answer", { q: "x402" }], ...(stockListed ? [["market.quote", { symbol: "AAPL" }]] : []), ["browser.render", { url: "https://example.com" }], ["audio.transcribe", { url: "https://example.com/a.mp3" }], ["memory.write", { key, value: 1 }], ["catalog.call", { slug: "search", params: { q: "x402" } }]];
+  const macroListed = listedTools.some((t) => t.name === "macro.series");
+  const PAID_ASKS = [["pdf.markdown", { url: "https://example.com/a.pdf" }], ["weather.current", { lat: 48.86, lon: 2.35 }], ...(macroListed ? [["macro.series", { seriesId: "UNRATE" }]] : []), ...(stockListed ? [["market.quote", { symbol: "AAPL" }]] : []), ["browser.render", { url: "https://example.com" }], ["audio.transcribe", { url: "https://example.com/a.mp3" }], ["memory.write", { key, value: 1 }], ["catalog.call", { slug: "search", params: { q: "x402" } }]];
   const strict = listedTools.filter((t) => t.outputSchema && PAID_ASKS.some(([n]) => n === t.name));
   const unread = [];
   let unreadCalls = 0;
   for (const [name, args] of PAID_ASKS) {
     try {
       const r = await (unreadCalls++ < 4 ? lister : lister2).client.callTool({ name, arguments: args });
-      if (!(r.isError === true && !("structuredContent" in r) && Array.isArray(PR(r)?.accepts) && Array.isArray(r._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges))) unread.push(`${name}: ${JSON.stringify(r).slice(0, 120)}`);
+      const structuredOk = name === "catalog.call" ? !("structuredContent" in r) : JSON.stringify(r.structuredContent) === JSON.stringify(PR(r));
+      if (!(r.isError === true && structuredOk && Array.isArray(PR(r)?.accepts) && Array.isArray(r._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges))) unread.push(`${name}: ${JSON.stringify(r).slice(0, 120)}`);
     } catch (e) { unread.push(`${name}: threw ${String(e?.message).slice(0, 120)}`); }
   }
-  ok(strict.length === PAID_ASKS.length && unread.length === 0, `the reference SDK client, tools listed, reads the first ask of every paid tool with an outputSchema: no structuredContent, the offer in the first text block, the MPP challenges in _meta (${unread.join(" | ") || `${PAID_ASKS.length} read`}, ${strict.length} of ${PAID_ASKS.length} listed with a schema)`);
+  ok(strict.length === PAID_ASKS.length && unread.length === 0, `the reference SDK client, tools listed, reads the first ask of every paid tool with an outputSchema: the offer in the first text block and, on every flagship (not catalog.call), as structuredContent, the MPP challenges in _meta (${unread.join(" | ") || `${PAID_ASKS.length} read`}, ${strict.length} of ${PAID_ASKS.length} listed with a schema)`);
+  // A former flagship, called by its old name: unlisted, still payable here, on its own HTTP route (no twin, no MCP listing).
+  {
+    const former = await lister2.client.callTool({ name: "web.search", arguments: { q: "x402" } });
+    const fpr = PR(former);
+    ok(!listedTools.some((t) => ["web.search", "web.news", "web.answer"].includes(t.name)) && former.isError === true && fpr?.x402Version === 2 && /\/api\/search$/.test(String(fpr.resource?.url || "")) && fpr.extensions?.bazaar?.info?.input?.type !== "mcp",
+      `web.search (a former flagship) is unlisted and its call asks the HTTP route's offer, not an MCP listing's (${fpr?.resource?.url})`);
+  }
   // Unlisted, market.quote answers the stock routes' not-offered refusal, never "Unknown tool".
   if (!stockListed) {
     // Own addresses: the per-IP free-call limit on this boot is 2 a minute.
@@ -610,7 +621,7 @@ try {
   }
   const ask = await plain.client.callTool({ name: "memory.read", arguments: { key } });
   const pr = PR(ask);
-  ok(ask.isError === true && !("structuredContent" in ask) && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose first text block is a v2 PaymentRequired, with no structuredContent (${JSON.stringify(pr).slice(0, 120)})`);
+  ok(ask.isError === true && JSON.stringify(ask.structuredContent) === JSON.stringify(pr) && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose first text block is a v2 PaymentRequired, also its structuredContent (${JSON.stringify(pr).slice(0, 120)})`);
   ok(pr?.resource?.url === "https://agent402.tools/mcp" && pr.extensions?.bazaar?.info?.input?.type === "mcp" && pr.extensions.bazaar.info.input.toolName === "memory.read", `it is the twin's offer: resource /mcp, an MCP extension for memory.read (${pr?.resource?.url})`);
   ok(JSON.stringify(JSON.parse(ask.content?.[0]?.text || "null")) === JSON.stringify(pr), "content[0].text is the same PaymentRequired as JSON");
 
@@ -634,14 +645,14 @@ try {
     const ip = `198.51.100.${40 + i}`;
     const init = await rawPost(accept, ip, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "accept-probe", version: "0" } } });
     const list = await rawPost(accept, ip, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
-    const call = await rawPost(accept, ip, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "web.search", arguments: { q: "x402 payment protocol adoption", count: 2 } } });
+    const call = await rawPost(accept, ip, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "weather.current", arguments: { lat: 48.86, lon: 2.35 } } });
     const j = (r) => { try { return JSON.parse(r.text); } catch { return null; } };
     const callPr = PR(j(call)?.result || {});
     ok(init.status === 200 && /^application\/json/.test(init.type) && j(init)?.result?.serverInfo, `${label}: initialize answers 200 JSON (${init.status} ${init.type})`);
-    ok(list.status === 200 && /^application\/json/.test(list.type) && j(list)?.result?.tools?.some((t) => t.name === "web.search"), `${label}: tools/list answers 200 JSON with web.search (${list.status})`);
+    ok(list.status === 200 && /^application\/json/.test(list.type) && j(list)?.result?.tools?.some((t) => t.name === "weather.current"), `${label}: tools/list answers 200 JSON with weather.current (${list.status})`);
     ok(call.status === 200 && /^application\/json/.test(call.type) && j(call)?.result?.isError === true && callPr?.x402Version === 2 && callPr.resource?.url === "https://agent402.tools/mcp"
-      && callPr.extensions?.bazaar?.info?.input?.type === "mcp" && callPr.extensions.bazaar.info.input.toolName === "web.search" && callPr.accepts?.some((a) => a.network === BASE_NET),
-    `${label}: an unpaid tools/call web.search answers 200 JSON with the twin's PaymentRequired (${call.status} ${callPr?.resource?.url})`);
+      && callPr.extensions?.bazaar?.info?.input?.type === "mcp" && callPr.extensions.bazaar.info.input.toolName === "weather.current" && callPr.accepts?.some((a) => a.network === BASE_NET),
+    `${label}: an unpaid tools/call weather.current answers 200 JSON with the twin's PaymentRequired (${call.status} ${callPr?.resource?.url})`);
   }
   for (const [i, accept] of ["text/event-stream", "text/html"].entries()) {
     const r = await rawPost(accept, `198.51.100.${50 + i}`, { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
@@ -735,7 +746,7 @@ try {
     clients.push(m);
     ok(m.getProtocolEra() === "modern", "the v2 client settles on 2026-07-28 against the paid boot");
     const mAsk = await m.callTool({ name: "memory.read", arguments: { key } });
-    ok(mAsk.isError === true && !("structuredContent" in mAsk) && JSON.stringify(PR(mAsk)?.accepts) === JSON.stringify(offer.accepts) && JSON.stringify(mAsk.content.slice(1)) === JSON.stringify(ask.content.slice(1))
+    ok(mAsk.isError === true && JSON.stringify(mAsk.structuredContent) === JSON.stringify(PR(mAsk)) && JSON.stringify(PR(mAsk)?.accepts) === JSON.stringify(offer.accepts) && JSON.stringify(mAsk.content.slice(1)) === JSON.stringify(ask.content.slice(1))
       && Array.isArray(mAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges), "2026-07-28: memory.read's first ask carries the same x402 offer, text and MPP challenges");
     c0 = { ...counts };
     const mPaid = await m.callTool({ name: "memory.read", arguments: { key }, _meta: { [X402_PAYMENT_META]: await payA.payments.createPaymentPayload(offer) } });

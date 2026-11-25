@@ -103,6 +103,49 @@ try {
   undoDns();
 }
 ok(seen.length >= 5, `the handlers read the stubbed upstream (${seen.length} reads)`);
+// 3. The government credit lines: USGS on earthquakes, the FDA on every
+// openFDA tool, and the Census Bureau's statement on a geo-lookup answer the
+// Census geocoder served (an answer from another agency is not credited to it).
+{
+  const { USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT } = await import("../src/data-attribution.js");
+  const gt = (slug) => GOV_TOOLS.find((t) => t.slug === slug);
+  ok(gt("earthquakes").credit === USGS_CREDIT && gt("earthquakes").discovery.output.example.credit === USGS_CREDIT && USGS_CREDIT === "Credit: U.S. Geological Survey.", "earthquakes: every answer and the example credit USGS");
+  const fda = ["drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls"];
+  ok(fda.every((s) => gt(s)?.credit === OPENFDA_CREDIT), `the openFDA tools credit the FDA (${fda.filter((s) => gt(s)?.credit !== OPENFDA_CREDIT).join(",") || "all"})`);
+  ok(/not endorsed or certified by the Census Bureau/.test(CENSUS_CREDIT) && gt("geo-lookup").discovery.output.example.credit === CENSUS_CREDIT, "geo-lookup: the Census statement rides the example the Census geocoder served");
+  const realFetch2 = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (/census\.gov/.test(u)) return new Response(JSON.stringify({ result: { geographies: { "2020 Census Blocks": [{ GEOID: "060372074001024", STATE: "06", COUNTY: "037" }], Counties: [{ NAME: "Los Angeles County", STATE: "06" }], States: [{ STUSAB: "CA", NAME: "California" }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response("{}", { status: 500 });
+    };
+    let a; try { a = await gt("geo-lookup").handler({ lat: 34.0522, lon: -118.2437 }); } catch (e) { a = { error: e.message }; }
+    ok(!/census\.gov/.test(String(a.source || "")) || a.credit === CENSUS_CREDIT, `a Census-served geo-lookup answer carries the statement (${JSON.stringify(a).slice(0, 160)})`);
+  } finally { globalThis.fetch = realFetch2; }
+}
+
+// CoinGecko: the credit is its section 4.3 wording, "Powered by CoinGecko"
+// with the link to its API page, on every surface that prints it; the earlier
+// "Data provided by" wording is kept only in the list of reworded sentences
+// (never printed).
+{
+  const DA = await import("../src/data-attribution.js");
+  const want = "Powered by CoinGecko (https://www.coingecko.com/en/api).";
+  ok(DA.COINGECKO_ATTRIBUTION === want && DA.COINGECKO_CREDIT === want && DA.ATTRIBUTIONS.coingecko === want, `the CoinGecko credit reads "${want}" (got "${DA.COINGECKO_ATTRIBUTION}")`);
+  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+  const cg = (CRYPTO_TOOLS || []).filter((t) => t?.attribution === "coingecko" || String(t?.description || "").includes("CoinGecko ("));
+  ok(cg.length > 0 && cg.every((t) => String(t.description).endsWith(want)), `each CoinGecko tool's description ends with the Powered by sentence (${cg.length} tools)`);
+  ok(cg.every((t) => !JSON.stringify(t.discovery?.output?.example ?? {}).includes("Data provided by CoinGecko")), "no CoinGecko example prints the earlier wording");
+  const { readFileSync, readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const hits = [];
+  const walk = (d) => { for (const n of readdirSync(join(root, d))) { const p = join(d, n); if (statSync(join(root, p)).isDirectory()) { if (n !== "generated") walk(p); } else if (p.endsWith(".js") && p !== "src/changelog.js") { const t = readFileSync(join(root, p), "utf8"); if (/Data provided by CoinGecko/.test(t.replace(/export const REWORDED_ATTRIBUTIONS[^\n]*/, ""))) hits.push(p); } } };
+  walk("src");
+  ok(hits.length === 0, `no module prints "Data provided by CoinGecko" (${hits.join(", ") || "none"})`);
+}
 
 console.log(`\ntest-source-credits: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

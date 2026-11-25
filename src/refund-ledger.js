@@ -79,7 +79,7 @@ for (const h of [db, fileDb]) if (h) h.exec(`
     priceUsd REAL NOT NULL DEFAULT 0,
     httpStatus INTEGER,
     synthetic INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'owed',-- owed | paid | void
+    status TEXT NOT NULL DEFAULT 'owed',-- owed | paid | void | blocked
     paidTx TEXT,
     note TEXT,
     createdAt INTEGER NOT NULL,
@@ -404,7 +404,7 @@ async function importFile() {
   console.log(`[refund-ledger] imported ${n} of ${rows.length} row(s) from ${DB_FILE}`);
   return { bytes, rows: n };
 }
-const RANK = { owed: 0, sending: 1, paid: 2, void: 2 };
+const RANK = { owed: 0, sending: 1, paid: 2, void: 2, blocked: 2 };
 const rankOf = (st) => RANK[st] ?? 0;
 const COMPARE_COLS = ["status", "paid_tx", "note", "resolved_at", "http_status", "hangup_reason", "claimed_at"];
 const same = (a, b) => (a == null && b == null) || (a != null && b != null && String(a) === String(b));
@@ -781,6 +781,18 @@ function markVoidFor(id, note, failed) {
   } catch { return failed; }
 }
 
+/** Hold a debt as blocked property: its payee is on a sanctions list, so the
+ *  money is neither sent nor written off (31 CFR 501.603). Requires a note
+ *  (the reason). Only an owed or sending row moves. Database mode: a Promise. */
+export function markRefundBlocked(id, note) { return markBlockedFor(id, note, false); }
+function markBlockedFor(id, note, failed) {
+  if (!usableNote(note)) return refuse();
+  if (USE_PG) return resolvePg("blocked", id, "blocked", null, note.trim(), failed);
+  try {
+    return resolveRow.run({ id, status: "blocked", paidTx: null, note: note.trim(), resolvedAt: Date.now() }).changes > 0;
+  } catch { return failed; }
+}
+
 /**
  * One operator change to a row (POST /__operator/refunds/update), by verdict:
  *  - "updated": the row moved;
@@ -800,6 +812,7 @@ export async function refundRowUpdate({ id, action, tx, note } = {}) {
   else if (action === "void") { if (!usableNote(note)) return "invalid"; v = await markVoidFor(rowId, note, FAILED); }
   else if (action === "claim") v = await claimFor(rowId, note || null, FAILED);
   else if (action === "release") { if (!usableNote(note)) return "invalid"; v = await releaseFor(rowId, note, FAILED); }
+  else if (action === "block") { if (!usableNote(note)) return "invalid"; v = await markBlockedFor(rowId, note, FAILED); }
   else return "invalid";
   return v === FAILED ? "store_failed" : v ? "updated" : "conflict";
 }
@@ -1002,6 +1015,7 @@ export function refundTotals() {
   try {
     const out = { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } };
     out.sending = { n: 0, usd: 0 };   // in-flight or stuck mid-send; needs a human
+    out.blocked = { n: 0, usd: 0 };   // payee listed: held as blocked property, never sent
     for (const r of totalsQ.all()) {
       if (out[r.status]) out[r.status] = { n: r.n, usd: Number((r.usd || 0).toFixed(6)), synthetic: r.synth || 0 };
     }
@@ -1095,3 +1109,26 @@ export function __resetRefunds() {
 // Operator heap read (/__operator/heap.json `stores`).
 registerSqliteStore("refund-ledger.db", () => db, { note: "refund ledger (in memory with a state database)" });
 registerSqliteStore("refund-ledger.fileDb", () => fileDb, { note: "refund ledger write-through file" });
+
+
+/**
+ * Retention (src/ledger-retention.js): resolved debts (paid or void) created
+ * before `cutoffMs`. An owed, sending or blocked row is never removed (a
+ * blocked row is held property, kept as long as it is blocked). Counts only
+ * unless `apply` is true. Resolves { due, removed }.
+ */
+export async function pruneResolvedRefundsBefore(cutoffMs, { apply = false } = {}) {
+  const cut = Math.floor(Number(cutoffMs));
+  if (!Number.isFinite(cut) || cut <= 0) throw new Error("a cutoff time is required");
+  if (USE_PG) {
+    const where = `created_at < $1 AND status IN ('paid', 'void')`;
+    const due = Number((await stateQuery(`SELECT count(*)::bigint AS n FROM ${T("refunds")} WHERE ${where}`, [cut])).rows[0].n);
+    if (!apply || !due) return { due, removed: 0 };
+    const r = await stateQuery(`DELETE FROM ${T("refunds")} WHERE ${where}`, [cut]);
+    for (const h of [db, fileDb]) if (h) { try { h.prepare("DELETE FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").run(cut); } catch { /* the table is the record */ } }
+    return { due, removed: r.rowCount };
+  }
+  const due = Number(db.prepare("SELECT count(*) AS n FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").get(cut).n);
+  if (!apply || !due) return { due, removed: 0 };
+  return { due, removed: db.prepare("DELETE FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").run(cut).changes };
+}

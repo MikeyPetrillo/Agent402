@@ -72,12 +72,22 @@ export const SPEECH_ADDITIONS = Object.freeze([
 ]);
 
 /** Transcription models for the URL transcribe routes, named in `model`. Each
- *  is sent over the same transcription wire the speaker-label path uses. */
+ *  is sent over the same transcription wire the speaker-label path uses.
+ *  `listedPer` is the unit of the upstream listing's price where a supervised
+ *  paid call has measured it (the listing's transcription unit differs by
+ *  provider); the live guard (scripts/test-gateway-model-ids.js) then holds the
+ *  private per-minute row to the listing in that unit. mai-transcribe-2,
+ *  measured 2026-11-24: the listing is per audio hour, billed per audio second
+ *  (a part second bills as a whole one). The two Voxtral models, measured the
+ *  same day: the listing is per audio second. */
 export const STT_ADDITIONS = Object.freeze([
-  Object.freeze({ id: "mistralai/voxtral-mini-transcribe-3-0", aliases: Object.freeze(["voxtral-mini-transcribe-3-0", "voxtral-mini-transcribe"]) }),
-  Object.freeze({ id: "mistralai/voxtral-small-transcribe-3-0", aliases: Object.freeze(["voxtral-small-transcribe-3-0", "voxtral-small-transcribe"]) }),
-  Object.freeze({ id: "microsoft/mai-transcribe-2", aliases: Object.freeze(["mai-transcribe-2"]) }),
+  Object.freeze({ id: "mistralai/voxtral-mini-transcribe-3-0", aliases: Object.freeze(["voxtral-mini-transcribe-3-0", "voxtral-mini-transcribe"]), listedPer: "second" }),
+  Object.freeze({ id: "mistralai/voxtral-small-transcribe-3-0", aliases: Object.freeze(["voxtral-small-transcribe-3-0", "voxtral-small-transcribe"]), listedPer: "second" }),
+  Object.freeze({ id: "microsoft/mai-transcribe-2", aliases: Object.freeze(["mai-transcribe-2"]), listedPer: "hour" }),
 ]);
+
+/** The listing units `listedPer` may name, as audio minutes per unit. */
+export const LISTED_UNIT_MINUTES = Object.freeze({ second: 1 / 60, minute: 1, hour: 60 });
 
 /** Every model id here (the audio policy and the live guard read it). */
 export const ADDITION_MODEL_IDS = Object.freeze([...SPEECH_ADDITIONS.map((m) => m.id), ...STT_ADDITIONS.map((m) => m.id)]);

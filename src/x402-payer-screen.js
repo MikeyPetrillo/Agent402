@@ -68,13 +68,28 @@
 // names (WALLET_BLOCKLIST, src/payments.js blockedPayerFromPayload); the
 // direct routes apply that list at settlement instead.
 //
+// RECORDS. A refusal names an address in the sanctions events store
+// (src/sanctions-events.js) only for a payment the facilitator verified on
+// THIS request (the marker src/verified-payment.js keeps: verify answered
+// isValid for our own requirements), and then only the payer that verify
+// vouches for (its `payer`, else the verified payload's signer field) when
+// that payer is listed. Every other refusal, before verification (the strict
+// screen on /ref, a route with no price, which the middleware passes here
+// unverified) or on a listed address that is not the verified payer, is
+// refused exactly the same, counted as `refusedUnrecorded`, and counted in
+// the hour's `unproven-refusal` aggregate row (a count, never the address).
+//
 // COST. Decoding the header the middleware already decoded once, and one Set
-// lookup per address. No network call.
+// lookup per address. No network call; a refusal alone adds local signature
+// recoveries (at most five) before its record is written.
 import { paymentHeaderOf } from "./payer.js";
 import { screenAddresses, maskAddress } from "./sanctions-screen.js";
 import { nonEvmScreenAddressesFromRequest } from "./non-evm-payer.js";
 import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
+import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
+import { verifiedPayerOf } from "./verified-payment.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -139,7 +154,24 @@ export function x402ScreenedAddressesOf(req) {
   return x402ScreenedPaymentOf(req)?.addresses || [];
 }
 
-const counts = { screened: 0, refused: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+const counts = { screened: 0, refused: 0, refusedUnrecorded: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+
+/** What a refusal records: { address } (the verified payer, listed) or
+ *  { reason } (counted only: "before-verify" when no payment verified on this
+ *  request, "not-the-payer" when the verified payer is not listed). Never
+ *  throws. */
+async function recordVerdictOf(req, { strict }) {
+  const payer = strict ? null : verifiedPayerOf(req);
+  if (!payer) return { reason: "before-verify" };
+  try {
+    if (EVM_RE.test(payer)) {
+      const w = screenAddresses([payer]);
+      return w && w.ok === false && w.reason === "listed" ? { address: w.address } : { reason: "not-the-payer" };
+    }
+    const bare = payer.replace(/^(svm|avm|stellar):/, "");
+    return (await screenAddressForPayment(bare)) ? { address: bare } : { reason: "not-the-payer" };
+  } catch { return { reason: "not-the-payer" }; }
+}
 let unscreenedLoggedAt = 0;
 let unreadableLoggedAt = 0;
 let strictLoggedAt = 0;
@@ -149,6 +181,9 @@ export function x402PayerScreenView() {
   return {
     screened: counts.screened,
     refused: counts.refused,
+    // Of those, refused on an address the payment's signature does not prove:
+    // refused all the same, counted in the store's hourly aggregate row only.
+    refusedUnrecorded: counts.refusedUnrecorded,
     servedUnscreened: counts.servedUnscreened,
     // Of those, EVM payments none of whose payer fields could be read.
     unreadablePayer: counts.unreadablePayer,
@@ -174,7 +209,7 @@ async function screenNonEvmPayer(req, addressesOf) {
   for (const address of addresses) {
     try {
       const hit = await screenAddressForPayment(address);
-      if (hit) return { ok: false, reason: "listed", address };
+      if (hit) return { ok: false, reason: "listed", address, nonEvm: true };
       screened++;
     } catch (e) {
       if (!/unreadable address/.test(String(e?.message || e))) unavailable = true;
@@ -219,6 +254,24 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     counts.refused++;
     counts.lastRefusedAt = Date.now();
     log(`[sanctions-screen] x402 payer ${maskAddress(v.address)} refused before the handler (${req.method} ${req.path}); nothing settles`);
+    // The rejected transaction, in full, for the records rule and its report
+    // (src/sanctions-events.js), only for the payer a verification on this
+    // request vouches for (recordVerdictOf); every other refusal is counted in
+    // the hourly aggregate. Never awaited: the refusal does not wait on it.
+    try {
+      const payload = x402ScreenedPaymentOf(req)?.payload;
+      const acc = payload?.accepted || payload || {};
+      const route = `${req.method} ${req.path}`, ip = req.ip;
+      recordVerdictOf(req, { strict }).then(({ address, reason }) => {
+        if (!address) {
+          counts.refusedUnrecorded++;
+          return recordSanctionsAggregate({ kind: "unproven-refusal", reason, rail: "x402", route });
+        }
+        let listDate = null;
+        try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }
+        return recordSanctionsEvent({ kind: "screen-hit", address, rail: "x402", network: acc.network ?? null, amount: acc.amount ?? acc.maxAmountRequired ?? null, asset: acc.asset ?? null, route, ip, listPublishDate: listDate });
+      }).catch(() => {});
+    } catch { /* recording never breaks the refusal */ }
     res.status(403);
     res.setHeader("Cache-Control", "no-store");
     return res.json({ error: X402_PAYER_REFUSED_TEXT, reason: "payer-not-accepted", charged: false });
@@ -260,6 +313,6 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
 
 /** Test seam. */
 export function __resetX402PayerScreenForTests() {
-  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.refusedUnscreened = 0; counts.blocked = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
+  counts.screened = 0; counts.refused = 0; counts.refusedUnrecorded = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.refusedUnscreened = 0; counts.blocked = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
   unscreenedLoggedAt = 0; unreadableLoggedAt = 0; strictLoggedAt = 0;
 }

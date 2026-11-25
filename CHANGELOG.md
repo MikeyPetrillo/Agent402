@@ -4,6 +4,204 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.16.0 - 2026-11-25
+
+### 2026-11-25 (region block)
+Payments:
+- A request from a region under comprehensive U.S. sanctions, or from a
+  country this service does not serve, is answered 451 with reason
+  `unavailable_in_region` before any payment is verified or settled
+  (SANCTIONS_GEO_BLOCK, on by default). An x402 payment's answer says nothing
+  was charged (`charged: false`); a Tempo push credential's answer says the
+  transfer it names was not claimed (`transferClaimed: false`). /health and
+  the legal pages answer from anywhere.
+
+### 2026-11-25 (terms, AI marks, Solana fields, refund lookup)
+Site:
+- /terms and /privacy are dated 2026-11-25. A change to the terms applies to
+  calls and purchases made on or after the date it is posted with, never to a
+  dispute that arose before it, and an active subscription keeps the price it
+  was bought at. If the hosted service stops, an unspent prepaid balance is
+  refunded to the card that bought it and any amount owed is repaid under the
+  refund terms.
+Tools:
+- A generated image or MP3 file carries the AI-generated mark inside the file:
+  XMP with the IPTC digital source type in PNG, JPEG and WebP, and an ID3 tag
+  on an MP3 that has none. A file that already carries content credentials or
+  its own XMP is passed through unchanged.
+- The Solana token tools and the token brief no longer return the token
+  index's own verified flag or organic score (token.isVerified, organicScore,
+  organicScoreLabel) or a report's verification block, and sol-token-search's
+  fallback mints no longer carry isVerified.
+Payments:
+- The refund lookup answers `held` for a refund that is recorded and held for
+  review and has not been paid, where it answered none before.
+
+### 2026-11-24 (computed market screens)
+Tools:
+- The market screens built on CoinGecko data answer only what they compute
+  (ranks, percentiles, shares, deviations, ratios, bands, scores and flags)
+  and state each formula in a `method` field; the source's own prices,
+  volumes, market caps, liquidity, funding rates, basis, open interest and
+  percent changes are no longer returned, and the /ref and /aws copies serve
+  the same answer as the public route.
+- exchange-spread no longer returns medianPriceUsd, volumeWeightedPriceUsd or
+  each venue's bidAskPct; it returns volumeWeightedVsMedianBps and, per venue,
+  pricePercentile and quoteWidthVsMedian.
+- funding-screener no longer returns each venue's fundingPct and basisPct, the
+  funding and basis minPct and maxPct, or openInterest.totalUsd; it returns
+  each venue's annualizedPct rounded to 0.01, percentile, basisVsMedianPct and
+  flags (extreme-positive-funding, extreme-negative-funding, far-from-median),
+  annualizedMedianPct, basis.rangePct and openInterest.tier in each answer.
+- dex-pool-health no longer returns liquidityUsd, volume24hUsd,
+  lockedLiquidityPct, activity24h.trades or the recent trades' medianUsd,
+  p90Usd and largestUsd; it returns a 0-100 healthScore from five stated
+  components, liquidityTier, activity24h.tier and
+  buySellRatio, and p90ToMedian and largestToMedian.
+- defi-screener no longer returns each token's change24hPct, change7dPct and
+  athDrawdownPct or categoryTotals.marketCapUsd; it returns
+  change24hPercentile, change7dVsCategoryPct, change7dPercentile,
+  athDrawdownBand and capWeightedChange7dPct. chain-board no longer returns
+  change24hPct, athDrawdownPct or market.change24hPct; capRank is its own
+  place among the 250 largest coins, and it returns change24hPercentile,
+  athDrawdownBand and market.outpacingMarketSharePct. dex-volume-board no
+  longer returns totals.volume24hUsd or totals.liquidityUsd in its answer.
+- stablecoin-peg no longer returns each coin's price, high24h, low24h and
+  marketCap; it returns capRank and marketCapSharePct. token-diligence no
+  longer returns each row's market block, supply counts or rank, or the market
+  caps in its byMarketCap ranking (the order stays).
+
+### 2026-11-24 (source terms, neutral names, MCP flagships, package names)
+Tools:
+- fred-series (us-macro-series) and fred-release-observations
+  (us-macro-series) are retired and answer 410 naming that replacement, which
+  takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces
+  fred-snapshot, whose route answers 410 naming it. The tools serving New York Fed rates are not offered for resale
+  through a third party, and say why.
+- market-calendar compiles its calendars from public sources (NYSE Rules 7.2
+  and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office
+  national holidays, DATA.GOV.HK and the exchange_calendars rules) and every
+  answer names them, carries their credits and says the facts are not exchange
+  data. The HKEX day has its 12:00 to 13:00 break.
+- settlement-calendar cites each rail's rule to public sources and carries
+  their credits; CHAPS answers no longer state operating hours.
+- token-safety, token-risk and token-risk-pro compute every token fact here:
+  supply, owner and proxy from chain reads, buy and sell tax and the honeypot
+  reading from a simulated buy and sell that sends nothing, privileged
+  functions from the Sourcify ABI, and holders from the Transfer history where
+  it is small enough. A fact not computed is null with its reason in limits,
+  and every answer lists its sources. Celo joins the report chains, and an
+  unsupported chain answers 422 naming the supported ones.
+- token-safety no longer returns a verdict: its verdict, because, blocking and
+  warnings fields are removed. Each answer lists the named facts found (flags,
+  each an id, a description and the measured value), what could not be checked
+  and why (unknown), its sources and limits, and a notice that these are
+  facts read from the chain and named public sources and not investment advice. token-risk and token-risk-pro
+  carry the same notice, and a report that judges the token is written once
+  more and then withheld. The Solana token tools and the token brief list
+  named facts computed from their sources' fields and never pass through a
+  source's score, risk levels or verdict words.
+- fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment
+  and in every answer that the ECB reference rates are available free of
+  charge at ecb.europa.eu, and each answer says whether its rate is the ECB's
+  own or computed from it (`rateBasis`).
+- search-suggest keeps each prefix's suggestions for a day, so a repeated
+  prefix is answered without a new read, and every answer carries the license
+  link and says it is not affiliated with the Wikimedia Foundation.
+- tts, tts-lite, tts-hd, v1-audio-speech and dub say before payment and in
+  every answer that the voice is AI-generated (`aiGeneratedVoice`, or the
+  X-AI-Generated header on audio bytes).
+- earthquakes, the openFDA tools and geo-lookup answers carry the credit line
+  their sources ask for.
+- rwa-markets says why a reference rate is missing (referenceStatus read,
+  rate_table_unreadable or rate_not_listed) and never reports a missing rate
+  as 0.
+- image-ocr runs on tesseract.js 7 and reads its lines from the recognized
+  page tree.
+- The professional article report takes a neutral name, and the reports on an
+  issuer carry a line that they are not investment advice.
+Gateway:
+- Speech and transcription answers name agent402 in their provider field;
+  the model field still names the model that ran.
+- The pro and premium chat tiers list their server tools as agent402:web_search,
+  agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
+  names are still accepted on input. The /v1 tiers are described by their wire
+  formats.
+- /v1/models names the web search engine of agent402:web_search and of the
+  grounded tier as agent402-web; a request may name engine "agent402-web",
+  and any other engine is refused as before.
+Payments:
+- A refusal says nothing was charged only on a call answered to its own
+  caller; a step inside a charged answer (a skill pack, decide, route-execute
+  or a bundle leg) does not print it, and a delivered answer never carries it.
+- The Algorand seller catalog builds in the background at boot and refreshes
+  on its own schedule, reading each listing page by page to its total under a
+  page cap; a route-execute call that meets a cold catalog waits only within
+  its payment window, then answers an uncharged 503 with Retry-After.
+- A server that sets INK_RELAYER_KEY settles an Ink payment through its own
+  relayer after the listed settlement providers, only after a refusal that
+  moved nothing, under its own caps and minimum.
+- Tempo payments from a configurable account envelope are read and screened
+  like any other, and a subscription key authorization carrying a high-s
+  signature is refused. Stellar payments are read with stellar-sdk 17 and
+  @x402/stellar 2.32.
+- Rate limits read every spelling of one address (IPv6 case, leading zeros, an
+  IPv4-mapped form) as one key, and the connector sign-in counts a code mail
+  before it compares the count.
+- Chain reads default only to endpoints whose terms permit commercial use; a
+  chain with no such public endpoint reads the keyed lane when one is set.
+MCP:
+- The hosted connector and agent402-mcp list pdf.markdown, macro.series and
+  weather.current as flagship tools in place of web.search, web.news and
+  web.answer, each payable in the call over x402. The earlier names still run
+  their catalog tools, paid on their HTTP routes, and are not listed.
+- The hosted connector lists every tool under a plain name (catalog_search for
+  catalog.search) at /mcp?tool_names=underscore, for hosts that accept only
+  letters, digits, underscores and dashes in a tool name; either spelling
+  runs.
+Site:
+- /llms.txt, /agents.md and server.describe open with SEC filings as the first
+  call (edgar-filings, then edgar-company-facts), and the integration pages
+  lead with Agent402 and use the SEC tools in their examples.
+- /terms adds a section on third-party names and marks, linked from every
+  page's footer, and pages that name another owner's mark print that owner's
+  notice. /terms also asks a buyer who offers synthetic speech to its own
+  users to pass the AI-generated disclosure on.
+- Chains are named in plain text, and published prose names no settlement
+  counterparty.
+- A /docs slug typed in another case 301s to its canonical path. A retired
+  route's 410 suggests its declared replacement first, then tools in its
+  category. /aws/start states the sanctions eligibility /terms sets, lists
+  settlement-calendar with the calendars, and /crawler lists the
+  search-suggest User-Agent.
+- The server images install dependencies in a builder stage and ship no
+  compiler; the server moves to undici 8, better-sqlite3 13, jsdom 31,
+  TypeScript 7 and mppx 0.21.
+Operations:
+- The scheduled checks page when the holiday source's commercial terms lapse,
+  and the paid canary reads its Monad funding on the keyed lane without
+  printing the key.
+Packages:
+- The framework packages take neutral names, same API: agent402-function-calling
+  0.3.0 (was agent402-openai-tools), agent402-messages-tools 0.3.0
+  (agent402-anthropic-tools), agent402-stream-tools 0.3.0 (agent402-ai-sdk),
+  agent402-structured-tools 0.3.0 on npm and 0.2.0 on PyPI (agent402-langchain),
+  agent402-function-tools 0.3.0 (agent402-llamaindex), agent402-dev-kit-tools
+  0.2.0 (agent402-google-adk), agent402-agent-loop-tools 0.3.0
+  (agent402-strands), agent402-action-provider 0.3.0 (agent402-agentkit),
+  agent402-runner-tools 0.2.0 (agent402-openai-agents), agent402-actions-plugin
+  0.4.0 (elizaos-plugin-agent402) and agent402-model-provider 0.7.0
+  (agent402-openclaw, CLI `agent402-model-provider`). Each earlier name's last
+  release depends on its new name, re-exports it and prints a one-time notice.
+- agent402-mcp 0.17.1 lists the new flagship tools. Package license files and
+  author fields name Cardhavok LLC (doing business as Havok Holdings LLC);
+  agent402-mcp 0.17.1, agent402-client 0.12.2 and agent402-tollbooth 0.13.1
+  carry them. The tollbooth README cites Coinbase's own documentation for its
+  Coinbase Business section.
+- agent402-tollbooth 0.13.2 gives every Tempo challenge a random `opaque`
+  value bound into its id, so two challenges minted in the same millisecond
+  get distinct ids and paying one never refuses the other as already used.
+
 ## v2.15.0 - 2026-11-24
 
 ### 2026-11-24 (chain reads, source credits, caller URLs, receipts by token)
@@ -19,7 +217,7 @@ Tools:
   asking the archive, and cert-transparency makes its second search only with
   its key. search-suggest reads Wikipedia's opensearch.
 - Answers carry their source's credit where the source asks for one (crt.sh,
-  Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract
+  Team Cymru, Hyperliquid, RugCheck, EAS and Wikipedia), and contract
   source answers carry each file's license; the catalog text and the 402
   samples are unchanged.
 - A tool that reads a URL the caller names sends the Agent402-Fetch token in
@@ -86,7 +284,7 @@ Packages:
   User-Agent elsewhere now pays.
 - agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.
 - The meta-tool adapters pass the server's error body through to the caller.
-- The other adapters (agent402-eliza 0.3.2 among them) and agent402-openclaw
+- The other adapters (elizaos-plugin-agent402 0.3.2 among them) and agent402-openclaw
   add the server's error text to a failed catalog or discovery read.
 
 ### 2026-11-24 (agent402-mcp 0.17.0)
@@ -106,7 +304,7 @@ Packages:
   0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by
   default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in
   `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits;
-  agent402-langchain for Python 0.1.7 does the same through
+  the Python adapter does the same from its next PyPI release, through
   `max_per_call_usd` and `daily_limit_usd`, its own option names.
 - agent402-openclaw 0.6.2, agent402-agentkit 0.2.1, agent402-anthropic-tools,
   agent402-openai-tools, agent402-llamaindex and agent402-strands 0.2.2 ship
@@ -121,8 +319,8 @@ Site:
 ### 2026-11-24 (thirty retired tools)
 Tools:
 - onchain-sql-week, onchain-sql-range and fred-release-observations are
-  retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A
-  partial onchain-sql walk no longer lists longer routes.
+  retired and answer 410 naming onchain-sql, onchain-sql and us-macro-series.
+  A partial onchain-sql walk no longer lists longer routes.
 - solana-rpc, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics,
   fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies,
   fc-channel, fc-user-search, farcaster-profile, farcaster-by-address,
@@ -625,7 +823,7 @@ Tools:
 ### 2026-11-21 (the guide site, report links and the brand mark)
 Site:
 - The site menu, the openings of /learn and /how-to-pay, /llms.txt and
-  /llms-full.txt link ask402.ai, the maintainer's plain-language guide to
+  /llms-full.txt link ask402.ai, the maintainer's guide to
   x402 and MPP for people.
 - /what-is-x402, /what-is-mpp and /learn/x402 are titled for how each
   protocol runs on this server, and each links the guide's explainer for the
@@ -2432,7 +2630,7 @@ Server:
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
 - /api/llm-premium's refusal lists every model family it accepts.
-- The insider, LinkedIn article and IPO reports fence the filer- and
+- The insider, professional article and IPO reports fence the filer- and
   publisher-written text they read.
 - Daily upstream ceilings no longer count a call the upstream refused.
 - /mcp and the revenue view redact secrets from error text, including keys
@@ -3148,7 +3346,7 @@ Packages:
   against their caps until its authorization can no longer settle, and an
   error after sending reports the payment as unknown rather than unpaid.
 
-### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
+### 2026-11-05 (Robinhood Chain facilitator order, public-index disclosure, job buys)
 Payments:
 - On Robinhood Chain the server settles through the first listed facilitator
   whose `/supported` confirms exact at boot, so a primary that does not answer
@@ -3159,7 +3357,7 @@ Privacy:
 - When the facilitator that settles Robinhood Chain publishes settlements on a
   public index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it
   and what it publishes, the terms, `/.well-known/x402`, llms.txt and the
-  Robinhood page point there, and the pages print the date it began.
+  Robinhood Chain page point there, and the pages print the date it began.
 Operations:
 - The operator view of first-call grants counts refusals of wallets that
   never paid by reason and route, apart from returning buyers, so a route a

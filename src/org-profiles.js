@@ -20,6 +20,6 @@ export const ORG_SAME_AS = Object.freeze([
   "https://www.npmjs.com/package/agent402-mcp",
   "https://www.npmjs.com/package/agent402-client",
   "https://www.npmjs.com/package/agent402-tollbooth",
-  "https://pypi.org/project/agent402-langchain/",
+  "https://pypi.org/project/agent402-structured-tools/",
   MCP_REGISTRY_ENTRY_URL,
 ]);

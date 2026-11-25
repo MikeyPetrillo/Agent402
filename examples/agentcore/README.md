@@ -1,12 +1,12 @@
 # Strands + Agent402 on Amazon Bedrock AgentCore - runnable demo
 
-A 30-second proof that the [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) adapter does what the [wiki](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore) claims: a [Strands Agent](https://strandsagents.com) calls Agent402 tools and the adapter handles payment underneath (proof-of-work for free tools, x402+USDC for wallet-only).
+A 30-second proof that the [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) adapter does what the [wiki](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore) claims: a [Strands Agent](https://strandsagents.com) calls Agent402 tools and the adapter handles payment underneath (proof-of-work for free tools, x402+USDC for wallet-only).
 
 This example runs **locally** with a stubbed `@strands-agents/sdk` so you can verify the wiring without an AWS account. The same code runs **unchanged on Amazon Bedrock AgentCore** - only the import is swapped for the real SDK and Identity supplies the CDP credentials. See "Deploying on AgentCore" below.
 
 ## Run it
 
-With a wallet (an EVM key holding USDC on Base), the agent runs a web search and then a cited answer, each paid per call over x402:
+With a wallet (an EVM key holding USDC on Base), the agent lists Apple's latest 10-K filings and then its filed revenue and total assets (SEC EDGAR, public domain), each paid per call over x402:
 
 ```bash
 cd examples/agentcore
@@ -16,9 +16,9 @@ AGENT_KEY=0x... node run.js
 
 ```
 [demo] catalog: 2 Agent402 tools wired into Strands
-[demo] search({"q":"x402 payment protocol adoption"}): { query: ..., results: [ ... ] }
-[demo] answer({"q":"what is the x402 payment protocol?"}): { answer: ..., citations: [ ... ] }
-PASS: Strands → Agent402 web search and answer, paid from the wallet.
+[demo] edgar-filings: Apple Inc., 10-K filed <five filing dates, newest first>
+[demo] edgar-company-facts: revenue $<amount> (fiscal year ending <date>), total assets $<amount> (at <date>)
+PASS: Strands → Agent402 SEC filings and filed financials, paid from the wallet.
 ```
 
 That's the full flow:
@@ -62,7 +62,7 @@ That's the whole port. AgentCore handles the CDP credentials, CloudWatch observa
 
 - **`ECONNREFUSED agent402.tools`**: your network can't reach the hosted catalog. Point `baseUrl` at your own instance: `agent402Tools({ baseUrl: "http://localhost:3000", ... })` after `FREE_MODE=true npm start` in the repo root.
 - **`expected at least one tool`**: the slug filter ruled out everything; try without `slugs:` to see the full catalog.
-- **`agent402-strands` not found** - run `npm install` in this folder first.
+- **`agent402-agent-loop-tools` not found** - run `npm install` in this folder first.
 
 ## See also
 

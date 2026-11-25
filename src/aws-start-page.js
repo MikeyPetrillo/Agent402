@@ -17,6 +17,8 @@ import { LEDGER_HEAD, LEDGER_CSS, esc, jsSrc, codeBlock } from "./ledger-chrome.
 import { awsServedGroups, sentencesOf } from "./aws-listing.js";
 import { AWS_JWKS_PATH, AWS_NETWORK, AWS_PREFIX } from "./aws-marketplace-gate.js";
 import { AWS_UNANSWERED_SENTENCE } from "./aws-unanswered-copy.js";
+import { ELIGIBILITY_SENTENCE } from "./eligibility-copy.js";
+import { AWS_MARK_NOTICE } from "./mark-notices.js";
 
 export const AWS_START_PATH = `${AWS_PREFIX}/start`;
 export const AWS_OPENAPI_PATH = `${AWS_PREFIX}/openapi.json`;
@@ -46,7 +48,7 @@ export function awsPurposeOf(def, { describe = (d) => d?.description, max = 180 
 
 const CSS = `
 .aw-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
-.aw-eyebrow{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0 0 14px}
+.aw-notice{font-size:var(--fs-xs);color:var(--faint);margin:0 0 14px}
 .aw-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance}
 .aw-wrap h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:56px 0 14px}
 .aw-wrap h3{font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);margin:30px 0 8px}
@@ -122,8 +124,8 @@ ${g.slugs.map((s) => { const d = defs.get(s); return `<tr><th scope="row"><code>
 </div>`;
 
   const body = `<div class="aw-wrap">
-<p class="aw-eyebrow">AWS Marketplace</p>
 <h1>Agent402 tools on AWS Marketplace</h1>
+<p class="aw-notice">${esc(AWS_MARK_NOTICE)}</p>
 <p class="aw-lede">Your agent calls each tool over HTTPS and pays per call in US dollars on your AWS bill, through Amazon Bedrock AgentCore payments with the AWS Billing connector. ${served.length} tools, from ${esc(usd(lo))} to ${esc(usd(hi))} per call.</p>
 
 <h2 id="setup">Set up</h2>
@@ -168,6 +170,9 @@ ${groups.map(table).join("\n")}
 
 <h2 id="limits">Limits</h2>
 <p>Up to ${esc(String(config?.quotesPerMin ?? ""))} unpaid requests a minute per client address, and up to ${esc(String(config?.paidPerMin ?? ""))} new paid requests a minute per AWS buyer and per client address. Past either, the answer is <code>429</code> with <code>Retry-After</code>; a paid request refused this way does not use its payment. A quote is valid for ${esc(String(Math.round(Number(config?.quoteSeconds || 0) / 60)))} minutes.</p>
+
+<h2 id="eligibility">Eligibility</h2>
+<p>${esc(ELIGIBILITY_SENTENCE)}</p>
 
 <h2 id="support">Support</h2>
 <p>Questions, billing and failed calls: <a href="mailto:${AWS_SUPPORT_EMAIL}">${AWS_SUPPORT_EMAIL}</a>. Security reports: <a href="mailto:${AWS_SECURITY_EMAIL}">${AWS_SECURITY_EMAIL}</a>.</p>

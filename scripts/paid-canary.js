@@ -526,7 +526,7 @@ export const TOOLS = [
     method: "POST",
     body: { mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" },
     priceUsd: 0.005,
-    check: (r) => (typeof r.riskLevel === "string" && (typeof r.score === "number" || typeof r.normalizedScore === "number") && r.untrustedContent === true) || `expected a graded safety verdict, got ${JSON.stringify(r).slice(0, 120)}`,
+    check: (r) => (Array.isArray(r.flags) && Array.isArray(r.unknown) && typeof r.notice === "string" && !("riskLevel" in r) && !("score" in r) && r.untrustedContent === true) || `expected named facts with the notice and no score, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Route-and-execute — the SOR's executing surface. Dispatches internally
@@ -751,10 +751,20 @@ const BASE_BALANCE_RPCS = [
 ];
 /** Stablecoin balance (6-decimal ERC-20) via an RPC fallback chain. null only
  *  when EVERY RPC fails; each failed attempt logs which endpoint and why. */
+/** An RPC address as a log line may print it: a keyed lane's key (a path
+ *  segment after /v2/ or /v3/, or a query value) is never written out. */
+export function rpcForLog(rpc) {
+  try {
+    const u = new URL(String(rpc));
+    const path = u.pathname.replace(/\/(v2|v3)\/[^/]+/g, "/$1/<key>");
+    return `${u.protocol}//${u.host}${path}${u.search ? "?<query>" : ""}`;
+  } catch { return "<rpc>"; }
+}
 async function erc20BalanceUsd(address, { token, rpcs, label = "" }) {
   const data = "0x70a08231" + address.toLowerCase().replace("0x", "").padStart(64, "0");
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: token, data }, "latest"] });
   for (const rpc of rpcs) {
+    const shown = rpcForLog(rpc);
     try {
       const r = await fetch(rpc, {
         method: "POST",
@@ -766,9 +776,9 @@ async function erc20BalanceUsd(address, { token, rpcs, label = "" }) {
       if (typeof j?.result === "string" && /^0x[0-9a-fA-F]*$/.test(j.result)) {
         return parseInt(j.result, 16) / 1e6;
       }
-      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${rpc} returned no result (HTTP ${r.status}) — trying next RPC`);
+      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${shown} returned no result (HTTP ${r.status}) — trying next RPC`);
     } catch (e) {
-      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${rpc} failed (${(e?.message || e).toString().slice(0, 80)}) — trying next RPC`);
+      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${shown} failed (${(e?.message || e).toString().split(rpc).join(shown).slice(0, 80)}) — trying next RPC`);
     }
   }
   return null;
@@ -794,13 +804,13 @@ async function baseUsdcBalanceUsd(address) {
 export const CHAIN_FUNDING = [
   { key: "polygon", label: "Polygon", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", rpcs: ["https://polygon-bor-rpc.publicnode.com"] },
   { key: "arbitrum", label: "Arbitrum", token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", rpcs: ["https://arb1.arbitrum.io/rpc"] },
-  { key: "monad", label: "Monad", token: "0x754704bc059f8c67012fed69bc8a327a5aafb603", rpcs: ["https://rpc.monad.xyz", "https://rpc2.monad.xyz"] },
+  { key: "monad", label: "Monad", token: "0x754704bc059f8c67012fed69bc8a327a5aafb603", rpcs: process.env.ALCHEMY_API_KEY ? [`https://monad-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : [] },
   { key: "celo", label: "Celo", token: "0xceba9300f2b948710d2653dd7b07f33a8b32118c", rpcs: ["https://forno.celo.org"] },
-  { key: "avalanche", label: "Avalanche", token: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", rpcs: ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"] },
+  { key: "avalanche", label: "Avalanche", token: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", rpcs: ["https://avalanche-c-chain-rpc.publicnode.com"] },
   { key: "sei", label: "Sei", token: "0xe15fc38f6d8c56af07bbcbe3baf5708a2bf42392", rpcs: ["https://evm-rpc.sei-apis.com", "https://sei-evm-rpc.publicnode.com"] },
-  { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"] },
+  { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://optimism-rpc.publicnode.com"] },
   { key: "arc", label: "Arc", token: "0x3600000000000000000000000000000000000000", rpcs: ["https://rpc.mainnet.arc.io"] },
-  { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://rpc.mainnet.chain.robinhood.com"] },
+  { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://robinhood-rpc.publicnode.com"] },
   // Ink: read only while CANARY_INK=true (the workflow sets it from the Ink
   // facilitator Actions secret), so the leg and its balance check run together.
   ...(process.env.CANARY_INK === "true" ? [{ key: "ink", label: "Ink", token: "0x2D270e6886d130D724215A266106e6832161EAEd", rpcs: ["https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com"] }] : []),
@@ -1351,7 +1361,7 @@ async function main() {
   // llm-metered TOOL leg pays the per-request EXACT quote; this leg buys the
   // same body through the upto scheme (Permit2 allowance on the burner, granted
   // once), so the quote becomes a ceiling and the gateway settles actual usage
-  // plus the markup. It is the only live proof of what agent402-openclaw's upto path
+  // plus the markup. It is the only live proof of what agent402-model-provider's upto path
   // does for a real buyer: the OUTGOING credential must be scheme "upto" (a
   // client that quietly fell back to exact would still get a 200), the
   // response must carry X-Metered-Usd strictly UNDER the quote, and the
@@ -1369,7 +1379,7 @@ async function main() {
       const pub = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || "https://mainnet.base.org") });
       const allowance = await pub.readContract(getPermit2AllowanceReadParams({ tokenAddress: USDC_BASE, ownerAddress: account.address }));
       if (BigInt(allowance) < 10n ** 12n) {
-        railFail("metered-upto", `burner ${account.address} has no Permit2 allowance on Base USDC (${allowance}) — run \`agent402-openclaw permit2-approve\` with the burner key once`);
+        railFail("metered-upto", `burner ${account.address} has no Permit2 allowance on Base USDC (${allowance}) — run \`agent402-model-provider permit2-approve\` with the burner key once`);
         return;
       }
       const bare = await fetch(`${TARGET}${path}`, init());

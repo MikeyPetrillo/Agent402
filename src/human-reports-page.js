@@ -192,7 +192,7 @@ export function humanReportsPage(baseUrl) {
       <div class="pcard receipt" data-kind="filing">
         <div class="k">SEC filing report</div>
         <h3>What did they just file</h3>
-        <p>The company's newest SEC filings, with the document itself read and explained in plain language, cited to the filing.</p>
+        <p>The company's newest SEC filings, with the document itself read and explained, cited to the filing.</p>
         <form class="pcard-form" data-kind="filing" novalidate>${cardField("filing", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> the newest 10-K, 10-Q or 8-K read for you: what changed, what the numbers say, what the notes disclose, cited to the document.</div>
         ${cardError("filing")}
@@ -212,10 +212,10 @@ export function humanReportsPage(baseUrl) {
 ${R["token-brief"] ? `
       <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
-        <h3>Solana token risk evidence</h3>
-        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, each cited from on-chain sources.</p>
+        <h3>Solana token on-chain facts</h3>
+        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and each named fact found, each cited from on-chain sources.</p>
         <form class="pcard-form" data-kind="token" novalidate>${cardField("token", "Solana mint address", "")}
-        <div class="gets"><b>What you get:</b> risk evidence, not a rating: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
+        <div class="gets"><b>What you get:</b> on-chain facts, not a rating: authorities, liquidity, holder concentration, trading flow and each named fact found, cited on-chain. Not investment advice.</div>
         ${cardError("token")}
         ${buyBtn("token", "token-brief", "Get the brief")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
@@ -251,11 +251,11 @@ ${R["token-brief"] ? `
         <div class="note" style="margin-top:10px;">${sampleLink("market-brief")}<a href="/tools/market-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="linkedin">
-        <div class="k">LinkedIn article</div>
-        <h3>A publish-ready LinkedIn article, with the images</h3>
-        <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images at LinkedIn's own sizes: cover 1920x1080, link-share 1200x627, feed square and portrait. Paste and publish.</p>
+        <div class="k">Professional article</div>
+        <h3>A publish-ready professional article, with the images</h3>
+        <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images in the sizes LinkedIn uses: cover 1920x1080, link-share 1200x627, feed square and portrait. Formatted for posting on LinkedIn; not affiliated with LinkedIn.</p>
         <form class="pcard-form" data-kind="linkedin" novalidate>${cardField("linkedin", "Topic", "e.g. why AI agents will pay for APIs with stablecoins")}
-        <div class="gets"><b>What you get:</b> the article, three headline options, key takeaways, a companion post and cover plus inline images cut to LinkedIn's sizes.</div>
+        <div class="gets"><b>What you get:</b> the article, three headline options, key takeaways, a companion post and cover plus inline images cut to the sizes LinkedIn uses.</div>
         ${cardError("linkedin")}
         ${buyBtn("linkedin", "linkedin-article", "Get the article")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("linkedin-article")}<a href="/tools/linkedin-article" style="color:var(--muted);">Sample output + API docs →</a></div>

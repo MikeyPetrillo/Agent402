@@ -65,7 +65,7 @@ export const WHY_POINTS = [
     t: "Finished work, ready to use.",
     h: "Finished work, ready to use.",
     s: "Dossiers, 13F holdings, filing reports, domain audits and deep research from live sources; monitors re-run them on change.",
-    p: `Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix. Monitors check for free on a schedule and re-run the paid report when the facts change, up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days; past that a change arrives as an alert.`,
+    p: `Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a professional article package, grounded in live sources, most with a downloadable data appendix. Monitors check for free on a schedule and re-run the paid report when the facts change, up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days; past that a change arrives as an alert.`,
     links: [["/reports", "report products"], ["/monitors", "monitors"]],
     more: [],
   },

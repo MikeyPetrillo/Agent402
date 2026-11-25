@@ -324,7 +324,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.17.0")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment offer attached, and a client that speaks ${CONNECTOR.phrase || "x402 or MPP, where the instance takes one in the call,"} pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.17.1")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment offer attached, and a client that speaks ${CONNECTOR.phrase || "x402 or MPP, where the instance takes one in the call,"} pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -332,7 +332,7 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
@@ -420,7 +420,7 @@ export function learnPage(baseUrl, slug) {
     ${breadcrumbNavFromLd(baseUrl, breadcrumbLd)}
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
-    ${l.guide ? `<p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 8px;max-width:780px;">For ${esc(l.guide[1])} in plain language, read ${guideLink(GUIDE_EXPLAINERS[l.guide[0]], esc(l.guide[2]))} on ${GUIDE_SITE_NAME}.</p>` : ""}
+    ${l.guide ? `<p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 8px;max-width:780px;">For an explainer on ${esc(l.guide[1])}, read ${guideLink(GUIDE_EXPLAINERS[l.guide[0]], esc(l.guide[2]))} on ${GUIDE_SITE_NAME}.</p>` : ""}
     <div class="lp-body">
 ${sections}
       <h2>Related</h2>
@@ -458,7 +458,7 @@ export function learnIndex(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:52px 30px 64px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 16px;">How agents pay for APIs</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>. For x402 and MPP in plain language, read ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)}.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>. For an explainer on x402 and MPP, read ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)}.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
 ${cards}
     </div>

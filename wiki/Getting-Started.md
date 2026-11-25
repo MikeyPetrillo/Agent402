@@ -45,7 +45,7 @@ To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new walle
 |---|---|
 | A Claude user | Paste `https://agent402.tools/mcp` into Settings → Connectors - see [[MCP Connector]] |
 | A Cursor, VS Code, Windsurf, Cline, Codex or Gemini CLI user | Each host's config block is in the [agent-hosts guide](https://agent402.tools/guides/agent-hosts) - see also [[MCP Connector]] |
-| An MCP-based agent | `npx -y agent402-mcp@0.17.0` with optional `AGENT_KEY` - see [[MCP Connector]] |
+| An MCP-based agent | `npx -y agent402-mcp@0.17.1` with optional `AGENT_KEY` - see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages - see [[Adapters]] |
 | Calling over HTTP with a wallet | One x402-wrapped fetch - see [[Paying with x402]] |
 | Wallet-less / sandboxed | Proof-of-work on 150+ pure-CPU tools - see [[Paying with Compute]] |
@@ -54,4 +54,4 @@ To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new walle
 
 ## What things cost
 
-Flat per-call prices from **$0.001** (utilities, conversions); most tools are **$0.001 to $0.02** (e.g. browser rendering), with premium AI, media, and multi-tool skill packs priced higher. Report products (research, dossier, ticker pack, fund, SEC filing, domain audit, recall, insider flow, token brief, token risk, LinkedIn article, IPO digest) are priced per outcome over x402 or MPP, and by card at [`/reports`](https://agent402.tools/reports), where the card price includes payment processing; monitors are billed monthly per target. The one exception to flat pricing is the LLM gateway's metered tier (`/v1/metered/*`), where the 402 quotes each request from its own body (see [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]). No tiers, no rate-limit plans - every call settles in seconds and the next one is independent. Prices are in the catalog and in every 402 response.
+Flat per-call prices from **$0.001** (utilities, conversions); most tools are **$0.001 to $0.02** (e.g. browser rendering), with premium AI, media, and multi-tool skill packs priced higher. Report products (research, dossier, ticker pack, fund, SEC filing, domain audit, recall, insider flow, token brief, token risk, professional article, IPO digest) are priced per outcome over x402 or MPP, and by card at [`/reports`](https://agent402.tools/reports), where the card price includes payment processing; monitors are billed monthly per target. The one exception to flat pricing is the LLM gateway's metered tier (`/v1/metered/*`), where the 402 quotes each request from its own body (see [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]). No tiers, no rate-limit plans - every call settles in seconds and the next one is independent. Prices are in the catalog and in every 402 response.

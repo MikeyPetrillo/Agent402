@@ -71,6 +71,7 @@ import { pathToFileURL } from "node:url";
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
+import { alchemyRpcFor } from "../src/rpc-terms.js";
 import { isGatewayWire } from "../src/gateway-wire.js";
 import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 import { withoutUrls } from "../src/payment-verify.js";
@@ -175,9 +176,10 @@ export const DEFAULT_TIME_BUDGET_SECONDS = 480;
 const TIME_BUDGET_SECONDS = capUsd(process.env.REFUND_TIME_BUDGET_SECONDS, String(DEFAULT_TIME_BUDGET_SECONDS), "REFUND_TIME_BUDGET_SECONDS");
 
 // Public RPCs for the EVM rails we can refund on (src/evm-rpcs.js, shared
-// with the settle path). Overridable per chain via REFUND_RPC_<id> (e.g.
-// REFUND_RPC_8453). A chain with no RPC entry holds its rows - refusing loudly
-// beats broadcasting through a guessed endpoint.
+// with the settle path), then the keyed Alchemy lane when ALCHEMY_API_KEY is
+// set (src/rpc-terms.js: the only permitted lane for Monad). Overridable per
+// chain via REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no RPC holds
+// its rows - refusing loudly beats broadcasting through a guessed endpoint.
 export { EVM_RPCS };
 
 /**
@@ -195,7 +197,7 @@ export function proofRpcsFor(network, env = process.env) {
   if (n === TEMPO_NETWORK) return [TEMPO_RPC()];
   if (!n.startsWith("eip155:")) return [];
   const out = [];
-  for (const u of [env[`REFUND_RPC_${n.split(":")[1]}`], EVM_RPCS[n]]) {
+  for (const u of [env[`REFUND_RPC_${n.split(":")[1]}`], EVM_RPCS[n], alchemyRpcFor(n, env)]) {
     const s = typeof u === "string" ? u.trim() : "";
     if (s && !out.includes(s)) out.push(s);
   }
@@ -242,7 +244,7 @@ export const TEMPO_NETWORK = "eip155:4217";
 export const SOLANA_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TEMPO_RPC = () => (process.env.REFUND_TEMPO_RPC || process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
-const SOLANA_RPC = () => (process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+const SOLANA_RPC = () => (process.env.SOLANA_RPC_URL || "https://solana-rpc.publicnode.com").trim();
 
 export function familyOf(network) {
   const n = String(network || "");
@@ -535,7 +537,7 @@ async function evmClientFor(row) {
   const { createWalletClient, http, publicActions, defineChain } = await import("viem");
   const { privateKeyToAccount } = await import("viem/accounts");
   const id = Number(String(row.network).split(":")[1]);
-  const rpc = (process.env[`REFUND_RPC_${id}`] || EVM_RPCS[row.network] || "").trim();
+  const rpc = (process.env[`REFUND_RPC_${id}`] || EVM_RPCS[row.network] || alchemyRpcFor(row.network) || "").trim();
   if (!rpc) throw new Error(`no RPC for ${row.network}`);
   const account = privateKeyToAccount(process.env.REFUND_EVM_KEY.trim());
   const chain = defineChain({ id, name: row.network, nativeCurrency: { name: "n", symbol: "n", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
@@ -835,6 +837,11 @@ export async function executeRefunds(rows, {
   // The recipient is screened like every payout we make; a refusal or a
   // screen that cannot run HOLDS the row (still owed, never sent).
   screen = null,
+  // A payee the screen finds LISTED is not held for a human: the row is
+  // moved to blocked (blocked property, never sent, never written off) and
+  // the event is reported to the server's sanctions store. `block(row)`
+  // resolves true when both landed; on any failure the row stays owed and held.
+  block = null,
   prepare = async () => null,
   prove = async () => ({ verified: false, reason: "no outbound verifier" }),
   release = null,
@@ -843,7 +850,7 @@ export async function executeRefunds(rows, {
   now = Date.now,
   log = console,
 } = {}) {
-  let ok = 0, failed = 0, unverified = 0, stuck = 0, released = 0, deferred = 0;
+  let ok = 0, failed = 0, unverified = 0, stuck = 0, released = 0, deferred = 0, blocked = 0;
   const list = rows || [];
   for (let i = 0; i < list.length; i++) {
     const row = list[i];
@@ -874,6 +881,21 @@ export async function executeRefunds(rows, {
           // A fixed reason only: the screen's own message can name a listed
           // entity, and this log is published by the workflow run.
           const why = e?.sanctioned ? "address is listed" : e?.screenUnavailable ? "list not loaded" : e?.statusCode === 502 ? "address unreadable" : "screen did not run";
+          if (e?.sanctioned && typeof block === "function") {
+            let outcome = false;
+            try { outcome = await block(row); } catch { outcome = false; }
+            if (outcome === BLOCK_UNRECORDED) {
+              log.warn(`FAIL  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: held as blocked property (never sent), but its sanctions event was not recorded; record it by hand`);
+              blocked++;
+              failed++;
+              continue;
+            }
+            if (outcome === true) {
+              log.warn(`BLOCK #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: refused, the payee is on a sanctions list; held as blocked property (never sent) and recorded for the blocked-property report`);
+              blocked++;
+              continue;
+            }
+          }
           log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: payout screen refused (${why}); held for a human, still owed`);
           unverified++;
           continue;
@@ -935,7 +957,7 @@ export async function executeRefunds(rows, {
       failed++;
     }
   }
-  return { ok, failed, unverified, stuck, released, deferred };
+  return { ok, failed, unverified, stuck, released, deferred, blocked };
 }
 
 /**
@@ -966,7 +988,7 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   }
   if (!plan.send.length) { log.log("nothing to send."); return { plan, executed: false }; }
   const result = await executeRefunds(plan.send, { ...(await (typeof deps === "function" ? deps(plan) : deps)), log });
-  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof, ${result.deferred || 0} deferred to the next run (all unpaid rows remain owed or sending)`);
+  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof, ${result.deferred || 0} deferred to the next run, ${result.blocked || 0} held as blocked property (all unpaid rows remain owed or sending)`);
   return { plan, executed: true, result };
 }
 
@@ -1010,6 +1032,31 @@ async function releaseClaim(id, note) {
   const res = await ledgerUpdate({ id, action: "release", note });
   if (res.ok) return true;
   throw new Error(`release failed for row ${id}: HTTP ${res.status} (the row stays sending)`);
+}
+
+// A refund whose payee is listed: the row is held as blocked property
+// (action "block", never sent, never voided) and the event is kept in the
+// server's sanctions store, which then reads `due` until the
+// blocked-property report is marked filed. True only when both landed;
+// false when the row was not blocked (it stays owed); BLOCK_UNRECORDED when
+// the row is held blocked but the event did not land, which the run reports
+// as a failure (the event must be recorded by hand).
+export const BLOCK_UNRECORDED = "blocked-unrecorded";
+export async function blockListedRefund(row, { fetchImpl = fetch } = {}) {
+  const res = await ledgerUpdate({ id: row.id, action: "block", note: "refund-run: payee is on a sanctions list; held as blocked property, never sent" }, { fetchImpl });
+  if (!res.ok) return false;
+  let status = 0;
+  try {
+    const ev = await fetchImpl(`${TARGET}/__operator/sanctions-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ kind: "blocked-refund", address: row.payer, network: row.network, amountUsd: row.priceUsd, refundId: row.id, route: row.slug ? `refund of ${row.slug}` : null, rail: "refund" }),
+    });
+    status = ev.status;
+    if (ev.ok) return true;
+  } catch { status = 0; }
+  console.warn(`      #${row.id}: held as blocked, but the sanctions event was not recorded (HTTP ${status || "unreachable"}); record it by hand`);
+  return BLOCK_UNRECORDED;
 }
 
 async function main() {
@@ -1057,11 +1104,14 @@ async function main() {
       }),
       claim: claimForSend,
       release: releaseClaim,
+      // record: false - this process holds no store; a listed payee is
+      // reported to the server by `block` below.
       screen: async (row) => {
         const { loadSanctions, assertPayoutScreened } = await import("../src/tools/sanctions-kit.js");
         await loadSanctions();
-        await assertPayoutScreened(row.payer, { label: tag(row.payer) });
+        await assertPayoutScreened(row.payer, { label: tag(row.payer), record: false });
       },
+      block: (row) => blockListedRefund(row),
       prepare: (row, proof) => {
         const family = familyOf(row.network);
         if (family === "tempo") return prepareTempo(row, proof, accepts[row.network]);

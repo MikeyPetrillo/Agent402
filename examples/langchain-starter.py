@@ -1,12 +1,12 @@
 # Agent402 + LangChain Starter
-# pip install "agent402-langchain[langchain]" langchain langchain-openai
+# pip install "agent402-structured-tools[langchain]" langchain langchain-openai
 #
 # Pure-CPU tools are FREE via built-in proof-of-work (no wallet, no keys).
 # Live-data tools (market data, web search, EDGAR, on-chain) are wallet-only:
 # construct the toolkit with x402_fetch=<callable> that signs USDC payment.
 # See https://agent402.tools/docs.
 
-from agent402_langchain import Agent402Toolkit
+from agent402_structured_tools import Agent402Toolkit
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate

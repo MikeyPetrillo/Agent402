@@ -12,8 +12,10 @@
 // is the same shape a later cross-seller executor needs; only the dispatch
 // step changes.
 //
-// Economics: flat $0.01 covers any underlying tool priced <= $0.005 — the
-// spread is the routing fee. Tools above the cap return a self-correcting 409
+// Economics: flat $0.01 covers any underlying tool priced <= $0.005. We buy
+// the result for our own account and resell it; the spread is our margin as
+// the reseller (published as `routingFeeUsd`, a name kept for compatibility:
+// our price less the seller's price, not a fee for moving the buyer's money). Tools above the cap return a self-correcting 409
 // that names the tool and its direct route, so the buyer can call it at list
 // price instead.
 import { isOwnPayoutAddress } from "../own-wallets.js";
@@ -41,7 +43,7 @@ import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
-import { notChargedOn } from "../not-charged.js";
+import { notChargedOn, runAsStep } from "../not-charged.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -90,7 +92,10 @@ export const EXEC_TIERS = [
 export const EXTERNAL_EXAMPLE_INPUT = Object.freeze({ task: "weather forecast", include: "external", params: Object.freeze({ lat: 40.7128, lon: -74.006 }) });
 const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
 /** Which execution tier (if any) can run a tool at `underlyingUsd`, and the
- *  price to pay it. Used by /api/route to quote the buyer the exact tier. */
+ *  price to pay it. Used by /api/route to quote the buyer the exact tier.
+ *  `underlyingPriceUsd` is the seller's price for the result we buy;
+ *  `routingFeeUsd` is our resale price less it (our margin; the name is kept
+ *  for compatibility). */
 export function routeExecuteHint(underlyingUsd) {
   const tier = EXEC_TIERS.find((t) => underlyingUsd <= t.underlyingMaxUsd);
   return tier ? { tool: tier.slug, price: `$${tier.execPriceUsd.toFixed(2)}`, underlyingPriceUsd: underlyingUsd, routingFeeUsd: Number((tier.execPriceUsd - underlyingUsd).toFixed(6)) } : null;
@@ -379,6 +384,14 @@ export function closedSentence(text) {
 /** The refusal while the spending wallet reads low; the charge sentence on a
  *  route call only (src/not-charged.js). */
 export const walletLowMessage = (req) => `Paying outside sellers is temporarily unavailable.${notChargedOn(req)} Retry later.`;
+/** A cold seller list (the first catalog build after a restart) is waited on
+ *  for at most the payment window's remaining time less this reserve: the 4 s
+ *  the run needs after resolution (the budget check below) plus one bound
+ *  probe (3 s) of the candidates the list yields. */
+export const CATALOG_WAIT_RESERVE_MS = 7000;
+export const CATALOG_WARMING_RETRY_AFTER_S = 30;
+/** The uncharged refusal while a chain's seller list is still loading. */
+export const catalogWarmingMessage = (req, chain) => `The list of outside sellers on ${chain} is still loading after a restart, so no seller was tried. Nothing was spent.${notChargedOn(req)} Retry in about ${CATALOG_WARMING_RETRY_AFTER_S} seconds.`;
 
 // Buyer payment network (CAIP-2) -> the external settlement chain it can fund.
 // External routing is SELF-FUNDING per chain: the buyer's settlement lands on
@@ -493,7 +506,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         : { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
+          task: { type: "string", description: "Task description, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
           slug: { type: "string", description: "Exact tool slug to execute (skips ranking). Provide task OR slug." },
           params: { type: "object", description: "Input for the resolved tool, matching its inputSchema (default {})" },
           include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index, buys the result from it and sells it to you (marked untrustedContent). Requires task (not slug).' },
@@ -664,15 +677,26 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // publishes a model list without it is skipped before anything is
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
-          let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null;
+          let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null; let warmingChain = null;
           for (const c of chains) {
-            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, ...(target ? { onlyUrl: target } : {}) });
+            // A seller list still loading (a cold catalog) is waited on for
+            // at most what this payment's window has left less the reserve
+            // the rest of the run needs; null (no window) waits as before.
+            const catalogWaitMs = windowBudgetMs != null ? Math.max(0, remainingMs() - CATALOG_WAIT_RESERVE_MS) : null;
+            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, catalogWaitMs, ...(target ? { onlyUrl: target } : {}) });
+            if (found && found.__gateDrops?.byReason?.catalog_warming) warmingChain = warmingChain || c;
             const list = Array.isArray(found) ? found : (found ? [found] : []);
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
             if (found && found.__judgedNoMatch) lastNoMatch = found.__judgedNoMatch;
             if (list.length) { candidateList = list; chain = c; break; }
+          }
+          // The seller list for this chain is still loading after a restart:
+          // nothing was tried and nothing spent. Answered at once, uncharged,
+          // with a short Retry-After, never as a spent time budget.
+          if (!candidateList.length && warmingChain) {
+            throw Object.assign(bad(catalogWarmingMessage(req, warmingChain), 503), { retryAfter: CATALOG_WARMING_RETRY_AFTER_S, attribution: "ours" });
           }
           if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used this payment's time budget. Nothing was spent.${notChargedOn(req)} Retry with a fresh payment, or pay this route over an EVM rail.`, 504);
@@ -1140,13 +1164,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           );
         }
       } else {
-        throw bad('Provide "task" (plain language) or "slug" (exact tool)');
+        throw bad('Provide "task" (a description) or "slug" (exact tool)');
       }
 
       const underlying = toUsd(def.price);
       let result;
       try {
-        result = await runAsCallerOf(req, () => def.handler(params));
+        result = await runAsCallerOf(req, () => runAsStep(() => def.handler(params)));
         // Never relay an inner handler's meter sentinel (non-enumerable now,
         // but belt and braces: this object is nested into our own response).
         if (result && typeof result === "object") { try { delete result.__meterUpstreamUsd; } catch { /* frozen */ } }

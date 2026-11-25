@@ -17,7 +17,7 @@
 // This module is a LEAF: it imports nothing from the server; server.js hands
 // in the brand tokens and the live figures.
 
-import { RAILS } from "./rails.js";
+import { RAILS, railKey } from "./rails.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { sellablePacks } from "./credits.js";
 import { SKILL_PACKS } from "./skills.js";
@@ -28,7 +28,7 @@ import { brandMarkTile } from "./brand-mark.js";
 // import cycle, so SKILL_PACKS is not initialized while this file first runs.
 const packsFloor = () => `${Math.floor(SKILL_PACKS.length / 10) * 10}+`;
 
-const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain$/, "").replace(/\s+/g, "-"), name: r.name, asset: r.asset }));
+const CHAIN_KEYS = RAILS.map((r) => ({ key: railKey(r), name: r.name, asset: r.asset }));
 
 /** Exact path -> section id. Prefix rules live in ogSectionFor. */
 const EXACT = {

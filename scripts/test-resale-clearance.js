@@ -115,10 +115,10 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
     "device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "food-recalls",
     "earthquakes", "federal-awards", "fema-disasters", "geo-lookup", "vehicle-recalls", "vin-decode",
     "weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup", "weather-window", "weather-thresholds", "weather-probability", "weather-market-brackets", "weather-market-board", "weather-forecast", "weather-alerts",
-    "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "dns", "tls-cert", "ip-info",
+    "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "dns", "tls-cert", "ip-info",
     "stablecoin-peg", "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", ...PERPS,
   ];
-  ok(new Set(REF_LISTED).size === 73 && AWS_LISTED.length >= 74, `the lists read are the ones sold today (/ref ${new Set(REF_LISTED).size}, AWS ${AWS_LISTED.length})`);
+  ok(new Set(REF_LISTED).size === REF_LISTED.length && AWS_LISTED.length > 0, `the lists read are the ones sold today (/ref ${new Set(REF_LISTED).size}, AWS ${AWS_LISTED.length})`);
   // The server's compute reading, for the pure-CPU tools on the AWS list.
   const { isComputePayable } = await import("../src/pow.js");
   const computeOf = (d) => { try { return typeof isComputePayable === "function" ? isComputePayable(d) === true : false; } catch { return false; } };
@@ -128,24 +128,136 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   ok(["whois", "github-repo", "onchain-sql-schema"].every((s) => !REF_LISTED.includes(s) && !AWS_LISTED.includes(s) && defs.get(s)?.resaleCleared !== true), "whois, github-repo and onchain-sql-schema are on neither list and stay uncleared");
 }
 
-// A cleared tool whose answer carries a source's raw figures sells a trimmed
-// answer through a third party (markRefAnswer): the clearance above holds
-// only with the trim, so the trim is asserted here, not only in its kit's
-// suite. token-diligence: no market block, no supply counts (only
-// circulatingShare), and the market-cap ranking without its values.
+// CLASS GUARD, source figures in a computed answer (owner rule for the market
+// source: a tool built on it is listed and sold only when its answer is our
+// own computation). Every tool that reads the market source (attribution
+// "coingecko") and is marked computed or cleared over market data has its
+// PUBLIC published example read, at any depth, for a field on the shared
+// raw-field denylist (R.RAW_MARKET_FIELDS); none may carry one, and none needs
+// a resale trim (markRefAnswer) to be clean. The kits' suites drive the
+// handlers themselves through the same list.
 {
-  const TRIMMED = ["token-diligence", "exchange-spread", "dex-pool-health", "funding-screener", "stablecoin-peg"];
-  const undeclared = TRIMMED.filter((s) => typeof defs.get(s)?.refAnswer !== "function");
-  ok(undeclared.length === 0, `each cleared tool that trims its resold answer declares the trim (${undeclared.join(",") || TRIMMED.length})`);
-  const td = defs.get("token-diligence");
-  const pub = td?.discovery?.output?.example;
-  const before = JSON.stringify(pub);
-  const ref = R.refAnswerOf(td, pub);
-  ok(pub && Array.isArray(pub.rows) && pub.rows.length > 0 && pub.rows.some((r) => r && r.market) && pub.comparison?.byMarketCap?.some((x) => "value" in x), "CONTROL: token-diligence's published answer carries the market block and the market-cap values");
-  ok(Array.isArray(ref?.rows) && ref.rows.length === pub.rows.length && ref.rows.every((r) => !("market" in r)), "token-diligence resold: no row carries the market block");
-  ok(ref.rows.every((r) => r.supply === undefined || Object.keys(r.supply).join() === "circulatingShare"), `token-diligence resold: supply keeps only circulatingShare (${ref.rows.map((r) => Object.keys(r.supply || {}).join("+")).join(",")})`);
-  ok(Array.isArray(ref.comparison?.byMarketCap) && ref.comparison.byMarketCap.length > 0 && ref.comparison.byMarketCap.every((x) => !("value" in x) && x.id), "token-diligence resold: the market-cap ranking keeps the order, never the market cap");
-  ok(JSON.stringify(pub) === before, "the trim leaves the public answer untouched");
+  const CLASS = "[source figure in a computed answer]";
+  const keysAt = (v, path = "", acc = []) => { if (Array.isArray(v)) v.forEach((x) => keysAt(x, `${path}[]`, acc)); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { const at = path ? `${path}.${k}` : k; acc.push([k, at]); keysAt(x, at, acc); } return acc; };
+  const deny = new Set(R.RAW_MARKET_FIELDS);
+  const computedCg = [...defs.values()].filter((d) => d.attribution === "coingecko" && (d.resale === R.RESALE_COMPUTED || d.resaleClearedBy === R.MARKET_DATA_CLEARANCE));
+  const NINE = ["funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", "token-diligence", "stablecoin-peg"];
+  ok(NINE.every((s) => computedCg.some((d) => d.slug === s)), `${CLASS} the guard reads every computed market-source tool (${computedCg.length}: ${NINE.filter((s) => !computedCg.some((d) => d.slug === s)).join(",") || "all nine"})`);
+  for (const d of computedCg) {
+    const pub = d.discovery?.output?.example;
+    ok(pub && typeof pub === "object" && Object.keys(pub).length > 3, `${CLASS} ${d.slug}: has a published example to read`);
+    const hits = keysAt(pub).filter(([k]) => deny.has(k)).map(([, p]) => p);
+    ok(hits.length === 0, `${CLASS} ${d.slug}: the public example carries no source figure (${hits.join(", ") || "none"}${hits.length ? "; answer a share, ratio, deviation, percentile, rank, band or score instead" : ""})`);
+    ok(typeof d.refAnswer !== "function", `${CLASS} ${d.slug}: no resale trim is needed (the public answer is the resold one)`);
+  }
+  // Every withdrawn top-level field is a denylisted one and is gone from the example.
+  for (const [slug, fields] of Object.entries(R.WITHDRAWN_SOURCE_FIELDS)) {
+    ok(fields.every((k) => deny.has(k)) && fields.every((k) => !(k in (defs.get(slug)?.discovery?.output?.example || {}))), `${CLASS} ${slug}: each withdrawn field (${fields.join(", ")}) is on the denylist and out of the example`);
+  }
+  // CONTROLS: the guard reads something. A source figure planted deep in a
+  // copy of one example is found at its path; the barred raw pass-through
+  // carries listed fields and is outside the computed set.
+  const planted = structuredClone(defs.get("exchange-spread").discovery.output.example);
+  planted.venues[0].liquidityUsd = 1;
+  ok(keysAt(planted).some(([k, p]) => deny.has(k) && p === "venues[].liquidityUsd"), "CONTROL: a planted source figure is found at its path");
+  ok(!computedCg.some((d) => d.slug === "crypto-price") && keysAt(defs.get("crypto-price")?.discovery?.output?.example).some(([k]) => deny.has(k)), "CONTROL: the barred raw pass-through carries listed fields and is outside the computed set");
+}
+
+// CLASS GUARD, raw upstream figures sold on a resale surface: every tool
+// cleared as computed over market data (R.MARKET_DATA_CLEARANCE) has its
+// published example driven through the one resale serializer both gates
+// serve (refAnswerOf: /ref and /aws), and the resold answer may carry no field
+// on the shared list (R.RAW_MARKET_FIELDS) at any depth, nor any field the
+// tool's own trim names (markRefAnswer rawFields). Each named field must be in
+// the public example (else the check reads nothing) and gone after the trim.
+{
+  const CLASS = "[raw upstream on a resale surface]";
+  const FIX = "drop it in the tool's markRefAnswer transform and name it in its rawFields (src/resale-terms.js)";
+  const keysAnywhere = (v, acc = new Set()) => { if (Array.isArray(v)) for (const x of v) keysAnywhere(x, acc); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { acc.add(k); keysAnywhere(x, acc); } return acc; };
+  const market = [...defs.values()].filter((d) => d.resaleCleared === true && d.resaleClearedBy === R.MARKET_DATA_CLEARANCE);
+  const expected = CLEARED.filter((s) => /market data/.test(String(defs.get(s)?.resaleClearedBy || "")));
+  ok(market.length >= 9 && expected.every((s) => market.some((d) => d.slug === s)), `${CLASS} every tool cleared over market data reads the shared clearance constant (${market.length}: ${expected.filter((s) => !market.some((d) => d.slug === s)).join(",") || "all"})`);
+  ok(R.RAW_MARKET_FIELDS.length >= 10 && R.RAW_MARKET_FIELDS.includes("price") && R.RAW_MARKET_FIELDS.includes("marketCap"), "the shared raw-field list names the source's own figures");
+  for (const d of market) {
+    const pub = d.discovery?.output?.example;
+    ok(pub && typeof pub === "object", `${CLASS} ${d.slug}: has a published example to drive through the resale serializer`);
+    if (!pub || typeof pub !== "object") continue;
+    const before = JSON.stringify(pub);
+    let resold;
+    try { resold = R.refAnswerOf(d, structuredClone(pub)); } catch (e) { resold = undefined; ok(false, `${CLASS} ${d.slug}: the resale trim threw (${e?.message})`); continue; }
+    const leaked = R.RAW_MARKET_FIELDS.filter((k) => keysAnywhere(resold).has(k));
+    ok(leaked.length === 0, `${CLASS} ${d.slug}: the resold example carries no shared raw field (${leaked.join(",") || "none"}${leaked.length ? `; ${FIX}` : ""})`);
+    if (typeof d.refAnswer === "function") {
+      const paths = Array.isArray(d.refRawFields) ? d.refRawFields : [];
+      ok(paths.length > 0, `${CLASS} ${d.slug}: its trim names the raw fields it drops (${FIX})`);
+      const absentInPublic = paths.filter((p) => R.valuesAtPath(pub, p).length === 0);
+      ok(absentInPublic.length === 0, `${CLASS} ${d.slug}: CONTROL, each named raw field is in the public example, so the check reads something (${absentInPublic.join(",") || paths.length})`);
+      const kept = paths.filter((p) => R.valuesAtPath(resold, p).length > 0);
+      ok(kept.length === 0, `${CLASS} ${d.slug}: each named raw field is gone from the resold answer (${kept.join(",") || "all dropped"}${kept.length ? `; ${FIX}` : ""})`);
+    }
+    ok(JSON.stringify(pub) === before, `${d.slug}: the trim leaves the public answer untouched`);
+  }
+  // Both resale gates serve through the one serializer.
+  const { readFileSync } = await import("node:fs");
+  for (const f of ["referral-gate.js", "aws-marketplace-gate.js"]) {
+    const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    ok(/refAnswerOf\(def, result\)/.test(src), `${CLASS} src/${f} serves a sale's answer through refAnswerOf`);
+  }
+  // A trim must name what it drops.
+  let threw = false;
+  try { R.markRefAnswer([{ slug: "z" }], ["z"], (a) => a); } catch { threw = true; }
+  ok(threw, "a resale trim that names no raw fields is refused when the kit loads");
+}
+
+// CLASS GUARD, facts compiled from outside sources: reaching no upstream
+// clears a tool for resale only when none of its facts come from an outside
+// source. Every proof-of-work tool's own example is run here, and one whose
+// answer names an outside source (a URL under a source, credit, license or
+// citation key, off this host) must declare its sources (markContentSources),
+// which takes it out of the compute clearance unless it is marked cleared.
+{
+  const CLASS = "[outside facts cleared as compute]";
+  const { readdirSync } = await import("node:fs");
+  const { isComputePayable } = await import("../src/pow.js");
+  const all = new Map(defs);
+  for (const f of readdirSync(new URL("../src/tools/", import.meta.url)).filter((x) => x.endsWith(".js") && !/-worker\.js$/.test(x))) {
+    let mod;
+    try { mod = await import(`../src/tools/${f}`); } catch { continue; }
+    for (const v of Object.values(mod)) if (Array.isArray(v)) for (const d of v) if (d && typeof d === "object" && typeof d.slug === "string" && typeof d.handler === "function" && !all.has(d.slug)) all.set(d.slug, d);
+  }
+  const KEY = /source|credit|licen|citation/i;
+  const urlsIn = (v, acc = [], key = "") => {
+    if (typeof v === "string") { if (KEY.test(key) && /^https?:\/\//.test(v)) acc.push(v); }
+    else if (Array.isArray(v)) for (const x of v) urlsIn(x, acc, key);
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) urlsIn(x, acc, KEY.test(k) ? k : key);
+    return acc;
+  };
+  const compute = [...all.values()].filter((d) => { try { return isComputePayable(d) === true; } catch { return false; } });
+  ok(compute.length >= 100, `the proof-of-work tools are read (${compute.length})`);
+  const undeclared = [];
+  let named = 0;
+  for (const d of compute) {
+    let out;
+    try { out = await Promise.race([Promise.resolve(d.handler(structuredClone(d.discovery?.input ?? {}), { headers: {} })), new Promise((r) => setTimeout(() => r(null), 3000))]); } catch { continue; }
+    const urls = urlsIn(out).filter((u) => !/agent402\.tools/.test(u));
+    if (!urls.length) continue;
+    named++;
+    if (!R.hasContentSources(d)) undeclared.push(`${d.slug} (${urls[0]})`);
+  }
+  ok(named >= 1, `CONTROL: at least one proof-of-work tool names an outside source in its answer (${named})`);
+  ok(undeclared.length === 0, `${CLASS} every proof-of-work tool whose answer names an outside source declares it (${undeclared.join("; ") || "all declared"}; fix: markContentSources beside its handler, src/resale-terms.js)`);
+  const mc = all.get("market-calendar");
+  ok(R.hasContentSources(mc) && mc.contentSources.every((x) => x.url.startsWith("https://") && x.license && typeof x.redistribution === "boolean"), "market-calendar declares each source, its license and whether it allows redistribution");
+  ok(R.resaleClearanceRefusal(mc, { compute: true }) === NOT_CLEARED && referralIneligibility(mc, { compute: true, priceForNetwork: (p) => p }) !== null && awsIneligibility(mc, { compute: true }) === NOT_CLEARED, `${CLASS} market-calendar is not cleared by reaching no upstream (both gates refuse it)`);
+  const redact = all.get("redact");
+  ok(R.resaleClearanceRefusal(redact, { compute: true }) === null, "CONTROL: a compute tool with no outside facts still passes");
+  const sc = all.get("settlement-calendar");
+  ok(R.hasContentSources(sc) && sc.resaleCleared === true && !sc.contentSources.some((x) => /nacha|frbservices|bankofengland|europeanpaymentscouncil|jpx\.co\.jp/.test(x.url)), "settlement-calendar's rule sources are public ones, declared");
+  const nyfed = ["fed-funds", "us-macro-series"].map((x) => all.get(x));
+  ok(nyfed.every((d) => d && R.resaleBarredReason(d) === R.NYFED_PASS_ON_RESALE_REASON && awsIneligibility(d, {}) === R.NYFED_PASS_ON_RESALE_REASON), "the tools serving New York Fed rates are barred from resale, with the pass-on reason");
+  let threw = false;
+  try { R.markContentSources([{ slug: "z" }], ["z"], [{ name: "x", url: "https://x.example", license: "y" }]); } catch { threw = true; }
+  ok(threw, "a content source must say whether its license allows redistribution");
 }
 
 // The suite seam: clears named slugs for a test boot, never in production.

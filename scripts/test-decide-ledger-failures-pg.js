@@ -80,7 +80,7 @@ if (CHILD) {
   const out = await exec({ decisionId, maxBudgetUsd: 0.05 }, req);
   for (const fn of req.__onSettled || []) fn(true); // the payment settled
   setTimeout(() => {
-    console.log(JSON.stringify({ decisionId, runId: out.runId, status: out.status, spentUsd: out.spentUsd, leftover: out.leftoverCredit, claims }));
+    console.log(JSON.stringify({ decisionId, runId: out.runId, status: out.status, spentUsd: out.spentUsd, leftover: out.leftoverCredit, unspent: out.unspent, claims }));
     process.exit(0); // gone long before the first in-memory retry
   }, 300);
 } else {
@@ -261,7 +261,9 @@ if (CHILD) {
       await new Promise((r) => child.on("exit", r));
       const o = JSON.parse(buf.split("\n").find((l) => l.startsWith("{")) || "{}");
       const before = (await q(`SELECT status FROM ${T("runs")} WHERE id = $1`, [o.runId]))[0];
-      ok(o.status === "complete" && o.leftover?.token && before?.status === "running", `the child answered ${o.status} with a leftover credit, then exited; the run reads ${before?.status} in the database`);
+      // The unspent part of an exact payment is a refund owed, never a credit
+      // (src/tools/decide-kit.js DECIDE_UNSPENT).
+      ok(o.status === "complete" && o.leftover == null && o.unspent?.handling === "refund-owed" && o.unspent.amountUsd > 0 && before?.status === "running", `the child answered ${o.status} with its unspent budget owed back (${JSON.stringify(o.unspent)}), no credit, then exited; the run reads ${before?.status} in the database`);
       ok(await journalHolds({ schema: process.env.STATE_DB_SCHEMA, prefix: "decide", needle: o.runId, file: join(childDir, "ledger.db.pending.ndjson") }), "...its journal is kept (in Redis with REDIS_URL set, else beside the ledger file)");
       if (String(process.env.REDIS_URL || "").trim()) ok(o.claims === 0, `...the exited child never claimed its journal, so no lease of a gone holder stands in the restart's way (${o.claims} claims)`);
       const L2 = openDecideLedger(join(childDir, "ledger.db"));
@@ -271,12 +273,12 @@ if (CHILD) {
       const credits = await q(`SELECT state, amount_micro FROM ${T("credits")} WHERE decision_id = $1`, [o.decisionId]);
       const holds = await q(`SELECT micro FROM ${T("seller_spend")} WHERE run_id = $1`, [o.runId]);
       ok(runRow?.status === "complete" && Number(runRow.spent_micro) === Math.round(o.spentUsd * 1e6), `a restarted ledger lands the run's finish (${JSON.stringify(runRow)})`);
-      ok(credits.length === 1 && credits[0].state === "active" && Number(credits[0].amount_micro) === Math.round(o.leftover.amountUsd * 1e6), `...and the leftover credit, minted and active (${JSON.stringify(credits)})`);
+      ok(credits.length === 0, `...and no credit is minted from the unspent budget (${JSON.stringify(credits)})`);
       ok(holds.length === 1 && Number(holds[0].micro) === 20000, `...and the seller hold at what was paid (${JSON.stringify(holds)})`);
       ok(L2.pendingCount() === 0, "...and the journal is empty");
       await L2.replayPending();
       const credits2 = await q(`SELECT state FROM ${T("credits")} WHERE decision_id = $1`, [o.decisionId]);
-      ok(credits2.length === 1, "a second replay changes nothing");
+      ok(credits2.length === 0, "a second replay changes nothing");
     }
   } finally {
     relay.heal();

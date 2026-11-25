@@ -24,11 +24,12 @@
 // College Scorecard + FEC use the api.data.gov key (DATA_GOV_API_KEY, DEMO_KEY
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
-import { attribute, FEMA_NOTICE } from "../data-attribution.js";
+import { attribute, creditAnswers, withCredit, FEMA_NOTICE, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 import { markResaleCleared } from "../resale-terms.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -108,7 +109,7 @@ export function isOpenFdaNoMatch(e) {
 }
 const openFdaFailure = (url, what, upstreamStatus) => {
   let host = "the source"; try { host = new URL(url).hostname; } catch { /* keep the generic name */ }
-  return Object.assign(bad(`${host} ${what} - an upstream issue, not your input; nothing was charged, retry shortly`, 502), { ...(upstreamStatus ? { upstreamStatus } : {}), attribution: "upstream" });
+  return Object.assign(bad(`${host} ${what} - an upstream issue, not your input.${notChargedHere()} Retry shortly.`, 502), { ...(upstreamStatus ? { upstreamStatus } : {}), attribution: "upstream" });
 };
 async function getJsonAllowEmpty(url, opts = {}) {
   let data;
@@ -1389,7 +1390,7 @@ export const GOV_TOOLS = [
           }));
           return { state: st, count: disasters.length, disasters, source: "OpenFEMA FemaWebDisasterDeclarations (fema.gov)", ...femaCitation(FEMA_WEB_ENDPOINT, accessed) };
         }
-        if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA. Nothing was charged.`, 502);
+        if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA.${notChargedHere()}`, 502);
       }
       const seen = new Set();
       const disasters = [];
@@ -1419,6 +1420,24 @@ export const GOV_TOOLS = [
 // for a citation of the endpoint (with its version) and the access date: the
 // description ends with the disclaimer, and every answer carries all three.
 attribute(GOV_TOOLS.find((t) => t.slug === "fema-disasters"), "fema");
+// Credit lines the sources ask for (src/data-attribution.js): USGS on every
+// earthquakes answer, the FDA on every openFDA answer, and the Census
+// Bureau's statement on a geo-lookup answer the Census geocoder served (a
+// fallback answer from another agency carries its own source only).
+creditAnswers(GOV_TOOLS.find((t) => t.slug === "earthquakes"), USGS_CREDIT);
+for (const slug of ["drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "drug-shortages", "drug-orange-book", "device-510k", "device-adverse-events", "device-recalls", "food-recalls"]) {
+  const t = GOV_TOOLS.find((x) => x.slug === slug);
+  if (t) creditAnswers(t, OPENFDA_CREDIT);
+}
+{
+  const geo = GOV_TOOLS.find((t) => t.slug === "geo-lookup");
+  const inner = geo.handler;
+  const censusCredit = (a) => (a && typeof a === "object" && /census\.gov/.test(String(a.source || "")) ? withCredit(a, CENSUS_CREDIT) : a);
+  geo.handler = async function geoCredited(...args) { return censusCredit(await inner.apply(this, args)); };
+  for (const k of Object.keys(inner)) geo.handler[k] = inner[k];
+  Object.defineProperty(geo.handler, "toString", { value: () => String(inner) });
+  geo.discovery.output.example = censusCredit(geo.discovery.output.example);
+}
 
 markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-orange-book", "drug-recalls", "drug-shortages", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);
 

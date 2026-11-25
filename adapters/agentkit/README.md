@@ -1,24 +1,28 @@
-# agent402-agentkit
+# agent402-action-provider
 
-[Agent402](https://agent402.tools) as a [Coinbase AgentKit](https://github.com/coinbase/agentkit)
-action provider: give an agent with a CDP, Privy, ZeroDev or viem-backed
+[Agent402](https://agent402.tools) as an **action provider** for use with
+[AgentKit](https://github.com/coinbase/agentkit): give an agent with a CDP, Privy, ZeroDev or viem-backed
 wallet 500+ pay-per-call web tools through three actions, paying under the
 hood over x402 in USDC from the agent's own wallet; the pure-CPU tools are
 free via proof-of-work.
+
+Works with AgentKit (`@coinbase/agentkit`). Agent402 is not affiliated with or endorsed by Coinbase.
+
+Formerly `agent402-agentkit`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://x402.org) and MPP.
 
 ## Install
 
 ```bash
-npm install agent402-agentkit @coinbase/agentkit @x402/fetch @x402/evm zod
+npm install agent402-action-provider @coinbase/agentkit @x402/fetch @x402/evm zod
 ```
 
 ## Use
 
 ```ts
 import { AgentKit, CdpEvmWalletProvider } from "@coinbase/agentkit";
-import { agent402ActionProvider } from "agent402-agentkit";
+import { agent402ActionProvider } from "agent402-action-provider";
 
 const walletProvider = await CdpEvmWalletProvider.configureWithWallet({
   apiKeyId: process.env.CDP_API_KEY_ID,
@@ -52,7 +56,7 @@ tool and paid $0.002 over x402 ([transaction](https://basescan.org/tx/0x1c0592f7
 Hosts that wrap actions themselves can take the raw list:
 
 ```js
-import { agent402Actions } from "agent402-agentkit";
+import { agent402Actions } from "agent402-action-provider";
 const actions = await agent402Actions();   // [{ name, description, schema, invoke }]
 ```
 

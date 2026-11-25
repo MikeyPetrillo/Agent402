@@ -100,9 +100,12 @@ export function checkExpect(expect, status, body) {
   for (const [p, re] of Object.entries(e.matches || {})) { const v = getPath(body, p); if (!new RegExp(re, "i").test(String(v))) fails.push(`${p} !~ /${re}/i (got ${JSON.stringify(v)?.slice(0, 80)})`); }
   for (const p of e.truthy || []) if (!getPath(body, p)) fails.push(`${p} not truthy (${JSON.stringify(getPath(body, p))})`);
   for (const p of e.falsy || []) if (getPath(body, p)) fails.push(`${p} not falsy (${JSON.stringify(getPath(body, p))?.slice(0, 60)})`);
-  for (const [p, n] of Object.entries(e.gt || {})) { const v = Number(getPath(body, p)); if (!(v > n)) fails.push(`${p} = ${v}, expected > ${n}`); }
-  for (const [p, n] of Object.entries(e.gte || {})) { const v = Number(getPath(body, p)); if (!(v >= n)) fails.push(`${p} = ${v}, expected >= ${n}`); }
-  for (const [p, n] of Object.entries(e.lt || {})) { const v = Number(getPath(body, p)); if (!(v < n)) fails.push(`${p} = ${v}, expected < ${n}`); }
+  // A comparison reads a number or a numeric string only: Number(null) and
+  // Number("") are 0, which would pass lt/gte and print a null field as "= 0".
+  const numAt = (p) => { const g = getPath(body, p); const v = typeof g === "number" ? g : (typeof g === "string" && g.trim() !== "" ? Number(g) : NaN); return { v, shown: JSON.stringify(g)?.slice(0, 60) ?? "undefined" }; };
+  for (const [p, n] of Object.entries(e.gt || {})) { const { v, shown } = numAt(p); if (!(v > n)) fails.push(`${p} = ${shown}, expected > ${n}`); }
+  for (const [p, n] of Object.entries(e.gte || {})) { const { v, shown } = numAt(p); if (!(v >= n)) fails.push(`${p} = ${shown}, expected >= ${n}`); }
+  for (const [p, n] of Object.entries(e.lt || {})) { const { v, shown } = numAt(p); if (!(v < n)) fails.push(`${p} = ${shown}, expected < ${n}`); }
   return fails;
 }
 

@@ -23,8 +23,8 @@ const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
 const eq = (a, b, msg) => { assert.equal(a, b, msg); pass++; };
 const BASE = "https://example.test";
 const CATALOG = {
-  "GET /api/search": { slug: "search", name: "Web search", price: "$0.010" },
-  "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02", modelBacked: true },
+  "GET /api/edgar-filings": { slug: "edgar-filings", name: "SEC recent filings", price: "$0.010" },
+  "GET /api/edgar-company-facts": { slug: "edgar-company-facts", name: "SEC company facts", price: "$0.02" },
   "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.001" },
 };
 // Visible text: scripts, styles, head and tags removed, entities decoded.
@@ -101,8 +101,8 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   }
   ok(t.includes("with no extra configuration on this server's side"), "configuration is said of this server's side");
   ok(t.includes("direct_buy.py") && t.includes("agent_buy.py") && html.includes("examples/agentcore-x402-buyer"), "the sample and its two entry points");
-  ok(t.includes("a cited answer from a model-backed tool"), "the answer step is labeled model-backed when the catalog says so");
-  ok(!main(agentcorePage(BASE, { ...CATALOG, "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02" } }, { tempo: true, env: {} })).includes("model-backed tool"), "and not labeled when it does not");
+  ok(t.includes("lists a company's SEC filings, then its filed financials"), "the agent sample's two paid steps are the SEC tools it calls");
+  ok(t.includes("Amazon Web Services, AWS and Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its affiliates."), "the AWS notice sits under the title");
   // Prices come from the catalog handed in, nothing typed.
   ok(t.includes("$0.01") && t.includes("$0.02") && t.includes("$0.001"), "tool card prices are the catalog's");
   const other = main(agentcorePage(BASE, { "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.777" } }, { tempo: true, env: {} }));
@@ -114,6 +114,27 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   ok(/<h1[^>]*>Agent402 with Amazon Bedrock AgentCore<\/h1>/.test(html) && /<title>Agent402 with Amazon Bedrock AgentCore/.test(html) && !/AWS Bedrock AgentCore/.test(html), "the heading and title name Agent402 first and the product by its own name");
   ok(/<title>[^<]*Amazon Bedrock AgentCore/.test(html) && html.includes(`<link rel="canonical" href="${BASE}/integrations/${AGENTCORE_SLUG}"`), "title and canonical");
   eq((html.match(/<h1\b/g) || []).length, 1, "one h1");
+}
+{
+  // The samples the page links make the SEC calls the page says, with a revenue
+  // concept the company still files (Apple's Revenues stops at fiscal 2018),
+  // and every text that describes them says the same.
+  const { readFileSync } = await import("node:fs");
+  const rd = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  const REV = "RevenueFromContractWithCustomerExcludingAssessedTax";
+  const py = rd("examples/agentcore-x402-buyer/agent_buy.py");
+  ok(py.includes("/api/edgar-filings?ticker=AAPL&form=10-K&limit=5") && py.includes(`/api/edgar-company-facts?ticker=AAPL&tags=${REV},Assets`) && !/tags=Revenues[,&"]/.test(py), "agent_buy.py: the SEC filings call, then the filed financials with the revenue concept Apple files");
+  const run = rd("examples/agentcore/run.js");
+  ok(run.includes('slugs: ["edgar-filings", "edgar-company-facts"]') && run.includes(REV), "examples/agentcore/run.js: the wallet path calls the same SEC tools");
+  const pkg = JSON.parse(rd("examples/agentcore/package.json"));
+  const adapter = JSON.parse(rd("adapters/strands/package.json"));
+  const want = pkg.dependencies[adapter.name];
+  ok(typeof want === "string" && want === `^${adapter.version.split(".").slice(0, 2).join(".")}.0`, `examples/agentcore installs the adapter's current release line (${want} for ${adapter.version})`);
+  for (const f of ["examples/agentcore-x402-buyer/README.md", "examples/agentcore/README.md", "wiki/AWS-Bedrock-AgentCore.md"]) {
+    const t = rd(f);
+    ok(/10-K/.test(t) && !/web search, then a cited answer|runs a web search and then a cited answer/.test(t), `${f}: describes the SEC sample, not the earlier search one`);
+  }
+  ok(!/tags: "Revenues,Assets"/.test(rd("src/integration-pages.js")), "the client example reads the revenue concept Apple files");
 }
 {
   // One list feeds every surface; the slug is not also a package page.

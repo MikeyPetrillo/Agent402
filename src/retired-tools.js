@@ -42,13 +42,13 @@ export const RETIRED_TOOLS = Object.freeze({
   // 2026-11-23: routes with no or near-no use whose source reads are not
   // kept. The two day-walk SQL routes ran onchain-sql's own query over more
   // days per call, so onchain-sql is named; fred-release-observations read
-  // every series of one release, and fred-series reads one of them by ID.
+  // every series of one release, and us-macro-series reads one of them by ID.
   // Every other route here answers a question no live tool answers (raw
   // Solana RPC, X post counts and trends, Farcaster,
   // the crypto options book, Solana swap routing and token profiles, image
   // judgment, FRED search, metadata and the release calendar, crypto
   // headlines, avatar lookup), so it names none.
-  "solana-rpc": { retiredAt: "2026-11-23", replacement: null, note: "Nothing live serves raw Solana JSON-RPC; the sol-token tools read Solana token prices, pairs and safety." },
+  "solana-rpc": { retiredAt: "2026-11-23", replacement: null, note: "Nothing live serves raw Solana JSON-RPC; the sol-token tools read Solana token prices, pairs and risk facts." },
   "onchain-sql-week": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
   "onchain-sql-range": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
   "x-post-counts": { retiredAt: "2026-11-23", replacement: null, note: "x-search-recent returns the matching posts from the last 7 days, not counts by period." },
@@ -68,9 +68,12 @@ export const RETIRED_TOOLS = Object.freeze({
   // pointer to it rides in the note rather than as the replacement.
   "judge-long": { retiredAt: "2026-11-23", replacement: null, route: "/v1/judge/long", note: "POST /v1/judge asks the same typed questions of a shorter document." },
   "fred-release-calendar": { retiredAt: "2026-11-23", replacement: null },
-  "fred-search": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations when you already hold its ID." },
-  "fred-series-info": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations by ID; nothing live returns its metadata." },
-  "fred-release-observations": { retiredAt: "2026-11-23", replacement: "fred-series" },
+  "fred-search": { retiredAt: "2026-11-23", replacement: null, note: "us-macro-series reads a series' observations when you already hold its ID." },
+  "fred-series-info": { retiredAt: "2026-11-23", replacement: null, note: "us-macro-series reads a series' observations by ID; nothing live returns its metadata." },
+  "fred-release-observations": { retiredAt: "2026-11-23", replacement: "us-macro-series" },
+  // 2026-11-24: renamed so the route carries no third party's mark; the same
+  // inputs and answer at the new route.
+  "fred-series": { retiredAt: "2026-11-24", replacement: "us-macro-series" },
   "crypto-news": { retiredAt: "2026-11-23", replacement: null, note: "search-news answers a news search for any query." },
   "gravatar-check": { retiredAt: "2026-11-23", replacement: null },
   // 2026-11-22: the market tick read (GET /api/market/tick, published under the
@@ -188,6 +191,8 @@ export const RETIRED_ROUTE_SLUGS = Object.freeze(Object.fromEntries(
 
 /** Skill packs: /api/skill/<slug>. The catalog slug is `skill-<slug>`. */
 export const RETIRED_PACKS = Object.freeze({
+  // 2026-11-24: renamed with its one tool (fred-series is us-macro-series).
+  "fred-snapshot": { retiredAt: "2026-11-24", replacement: "skill-macro-snapshot" },
   "market-open": { retiredAt: "2026-09-20", replacement: null },
   "agent-outreach": { retiredAt: "2026-09-03", replacement: null },
   ...Object.fromEntries([
@@ -265,6 +270,41 @@ export function retiredEntryForSlug(slug) {
   if (pack && Object.hasOwn(RETIRED_PACKS, pack[1])) return { kind: "pack", slug: pack[1], route: `/api/skill/${pack[1]}`, ...RETIRED_PACKS[pack[1]] };
   if (Object.hasOwn(RETIRED_TOOLS, s)) return { kind: "tool", slug: s, route: RETIRED_TOOLS[s].route || `/api/${s}`, ...RETIRED_TOOLS[s] };
   return null;
+}
+
+/**
+ * The live tools a 410 or 404 suggests, by meaning rather than word overlap
+ * (at most `k`, each { slug, route, price, name }):
+ *   - a retired route with a live replacement: the replacement first, then
+ *     matched tools in the replacement's category;
+ *   - a retired route with none: only the live tools its note names (a
+ *     hyphenated slug in the note's text, in its order), never a matched
+ *     word, since the retirement already says nothing live answers it;
+ *   - an unknown path (`gone` null): the matches, held to the category of the
+ *     best one, so a shared word never pulls in an unrelated tool.
+ * `defs` is the live catalog's definitions; `matches` the word matches for
+ * the path, best first (each with a `slug`).
+ */
+export function goneSuggestions({ gone, defs, matches = [], k = 3 }) {
+  const bySlug = new Map();
+  for (const d of defs || []) if (d?.slug && !bySlug.has(d.slug)) bySlug.set(d.slug, d);
+  const shape = (d) => ({ slug: d.slug, route: d.route, price: d.price, name: d.name });
+  const live = (xs) => xs.map((m) => bySlug.get(m?.slug)).filter(Boolean);
+  const take = (list) => {
+    const seen = new Set();
+    const out = [];
+    for (const d of list) { if (seen.has(d.slug)) continue; seen.add(d.slug); out.push(shape(d)); if (out.length >= k) break; }
+    return out;
+  };
+  if (gone) {
+    const rep = gone.replacement ? bySlug.get(gone.replacement) : null;
+    if (rep) return take([rep, ...live(matches).filter((d) => d.category === rep.category)]);
+    const named = String(gone.note || "").toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)+/g) || [];
+    return take(named.map((s) => bySlug.get(s)).filter(Boolean));
+  }
+  const found = live(matches);
+  if (!found.length) return [];
+  return take(found.filter((d) => d.category === found[0].category));
 }
 
 /** Boot guard. `liveSlugs` is the set of catalog slugs (packs as `skill-<slug>`). */

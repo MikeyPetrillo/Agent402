@@ -59,7 +59,7 @@ async function testFatal() {
   const harness = join(dir, "harness.mjs");
   writeFileSync(harness, `
 import http from "node:http";
-const httpServer = http.createServer((_req, res) => res.end("ok")).listen(0);
+const httpServer = http.createServer((_req, res) => res.end("ok")).listen(0, "127.0.0.1");
 let shuttingDown = false;
 function shutdown(signal, { code = 0, deadlineMs = 75000 } = {}) {
   if (shuttingDown) return; shuttingDown = true;

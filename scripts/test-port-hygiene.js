@@ -68,12 +68,21 @@ const added = reserving.filter((f) => !baseline.has(f));
 const stale = [...baseline].filter((f) => !reserving.includes(f));
 ok(added.length === 0, `no new test boots src/server.js on a reserved port (use bootServer from scripts/lib/boot-server.js)${added.length ? `:\n  ${added.join("\n  ")}` : ""}`);
 ok(stale.length === 0, `the port-reservation baseline lists only files that still reserve (delete moved ones)${stale.length ? `:\n  ${stale.join("\n  ")}` : ""}`);
-ok(baseline.size <= 20, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 20)`);
+ok(baseline.size <= 12, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 12)`);
 {
   const accepts = bootedReadBack;
   ok(accepts("srv.port", "const srv = await bootServer({});") && !accepts("srv.port", "const srv = { port: 40000 };") && !accepts("cfg.port", "const srv = await bootServer({});"), "control: a .port read is accepted only from a bootServer() result");
 }
 ok(BOOTS_SERVER.test('spawn(process.execPath, ["src/server.js"])') && RESERVES.test("const [PORT] = await getFreePorts(1);"), "control: a planted reserved-port boot would be seen");
+
+// A stub bound to port 0 with no host listens on every address (`::`), and
+// the kernel can hand it a port another process holds on 127.0.0.1 alone (a
+// VM's forwarded SSH port, for one): the test then dials 127.0.0.1 and reaches
+// that process instead. Every test names the host it dials.
+const BARE_LISTEN = /\.listen\(\s*0\s*(?:\)|,(?!\s*\\?["'`]))/;
+const bareListens = files.filter((f) => BARE_LISTEN.test(readFileSync(join(DIR, f), "utf8")));
+ok(bareListens.length === 0, `no test binds port 0 without a host (listen(0, "127.0.0.1", ...))${bareListens.length ? `:\n  ${bareListens.join("\n  ")}` : ""}`);
+ok(BARE_LISTEN.test("app.listen(0);") && BARE_LISTEN.test("s.listen(0, r)") && BARE_LISTEN.test("s.listen(0, () => r())") && !BARE_LISTEN.test('s.listen(0, "127.0.0.1", r)') && !BARE_LISTEN.test('"app.listen(0, \\"127.0.0.1\\");"'), "control: a bare port-0 bind is seen and a host-bound one is not");
 
 // The scan must be able to see an offender at all.
 const planted = "const PORT = 40000 + Math.floor(Math.random() * 20000);";

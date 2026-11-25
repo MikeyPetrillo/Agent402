@@ -1,7 +1,7 @@
 {
-  "name": "agent402-openai-agents",
-  "version": "0.1.14",
-  "description": "OpenAI Agents SDK tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into Agent tools via four meta-tools (find/route/call/about), including the cross-seller x402 router. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain.",
+  "name": "agent402-runner-tools",
+  "version": "0.2.0",
+  "description": "Agent402 tools for use with the OpenAI Agents SDK (Agentic Finance over x402 or MPP): turn Agent402's catalog of 500+ pay-per-call tools and skill packs into agent tools via four meta-tools (find/route/call/about), including the cross-seller x402 router. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain. Formerly agent402-openai-agents.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -46,7 +46,7 @@
     "machine-payments-protocol",
     "agentic-payments"
   ],
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
   "license": "MIT",
   "repository": {
     "type": "git",

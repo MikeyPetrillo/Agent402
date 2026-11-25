@@ -18,7 +18,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 
 const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "http://127.0.0.1:3790", "rh-settle-test");
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
-const RH_RPC = process.env.ROBINHOOD_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+const RH_RPC = process.env.ROBINHOOD_RPC_URL || "https://robinhood-rpc.publicnode.com";
 const account = privateKeyToAccount(readFileSync(process.env.KEY_FILE, "utf8").trim());
 console.log("buyer (burner):", account.address);
 

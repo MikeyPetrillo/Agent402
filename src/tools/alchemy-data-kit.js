@@ -727,7 +727,7 @@ export const ALCHEMY_DATA_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Full receipt for a transaction hash in one call: status, block, from/to, value, gas used vs limit, effective gas price, total fee, tx type, calldata selector, contract created, plus every ERC-20 / ERC-721 / ERC-1155 Transfer event decoded locally from the logs (token, from, to, amount, tokenId) and the list of contracts that emitted logs. Receipt and transaction are fetched in a single batched request. 404 (not charged) when the hash is unknown on that chain; a seen-but-unmined tx answers with status pending.",
+      "Full receipt for a transaction hash in one call: status, block, from/to, value, gas used vs limit, effective gas price, total fee, tx type, calldata selector, contract created, plus every ERC-20 / ERC-721 / ERC-1155 Transfer event decoded locally from the logs (token, from, to, amount, tokenId) and the list of contracts that emitted logs. Receipt and transaction are fetched in a single batched request. 404 when the hash is unknown on that chain; a seen-but-unmined tx answers with status pending.",
     tags: ["crypto", "transaction", "receipt", "tx", "logs", "transfers", "gas", "fee", "evm", "ethereum", "base"],
     discovery: {
       bodyType: "json",
@@ -895,7 +895,7 @@ export const ALCHEMY_DATA_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Historical USD price series for a token, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract + network, at 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) resolution. Returns the points plus first/last/high/low and the percent change over the window - the data behind 'how did this token move over the last N days' without a separate market-data subscription. 404 (not charged) when the token is not in the price feed.",
+      "Historical USD price series for a token, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract + network, at 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) resolution. Returns the points plus first/last/high/low and the percent change over the window - the data behind 'how did this token move over the last N days' without a separate market-data subscription. 404, naming the token asked for, when the price feed holds no history for it in that window.",
     tags: ["crypto", "price", "history", "ohlc", "usd", "token", "erc20", "chart", "timeseries"],
     discovery: {
       bodyType: "json",
@@ -966,7 +966,7 @@ export const ALCHEMY_DATA_TOOLS = [
     category: "crypto",
     price: "$0.01",
     description:
-      "A wallet's token and native transfers on up to 5 EVM networks in one call (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB, Celo, Gnosis, Arc and more), merged newest first by block time: network, block, time, hash, from, to, category, asset, exact decimal value, token contract and NFT token ids. Filter by direction, category, token contracts and a time window; page with the cursor. Each network's state is in the answer, so a network that did not answer is never read as having no transfers.",
+      "A wallet's token and native transfers on up to 5 EVM networks in one call (Ethereum, Base, Arbitrum One, OP Mainnet, Polygon, BNB, Celo, Gnosis, Arc and more), merged newest first by block time: network, block, time, hash, from, to, category, asset, exact decimal value, token contract and NFT token ids. Filter by direction, category, token contracts and a time window; page with the cursor. Each network's state is in the answer, so a network that did not answer is never read as having no transfers.",
     tags: ["crypto", "transfers", "multichain", "wallet", "history", "erc20", "erc721", "evm", "ethereum", "base", "arbitrum"],
     discovery: {
       bodyType: "json",

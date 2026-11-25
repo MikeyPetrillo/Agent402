@@ -1,4 +1,6 @@
 import { usdToBaseUnits } from "./base-units.js";
+import { stashVerifiedPayment, verifiedPaymentOf } from "./verified-payment.js";
+import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { encodePaymentRequiredHeader, decodePaymentRequiredHeader } from "@x402/core/http";
@@ -24,7 +26,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
-import { confirmStellarPayment, settlePayerOf, settleTxOf, settleWithStellarFallback, stellarSignedPaymentOf } from "./stellar-confirm.js";
+import { confirmStellarPayment, settlePayerOf, settleTxOf, settleWithStellarFallback, stellarAddressCredentialsOf, stellarSignedPaymentOf } from "./stellar-confirm.js";
 import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
@@ -37,9 +39,9 @@ import {
   declareBuilderCodeExtension,
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
-import { normalizePayerAddress } from "./payer.js";
-import { x402EvmOnly, RAILS, GATED_RAILS } from "./rails.js";
-import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd } from "./network-floors.js";
+import { normalizePayerAddress, paymentSchemeOf } from "./payer.js";
+import { x402EvmOnly, RAILS, GATED_RAILS, railKey } from "./rails.js";
+import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd, inkRelayerMinPriceUsd, ownRelayerMinPriceUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
@@ -60,6 +62,7 @@ import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
 import { screenStellarBeforeSettle } from "./own-settler-screen.js";
 import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult } from "./settle-compliance.js";
+import { recordSanctionsEvent } from "./sanctions-events.js";
 import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -189,7 +192,8 @@ const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
 // Ink (eip155:57073): INK_FACILITATOR_URL is an ordered list with the same
 // meaning as ROBINHOOD_FACILITATOR_URL (the first confirming /supported exact
 // on eip155:57073 at boot settles, the rest are its settle fallback). No
-// default and no own relayer: unset, Ink is not configured.
+// default: unset, Ink is not configured. INK_RELAYER_KEY adds our own relayer
+// after the listed ones (the last settle fallback).
 const INK_CAIP2 = "eip155:57073";
 const INK_FACILITATOR_URLS = facilitatorUrlList(process.env.INK_FACILITATOR_URL);
 // ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
@@ -198,6 +202,22 @@ function robinhoodRelayerKeySafe() {
   const k = String(process.env.ROBINHOOD_RELAYER_KEY || "").trim();
   if (!k) return "";
   if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: ROBINHOOD_RELAYER_KEY is not a 32-byte hex key - own Robinhood relayer off"); return ""; }
+  return k.startsWith("0x") ? k : `0x${k}`;
+}
+/**
+ * INK_RELAYER_KEY (our own Ink relayer, src/robinhood-relayer.js): its own
+ * key, never the Robinhood one. One key per chain keeps each wallet to the
+ * gas of one chain: a leaked key drains one chain's gas, each wallet's
+ * low-water row reads one chain, and turning one chain off is removing one
+ * variable. A key equal to ROBINHOOD_RELAYER_KEY is refused (Ink relayer off,
+ * with a warning); a malformed one too. Never a crash.
+ */
+export function inkRelayerKeySafe(env = process.env) {
+  const k = String(env.INK_RELAYER_KEY || "").trim();
+  if (!k) return "";
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: INK_RELAYER_KEY is not a 32-byte hex key - own Ink relayer off"); return ""; }
+  const norm = (x) => String(x || "").trim().toLowerCase().replace(/^0x/, "");
+  if (norm(k) === norm(env.ROBINHOOD_RELAYER_KEY)) { console.warn("WARNING: INK_RELAYER_KEY is the same key as ROBINHOOD_RELAYER_KEY - own Ink relayer off (give Ink a wallet of its own)"); return ""; }
   return k.startsWith("0x") ? k : `0x${k}`;
 }
 // Monad (chain 143) settles native Circle USDC (in @x402/evm's registry, so the
@@ -722,7 +742,22 @@ export function acceptsForItem(item, rails) {
   // from that wallet. Decided once per request; every other accept stays a
   // fixed list price, and with the switch off every accept does.
   const loyal = !quoteFn && returningWalletEnabled() && returningWalletRouteRefusal(item) === null;
-  const priceOf = (caip2, { exactEvm = false } = {}) => {
+  // A route that settles what its run spent (`chargesActualSpend`, with its
+  // own `uptoQuote`: decide-execute) quotes two figures. Its upto accepts
+  // carry the ceiling the buyer signs (uptoQuote) and every other accept the
+  // fixed price (quote), so an exact payment is never priced at headroom it
+  // may not spend. A request PAID on upto carries the ceiling as its one
+  // quote, so the handler, the settlement override and the books all read
+  // the amount that buyer signed.
+  const uptoQuoteFn = quoteFn && typeof item.uptoQuote === "function" ? item.uptoQuote : null;
+  const paidUpto = (req) => {
+    if (!uptoQuoteFn || !req || typeof req !== "object") return false;
+    if (typeof req.__paidOnUpto !== "boolean") {
+      try { req.__paidOnUpto = paymentSchemeOf(req) === "upto"; } catch { req.__paidOnUpto = false; }
+    }
+    return req.__paidOnUpto;
+  };
+  const priceOf = (caip2, { exactEvm = false, upto = false } = {}) => {
     if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
     if (!quoteFn) return async (ctx) => {
       const listQuote = priceForNetwork(item.price, caip2);
@@ -744,20 +779,24 @@ export function acceptsForItem(item, rails) {
       let usd = null;
       try {
         const req = ctx?.adapter?.req;
+        const onUpto = paidUpto(req);
+        const ceiling = !!uptoQuoteFn && (upto || onUpto);
+        const fn = ceiling ? uptoQuoteFn : quoteFn;
+        const key = ceiling && !onUpto ? "__uptoQuoteUsd" : "__meteredQuoteUsd";
         // ONE quote per request: @x402/core resolves every option's price on
         // every request (13 rails on prod) and the Tempo/Stripe appenders ask
         // again on the 402, and each quote is a full tokenization of the body.
         // Every closure shares the request object, so the first one computes
         // and the rest read the stash (audit 2026-08-26: ~15x per POST before).
-        if (req && Number.isFinite(req.__meteredQuoteUsd)) {
-          usd = req.__meteredQuoteUsd;
+        if (req && Number.isFinite(req[key])) {
+          usd = req[key];
         } else {
           // Price the object the handler will be SERVED (query merged, MCP
           // envelopes unwrapped), never the raw body: a body the quoter cannot
           // read must not quote the floor for a call that is then served.
           const body = req ? handlerInputOf(req, item) : (typeof ctx?.adapter?.getBody === "function" ? ctx.adapter.getBody() : null);
-          usd = Number(quoteFn(body && typeof body === "object" ? body : {}));
-          if (req && Number.isFinite(usd)) req.__meteredQuoteUsd = usd;
+          usd = Number(fn(body && typeof body === "object" ? body : {}));
+          if (req && Number.isFinite(usd)) req[key] = usd;
         }
       } catch { usd = null; }
       const price = Number.isFinite(usd) && usd > 0 ? "$" + usd.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") : item.price;
@@ -780,8 +819,14 @@ export function acceptsForItem(item, rails) {
   // top of a scheme that already settles.
   const uptoNets = Array.isArray(rails.uptoCaip2) ? rails.uptoCaip2 : [];
   const upto = uptoNets
-    .filter((caip2) => evmCaip2.includes(caip2))
-    .map((caip2) => ({ scheme: "upto", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 }));
+    .filter((caip2) => evmCaip2.includes(caip2) && (!allowed || allowed.has(caip2)))
+    .map((caip2) => ({ scheme: "upto", payTo: payToFor(caip2), price: priceOf(caip2, { upto: true }), network: caip2 }));
+  // A route that settles only what its run spent (chargesActualSpend:
+  // decide-execute) lists its upto accepts FIRST: a buyer that takes the
+  // first accept it can sign signs the budget as a ceiling and is settled for
+  // the spend, so no unspent remainder is left to repay. Its exact accepts
+  // follow, so a buyer that cannot sign upto keeps the route.
+  const uptoFirst = item.chargesActualSpend === true && !item.identityBound;
   // Identity-bound routes stay EVM-`exact` ONLY (security audit A402-03): the
   // handler derives the caller from the signed EIP-3009 authorization.from, and
   // upto's payload is Permit2-shaped (permit2Authorization.from), which
@@ -819,7 +864,7 @@ export function acceptsForItem(item, rails) {
   // x402EvmOnly (src/rails.js) is this same rule, read by the docs surfaces.
   // The batched accept is an EVM exact authorization with a longer window, so
   // it stays on these routes.
-  if (x402EvmOnly(item)) return [...evm, ...batched];
+  if (x402EvmOnly(item)) return uptoFirst ? [...upto, ...evm, ...batched] : [...evm, ...batched];
   // x402 `batch-settlement` (src/batch-settlement.js, off unless
   // X402_BATCH_SETTLEMENT_NETWORKS lists a network the boot gate kept): a
   // channel accept on each kept network, at the same price, to the treasury
@@ -832,8 +877,7 @@ export function acceptsForItem(item, rails) {
     : [];
   const channel = channelNets.map((caip2) => ({ scheme: "batch-settlement", payTo: rails.walletAddress, price: priceOf(caip2), network: caip2 }));
   return [
-    ...evm,
-    ...upto,
+    ...(uptoFirst ? [...upto, ...evm] : [...evm, ...upto]),
     ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     // The Algorand accepts carry the x402 Global Challenge tag (Algorand
@@ -1048,6 +1092,17 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
     if (fit >= tail.length + 1 + ATTRIBUTION_MIN_LEAD) { d = bazaarCapDescription(d, fit); trimmed.push("description-lead"); }
   }
   toPointer();
+  // The cuts above are made before the sample output gives way, and the fixed
+  // cut to CHALLENGE_SHORT_DESCRIPTION_MAX can take far more than the overage:
+  // a cut description takes back, from its full text, all the room the
+  // listing has left once every other step is done.
+  if (d && description && d !== description) {
+    const room = max - size(b, "");
+    if (room > d.length) {
+      const regrown = bazaarCapDescription(description, Math.min(room, BAZAAR_DESCRIPTION_MAX));
+      if (regrown.length > d.length && size(b, regrown) <= max) d = regrown;
+    }
+  }
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 
@@ -1364,7 +1419,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "demand-radar": "What agents keep asking for that nobody serves yet: aggregated, qualified demand clusters from a live agent-demand board, with caller counts and how long each need has persisted. Use it when a seller or an agent is choosing what to build next and wants unmet demand with evidence instead of guesses.",
   "stock-quote": "End-of-day US equity quote from a licensed feed: last close, day range, consolidated volume, previous close and the change between them, from the consolidated end-of-day summary across all US exchanges and ATSs. Use it when an agent needs a current price for a US stock without an exchange account; indices, FX and crypto are not covered here.",
   "random": "Cryptographically secure randomness: N random bytes as hex, a uniform integer in a range, or a batch of up to 100 values in one call. Use it when an agent needs unpredictable values for nonces, sampling, shuffles or test data and cannot trust its own generator.",
-  "block-number": "The latest block number on Ethereum, Base, Polygon, Arbitrum or Optimism from keyless public nodes with fallback. Use it as the cheapest possible on-chain read: a liveness check for a chain, a timestamp anchor for a query, or the first paid call to prove an x402 client works end to end.",
+  "block-number": "The latest block number on Ethereum, Base, Polygon, Arbitrum One or OP Mainnet from keyless public nodes with fallback. Use it as the cheapest possible on-chain read: a liveness check for a chain, a timestamp anchor for a query, or the first paid call to prove an x402 client works end to end.",
   "uuid": "UUIDs on demand: version 4 (random) or version 7 (time-ordered, sortable), up to 100 per call. Use it when an agent needs identifiers for records, requests or files, or a sub-cent call to test an x402 client end to end before buying anything larger.",
   "v1-chat": "OpenAI-compatible chat completions paid per call in USDC: point any OpenAI SDK at this base URL and send a normal chat request, with the model chosen from a curated list and streaming supported. Use it when an agent needs a model answer without an API key or an account, one call at a time, with a receipt for each.",
   "v1-images-pro": "Higher-fidelity text-to-image on the OpenAI images wire: a prompt in, one 1024x1024 image out as inline base64, served by a pro-grade diffusion model in about ten seconds. Use it when an agent needs a finished picture for a page, a post or a product and quality matters more than the cheapest draft.",
@@ -1381,18 +1436,18 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "perp-klines": "OHLCV candles for one perpetual at any interval from 1 minute to 1 month, up to the venue's history, with a window summary of open, close, change, high, low and volume. Use it when an agent needs price history for a chart, a backtest or an indicator without an exchange account or API key.",
   "perp-orderbook": "The live level-2 order book for one perpetual: best bid and ask, mid, spread in basis points, up to 20 levels a side with cumulative depth and bid/ask imbalance. Use it when an agent is sizing an order, checking liquidity before a trade or measuring book pressure at a point in time.",
   "perp-basis": "Basis for one perpetual: mark versus oracle premium in percent and basis points, impact premium, current funding and the predicted next funding per venue. Use it when an agent is evaluating a cash-and-carry, comparing funding across venues or deciding whether a perp is trading rich or cheap to spot.",
-  "crypto-indicators": "RSI, MACD, EMA 20/50/200, SMA 20/50, Bollinger bands, ATR and VWAP computed deterministically from live candles for one coin and interval, with the latest series points and a plain-language summary. Use it when an agent needs standard technical indicators without fetching candles and computing them itself.",
+  "crypto-indicators": "RSI, MACD, EMA 20/50/200, SMA 20/50, Bollinger bands, ATR and VWAP computed deterministically from live candles for one coin and interval, with the latest series points and a one-line summary of trend, RSI zone and MACD cross. Use it when an agent needs standard technical indicators without fetching candles and computing them itself.",
   "crypto-market-pulse": "The whole crypto perp market in one call: advancers versus decliners, mean, median and volume-weighted 24h change, total open interest and volume, top contracts by volume, the day's gainers and losers, funding extremes and BTC and ETH at a glance. Use it when an agent needs a market snapshot before deciding what to look at next.",
   // 2026-11-16: the computed market answers. Each leads with what is worked
   // out per call and ends with the source credit.
-  "funding-screener": `Perpetual funding for one coin compared across every listed derivatives venue in one call: open-interest-weighted and median funding, the gap between the highest and lowest venue, annualized carry, basis and open-interest concentration, with venues ranked against the median. Use it when an agent needs funding across exchanges rather than one venue's rate, or a board of coins by funding dispersion. ${COINGECKO_ATTRIBUTION}`,
+  "funding-screener": `Perpetual funding for one coin compared across every listed derivatives venue in one call: open-interest-weighted and median funding, the gap between the highest and lowest venue, annualized carry, basis and open-interest concentration, with venues ranked against the median by annualized rate and percentile. Use it when an agent needs funding across exchanges rather than one venue's rate, or a board of coins by funding dispersion. ${COINGECKO_ATTRIBUTION}`,
   "stablecoin-depeg-watch": `Every USD stablecoin above a market-cap floor checked against its peg in one call, flagged ones first: deviation now in basis points, the worst deviation over 24 hours and 7 days, an on-peg, stressed or depegged status and the share of market cap on peg. Use it when an agent monitors stablecoin risk across the whole market or needs a depeg alert input. ${COINGECKO_ATTRIBUTION}`,
   "exchange-spread": `One coin's price on every major venue measured against the cross-venue median: deviation per venue in basis points, high-to-low and interquartile spread, quoted bid-ask, volume share and flags for stale or outlier tickers. Use it when an agent needs cross-exchange price dispersion or wants to know which venues price a coin away from the market. ${COINGECKO_ATTRIBUTION}`,
-  "dex-pool-health": `Measured health of one DEX pool by network and address: liquidity, 24h turnover, buy share, the size distribution and wallet concentration of its latest trades, a price-impact estimate and flags for thin liquidity, new pools, one-sided flow and repeat-wallet trading. Use it when an agent is sizing a swap or screening a pool before it trades there. ${COINGECKO_ATTRIBUTION}`,
+  "dex-pool-health": `Measured health of one DEX pool by network and address: a 0-100 score, liquidity tier, 24h turnover, buy share, the size distribution and wallet concentration of its latest trades, a price-impact estimate and flags for thin liquidity, new pools, one-sided flow and repeat-wallet trading. Use it when an agent is sizing a swap or screening a pool before it trades there. ${COINGECKO_ATTRIBUTION}`,
   "defi-screener": `Screen the DeFi category's largest tokens with computed columns: share of category market cap, turnover, 24h move against the category, 7-day move, drawdown from the high and dilution, sortable and filterable, with category totals. Use it when an agent needs a ranked DeFi token screen rather than a raw market list. ${COINGECKO_ATTRIBUTION}`,
   "dex-volume-board": `A network's decentralized exchanges ranked by share of 24h volume across its top pools, with liquidity share, turnover, pool count, buy share and a concentration index. Use it when an agent needs to know where on-chain spot volume trades on a network. ${COINGECKO_ATTRIBUTION}`,
   "chain-board": `Blockchains ranked by native asset: share of the whole crypto market cap, 24h move against the market, turnover, drawdown from the high and the chains each asset fuels with EVM chain ids. Use it when an agent compares chains by the market weight of their native asset. ${COINGECKO_ATTRIBUTION}`,
-  "lending-rates": "Supply and borrow rates for the major assets on Aave v3 and Compound v3, read from the lending contracts on Ethereum, Base, Arbitrum, Optimism or Polygon at the latest block: APY and APR per market, utilization, and per asset which protocol pays more to suppliers and charges less to borrowers. Use it when an agent compares stablecoin or ETH lending yields across protocols from on-chain state.",
+  "lending-rates": "Supply and borrow rates for the major assets on Aave v3 and Compound v3, read from the lending contracts on Ethereum, Base, Arbitrum One, OP Mainnet or Polygon at the latest block: APY and APR per market, utilization, and per asset which protocol pays more to suppliers and charges less to borrowers. Use it when an agent compares stablecoin or ETH lending yields across protocols from on-chain state.",
   "search": "Web search: one call returns up to 20 ranked live web results as clean JSON (title, URL, snippet, age, publish date) from an independent search index, with an optional freshness filter. Use it when an agent needs current pages on a topic before reading one. Results are marked as untrusted external content.",
   "search-lite": "A quick, low-cost web search sample as clean JSON: up to five ranked results with title, URL and snippet from an independent search index. Use it when an agent wants a first look at what a query returns, to check a topic has coverage or to pick one page to read, before paying for a full result page with freshness filtering. Each answer marks its results as untrusted external content.",
   "answer": "One call returns a direct answer to a natural-language question, written by a model from a live web search, with numbered source citations (URL, snippet) and a citation count. Use it when an agent needs a current answer plus the receipts to verify or follow up, instead of searching and reading several pages itself.",
@@ -1403,7 +1458,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "geo-lookup": "Resolve a US latitude/longitude to its county, state and census block FIPS codes via the US Census Bureau geocoder. Use it when an agent has coordinates and needs the administrative geography (jurisdiction, county, census block) - live government data, no key.",
   "hash": "Cryptographic hash of a text string - sha256 (default), sha512, sha1 or md5 - returned as hex and base64. Use it for content fingerprints, integrity checks and deterministic ids; pure computation, instant.",
   "sql-guard": "Review a SQL statement before running it against production: a pass / warn / block verdict naming concrete risks (unbounded UPDATE or DELETE, tautological WHERE, DROP, TRUNCATE, statement stacking, privilege changes, catalog writes) and, on pass, an Ed25519 certificate bound to the statement's SHA-256 that a database layer can verify before executing. Use it as the last check between an agent and a destructive query.",
-  "route-execute": "Describe a task in plain language (or name a tool slug) and the Smart Order Router resolves the best-matching tool across this catalog and the open x402/MPP seller index, then runs it in the same call and returns the result with a receipt. Flat price covers any tool listed at $0.005 or less. Use it when an agent wants one paid request that both finds and executes the right capability.",
+  "route-execute": "Describe a task (or name a tool slug) and the Smart Order Router resolves the best-matching tool across this catalog and the open x402/MPP seller index, then runs it in the same call and returns the result with a receipt. Flat price covers any tool listed at $0.005 or less. Use it when an agent wants one paid request that both finds and executes the right capability.",
   "v1-chat-auto": "OpenAI-compatible chat completions with the model chosen server-side: omit model and the gateway routes the prompt to the top-ranked model for its task (code, reasoning, long-context, general) from a fixed eval-derived ranking, failing over automatically on provider errors. Flat price per call, 16k chars in, 1024 tokens out, streaming supported. Use it as a drop-in OpenAI base_url when you want good answers without picking a model.",
   "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. A repeat of identical inputs within 10 minutes is free from cache to the payer that paid for it, paying again by its own EVM x402 signature, verified Tempo sender or credits key. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
   "image-ocr": "Extract text from a PNG or JPEG image - full text, overall confidence and per-line bounding boxes - from a URL or base64 payload, Tesseract on-device (no upstream API). Default English; other ISO 639-2 languages on request. Use it when an agent needs the words in a screenshot, scan or photo.",
@@ -1423,14 +1478,36 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   // says what it answers and when to reach for it.
   "perp-funding": "Current and historical funding rate for one perpetual futures market, from a live derivatives venue: hourly rate, the 8-hour and annualized equivalents, the mark-vs-oracle premium, and a window of past prints with average, minimum, maximum and the share that were positive. Use it when an agent needs to know what holding a leveraged position costs right now, or wants to detect a funding regime flip before sizing a trade.",
   "perp-markets": "Every listed perpetual futures market in one call: mark, oracle and mid price, 24-hour change, funding (hourly, 8-hour, annualized), open interest in coins and dollars, 24-hour notional volume and max leverage, sortable by volume, open interest, funding or change. Use it as the one-shot market map before drilling into a single symbol.",
-  "sol-token-safety": `Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict. ${JUPITER_ATTRIBUTION}`,
+  "sol-token-safety": `Risk facts for one Solana token mint: mint and freeze authority state, the share of the liquidity pool locked, the largest holders' share, dev balance and holder count. Each named fact found is listed with its value, what could not be checked is listed with why, and a notice says these are facts read from the chain and named public sources and not investment advice. Use it to read an unfamiliar token's facts or screen a list of mints. No verdict, rating or score. ${JUPITER_ATTRIBUTION}`,
   "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG, JPEG or WebP out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",
   "v1-videos": "Generate a short video clip from a text prompt at a flat price per clip: a four-second 720p clip returned inline as base64 MP4, with the duration and resolution locked so the price never moves. Use it when an agent needs motion rather than a still, and needs to know the cost before it calls.",
   "site-crawl": "Crawl a website from a starting URL and return each page as clean markdown: breadth-first over internal links, bounded by page count and depth, honouring robots.txt, with per-page title, status, depth and outbound links. Use it when an agent needs a whole section of a site rather than one known page.",
   "asset-transfers": "Token and native transfer history for any EVM address across major chains: direction, counterparty, asset, exact decimal value, block and transaction hash, filterable by category and block range with a cursor for paging. Use it to reconstruct what an address actually did, rather than only what it holds now.",
 });
 
+// Each catalog route's discovery block as its own 402 declares it (route ->
+// the declared extensions.bazaar, before the per-request method is written
+// in), kept by the last buildPaymentMiddleware. The referral copies under
+// /ref read it (publicBazaarOf) so their 402 lists the same input, schema
+// and example the public route lists.
+const LISTED_BAZAAR = new Map();
+/** The extensions.bazaar block the public route `route` ("GET /api/x")
+ *  returns in its 402, with the request method written in as the vendor's
+ *  own extension writes it; null when the route lists none (or the payment
+ *  middleware has not been built). */
+export function publicBazaarOf(route) {
+  const declared = typeof route === "string" ? LISTED_BAZAAR.get(route) : null;
+  if (!declared) return null;
+  const sp = route.indexOf(" ");
+  const method = sp > 0 ? route.slice(0, sp) : "GET";
+  const path = sp > 0 ? route.slice(sp + 1) : route;
+  try {
+    return bazaarResourceServerExtension.enrichDeclaration(structuredClone(declared), { method, adapter: { getPath: () => path } });
+  } catch { return null; }
+}
+
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {}, mcpRoutes = [] }) {
+  LISTED_BAZAAR.clear();
   // The origin an unconfirmed settle's refund lookup names (markUnconfirmedStop).
   publicOrigin = typeof baseUrl === "string" && baseUrl ? baseUrl.replace(/\/+$/, "") : null;
   routeSlugOf = (route) => {
@@ -1801,19 +1878,24 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
-        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2) }] : [],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, followsAmbiguous: true, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2, { relayerMinUsd: robinhoodRelayerMinPriceUsd() }) }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
   // Ink (chain 57073 / USDC) settles through the operator's ordered
   // INK_FACILITATOR_URL list, wired exactly like Robinhood's (boot choice,
-  // listed settle fallbacks, graceful refusals passed on, gas runway) with no
-  // relayer of ours. The chosen client routes Ink only, and no other routing
-  // client may list Ink, so the operator's order is the only one. Same
-  // drop-don't-break safety: no URL, no Ink (enabledNetworks already leaves
-  // it unconfigured; this guard covers an `ink` primary).
+  // listed settle fallbacks, graceful refusals passed on, gas runway). The
+  // chosen client routes Ink only, and no other routing client may list Ink,
+  // so the operator's order is the only one. Same drop-don't-break safety: no
+  // URL, no Ink (enabledNetworks already leaves it unconfigured; this guard
+  // covers an `ink` primary). INK_RELAYER_KEY adds our own relayer as the LAST
+  // fallback, after every listed one: reached only by a refusal that moved
+  // nothing (pre-broadcast, a reverted transfer, a known nothing-sent node
+  // refusal). No gas order and no outage read on Ink: an ambiguous listed
+  // failure still stops as a 402, so the listed facilitator stays primary.
   const inkFallbacks = [];
+  let inkOwnRelayer = null;
   const inkEnabled = evmCaip2.includes(INK_CAIP2) && INK_FACILITATOR_URLS.length > 0;
   if (evmCaip2.includes(INK_CAIP2) && !inkEnabled) {
     console.warn("WARNING: PAYMENT_NETWORKS enables `ink` but INK_FACILITATOR_URL is unset - dropping Ink from the offered networks (other chains unaffected). Set INK_FACILITATOR_URL to enable it.");
@@ -1824,10 +1906,24 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     addFacilitator(`Ink (${listed.primaryUrl})`, listed.primary);
     console.log(`Ink: settling USDC (${TIER1_USDC[INK_CAIP2].asset}) via facilitator ${listed.primaryUrl}`);
     wireListedFallbacks({ caip2: INK_CAIP2, chain: "Ink", label: "Ink", listName: "Ink's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS, fallbacks: inkFallbacks }, listed);
+    if (inkRelayerKeySafe()) {
+      try {
+        const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
+        const { evmRpcFor } = await import("./evm-rpcs.js");
+        const client = withOwnRefusalMemo(createOwnRelayerClient({ key: inkRelayerKeySafe(), network: INK_CAIP2, asset: TIER1_USDC[INK_CAIP2].asset, payTo: walletAddress, rpcUrl: evmRpcFor(INK_CAIP2) }));
+        inkOwnRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
+        console.log(`Ink: own relayer ${client.address} enabled as the last settle fallback (our sales only, priced at least $${inkRelayerMinPriceUsd()}; pays gas only when the listed facilitators refuse with nothing sent)`);
+      } catch (e) {
+        console.warn(`WARNING: own Ink relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
+      }
+    }
     if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
       startFacilitatorGasCheck({
         network: INK_CAIP2,
         urls: () => gasCheckUrls(listed.primaryUrl, inkFallbacks),
+        // No outage read on Ink: a dry listed facilitator's ambiguous answer
+        // never reaches our relayer, so its empty wallet is never covered.
+        ownSigners: inkOwnRelayer ? [{ label: inkOwnRelayer.name, signer: inkOwnRelayer.client.address, followsAmbiguous: false, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, INK_CAIP2, { relayerMinUsd: inkRelayerMinPriceUsd() }) }] : [],
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
@@ -2733,9 +2829,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // exact on 4663), then the chain it had before. Read at settle time: the
     // boot check may still confirm or drop one.
     // Our own relayer, when configured, comes after them.
-    // Ink: its listed fallbacks only (confirmed ones, read at settle time);
-    // no default-chain facilitator settles Ink.
-    ...(inkEnabled ? { [INK_CAIP2]: () => inkFallbacks.filter((f) => f.confirmed) } : {}),
+    // Ink: its listed fallbacks (confirmed ones, read at settle time), then
+    // our own relayer when INK_RELAYER_KEY is set; no default-chain
+    // facilitator settles Ink.
+    ...(inkEnabled ? { [INK_CAIP2]: () => [...inkFallbacks.filter((f) => f.confirmed), ...(inkOwnRelayer ? [inkOwnRelayer] : [])] } : {}),
     ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
@@ -3019,6 +3116,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         if (spent + channelNets * BATCH_ACCEPT_JSON_BYTES > CHALLENGE_VARIABLE_MAX_BYTES) batchWithheld.add(item);
       }
       if (fitted.slim) Object.assign(ext, declareFor(fitted.slim));
+      if (ext.bazaar) LISTED_BAZAAR.set(route, ext.bazaar);
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
       // x402 payment-identifier (optional): a buyer MAY attach a payment id to
@@ -3334,9 +3432,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
 // A handler answer of 400 or above after such a settlement is not settled by
 // the vendor either way; the receipt the server put on the response at the
 // settlement stays on it, and the charge is booked as owed (server.js).
-const VERIFIED_PAYMENT = Symbol("a402.verifiedPayment");
-/** Keep a payment that verified on its request (own, non-enumerable), for the
- *  settle point. Same request path as the client-gone hook
+/** Keep a payment that verified on its request (own, non-enumerable,
+ *  src/verified-payment.js), for the settle point and the payer screen's
+ *  records rule. Same request path as the client-gone hook
  *  (transportContext.request.adapter.req): if a vendor bump moves it, nothing
  *  is kept and every run settles after its handler, as before. */
 export function registerVerifiedPaymentStash(server) {
@@ -3345,17 +3443,10 @@ export function registerVerifiedPaymentStash(server) {
       if (ctx?.result?.isValid !== true || !ctx.paymentPayload || !ctx.requirements) return;
       const req = ctx?.transportContext?.request?.adapter?.req;
       if (!req || typeof req !== "object") return;
-      Object.defineProperty(req, VERIFIED_PAYMENT, {
-        value: { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request },
-        enumerable: false, configurable: true,
-      });
+      stashVerifiedPayment(req, { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request, payer: typeof ctx.result.payer === "string" ? ctx.result.payer : null });
     } catch { /* nothing kept: the run settles after its handler */ }
   });
   return server;
-}
-function verifiedPaymentOf(req) {
-  const v = req && typeof req === "object" && Object.hasOwn(req, VERIFIED_PAYMENT) ? req[VERIFIED_PAYMENT] : null;
-  return v && typeof v === "object" ? v : null;
 }
 /** The namespaces of the networks a payment may settle first on: the x402
  *  `exact` rails, where the settled amount is the signed amount. */
@@ -4146,7 +4237,7 @@ export async function verifyFailurePayerKey(ctx, { idSecret: secret } = {}) {
 // hook - only onAfterVerify sees it (review 2026-08-28: 20 graceful
 // rejections, zero hook firings, zero hints). Tell the buyer WHY on the 402
 // (src/verify-hint.js): read their USDC balance on Base (bounded, <= 1.5 s,
-// burst reads coalesced into multicall batches) and remember a plain-language hint under the failed
+// burst reads coalesced into multicall batches) and remember a readable hint under the failed
 // CREDENTIAL's key, which the 402 middleware merges in for that header only.
 async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
   let bucket = "unknown";
@@ -4187,7 +4278,7 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
 export function cdpLabelOf(network) {
   const net = typeof network === "string" ? network : "";
   const lower = net.toLowerCase();
-  const rail = net ? [...RAILS, ...GATED_RAILS].find((r) => r.caip2 === net || r.name.toLowerCase() === lower) : null;
+  const rail = net ? [...RAILS, ...GATED_RAILS].find((r) => r.caip2 === net || r.name.toLowerCase() === lower || railKey(r) === lower) : null;
   return `CDP (${rail ? rail.name : net ? net.slice(0, 80) : "Base"})`;
 }
 
@@ -4318,14 +4409,15 @@ function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROB
 }
 
 /**
- * Whether our own relayer's minimum sale price (ROBINHOOD_RELAYER_MIN_PRICE_USD)
+ * Whether our own relayer's minimum sale price on `network`
+ * (ROBINHOOD_RELAYER_MIN_PRICE_USD, INK_RELAYER_MIN_PRICE_USD)
  * is at or under the lowest price sold on `network`: the catalog's least fixed
  * list price, raised to that chain's price floor. Only then can the relayer
  * stand in for a listed facilitator on every sale, so only then is a dry
  * facilitator row covered (src/tool-failure-monitor.js). A catalog with no
  * fixed price reads covered.
  */
-export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
+export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = ownRelayerMinPriceUsd(network) ?? robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
   let lowest = Infinity;
   for (const def of Object.values(catalog || {})) {
     if (!def || typeof def !== "object" || typeof def.quote === "function") continue;
@@ -4346,9 +4438,9 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   const { evmRpcFor } = await import("./evm-rpcs.js");
   const settings = gasCheckSettings();
   // Settlement gas against the least price a settler of ours is paid for:
-  // the chain's price floor, else (our relayer on, Robinhood) the relayer's
-  // minimum sale price. Neither: no row.
-  const gasRefUsd = () => networkFloorUsd(network) || (network === ROBINHOOD_CAIP2 && ownSigners.length ? robinhoodRelayerMinPriceUsd() : 0);
+  // the chain's price floor, else (our relayer on, Robinhood or Ink) the
+  // relayer's minimum sale price. Neither: no row.
+  const gasRefUsd = () => networkFloorUsd(network) || (ownSigners.length ? ownRelayerMinPriceUsd(network) || 0 : 0);
   const floorCheck = gasRefUsd() > 0 ? createFloorGasCheck({ network, floorUsd: gasRefUsd, readEthUsd }) : null;
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
   const logSeen = new Map(); // a fallback signer's last logged state (evmGasLogLines)
@@ -4778,7 +4870,16 @@ function complianceStop(ctx, refusal, via) {
   const own = isOwnScreenRefusal(refusal);
   const network = ctx?.requirements?.network;
   if (!own) noteComplianceRefusal({ network, via });
-  const payer = typeof refusal?.payer === "string" ? refusal.payer : ctx?.paymentPayload?.payload?.authorization?.from;
+  // The signed payer: a Permit2 payment is signed by its Permit2 signer, and
+  // an `authorization` block beside it is covered by no signature.
+  const inner = ctx?.paymentPayload?.payload;
+  const signedFrom = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
+  const payer = typeof refusal?.payer === "string" ? refusal.payer : signedFrom;
+  // Kept in full for the records rule and the rejected-transaction report
+  // (src/sanctions-events.js); never awaited.
+  try {
+    recordSanctionsEvent({ kind: own ? "own-screen-refusal" : "provider-refusal", address: typeof payer === "string" ? payer : null, rail: "x402", network: network ?? null, amount: ctx?.requirements?.amount ?? null, asset: ctx?.requirements?.asset ?? null, route: typeof ctx?.requirements?.resource === "string" ? ctx.requirements.resource : null, via: typeof via === "string" ? via : null }).catch(() => {});
+  } catch { /* recording never changes the settle's end */ }
   return { recovered: true, result: complianceRefusedResult({ network, payer, own }) };
 }
 
@@ -4921,16 +5022,21 @@ async function stellarAuthExpiryLedgerOf(payload) {
     const xdr = payload?.payload?.transaction;
     if (typeof xdr !== "string" || !xdr || xdr.length > 40_000) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const env = sdk.xdr.TransactionEnvelope.fromXDR(xdr, "base64");
-    const kind = env.switch().name;
-    const tx = kind === "envelopeTypeTx" ? env.v1().tx() : kind === "envelopeTypeTxFeeBump" ? env.feeBump().tx().innerTx().v1().tx() : null;
+    // Node's base64 reader, as stellar-sdk 16 decoded it (17 refuses a
+    // character outside the alphabet; the other Stellar readers decode the same way).
+    const bytes = Buffer.from(xdr, "base64");
+    if (!bytes.length) return null;
+    const env = sdk.xdr.TransactionEnvelope.fromXdr(bytes);
+    const kind = env.type;
+    const inner = kind === "envelopeTypeTxFeeBump" ? env.feeBump.tx.innerTx : null;
+    const tx = kind === "envelopeTypeTx" ? env.v1.tx : inner?.type === "envelopeTypeTx" ? inner.v1.tx : null;
     let max = 0;
-    for (const op of tx ? tx.operations() : []) {
-      if (op.body().switch().name !== "invokeHostFunction") continue;
-      for (const entry of op.body().invokeHostFunctionOp().auth()) {
-        const cred = entry.credentials();
-        if (cred.switch().name !== "sorobanCredentialsAddress") continue;
-        const n = Number(cred.address().signatureExpirationLedger());
+    for (const op of tx ? tx.operations : []) {
+      if (op.body.type !== "invokeHostFunction") continue;
+      for (const entry of op.body.invokeHostFunctionOp.auth) {
+        const a = stellarAddressCredentialsOf(entry);
+        if (!a) continue;
+        const n = Number(a.signatureExpirationLedger);
         if (Number.isSafeInteger(n) && n > max) max = n;
       }
     }
@@ -5470,7 +5576,7 @@ export function summarizeFacilitatorError(err) {
 const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 function warnIfSolanaTokenAccountMissing(owner) {
   (async () => {
-    const res = await fetch("https://api.mainnet-beta.solana.com", {
+    const res = await fetch(defaultSolanaRpcs()[0], {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

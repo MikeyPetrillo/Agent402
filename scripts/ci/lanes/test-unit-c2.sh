@@ -45,6 +45,8 @@ t node scripts/test-feature-flags.js
 t node scripts/test-feature-flags-railway.js
 # /integrations/agentcore: copy follows the MPP offer gate and the Tempo switch; route, index, sitemaps, llms.txt and page date (offline, port 0)
 t node scripts/test-agentcore-page.js
+# /integrations/claude-managed-agents: the agent definition, derived figures, attributed claims; route, index, sitemaps, llms.txt, page date; /mcp?tool_names=underscore lists plain names and runs either spelling (offline, port 0)
+t node scripts/test-managed-agents-page.js
 # Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
 t node scripts/test-monitor-issue-wording.js
 # An open issue a check filed under its previous title gets the current one before any lookup: one list, the adoption script against a stand-in gh, the step in every job that looks an issue up (offline)

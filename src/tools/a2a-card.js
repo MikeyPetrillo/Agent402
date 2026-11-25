@@ -147,7 +147,7 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
       {
         id: "catalog-find",
         name: "Find a tool for a task",
-        description: "Resolve a plain-language task to a callable endpoint with its price and input schema. Free.",
+        description: "Resolve a task description to a callable endpoint with its price and input schema. Free.",
         tags: ["discovery", "search", "catalog", "routing"],
       },
       {

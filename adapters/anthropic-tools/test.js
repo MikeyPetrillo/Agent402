@@ -1,4 +1,4 @@
-// Smoke test for agent402-anthropic-tools. Runs against a local FREE_MODE Agent402
+// Smoke test for agent402-messages-tools. Runs against a local FREE_MODE Agent402
 // server (boot with: FREE_MODE=true PORT=3000 node src/server.js).
 import { agent402Tools, agent402Execute } from "./index.js";
 
@@ -24,7 +24,7 @@ async function main() {
   const out2 = await exec("hash", { text: "hello world", algo: "sha256" });
   if (JSON.stringify(out) !== JSON.stringify(out2)) throw new Error("standalone executor disagreed with bundled one");
 
-  console.log(`PASS — agent402-anthropic-tools: ${tools.length} tool(s) generated, execute() returned a real result.`);
+  console.log(`PASS: agent402-messages-tools: ${tools.length} tool(s) generated, execute() returned a real result.`);
 }
 
 // Spending caps pass through to agent402-client: with none set the client's

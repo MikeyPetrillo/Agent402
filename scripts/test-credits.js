@@ -191,7 +191,7 @@ ok(!res.headers["PAYMENT-REQUIRED"] && !res.headers["payment-required"] && PAYME
   app.use(paymentRequiredBodyMiddleware()); // prod order: the mirror is mounted before the credits gate
   app.use(cr.gate(priceFor2));
   app.use((req, r) => r.status(200).json({ served: true }));
-  const server = app.listen(0);
+  const server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   const r = await fetch(`http://127.0.0.1:${server.address().port}/v1/big`, { method: "POST", headers: { authorization: `Bearer ${KEY}` } });
   const body = await r.json();

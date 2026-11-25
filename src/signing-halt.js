@@ -14,6 +14,7 @@
 // The refusal is 503, never 4xx: a halt is OUR configuration, not the caller's
 // error, and a status >= 400 already cancels settlement, so nobody is charged
 // for meeting it.
+import { notChargedHere } from "./not-charged.js";
 const OFF = new Set(["", "0", "false", "no", "off"]);
 
 /** True when outbound signing is halted. Call-time read: no restart needed. */
@@ -27,7 +28,7 @@ export function assertSigningAllowed(what = "this payment") {
   if (!signingHalted()) return;
   const e = new Error(
     `Outbound signing is halted on this server (SIGNING_HALTED), so ${what} was not attempted. `
-    + `Nothing was charged. Try again later or contact the operator if this persists.`,
+    + `Outbound signing never started.${notChargedHere()} Try again later or contact the operator if this persists.`,
   );
   e.statusCode = 503;
   throw e;

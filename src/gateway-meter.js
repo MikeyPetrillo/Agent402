@@ -235,11 +235,14 @@ export function recordStreamedUsage({ req, upstreamUsd, enabled = meterEnabled()
 }
 
 /** The metered amount a finished response settles at: X-Metered-Usd when the
- *  buffered path set it, else what a stream recorded on the request; NaN when
- *  neither (the caller keeps its ceiling). */
+ *  buffered path set it, else X-Charged-Usd (an upto settlement of what a run
+ *  spent, src/actual-charge.js), else what a stream recorded on the request;
+ *  NaN when none (the caller keeps its ceiling). */
 export function meteredUsdOf(req, res) {
   const header = Number(res?.getHeader?.("X-Metered-Usd"));
   if (Number.isFinite(header) && header > 0) return header;
+  const charged = Number(res?.getHeader?.("X-Charged-Usd"));
+  if (Number.isFinite(charged) && charged > 0) return charged;
   const streamed = Number(req?.__meteredUsageUsd);
   return Number.isFinite(streamed) && streamed > 0 ? streamed : NaN;
 }

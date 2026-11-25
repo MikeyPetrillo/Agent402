@@ -51,12 +51,12 @@ try {
   ok(safety.ms >= D.RUGCHECK_SUMMARY_MS - 100 && safety.ms < D.RUGCHECK_SUMMARY_MS + SLACK_MS, `it answers at the summary cap (${safety.ms} ms against ${D.RUGCHECK_SUMMARY_MS})`);
 
   ok(holders.status === 503, `a stalled RugCheck report answers 503, not 504 (got ${holders.status} in ${holders.ms} ms)`);
-  ok(/^RugCheck did not answer the report read within our 15 s limit; nothing was charged - retry shortly/.test(holders.body?.error || ""), `the body names the report step (got: ${holders.body?.error})`);
+  ok(/^RugCheck did not answer the report read within our 15 s limit\. Nothing was charged\. Retry shortly\.$/.test(holders.body?.error || ""), `the body names the report step (got: ${holders.body?.error})`);
   ok(holders.ms >= D.RUGCHECK_REPORT_MS - 100 && holders.ms < D.RUGCHECK_REPORT_MS + SLACK_MS && holders.ms < D.HANDLER_BUDGET_MS, `it answers at the report cap and inside the handler budget (${holders.ms} ms against ${D.RUGCHECK_REPORT_MS} and ${D.HANDLER_BUDGET_MS})`);
 
   ok(control.status === 200 && control.body?.holders?.length === 10 && control.body?.returned === 10 && control.body?.matched === 20 && control.body?.complete === false && control.body?.maxHolders === 20,
     `control: a served mint through the same stub answers 200 with rows and the partial fields (${control.status}, ${JSON.stringify({ rows: control.body?.holders?.length, returned: control.body?.returned, matched: control.body?.matched, complete: control.body?.complete })})`);
-  ok(controlSafety.status === 200 && controlSafety.body?.riskLevel === "good" && controlSafety.body?.token?.symbol === "FIX", `control: the safety route serves through the stub (${controlSafety.status}, ${controlSafety.body?.riskLevel}, ${controlSafety.body?.token?.symbol})`);
+  ok(controlSafety.status === 200 && Array.isArray(controlSafety.body?.flags) && controlSafety.body?.token?.symbol === "FIX", `control: the safety route serves through the stub (${controlSafety.status}, ${controlSafety.body?.flags?.length} flags, ${controlSafety.body?.token?.symbol})`);
   // "504" as a status, not inside another number: the boot log can carry it
   // in a millisecond timestamp or a count. The offending lines are printed.
   const offending = srv.log().split("\n").filter((l) => /upstream timed out|(?<![\d.:])504(?![\d])/.test(l));

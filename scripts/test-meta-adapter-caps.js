@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The four meta-tool adapters (agent402-langchain, agent402-ai-sdk,
-// agent402-openai-agents, agent402-google-adk) pay through the caller's
+// The four meta-tool adapters (agent402-structured-tools, agent402-stream-tools,
+// agent402-runner-tools, agent402-dev-kit-tools) pay through the caller's
 // payment fetch without agent402-client, so each holds its own caps:
 //   - a per-call ceiling on by default at agent402-client's default, checked
 //     against the tool's listed price before the payment fetch runs; 0 or

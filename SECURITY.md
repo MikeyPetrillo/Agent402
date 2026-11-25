@@ -1,7 +1,7 @@
 # Security Policy
 
 Agent402 handles real money (USDC settlement via x402 and MPP, card payments via
-Stripe for reports, monitors and prepaid credits), runs a headless browser
+Stripe for reports, monitors and, when they are on sale, prepaid credits), runs a headless browser
 against user-supplied URLs, and stores wallet-keyed data - security reports are
 taken seriously and acted on fast.
 
@@ -13,20 +13,22 @@ taken seriously and acted on fast.
 - Maintainer: [Havok Holdings LLC](https://havok.holdings) - [github.com/MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402).
 
 Please include reproduction steps and impact. Good-faith research inside the scope below will not be met
-with legal action. You can expect an acknowledgement within two business days; fixes for real issues ship through the normal CI pipeline
+with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone
+else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not
+degrade the service for others, and report to us promptly and before any disclosure. You can expect an acknowledgement within two business days; fixes for real issues ship through the normal CI pipeline
 (which re-tests every endpoint) as soon as they're ready.
 
 ## Scope
 
 - The live service at `agent402.tools`, including `/mcp`, the `/v1` LLM gateway and report
   products, the x402 / MPP paywall on every paid route, the prepaid-credits gate
-  (`Authorization: Bearer a402_...`), and the card front door (`/reports`, `/monitors`,
+  for existing keys (`Authorization: Bearer a402_...`), and the card front door (`/reports`, `/monitors`,
   `/credits`, the Stripe webhook)
 - This codebase: SSRF guards, the proof-of-work scheme, payment gating, the memory access-control model
 - The `agent402-mcp` npm package (especially the spend-control enforcement)
 - The `agent402-client` buyer SDK and the `agent402-tollbooth` pay-per-crawl gate
 
-Out of scope: the x402 protocol itself, the Coinbase facilitator, Base/USDC
+Out of scope: the x402 protocol itself, the x402 facilitators we settle through, Base/USDC
 contracts, and volumetric denial-of-service.
 
 ## Controls on the code

@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/cursor/plugins/main/schemas/plugin.schema.json",
   "name": "agent402",
   "displayName": "Agent402.Tools",
-  "version": "2.15.0",
-  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Open-source MCP server and skill: web search and rendering, PDFs, OCR, SEC filings, market and crypto data, and utilities, paid in USDC over x402 or MPP, or free via proof-of-work for pure-compute tools. Most tools are deterministic code; model-backed tools are marked as such.",
+  "version": "2.16.0",
+  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Open-source MCP server and skill: PDFs and OCR, SEC filings, US macro series, weather, chain reads and utilities, paid in USDC over x402 or MPP, or free via proof-of-work for pure-compute tools. Most tools are deterministic code; model-backed tools are marked as such.",
   "author": {
-    "name": "Havok Holdings LLC"
+    "name": "Cardhavok LLC (doing business as Havok Holdings LLC)"
   },
   "homepage": "https://agent402.tools",
   "repository": "https://github.com/MikeyPetrillo/Agent402",
@@ -34,7 +34,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "agent402-mcp@0.17.0"
+        "agent402-mcp@0.17.1"
       ]
     }
   },

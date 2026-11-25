@@ -28,4 +28,4 @@ ok(agent.tools.length === 4, "new Agent({ tools }) accepts them under the instal
 const call = tools.find((t) => t.name === "agent402_call");
 const out = await call.invoke({}, JSON.stringify({ slug: "hash", params: { text: "hello world", algorithm: "sha256" } }));
 ok(/b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9/.test(typeof out === "string" ? out : JSON.stringify(out)), "agent402_call runs through the SDK tool and returns the hash");
-console.log(`PASS - agent402-openai-agents real SDK: ${pass} assertions`);
+console.log(`PASS - agent402-runner-tools real SDK: ${pass} assertions`);

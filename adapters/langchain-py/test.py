@@ -1,4 +1,4 @@
-"""Offline-ish test for agent402-langchain (Python).
+"""Offline-ish test for agent402-structured-tools (Python).
 
 Mirrors the JS adapters' test.js: boots nothing itself — point it at a running
 FREE_MODE server via AGENT402_BASE_URL (default http://localhost:3091), then
@@ -12,7 +12,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from agent402_langchain import agent402_tool_specs, Agent402Toolkit  # noqa: E402
+from agent402_structured_tools import agent402_tool_specs, Agent402Toolkit  # noqa: E402
 
 BASE = os.environ.get("AGENT402_BASE_URL", "http://localhost:3091")
 passed = failed = 0
@@ -79,7 +79,7 @@ import threading  # noqa: E402
 from http.server import BaseHTTPRequestHandler, HTTPServer  # noqa: E402
 
 import requests as _requests  # noqa: E402
-from agent402_langchain import _Client  # noqa: E402
+from agent402_structured_tools import _Client  # noqa: E402
 
 _elsewhere_hits = []
 
@@ -154,7 +154,7 @@ try:
     ok(not _elsewhere_hits, f"the other origin got no request ({_elsewhere_hits})")
 
     # Spending caps: checked against the listed price before x402_fetch runs.
-    from agent402_langchain import SpendingLimitError, DEFAULT_MAX_PER_CALL_USD, MAX_POW_DIFFICULTY  # noqa: E402
+    from agent402_structured_tools import SpendingLimitError, DEFAULT_MAX_PER_CALL_USD, MAX_POW_DIFFICULTY  # noqa: E402
     _sent = []
 
     def _counting(method, url, **kw):

@@ -33,7 +33,7 @@ curl "https://agent402.tools/api/pricing"
 1. **Wallet, USDC over x402.** Set `EVM_PRIVATE_KEY` to a **dedicated** wallet
    that holds only a small working balance, never a treasury or personal
    wallet. Base is the default rail; the same call also settles on Solana,
-   Polygon, Arbitrum, Stellar, Algorand, Monad, Avalanche, Sei, Optimism, Arc, Ink,
+   Polygon, Arbitrum, Stellar, Algorand, Monad, Avalanche, Sei, OP Mainnet, Arc, Ink,
    Robinhood Chain (USDG) and Celo, as listed in each tool's 402.
 2. **Prepaid card credits.** Buy a pack at `https://agent402.tools/credits` and
    send `Authorization: Bearer a402_<key>`. The list price is held before the
@@ -60,7 +60,7 @@ matches (use `POST /api/wish`, below).
 
 ## Discover: `GET /api/find?q=<task>`
 
-Free, no keys. Send a plain-language task; get back the best-matching tools
+Free, no keys. Send a task description; get back the best-matching tools
 with route, price, input schema and a ready-to-run example.
 
 ```bash
@@ -165,5 +165,5 @@ If `/api/find` has no strong match, `POST /api/wish` with
 - `GET /api/pricing`: the full priced catalog in one call
 - `GET /.well-known/x402`: machine-readable service manifest
 - `GET /api/reliability`: uptime and error rates
-- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp@0.17.0`
+- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp@0.17.1`
 - Docs: https://agent402.tools/docs · Source: https://github.com/MikeyPetrillo/Agent402

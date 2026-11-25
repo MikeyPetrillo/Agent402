@@ -13,11 +13,11 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1129 variables in 113 groups.
+1147 variables in 114 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [INK](#ink) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -66,13 +66,17 @@ holds it.
 | --- | --- | --- | --- |
 | `ALGORAND_ALGOD_URL` | Algorand algod URL. | `https://mainnet-api.algonode.cloud` | `src/x402-buyer.js` |
 | `ALGORAND_ALGOD_URLS` | Algorand algod URLs. |  | `src/revenue-live.js` |
-| `ALGORAND_FACILITATOR_URL` | Algorand facilitator URL. | `https://facilitator.goplausible.xyz` | `src/algorand-sellers.js`, `src/payments.js` |
+| `ALGORAND_FACILITATOR_URL` | Algorand facilitator URL (unset, a built-in facilitator). | built in | `src/algorand-sellers.js`, `src/payments.js` |
 | `ALGORAND_INDEXER_URL` | Algorand indexer URL. |  | `src/revenue-ledger.js` |
 | `ALGORAND_INDEXER_URLS` | Algorand indexer URLs. |  | `src/revenue-live.js` |
 | `ALGORAND_PAGE_WAIT_MS` | Algorand page wait, in milliseconds. | `8000` | `src/server.js` |
 | `ALGORAND_RELAY_TOKEN` | Algorand relay token (a credential, set on the host). |  | `src/revenue-live.js`, `src/x402-buyer.js` |
 | `ALGORAND_RELAY_URL` | Algorand relay URL. |  | `src/revenue-live.js`, `src/x402-buyer.js` |
+| `ALGORAND_SELLERS_BG_BUILD_MAX_MS` | Longest the background Algorand seller-catalog build (boot warm-up and scheduled refresh) runs, in milliseconds; at least the build limit a waiting buyer gets. |  | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_BG_READ_TIMEOUT_MS` | Per-read time limit of the background Algorand seller-catalog build, in milliseconds; at least the short per-read limit a waiting buyer gets. |  | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_MAX_PAGES` | Most pages the Algorand seller-catalog build reads per listing (1 to 500); rows past the cap are not read. |  | `src/algorand-sellers.js` |
 | `ALGORAND_SELLERS_TTL_MS` | Algorand sellers lifetime, in milliseconds. | `1800000` | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_WARM` | off skips the Algorand seller-catalog warm-up at boot and its scheduled refresh; any other value builds it in the background where the Algorand router can run. |  | `src/server.js` |
 | `ALGORAND_UPSTREAM_BUYER_ADDRESS` | Algorand upstream buyer address. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` |
 | `ALGORAND_UPSTREAM_BUYER_LOW_USD` | Algorand upstream buyer low, in USD. | `0.5` | `src/x402-buyer.js` |
 | `ALGORAND_UPSTREAM_BUYER_MNEMONIC` | Mnemonic of the Algorand spending wallet route-execute buys with (a credential, set on the host). |  | `src/x402-buyer.js` |
@@ -470,7 +474,7 @@ holds it.
 | --- | --- | --- | --- |
 | `FREE_ALERTS` | Free alerts. |  | `src/server.js` |
 | `FREE_ALERTS_SECRET` | Free alerts secret (a credential, set on the host). |  | `src/server.js` |
-| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/mcp-tasks.js` and 9 more |
+| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 11 more |
 
 ## FUNNEL
 
@@ -604,6 +608,18 @@ holds it.
 | `INFLIGHT_COVER_UNREAD_MAX` | Inflight cover unread maximum. |  | `src/changelog.js`, `src/inflight-cover.js` |
 | `INFLIGHT_COVER_UNREAD_PAID_MAX` | Inflight cover unread paid maximum. |  | `src/inflight-cover.js` |
 
+## INK
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `INK_FACILITATOR_URL` | Ink facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
+| `INK_RELAYER_GAS_CAP` | Ink relayer gas cap. |  | `src/robinhood-relayer.js` |
+| `INK_RELAYER_KEY` | Ink relayer key (a credential, set on the host); its own wallet, never the Robinhood Chain relayer's key. |  | `src/payments.js` |
+| `INK_RELAYER_LOCK_WAIT_MS` | Ink relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
+| `INK_RELAYER_MAX_GWEI` | Ink relayer maximum gwei. |  | `src/robinhood-relayer.js` |
+| `INK_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Ink relayer settles (0: any). | not listed | `src/network-floors.js`, `src/robinhood-relayer.js` |
+| `INK_RELAYER_RECEIPT_MS` | Ink relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
+
 ## JUDGE
 
 | Variable | Purpose | Default | Read in |
@@ -664,6 +680,9 @@ holds it.
 | `LEDGER_JOURNAL_REDIS_OP_MS` | Ledger journal redis op, in milliseconds. |  | `src/ledger-journal-redis.js` |
 | `LEDGER_MIRROR_MARGIN_MS` | Ledger mirror margin, in milliseconds. |  | `src/ledger-mirror.js` |
 | `LEDGER_MIRROR_REFRESH_MS` | Ledger mirror refresh, in milliseconds. |  | `src/ledger-mirror.js` |
+| `LEDGER_RETENTION` | The daily money-record retention pass: apply deletes rows past their period; anything else is a dry run. |  | `src/ledger-retention.js`, `src/server.js` |
+| `LEDGER_RETENTION_REFUND_YEARS` | Years a resolved refund row is kept (7 at least). |  | `src/ledger-retention.js` |
+| `LEDGER_RETENTION_SALES_YEARS` | Years a sales ledger row is kept (7 at least). |  | `src/ledger-retention.js` |
 
 ## LOOP
 
@@ -701,7 +720,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `MONAD_FACILITATOR_URL` | Monad facilitator URL. | `https://x402-facilitator.molandak.org` | `src/payments.js` |
+| `MONAD_FACILITATOR_URL` | Monad facilitator URL (unset, a built-in facilitator). | built in | `src/payments.js` |
 | `MONAD_USDC_ADDRESS` | Monad USDC address. | `0x754704Bc059F8C67012fEd69BC8A327a5aafb603` | `src/payments.js` |
 | `MONAD_USDC_EIP712_NAME` | Monad USDC EIP-712 name. | `USDC` | `src/payments.js` |
 | `MONAD_USDC_EIP712_VERSION` | Monad USDC EIP-712 version. | `2` | `src/payments.js` |
@@ -728,7 +747,7 @@ holds it.
 | `MPP_RECONCILE_FILE` | MPP reconcile file path. | `/data/mpp-reconcile.json` | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_FIRST_DELAY_MS` | MPP reconcile first delay, in milliseconds. |  | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_NON_PAYMENT_USD` | MPP reconcile non payment, in USD. |  | `src/mpp-reconcile.js` |
-| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 8 more |
+| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 11 more |
 | `MPP_SUBMITTED_SEEDS_FILE` | MPP submitted seeds file path. | `/data/mpp-submitted-seeds.json` | `src/mpp-index.js` |
 | `MPP_SUBSCRIPTIONS` | MPP subscriptions. |  | `src/mpp-subscriptions.js` |
 | `MPP_SUB_CANARY_PERIOD_SECONDS` | MPP sub canary period, in seconds. |  | `src/mpp-subscriptions.js` |
@@ -818,9 +837,9 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `PAYAI_API_KEY_ID` | PayAI facilitator key id for multi-chain settlement (optional; a keyless allowance exists). |  | `src/payments.js` |
-| `PAYAI_API_KEY_SECRET` | PayAI facilitator key secret (a credential, set on the host). |  | `src/payments.js` |
-| `PAYAI_FACILITATOR_URL` | Payai facilitator URL. |  | `src/payments.js` |
+| `PAYAI_API_KEY_ID` | Key id for an optional multi-chain fallback facilitator (optional; it also settles without a key). |  | `src/payments.js` |
+| `PAYAI_API_KEY_SECRET` | Key secret for the same fallback facilitator (a credential, set on the host). |  | `src/payments.js` |
+| `PAYAI_FACILITATOR_URL` | URL of the same fallback facilitator. |  | `src/payments.js` |
 
 ## PAYMENT
 
@@ -870,7 +889,7 @@ holds it.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 11 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 12 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
 
 ## PRICE
@@ -1051,17 +1070,17 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `ROBINHOOD_AMBIGUOUS_WAIT_MS` | Robinhood ambiguous wait, in milliseconds. |  | `src/robinhood-outage.js` |
-| `ROBINHOOD_FACILITATOR_URL` | Robinhood facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
+| `ROBINHOOD_FACILITATOR_URL` | Robinhood Chain facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
 | `ROBINHOOD_FALLBACK_RECHECK_MS` | Robinhood fallback recheck, in milliseconds. |  | `src/payments.js` |
 | `ROBINHOOD_MIN_PRICE_USD` | Price floor on Robinhood Chain, in USD (unset or 0: none, the list price is quoted). |  | `src/changelog.js`, `src/network-floors.js` |
 | `ROBINHOOD_ORDER_REFRESH_MS` | Robinhood order refresh, in milliseconds. |  | `src/payments.js` |
-| `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` | Robinhood relayer first alert, in hours. |  | `src/robinhood-order.js` |
-| `ROBINHOOD_RELAYER_GAS_CAP` | Robinhood relayer gas cap. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
-| `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js` |
-| `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` | Robinhood Chain relayer first alert, in hours. |  | `src/robinhood-order.js` |
+| `ROBINHOOD_RELAYER_GAS_CAP` | Robinhood Chain relayer gas cap. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_KEY` | Robinhood Chain relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
+| `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood Chain relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood Chain relayer maximum gwei. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood Chain relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js`, `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood Chain relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |
 | `ROBINHOOD_USDG_EIP712_NAME` | Robinhood usdg EIP-712 name. | `Global Dollar` | `src/payments.js` |
@@ -1103,6 +1122,10 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SANCTIONS_EVENTS_FILE` | Sanctions events file path when the server runs without a state database. |  | `src/sanctions-events.js` |
+| `SANCTIONS_EVENTS_RETENTION_YEARS` | Years a sanctions event is kept (10 at least). |  | `src/sanctions-events.js` |
+| `SANCTIONS_GEO_BLOCK` | The 451 answer for requests from sanctioned regions; off turns it off. |  | `src/sanctioned-regions.js` |
+| `SANCTIONS_GEO_COUNTRIES` | Comma list of ISO country codes the geo block refuses, replacing the default set. |  | `src/sanctioned-regions.js` |
 | `SANCTIONS_LIST_REFRESH_MS` | Sanctions list refresh, in milliseconds. | `21600000` | `src/sanctions-screen.js` |
 | `SANCTIONS_LIST_RETRY_MS` | Sanctions list retry, in milliseconds. | `300000` | `src/sanctions-screen.js`, `src/tools/sanctions-kit.js` |
 | `SANCTIONS_LIST_TIMEOUT_MS` | Sanctions list timeout, in milliseconds. | `600000` | `src/ofac-sdn.js` |
@@ -1227,7 +1250,7 @@ holds it.
 | `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
 | `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
-| `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` and 1 more |
+| `SOLANA_RPC_URL` | Solana RPC endpoint URL; unset, the keyed lane when ALCHEMY_API_KEY is set, else the public endpoint listed as the default. | `https://solana-rpc.publicnode.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` and 1 more |
 | `SOLANA_UPSTREAM_BUYER_KEY` | Private key of the Solana spending wallet route-execute buys with (a credential, set on the host). |  | `src/solana-buyer.js` |
 | `SOLANA_UPSTREAM_BUYER_LOW_USD` | Solana upstream buyer low, in USD. | `0.5` | `src/solana-buyer.js` |
 | `SOLANA_WALLET_ADDRESS` | Solana address that receives USDC; without it the Solana option is left out of every 402. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` and 1 more |
@@ -1236,9 +1259,9 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `SOLVADOR_CELO_PRIMARY` | Solvador celo primary. |  | `src/payments.js` |
-| `SOLVADOR_FACILITATOR_URL` | Solvador facilitator URL. | `https://api.solvador.com` | `src/payments.js` |
-| `SOLVADOR_KEY` | Solvador key (a credential, set on the host). |  | `src/payments.js` |
+| `SOLVADOR_CELO_PRIMARY` | Tries the second fallback facilitator first on Celo. |  | `src/payments.js` |
+| `SOLVADOR_FACILITATOR_URL` | URL of a second fallback facilitator (unset, a built-in URL). | built in | `src/payments.js` |
+| `SOLVADOR_KEY` | Key for the second fallback facilitator (a credential, set on the host). |  | `src/payments.js` |
 
 ## SOR
 
@@ -1336,7 +1359,7 @@ holds it.
 | --- | --- | --- | --- |
 | `STELLAR_FACILITATOR_KEY` | Stellar facilitator key (a credential, set on the host). |  | `src/payments.js` |
 | `STELLAR_FACILITATOR_STATUS_TIMEOUT_MS` | Stellar facilitator status timeout, in milliseconds. |  | `src/stellar-facilitator-status.js` |
-| `STELLAR_FACILITATOR_URL` | Stellar facilitator URL. | `https://channels.openzeppelin.com/x402` | `src/payments.js`, `src/stellar-facilitator-status.js` |
+| `STELLAR_FACILITATOR_URL` | Stellar facilitator URL (unset, a built-in facilitator). | built in | `src/payments.js`, `src/stellar-facilitator-status.js` |
 | `STELLAR_FALLBACK_FACILITATOR_KEY` | Stellar fallback facilitator key (a credential, set on the host). |  | `src/payments.js` |
 | `STELLAR_FALLBACK_FACILITATOR_URL` | Stellar fallback facilitator URL. |  | `src/payments.js` |
 | `STELLAR_HORIZON_URL` | Stellar horizon URL. |  | `src/rail-cover.js`, `src/stellar-confirm.js` |
@@ -1575,7 +1598,7 @@ holds it.
 | `AUDIO_DECODE_SLOTS` | Audio decode slots. |  | `src/tools/media-kit.js` |
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
-| `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
+| `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). us-macro-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
 | `BLS_DAILY_MAX` | Lowers the BLS API queries this server makes a UTC day (never raises it past the keyless or keyed limit); the CI sweep server sets it to the per-run cap. |  | `src/tools/us-macro-series.js` |
 | `BRAVE_ANSWERS_API_KEY` | Brave answers API key (a credential, set on the host). |  | `src/tools/search.js` |
 | `BRAVE_API_KEY` | Key for the web search tools (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/llm-context-kit.js`, `src/tools/search.js` |
@@ -1613,7 +1636,7 @@ holds it.
 | `GITHUB_TOKEN` | GitHub token (a credential, set on the host); the github-repo tool sends it to lift the keyless rate limit. |  | `src/tools/enrich-kit.js` |
 | `GITHUB_TRAFFIC_TOKEN` | Github traffic token (a credential, set on the host). |  | `src/transparency.js` |
 | `GIT_COMMIT_SHA` | Build id for /health, the MCP version and asset URLs when the host platform does not provide one. | `dev` | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
-| `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `mike@agent402.tools` | `src/server.js` |
+| `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `help@agent402.tools` | `src/server.js` |
 | `GOOGLE_SITE_VERIFICATION` | Google site verification. |  | `src/ledger-chrome.js` |
 | `GSC_SERVICE_ACCOUNT_JSON` | Search Console service account JSON. |  | `src/search-data.js` |
 | `GSC_SITE_URL` | Search Console site URL. | `sc-domain:agent402.tools` | `src/search-data.js` |
@@ -1625,7 +1648,6 @@ holds it.
 | `IDEM_TTL_MS` | Idem lifetime, in milliseconds. |  | `src/idempotency-store.js` |
 | `IMAGE_LINK_TIMEOUT_MS` | Image link timeout, in milliseconds. | `45000` | `src/tools/llm-images-fast-kit.js` |
 | `INDEXNOW_KEY` | Indexnow key (a credential, set on the host). |  | `src/server.js` |
-| `INK_FACILITATOR_URL` | Ink facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
 | `JEV_DAILY_MAX_TOKENS` | Jev daily maximum tokens. |  | `src/tool-judge.js` |
 | `JEV_MODEL` | Jev model. | `jev-1.14.0` | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 1 more |
 | `JUPITER_API_BASE` | Jupiter API base. |  | `src/tools/solana-intel-kit.js` |
@@ -1638,6 +1660,7 @@ holds it.
 | `LLM_ATTEMPT_MAX_MS` | Model attempt maximum, in milliseconds. |  | `src/tools/llm-gateway-kit.js` |
 | `LLM_MAX_TIMED_OUT_ATTEMPTS` | Model maximum timed out attempts. | `2` | `src/tools/llm-gateway-kit.js` |
 | `LOAD_SHED` | off disables load shedding of free routes under event-loop pressure. |  | `src/load-shed.js` |
+| `MANAGED_AGENTS_PAGE` | on lists /integrations/claude-managed-agents on the integrations index, the sitemaps, /llms.txt and /llms-full.txt; unset or any other value serves the page with noindex and links it from none of them. |  | `src/platform-integrations.js` |
 | `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
@@ -1660,7 +1683,7 @@ holds it.
 | `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
 | `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 | `OPERATOR_AUTH_FAIL_ALERT` | Failed operator-token attempts per hour before the guessing alarm pages. | `100` | `src/server.js` |
-| `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/server.js` |
+| `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/operator-session-limits.js` |
 | `OWED_ESCALATE_DAYS` | Owed escalate, in days. |  | `src/tempo-push-debts.js` |
 | `PAID_TIMING_LOG` | Paid timing log. |  | `src/paid-phase-timing.js` |
 | `PAID_TIMING_WINDOW` | Paid timing window. |  | `src/paid-phase-timing.js` |
@@ -1699,7 +1722,7 @@ holds it.
 | `STATS_DB_DIR` | Stats database directory. |  | `src/router-pool.js`, `src/stats.js` |
 | `STOCK_DATA_PROVIDER` | Stock data provider behind stock-quote and stock-history (off lists none of them). |  | `src/tools/stock-provider.js` |
 | `SUBSCRIPTIONS_REPLAY_MS` | Subscriptions replay, in milliseconds. |  | `src/stripe-subscriptions.js` |
-| `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/tools/llm-gateway-kit.js` |
+| `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/posthog.js`, `src/subject-wallet.js` and 1 more |
 | `TRANSCRIBE_LONG` | Set to on to list and serve the thirty-minute transcription tier (/api/transcribe-long). |  | `src/tools/stt-kit.js` |
 | `TREASURY_YIELD_BUDGET_MS` | Treasury yield budget, in milliseconds. |  | `src/tools/macro-kit.js` |
 | `TREASURY_YIELD_REFRESH` | Treasury yield refresh. |  | `src/tools/macro-kit.js` |

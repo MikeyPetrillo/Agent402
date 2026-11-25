@@ -11,7 +11,7 @@
 // cleared the pay-time proven-seller gate) exits 1 with the router's own words
 // - that is a truthful "not proven yet", not a harness failure.
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "solana-sor-live");
-const RPC = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC = process.env.SOLANA_RPC_URL || "https://solana-rpc.publicnode.com";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPENDER = process.env.SOLANA_SPENDING_ADDRESS || "8KqQG8MefNvQEQmp9gBjov39DXcWsUpSeqjL9pPCGKKE";
 const ROUTE_ALLOWED = new Set(["/api/route/execute", "/api/route/execute-plus", "/api/route/execute-pro"]);

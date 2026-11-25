@@ -21,7 +21,8 @@ for (const f of files) {
   const text = readFileSync(f, "utf8");
   // Sentences (or wrapped lines joined) that promise an uncharged repeat.
   for (const m of text.matchAll(/[^.\n]*(?:\n[^.\n]+)*?payment[^.]{0,40}is not charged[^.]*\./g)) {
-    if (!/Tempo transfer/.test(m[0])) missing.push(`${f.slice(ROOT.length)}: ${m[0].replace(/\s+/g, " ").trim().slice(0, 90)}`);
+    // "a Tempo push transfer" names the same exception.
+    if (!/Tempo (?:push )?transfer/.test(m[0])) missing.push(`${f.slice(ROOT.length)}: ${m[0].replace(/\s+/g, " ").trim().slice(0, 90)}`);
   }
 }
 ok(missing.length === 0, `every "repeat's payment is not charged" sentence names the Tempo transfer exception${missing.length ? `:\n  ${missing.join("\n  ")}` : ""}`);

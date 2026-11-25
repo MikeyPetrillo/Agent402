@@ -1,15 +1,19 @@
-# agent402-ai-sdk
+# agent402-stream-tools
 
-Vercel AI SDK tools for [Agent402](https://agent402.tools) - the open-source
+[Agent402](https://agent402.tools) tools for use with the AI SDK by Vercel (`streamText`, `generateText`). Agent402 is the open-source
 x402 + MCP server with 500+ pay-per-call web tools (browser, web search,
 OCR, PDFs, durable memory, pure-CPU utilities) **and** the cross-seller
 [Smart Order Router](https://agent402.tools/marketplace) that ranks tools across
 the x402 sellers Agent402 indexes.
 
+Works with the AI SDK (`ai`). Agent402 is not affiliated with or endorsed by Vercel.
+
+Formerly `agent402-ai-sdk`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
+
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
 ```bash
-npm install agent402-ai-sdk ai zod
+npm install agent402-stream-tools ai zod
 # the quickstart's model provider:
 npm install @ai-sdk/openai
 ```
@@ -17,7 +21,7 @@ npm install @ai-sdk/openai
 ## Quickstart
 
 ```js
-import { agent402Tools } from "agent402-ai-sdk";
+import { agent402Tools } from "agent402-stream-tools";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 
@@ -41,7 +45,7 @@ The LLM picks tasks; the router ranks sellers; the caller handles payment.
 
 | Tool | Purpose |
 |---|---|
-| `agent402_find` | Resolve a plain-language task to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
+| `agent402_find` | Resolve a task description to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
 | `agent402_route` | **Cross-seller x402 router**: rank tools across the x402 sellers Agent402 indexes (its own catalog plus the other sellers it discovers and crawls). `include: "external"` excludes Agent402 itself - neutral discovery API over the rest of the ecosystem. |
 | `agent402_call` | Call a tool by slug. Pays automatically: pure-CPU tools via proof-of-work; wallet-only via your x402 fetch. |
 | `agent402_about` | The Agent402 service manifest - payment options, capability map, MCP connector, trust signals. |
@@ -54,7 +58,7 @@ payment.
 
 ## Migration from 0.1.x
 
-`agent402-ai-sdk@0.2.0` replaces the per-slug tool generator with the four-
+`agent402-stream-tools@0.2.0` replaces the per-slug tool generator with the four-
 meta-tool pattern. If you were using `agent402Tools({ slugs: [...] })`, the
 new entry point is just `agent402Tools()` - the LLM picks slugs at runtime
 via `agent402_find` and `agent402_route`.
@@ -65,7 +69,7 @@ If you'd rather not pull in `ai` (or you want to wrap the tools with your own
 factory), use the framework-agnostic export:
 
 ```js
-import { agent402ToolSpecs } from "agent402-ai-sdk";
+import { agent402ToolSpecs } from "agent402-stream-tools";
 
 const specs = agent402ToolSpecs();
 // specs = [{ name, description, parametersJsonSchema, execute }, ...]

@@ -39,13 +39,12 @@
 //   UNPAID_QUOTE_BUDGET_PER_HOUR=off never throttles; a FREE_MODE boot never
 //   throttles (no paywall there, and CI sweeps boot in that mode).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { registerOfferedNetworks, x402PaymentNetwork, decodesAsX402Payment } from "../src/payment-attempt.js";
 
 const POW_SECRET = "test-unpaid-quote-budget-secret";
@@ -436,12 +435,13 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
 }
 
 // ---- booted half -----------------------------------------------------------
-const [PAID, OFF, FREE, FAC] = await getFreePorts(4);
 facilitator = createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
 });
-await new Promise((r) => facilitator.listen(FAC, "127.0.0.1", r));
+// Port 0 everywhere, each port read back (scripts/lib/boot-server.js for the servers).
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC = facilitator.address().port;
 
 const quiet = {
   X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
@@ -456,24 +456,12 @@ const paidEnv = {
   // first chain refresh is pushed past the test so the boot makes no RPC reads.
   X402_SYNC_ON_START: "", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000",
 };
-function boot(port, env) {
+function boot(env) {
   const trafficDir = mkdtempSync(join(tmpdir(), "a402-unpaid-budget-"));
   dirs.push(trafficDir);
-  const p = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, TRUST_PROXY_HOPS: "1", ...quiet, PORT: String(port), POW_SECRET, TRAFFIC_DIR: trafficDir, AGENT402_OPERATOR_TOKEN: "test-unpaid-budget-operator", ...env },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  p.__log = "";
-  p.stderr.on("data", (b) => { p.__log = (p.__log + b.toString()).slice(-4000); });
-  procs.push(p);
-  return p;
-}
-async function waitUp(base, p) {
-  for (let i = 0; i < 180; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) return; } catch { /* booting */ }
-    await sleep(500);
-  }
-  fail(`server at ${base} never answered /health\n${p.__log}`);
+  // The servers boot together; each has 90 s to answer /health.
+  return bootServer({ stores: false, timeoutMs: 90_000, env: { TRUST_PROXY_HOPS: "1", ...quiet, POW_SECRET, TRAFFIC_DIR: trafficDir, AGENT402_OPERATOR_TOKEN: "test-unpaid-budget-operator", ...env } })
+    .then((srv) => { procs.push(srv.child); return srv; });
 }
 // Every 429 the paid server answers is counted here, so the operator read can
 // be checked against what this test actually saw rather than a hand-kept total.
@@ -488,14 +476,18 @@ const call = async (base, path, { method = "GET", ua = "budget-walker/1.0", head
 // resolved client. A request with no X-Forwarded-For comes from 127.0.0.1,
 // outside the CDN ranges, so the rest of this boot reads req.ip as before.
 const ORIGIN_SECRET = "test-unpaid-budget-origin-secret";
-const pPaid = boot(PAID, { ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "5", CDN_PROXY: "on", CDN_ORIGIN_SECRET: ORIGIN_SECRET, TRUST_PROXY_HOPS: "1" });
-const pOff = boot(OFF, { ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "off" });
-const pFree = boot(FREE, { FREE_MODE: "true", UNPAID_QUOTE_BUDGET_PER_HOUR: "5" });
-const P = `http://127.0.0.1:${PAID}`, O = `http://127.0.0.1:${OFF}`, F = `http://127.0.0.1:${FREE}`;
+let P = "", O = "", F = "";
 
 try {
-  await Promise.all([waitUp(P, pPaid), waitUp(O, pOff), waitUp(F, pFree)]);
-  // AFTER the boot, not before it: waitUp allows 90 s, so a check made before
+  const booted = await Promise.allSettled([
+    boot({ ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "5", CDN_PROXY: "on", CDN_ORIGIN_SECRET: ORIGIN_SECRET, TRUST_PROXY_HOPS: "1" }),
+    boot({ ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "off" }),
+    boot({ FREE_MODE: "true", UNPAID_QUOTE_BUDGET_PER_HOUR: "5" }),
+  ]);
+  const down = booted.find((b) => b.status === "rejected");
+  if (down) fail(`a server never answered /health\n${String(down.reason?.message || down.reason).slice(-4000)}`);
+  [P, O, F] = booted.map((b) => b.value.url);
+  // AFTER the boot, not before it: a boot may take 90 s, so a check made before
   // spawning guarantees nothing about the hour the assertions run in. A count
   // that straddles the hour resets mid-test and the sixth request is not a 429.
   if (secondsToHourBoundary() < 90) {
@@ -590,7 +582,9 @@ try {
   const crawlerHtml = await crawler.text();
   ok(crawler.status === 200 && crawlerHtml.includes("Past 5 in an hour"), "/crawler quotes the budget the running gate enforces");
   const robots = await (await call(P, "/robots.txt")).text();
-  ok(robots.includes(`${P}/crawler`) && /^# Crawling this catalog/m.test(robots), "/robots.txt points crawlers at /crawler");
+  // The server booted on PORT=0 with no BASE_URL, so its absolute links name
+  // port 0: the line is an absolute /crawler address on this host.
+  ok(/^# .*\bhttp:\/\/127\.0\.0\.1:\d+\/crawler\b/m.test(robots) && /^# Crawling this catalog/m.test(robots), "/robots.txt points crawlers at /crawler");
 
   // The operator read carries counts only.
   const op = await (await fetch(`${P}/__operator/traffic.json?days=1`, { headers: { authorization: "Bearer test-unpaid-budget-operator" } })).json();

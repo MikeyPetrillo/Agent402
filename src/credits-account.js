@@ -412,7 +412,9 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
   };
   const keyIdOf = (v) => (KEY_ID_RE.test(String(v || "")) ? String(v) : null);
   const limited = (req, res) => {
-    if (!writeLimiter?.check(clientIp(req)).limited) return false;
+    const rl = writeLimiter?.check(clientIp(req));
+    if (!rl?.limited) return false;
+    res.set("Retry-After", String(Math.max(1, Math.ceil(Number(rl.retryAfterSeconds) || 60))));
     res.status(429).json({ error: "Too many requests, please slow down. Nothing moved." });
     return true;
   };

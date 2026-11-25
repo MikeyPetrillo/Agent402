@@ -16,7 +16,7 @@ section below and apply the config.
 Run once in the user's project directory:
 
 ```bash
-claude mcp add agent402 -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -- npx -y agent402-mcp@0.17.1
 ```
 
 To use the hosted server instead of the npm package:
@@ -35,7 +35,7 @@ add to `mcpServers`:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"]
+      "args": ["-y", "agent402-mcp@0.17.1"]
     }
   }
 }
@@ -53,7 +53,7 @@ Open the Cline MCP Servers panel and add:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "disabled": false,
       "autoApprove": []
     }
@@ -70,7 +70,7 @@ Settings → MCP → Add new MCP server:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"]
+      "args": ["-y", "agent402-mcp@0.17.1"]
     }
   }
 }
@@ -85,7 +85,7 @@ Add to `.vscode/mcp.json` in the workspace, or to the user-level `mcp.json`:
   "servers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"]
+      "args": ["-y", "agent402-mcp@0.17.1"]
     }
   }
 }
@@ -97,8 +97,8 @@ A small set of dotted MCP tools that cover all 500+ underlying Agent402
 tools (the older snake_case names such as `search_tools` / `call_tool` still
 work as call aliases):
 
-- Flagships, callable directly: `web.search`, `web.answer`, `web.news`,
-  `browser.render`, `audio.transcribe`, `memory.read`,
+- Flagships, callable directly: `pdf.markdown`, `macro.series`,
+  `weather.current`, `browser.render`, `audio.transcribe`, `memory.read`,
   `memory.write`.
 - `catalog.search(query)` - lexical search across the catalog. Task-shaped
   queries also return matching multi-tool skill packs, which the server
@@ -125,7 +125,7 @@ math, validators, converters, geo math) are free via proof-of-work and
 need no wallet; `GET /api/pow` lists them. Paid tools (browser rendering,
 web search, PDF tooling, live data, crypto reads) start at $0.001 per call
 in USDC over x402 on Base or any other chain the 402 lists (Solana, Polygon,
-Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar, Algorand,
+Arbitrum One, Monad, Celo, Avalanche C-Chain, Sei, OP Mainnet, Arc, Ink, Stellar, Algorand,
 and USDG on Robinhood Chain), over MPP, or from a prepaid card credits key.
 Multi-tool skill packs cost the sum of the tools they run, less a bundle
 discount. The finished report products under `/v1` (deep research, company

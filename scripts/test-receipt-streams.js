@@ -175,6 +175,28 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
   process.env.RECEIPT_STORE_DB = join(mkdtempSync(join(tmpdir(), "a402-receipt-fetch-")), "receipts.db");
   const store = await import("../src/receipt-store.js");
   const { RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH, receiptFetchKey, isReceiptFetchKey } = await import("../src/receipt-signing.js");
+  // The keep waits for the response to finish with a final 200: a client
+  // gone before "finish" (only "close") or a final status other than 200
+  // keeps nothing, and a finished 200 keeps it once.
+  {
+    const { EventEmitter } = await import("node:events");
+    const kept = [];
+    const keep = (...a) => { kept.push(a); };
+    const resOf = (statusCode) => Object.assign(new EventEmitter(), { statusCode });
+    const gone = resOf(200);
+    store.keepStreamedReceiptOnFinalOk("k1", "jws1", {}, null, gone, keep);
+    await ok(kept.length === 0, "a streamed receipt is not kept before the response finishes");
+    gone.emit("close");
+    await ok(kept.length === 0, "a client gone before finish keeps no receipt");
+    const failed = resOf(500);
+    store.keepStreamedReceiptOnFinalOk("k2", "jws2", {}, null, failed, keep);
+    failed.emit("finish");
+    await ok(kept.length === 0, "a response that finished other than 200 keeps no receipt");
+    const done = resOf(200);
+    store.keepStreamedReceiptOnFinalOk("k3", "jws3", {}, null, done, keep);
+    done.emit("finish"); done.emit("finish");
+    await ok(kept.length === 1 && kept[0][0] === "k3", `a response that finished 200 keeps its receipt once (${kept.length})`);
+  }
   let describe = () => SETTLED;
   const app = express();
   app.use(express.json());

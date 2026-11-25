@@ -152,12 +152,14 @@ const sorobanRpc = getRpcClient(NETWORK);
 // mistaken assumption about the SDK's own union/getter shape fails loudly
 // here instead of silently mis-decoding a real production incident later.
 {
+  // stellar-sdk 17: int64 is a bigint, a union arm is a factory call, and
+  // toXdr("base64") returns the string.
   const encodeResult = (resultResult) =>
     new xdr.TransactionResult({
-      feeCharged: new xdr.Int64(0),
+      feeCharged: 0n,
       result: resultResult,
-      ext: xdr.TransactionResultExt.fromXDR("00000000", "hex"),
-    }).toXDR("base64");
+      ext: xdr.TransactionResultExt.v0(),
+    }).toXdr("base64");
 
   const raw = describeRpcRejection({ status: "ERROR", hash: "b5ff", latestLedger: 123, diagnosticEventsXdr: ["AAAA"], weird: 1, secretish: "x".repeat(5000) });
   ok(/"status":"ERROR"/.test(raw) && /"hash":"b5ff"/.test(raw) && /otherKeys/.test(raw) && raw.length <= 800, `describeRpcRejection: bounded, keeps status/hash/ledger and names unknown keys (${raw.length} chars)`);
@@ -191,11 +193,65 @@ const sorobanRpc = getRpcClient(NETWORK);
   // (no string): the 2026-08-27 production line "(no errorResultXdr in
   // response) ... otherKeys:[errorResult]" was this decoder reading the old field.
   const { decodeErrorResult } = await import("./rpc-diagnostics.js");
-  const parsed = xdr.TransactionResult.fromXDR(encodeResult(xdr.TransactionResultResult.txFailed([badAuthOp])), "base64");
+  const parsed = xdr.TransactionResult.fromXdr(encodeResult(xdr.TransactionResultResult.txFailed([badAuthOp])), "base64");
   ok(decodeErrorResult({ status: "ERROR", errorResult: parsed })?.opCodes?.[0] === "opBadAuth", "decodeErrorResult: the SDK's parsed errorResult object decodes like the XDR string did");
   ok(decodeErrorResult({ status: "ERROR", errorResultXdr: encodeResult(xdr.TransactionResultResult.txFailed([badAuthOp])) })?.opCodes?.[0] === "opBadAuth", "decodeErrorResult: the legacy errorResultXdr string still decodes");
   ok(decodeErrorResult({ status: "ERROR" }) === null, "decodeErrorResult: neither field -> null");
 
+
+  // The same decoder over XDR written by the PREVIOUS SDK (stellar-sdk 16.4.1,
+  // whose XDR layer was rebuilt in 17): each result below was encoded by 16.4.1
+  // and the decoded value beside it is what the 16.4.1 build of this decoder
+  // answered for it, from the string and from the parsed object alike. The
+  // wire format did not change, so the answers must not either.
+  const V16 = {
+    "results": {
+      "txBadSeq": "AAAAAAAABNL////7AAAAAA==",
+      "txInsufficientFee": "AAAAAAAABNL////3AAAAAA==",
+      "invokeResourceLimit": "AAAAAAAABNL/////AAAAAQAAAAAAAAAY/////QAAAAA=",
+      "invokeTrapped": "AAAAAAAABNL/////AAAAAQAAAAAAAAAY/////gAAAAA=",
+      "opBadAuth": "AAAAAAAABNL/////AAAAAf////8AAAAA",
+      "paymentUnderfunded": "AAAAAAAABNL/////AAAAAgAAAAAAAAAB/////v////4AAAAA"
+    },
+    "decoded": {
+      "txBadSeq": {
+        "code": "txBadSeq"
+      },
+      "txInsufficientFee": {
+        "code": "txInsufficientFee"
+      },
+      "invokeResourceLimit": {
+        "code": "txFailed",
+        "opCodes": [
+          "invokeHostFunction:invokeHostFunctionResourceLimitExceeded"
+        ]
+      },
+      "invokeTrapped": {
+        "code": "txFailed",
+        "opCodes": [
+          "invokeHostFunction:invokeHostFunctionTrapped"
+        ]
+      },
+      "opBadAuth": {
+        "code": "txFailed",
+        "opCodes": [
+          "opBadAuth"
+        ]
+      },
+      "paymentUnderfunded": {
+        "code": "txFailed",
+        "opCodes": [
+          "payment:paymentUnderfunded",
+          "opNoAccount"
+        ]
+      }
+    }
+  };
+  for (const [name, b64] of Object.entries(V16.results)) {
+    const want = JSON.stringify(V16.decoded[name]);
+    ok(JSON.stringify(decodeErrorResultXdr(b64)) === want, `decodeErrorResultXdr: 16.4.1-encoded ${name} decodes as 16.4.1 decoded it (${want})`);
+    ok(JSON.stringify(decodeErrorResult({ status: "ERROR", errorResult: xdr.TransactionResult.fromXdr(b64, "base64") })) === want, `decodeErrorResult: the parsed 16.4.1-encoded ${name} decodes the same`);
+  }
   console.log("rpc-diagnostics.js unit tests ✓");
 }
 
@@ -614,7 +670,7 @@ const sorobanRpc = getRpcClient(NETWORK);
   const normalCtx = newSettleContext(SETTLE_MS);
   const normal = await enqueue(job(normalCtx, () => {}));
   ok(normal?.status === "PENDING" && hits.sendTransaction === 1 && !normalCtx.deadlineRefused, "settle deadline: a settle inside its deadline submits exactly as before");
-  ok(normalCtx.sentHash === tx.hash().toString("hex"), "settle deadline: the hash of what is sent is recorded as it is sent, so an answer at the deadline can name it");
+  ok(normalCtx.sentHash === Buffer.from(tx.hash()).toString("hex"), "settle deadline: the hash of what is sent is recorded as it is sent, so an answer at the deadline can name it");
 
   // (a2) a submission in flight when the deadline passes: the answer comes at
   //      the deadline and the context names the hash that may still land
@@ -626,7 +682,7 @@ const sorobanRpc = getRpcClient(NETWORK);
     const inflightCtx = newSettleContext(SETTLE_MS);
     let inflightErr = null;
     try { await q(settleJob(inflightCtx, { run: (c, fn) => als.run(c, fn), settle: () => hangServer.sendTransaction(tx) })); } catch (e) { inflightErr = e; }
-    ok(inflightErr?.code === "FACILITATOR_TIMEOUT" && inflightCtx.sentHash === tx.hash().toString("hex") && !inflightCtx.deadlineRefused, "settle deadline: a submission in flight at the deadline is answered at the deadline with its hash on the context");
+    ok(inflightErr?.code === "FACILITATOR_TIMEOUT" && inflightCtx.sentHash === Buffer.from(tx.hash()).toString("hex") && !inflightCtx.deadlineRefused, "settle deadline: a submission in flight at the deadline is answered at the deadline with its hash on the context");
     hangSubmit.closeAllConnections?.(); hangSubmit.close();
   }
 
@@ -781,6 +837,21 @@ const sorobanRpc = getRpcClient(NETWORK);
     const envelope = { payload: { transaction: tx.toXDR() } };
     ok(payerOfPayload(envelope, requirements) === payer, "payerOfPayload: the transfer's from address, read offline");
     ok(payerOfPayload(envelope, { ...requirements, asset: StrKey.encodeContract(Buffer.alloc(32, 9)) }) === null, "payerOfPayload: a transfer on another asset names no payer");
+    // A transfer envelope written by stellar-sdk 16.4.1, and what the 16.4.1
+    // build of payerOfPayload read from it: the payer on the named asset,
+    // none on another.
+    const V16_ENVELOPE = {
+      "envelope": "AAAAAgAAAABmvn4zLHpFMzK9nQp/fbBV9cXvGgatpm2Ys5+2gQxHOgAAAGQAAAAAAAAAKgAAAAEAAAAAAAAAAAAAAABxP7MAAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcAAAAIdHJhbnNmZXIAAAADAAAAEgAAAAAAAAAAZr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzoAAAASAAAAAAAAAAALUTrZtJJAFcoJAu0HkETTrF2+wjBvBpSMENqOtuOfLQAAAAoAAAAAAAAAAAAAAAAAACcQAAAAAAAAAAAAAAABgQxHOgAAAEAS9M/5G6FVxM/UNTCIHBBUY+61rgrdlrGhyGIy1qBeH5QYDQZElDohBye1OKRoNzQYot+Pbi/0ERHw5XOqk74P",
+      "envelopeHashHex": "6ad4ef2183924787036bd5716dc9863bf3988799ea0b61bfc28c8b24ce72c412",
+      "payer": "GBTL47RTFR5EKMZSXWOQU735WBK7LRPPDIDK3JTNTCZZ7NUBBRDTVSK2",
+      "payTo": "GAFVCOWZWSJEAFOKBEBO2B4QITJ2YXN6YIYG6BUURQINVDVW4OPS3OL6",
+      "asset": "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR",
+      "otherAsset": "CAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQTD2L"
+    };
+    const v16Req = { scheme: "exact", network: "stellar:pubnet", asset: V16_ENVELOPE.asset, amount: "10000", payTo: V16_ENVELOPE.payTo };
+    ok(payerOfPayload({ payload: { transaction: V16_ENVELOPE.envelope } }, v16Req) === V16_ENVELOPE.payer, "payerOfPayload: a 16.4.1-encoded transfer names the payer 16.4.1 read");
+    ok(payerOfPayload({ payload: { transaction: V16_ENVELOPE.envelope } }, { ...v16Req, asset: V16_ENVELOPE.otherAsset }) === null, "payerOfPayload: a 16.4.1-encoded transfer on another asset names no payer, as in 16.4.1");
+    ok(Buffer.from(TransactionBuilder.fromXdr(V16_ENVELOPE.envelope, Networks.PUBLIC).hash()).toString("hex") === V16_ENVELOPE.envelopeHashHex, "a 16.4.1-encoded envelope hashes to the hash 16.4.1 gave it");
     ok(payerOfPayload({ payload: { transaction: "not-xdr" } }, requirements) === null && payerOfPayload(envelope, { ...requirements, network: "eip155:8453" }) === null && payerOfPayload(undefined, undefined) === null, "payerOfPayload: junk, another network or nothing names no payer");
     const t0 = Date.now();
     const r = await fetch(`http://127.0.0.1:${freePort}/settle`, {
@@ -825,7 +896,7 @@ const sorobanRpc = getRpcClient(NETWORK);
   const hashOf = (seq) => {
     for (const x of sent) {
       const tx = TransactionBuilder.fromXDR(x, Networks.TESTNET);
-      if (tx.source === source && String(tx.operations[0]?.bumpTo) === String(seq)) return tx.hash().toString("hex");
+      if (tx.source === source && String(tx.operations[0]?.bumpTo) === String(seq)) return Buffer.from(tx.hash()).toString("hex");
     }
     return undefined;
   };
@@ -856,7 +927,7 @@ ExactStellarScheme.prototype.settle = async function (payload, requirements) {
   if (mode === "throw-after-send") throw new Error("dropped after submit");
   if (mode === "hang-after-send") { await pause(Number(process.env.HANG_MS)); throw new Error("late"); }
   if (mode === "fail-result") return { success: false, errorReason: "settle_exact_stellar_transaction_failed", transaction: "", network: requirements.network, payer: process.env.STUB_SOURCE };
-  return { success: true, transaction: tx.hash().toString("hex"), network: requirements.network, payer: process.env.STUB_SOURCE };
+  return { success: true, transaction: Buffer.from(tx.hash()).toString("hex"), network: requirements.network, payer: process.env.STUB_SOURCE };
 };
 `);
   const freePort = await new Promise((r) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });

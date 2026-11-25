@@ -21,6 +21,7 @@ import { generateKeyPairSync } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { bootPaidServer } from "./lib/paid-boot.js";
+import { pageText } from "./lib/html-text.js";
 
 const { AWS_DEFAULT_SLUGS } = await import("../src/aws-marketplace-gate.js");
 const { AWS_LISTING_GROUPS, awsDescriptionOf, awsPointersIn, sentencesOf } = await import("../src/aws-listing.js");
@@ -40,6 +41,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   ok(awsDescriptionOf({ slug: "x", name: "X tool", description: "See /api/x." }, ctx) === "X tool", "nothing left: the tool's name");
   const listed = AWS_LISTING_GROUPS.flatMap((g) => g.slugs);
   ok(listed.length === 74 && new Set(listed).size === 74 && JSON.stringify([...AWS_DEFAULT_SLUGS]) === JSON.stringify(listed), "the default slug list is the 74 listed tools, each once");
+  ok(listed.includes("settlement-calendar") && AWS_DEFAULT_SLUGS.includes("settlement-calendar"), "settlement-calendar, its rail rules cited to public sources, is on the AWS default list");
   ok(!listed.includes("edgar-insider-trades") && !listed.includes("fec-candidates"), "the held slugs are not listed");
 }
 
@@ -165,7 +167,16 @@ try {
     ok(/spf-check/.test(bySlug.get("dns").description), "control: the direct route's dns description still names the mail tools");
   }
 
-  ok(/id="aws-marketplace"/.test(termsHtml) && /standard\s+contract for AWS Marketplace/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on");
+  // The eligibility and sanctions sentence: one text (src/eligibility-copy.js),
+  // printed by /aws/start and word for word in /terms.
+  {
+    const { ELIGIBILITY_SENTENCE } = await import("../src/eligibility-copy.js");
+    const flat = pageText;
+    ok(/sanctions list/.test(ELIGIBILITY_SENTENCE) && /embargoed jurisdiction/.test(ELIGIBILITY_SENTENCE), "the eligibility sentence names the sanctions list and embargoed jurisdictions");
+    ok(flat(termsHtml).includes(ELIGIBILITY_SENTENCE), "/terms prints the eligibility sentence word for word");
+    ok(flat(html).includes(ELIGIBILITY_SENTENCE) && /<h2 id="eligibility">/.test(html), "/aws/start prints the same eligibility and sanctions sentence under its own heading");
+  }
+  ok(/id="aws-marketplace"/.test(termsHtml) && /Standard\s+Contract\s+for\s+AWS\s+Marketplace and these terms both apply, and where they conflict the AWS contract\s+governs/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on, and the AWS contract governs a conflict");
   ok(/Every paid call that ends without an answer is recorded with its payment id, the tool, the time, why it ended and whether the payment can still be retried; one that is not answered on a later attempt is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace\./.test(termsHtml) && !/is corrected as a billing adjustment/.test(termsHtml), "/terms: every paid call that ends without an answer is recorded; one never answered is reviewed, and an approved correction is an invoice adjustment");
 } finally {
   await srv.stop();

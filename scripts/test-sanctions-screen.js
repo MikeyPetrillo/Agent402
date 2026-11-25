@@ -29,6 +29,7 @@ const PATH_USD = "0x20C000000000000000000000b9537d11c60E8b50";
 process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
 process.env.SANCTIONS_PAYOUT_FILE = join(dir, "payout.json");
 process.env.SANCTIONS_LIST_URL = "http://fixture.local/SDN.XML";
+process.env.SANCTIONS_EVENTS_FILE = join(dir, "events.jsonl");
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 delete process.env.TEMPO_DATA_API_KEY;
 delete process.env.TEMPO_API_KEY;
@@ -130,6 +131,14 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   calls.length = 0;
   const v = await T.validateTempoCredential(header({ source: LISTED_1 }));
   ok(v.ok === false && v.cls === "screen-rejected", `a listed payer (source) is refused (${v.cls})`);
+  {
+    // Before validation: refused, no row naming the source, one count in the hour's aggregate.
+    const EV = await import("../src/sanctions-events.js");
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await EV.sanctionsEventsOperatorView({ recent: 1000 });
+    const agg = view.recent.filter((r) => r.aggregate && r.kind === "unproven-refusal" && r.rail === "tempo");
+    ok(!view.recent.some((r) => !r.aggregate) && agg.length === 1 && agg[0].byReason?.["before-verify"] >= 1 && agg[0].address === null, `a listed source before validation gets no row; the refusal is counted (${JSON.stringify(agg[0]?.byReason)})`);
+  }
   ok(calls.length === 0, `before any network call (${calls.join(",") || "none"})`);
   ok(!/0xbad0{35}1/i.test(v.error) && /0xbad0\.\.\.0001/.test(v.error), `the refusal names the address masked (${v.error})`);
   const line = T.logTempoRefusal({ method: "GET", path: "/x" }, { cls: v.cls, detail: v.error });
@@ -156,6 +165,54 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   calls.length = 0;
   const b = await T.broadcastTempoCredential(header({ source: LISTED_2 }));
   ok(b.ok === false && b.cls === "screen-rejected" && calls.length === 0, "the broadcast screens again and sends nothing for a listed party");
+}
+
+// --- what a Tempo refusal records: a row only for the settled sender ---------
+{
+  const EV = await import("../src/sanctions-events.js");
+  const { SignatureEnvelope, AccountConfig } = await import("ox/tempo");
+  const view = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
+  const rowsFor = async (a) => (await view()).filter((r) => !r.aggregate && String(r.address).toLowerCase() === String(a).toLowerCase());
+  const tempoCount = async (reason) => (await view()).filter((r) => r.aggregate && r.rail === "tempo").reduce((t, r) => t + (r.byReason?.[reason] || 0), 0);
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  const TXB = { chainId: 4217, calls: [{ to: PATH_USD, data: "0xdeadbeef" }], nonce: 0n, nonceKey: 0n, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n };
+  const attackerKey = "0x" + "22".repeat(32);
+  // Strix vector: a keychain v2 envelope naming a listed userAddress, signed by the attacker's own key.
+  const base = TxEnvelopeTempo.from(TXB);
+  const kInner = SignatureEnvelope.from(Secp256k1.sign({ payload: TxEnvelopeTempo.getSignPayload(base, { from: LISTED_1 }), privateKey: attackerKey }));
+  const keychainV2 = TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ type: "keychain", userAddress: LISTED_1, inner: kInner, version: "v2" }) });
+  // Strix vector: a configurable account envelope naming a listed account, approved by attacker-held owners.
+  const owners = ["0x" + "31".repeat(32), "0x" + "32".repeat(32)].map((k) => ({ k, a: Address.fromPublicKey(Secp256k1.getPublicKey({ privateKey: k })).toLowerCase() }));
+  const config = { version: 0n, threshold: 2, owners: owners.map((o) => ({ owner: o.a, weight: 1 })) };
+  const digest = AccountConfig.getSignPayload({ account: LISTED_2, config, payload: TxEnvelopeTempo.getSignPayload(base) });
+  const configurable = TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account: LISTED_2, config, signatures: owners.map((o) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: o.k }))) }) });
+  const vectors = [
+    ["a keychain v2 naming a listed userAddress", header({ source: null, signature: keychainV2 }), LISTED_1],
+    ["a configurable envelope naming a listed account", header({ source: null, signature: configurable }), LISTED_2],
+    ["a push credential naming a listed source", header({ source: LISTED_1, type: "hash", hash: "0x" + "ab".repeat(32) }), LISTED_1],
+  ];
+  for (const [label, cred, named] of vectors) {
+    const before = await tempoCount("before-verify");
+    const v = await T.validateTempoCredential(cred);
+    await settle();
+    ok(v.ok === false && v.cls === "screen-rejected", `${label}: refused before validation as before (${v.cls})`);
+    ok((await rowsFor(named)).length === 0 && await tempoCount("before-verify") === before + 1, `${label}: no row naming it; counted before verification`);
+  }
+  // After validation: only the settled sender is recorded, and only when it is listed.
+  const R = T.__recordTempoRefusalForTests;
+  R([CLEAN], "after validate", () => "Tempo payment party, after validate");
+  await settle();
+  ok((await view()).filter((r) => !r.aggregate).length === 0 && await tempoCount("not-the-payer") === 1, "after validation, a listed party that is not the settled sender: no row, counted");
+  R([LISTED_FUNDER, CLEAN], "after validate", () => "Tempo payment party, after validate");
+  await settle();
+  const hit = await rowsFor(LISTED_FUNDER);
+  ok(hit.length === 1 && hit[0].rail === "tempo" && hit[0].kind === "screen-hit", "after validation, a listed settled sender is recorded");
+  R([CLEAN], "after validate", () => "funded", { only: CLEAN.toLowerCase(), funded: true });
+  await settle();
+  ok((await rowsFor(CLEAN)).length === 1, "the funding check records the settled sender it names as the funded payer");
+  R([LISTED_FUNDER], "after validate", () => "funded", { only: LISTED_2.toLowerCase(), funded: true });
+  await settle();
+  ok((await rowsFor(LISTED_2)).length === 0, "the funding check never records a funded payer that is not the settled sender");
 }
 
 // --- one-hop funding check ---------------------------------------------------
@@ -360,7 +417,9 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
     for (let i = 0; i < 40 && !fresh; i++) { await new Promise((r) => setTimeout(r, 250)); fresh = (await status(base))?.status === "fresh"; }
     ok(fresh, "the retry tick loads the list once the source answers");
     ok(await tempoOffered(base), "with the list loaded the 402 offers tempo/charge");
-    proc.kill("SIGKILL");
+    // The restart reads the same store files: the first server is gone
+    // (its exit seen) before the second opens them.
+    await new Promise((r) => { if (proc.exitCode !== null || proc.signalCode !== null) r(); else { proc.once("exit", r); proc.kill("SIGKILL"); } });
     listUp = false;
     base = await boot();
     ok((await status(base))?.status === "fresh" && await tempoOffered(base), "a restart with the source down reads the stored list at once and offers tempo");

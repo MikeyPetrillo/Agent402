@@ -6,7 +6,10 @@
 // checks the committed artifact still belongs to the committed source.
 //
 //   npm i --no-save solc@0.8.28 && node contracts/compile.js
+// or, with the compiler installed elsewhere (CI keeps it out of the example):
+//   SOLC_DIR=/path/with/node_modules/solc node contracts/compile.js
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const NAME = "Agent402PriceSnapshot";
 const source = readFileSync(join(here, `${NAME}.sol`), "utf8");
-const solc = (await import("solc")).default;
+const solc = process.env.SOLC_DIR ? createRequire(join(process.env.SOLC_DIR, "package.json"))("solc") : (await import("solc")).default;
 const input = {
   language: "Solidity",
   sources: { [`${NAME}.sol`]: { content: source } },

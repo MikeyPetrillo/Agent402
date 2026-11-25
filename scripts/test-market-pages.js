@@ -52,7 +52,8 @@ for (const c of NEW_CHAINS) {
   const html = marketPage(c.key, "https://agent402.tools", { snapshot, rail, activity: null, wallet: c.wallet });
   ok(!html.includes("outside999"), `${c.key}: an outside buyer's tx is never rendered`);
 
-  ok(html.includes(`The ${CHAIN_PAGES[c.key].chainName} x402 marketplace`), `${c.key}: renders with the correct title`);
+  ok(html.includes(`Agent402 on ${CHAIN_PAGES[c.key].chainName}`) && !html.includes(`${CHAIN_PAGES[c.key].chainName} x402 marketplace`), `${c.key}: renders with the correct title`);
+  ok(html.includes("is not affiliated with") || html.includes("not affiliated with, sponsored or endorsed"), `${c.key}: states independence under the H1`);
   ok(html.includes(`>${c.asset}<`) || html.includes(`${c.asset} on ${CHAIN_PAGES[c.key].chainName}`), `${c.key}: settles in ${c.asset}`);
   ok(html.includes(c.explorer), `${c.key}: correct explorer domain (${c.explorer}) rendered`);
   ok(html.includes("example.com/tx/abc123"), `${c.key}: real receipt tx link rendered, never invented`);

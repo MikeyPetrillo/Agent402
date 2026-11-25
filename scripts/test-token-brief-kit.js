@@ -25,6 +25,7 @@ process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not
 
 const { TOKEN_BRIEF_TOOLS, TOKEN_BRIEF_TIERS, probeTokenBrief, describeTokenChanges, normMint, __test } =
   await import("../src/tools/token-brief-kit.js");
+const { TOKEN_FACTS_NOTICE } = await import("../src/token-claims.js");
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -190,7 +191,10 @@ let happy = null;
   ok(e.holders.rows.length === 10 && e.holders.rows[0].owner === "WHALE1", "holder rows carried, largest first");
   ok(e.holders.concentration.top1Pct === 31.25, "top-1 concentration computed by the intel kit");
   ok(e.holders.concentration.top10PctExcludingPools < e.holders.concentration.top10Pct, "pool-excluded concentration is lower than the raw figure");
-  ok(e.risk.riskCounts.danger === 1 && e.risk.risks.length === 2, "risk flags and counts carried");
+  ok(!("risk" in e) && e.facts.flags.map((f) => f.id).join() === "metadata-mutable,top-holders-50-or-more" && e.facts.insiderNetworks != null, `named facts carried, computed from the report's fields (${e.facts.flags.map((f) => f.id)})`);
+  ok(!/"danger"|"warn"|LP Vault unlocked|riskLevel|scoreNormalised|rugged/.test(JSON.stringify(happy)), "no feed score, risk level, risk label, rugged flag or verdict word reaches the brief");
+  ok(happy.notice === TOKEN_FACTS_NOTICE && happy.report.includes(TOKEN_FACTS_NOTICE) && !/RugCheck band/.test(happy.report), "the notice rides the answer and the report; no band in the header");
+  ok(m.claim_check?.passed === true && m.claim_check.rewrites === 0, "the claim check passed on the first draft");
   ok(e.probes.report && e.probes.safety && e.probes.pairs && e.probes.lookup && e.probes.price, "all five probes recorded as ok");
   {
     const { RUGCHECK_ATTRIBUTION } = await import("../src/data-attribution.js");
@@ -200,10 +204,10 @@ let happy = null;
   ok(e.buckets.mint === "revoked" && e.buckets.freeze === "revoked", "authority buckets");
   ok(e.buckets.lpLocked === "partial-low", `LP-locked bucket for 8.98% is "partial-low" (${e.buckets.lpLocked})`);
   ok(e.buckets.topHolders === "very-high", `top-10 bucket for ~66% is very-high (${e.buckets.topHolders})`);
-  ok(e.buckets.riskLevel === "danger", "risk band carried from the safety probe");
+  ok(!("riskLevel" in e.buckets), "no risk band in the buckets");
 
   const names = happy.tables.map((t) => t.name);
-  ok(["holders", "pairs", "markets", "risks"].every((x) => names.includes(x)), `appendix has holders/pairs/markets/risks (${names.join(",")})`);
+  ok(["holders", "pairs", "markets", "flags"].every((x) => names.includes(x)), `appendix has holders/pairs/markets/flags (${names.join(",")})`);
   const holdersTable = happy.tables.find((t) => t.name === "holders");
   ok(holdersTable.rows[1][4].startsWith("AMM"), "a labelled pool account is typed as a pool, not a wallet");
   ok(holdersTable.rows[2][5] === "yes", "insider flag carried into the appendix");
@@ -238,7 +242,8 @@ let happy = null;
     return ![...allowed].some((f) => f.includes(x));
   });
   ok(stray.length === 0, `every number in the evidence half of the prompt traces to a fetched fact (stray: ${stray.slice(0, 8).join(", ")})`);
-  ok(prompt.includes("3550201") && prompt.includes("31.25%") && prompt.includes("2873512"), "distinctive fetched values reach the prompt");
+  ok(!prompt.includes("3550201") && prompt.includes("31.25%") && prompt.includes("2873512"), "distinctive fetched values reach the prompt; the feed's score does not");
+  ok(!/\bdanger\b|LOWER is safer|banded risk level|Rugged flag/i.test(prompt), "the prompt carries no feed score, risk level or verdict word");
   ok(prompt.includes("WHALE1") && prompt.includes("PAIR1") && prompt.includes("POOLBIG"), "holders, pairs and pools reach the prompt by identifier");
   ok(!prompt.includes("0.2034") || DS_PAIRS[0].priceUsd === "0.2034", "no price appears that was not fetched");
   ok(prompt.includes("NEVER add a price, a holder, a pool, a date"), "prompt states the no-invention rule");
@@ -258,7 +263,6 @@ let happy = null;
   const prompt = synthBodies[0].messages[0].content;
   ok(r.evidence.probes.report === false && r.evidence.probes.safety === true, "the failed leg alone is marked failed");
   ok(/RugCheck report probe FAILED/.test(prompt), "prompt names the failed probe");
-  ok(!/RugCheck score .*unknown/.test(prompt) === false || true, "prompt still carries the summary-based score");
   ok(r.evidence.holders.rows.length === 0 && /No holder rows available/.test(prompt), "no holder rows are invented when the report leg fails");
   ok(r.evidence.liquidity.totalMarketLiquidityUsd === null, "missing liquidity is null, never 0");
   ok(r.sources.length === 4 && !r.sources.some((s) => s.url.endsWith("/report")), "the failed leg is not cited as a source");
@@ -266,13 +270,14 @@ let happy = null;
 }
 
 // ---------------------------------------------------------------------------
+const { runAsRouteCall } = await import("../src/not-charged.js");
 // 6) Thin-evidence refusals - all 4xx/5xx, so never charged
 // ---------------------------------------------------------------------------
 {
   // (a) nothing anywhere knows the mint
   stub({ rcReport: () => errRes(400, "{\"error\":\"invalid token mint\"}"), rcSummary: () => errRes(400, "{}"), jupSearch: [], dsPairs: [], jupPrice: {} });
-  const e = await throws(handler({ mint: MINT }), 422, "unresolvable mint");
-  ok(e && /Not charged/.test(e.message), "unresolvable-mint refusal says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ mint: MINT })), 422, "unresolvable mint");
+  ok(e && /Nothing was charged\./.test(e.message), "unresolvable-mint refusal says not charged");
   ok(synthBodies.length === 0, "no synthesis call is made on an unresolvable mint");
   restore();
 }
@@ -311,8 +316,8 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
 }
 {
   stub({ synth: { choices: [{ message: { content: "" } }] } });
-  const e = await throws(handler({ mint: MINT }), 502, "empty synthesis");
-  ok(e && /not charged/i.test(e.message), "empty synthesis says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ mint: MINT })), 502, "empty synthesis");
+  ok(e && /Nothing was charged\.$/.test(e.message), "empty synthesis says not charged");
   restore();
 }
 
@@ -327,8 +332,10 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
   ok(!calls.some((u) => u.includes("openrouter")), "probe never calls the LLM gateway");
   ok(!calls.some((u) => u.endsWith("/report")), "probe never pulls the heavy RugCheck full report");
   ok(p1.signals.mintAuthority === "revoked" && p1.signals.freezeAuthority === "revoked", "probe reads authority state");
-  ok(p1.signals.lpLocked === "partial-low" && p1.signals.topHolders === "low" && p1.signals.riskLevel === "danger", "probe buckets LP lock, concentration and risk band");
-  ok(p1.signals.risks.join("|") === "LP Vault unlocked|Mutable metadata", "probe carries sorted risk-flag names");
+  ok(p1.signals.lpLocked === "partial-low" && p1.signals.topHolders === "low", "probe buckets LP lock and concentration");
+  ok(Object.keys(p1.signals).join() === "mintAuthority,freezeAuthority,lpLocked,topHolders", `probe signals are the four fact buckets only (${Object.keys(p1.signals)})`);
+  // A baseline stored with the dropped risk band reads no change on the same facts.
+  ok(describeTokenChanges({ ...p1.signals, riskLevel: "danger", dangerRisks: 1, risks: ["x"] }, p1.signals).length === 0, "a legacy baseline with a risk band reads no change on the same facts");
 
   const p2 = await probeTokenBrief(MINT);
   ok(p1.fingerprint === p2.fingerprint, "identical data yields an identical fingerprint");
@@ -347,9 +354,27 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
   ok(changes.some((c) => /^Mint authority: revoked -> live$/.test(c)), `mint-authority change described (${changes.join(" | ")})`);
   ok(changes.some((c) => /LP locked: partial-low -> locked/.test(c)), "LP-lock change described");
   ok(changes.some((c) => /Top-10 holder concentration: low -> very-high/.test(c)), "concentration change described");
-  ok(changes.some((c) => /Risk flag cleared: LP Vault unlocked/.test(c)), "cleared risk flag described");
+  ok(!changes.some((c) => /risk/i.test(c)), "no risk band or risk label in the change list");
 
   await throws(probeTokenBrief("not-a-mint"), 400, "probe validates the mint before egress");
+  restore();
+}
+
+// ---------------------------------------------------------------------------
+// 8b) The claim check: a brief that judges the token is written once more with
+//     the violation named, and withheld (502, not charged) when it still does.
+// ---------------------------------------------------------------------------
+{
+  const judged = { choices: [{ message: { content: "## Snapshot\nJupiter (JUP) appears safe and is not a scam [1]." } }], usage: { cost: 0.4 } };
+  let n = 0;
+  stub({ synth: () => (n++ === 0 ? jsonRes(judged) : jsonRes(SYNTH_OK)) });
+  const r = await handler({ mint: MINT });
+  ok(synthBodies.length === 2 && /REJECTED/.test(synthBodies[1].messages[0].content) && /appears safe/.test(synthBodies[1].messages[0].content), "a judging draft is written once more, the violation named in the retry");
+  ok(r.meta.claim_check.rewrites === 1 && !/appears safe/.test(r.report), "the second, clean draft is the one returned");
+  restore();
+  stub({ synth: judged });
+  const e = await throws(runAsRouteCall(() => handler({ mint: MINT })), 502, "a brief that judges the token twice is withheld");
+  ok(e && /withheld/.test(e.message) && /Nothing was charged\./.test(e.message) && synthBodies.length === 2, "the withheld brief says not charged and made exactly two drafts");
   restore();
 }
 

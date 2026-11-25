@@ -1,6 +1,6 @@
 # LangChain.js + Agent402 -- runnable demo
 
-Proves that the [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
+Proves that the [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
 
 ## Run it
 
@@ -28,7 +28,7 @@ Install the peer dependencies (`npm install @langchain/core zod`) and use `agent
 ```js
 import { ChatOpenAI } from "@langchain/openai";
 import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
-import { agent402Tools } from "agent402-langchain";
+import { agent402Tools } from "agent402-structured-tools";
 
 const tools = await agent402Tools();
 const model = new ChatOpenAI({ model: "gpt-4o-mini" });
@@ -38,7 +38,7 @@ const model = new ChatOpenAI({ model: "gpt-4o-mini" });
 ## Troubleshooting
 
 - **`ECONNREFUSED agent402.tools`** -- point at a local instance: `AGENT402_BASE_URL=http://localhost:3000 node run.js` after `FREE_MODE=true npm start` in the repo root.
-- **`agent402-langchain` not found** -- run `npm install` in this folder first.
+- **`agent402-structured-tools` not found** -- run `npm install` in this folder first.
 
 ## See also
 

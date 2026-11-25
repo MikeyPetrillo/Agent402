@@ -13,6 +13,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { isHost, urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders, tokenIndexLookup, priceOfMint, SOL_PRICE_MAX_MINTS } from "../src/tools/solana-intel-kit.js";
 import { RUGCHECK_ATTRIBUTION, JUPITER_ATTRIBUTION } from "../src/data-attribution.js";
+import { TOKEN_FACTS_NOTICE } from "../src/token-claims.js";
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -197,10 +198,14 @@ try {
   let r = await h("sol-token-safety")({ mint: JUP });
   ok(calls.length === 2 && calls.some((c) => c.url === `https://api.rugcheck.xyz/v1/tokens/${JUP}/report/summary`), "safety: RugCheck summary URL carries the mint");
   ok(calls.some((c) => c.url.includes(`/tokens/v2/search?query=${JUP}`)), "safety: Jupiter search URL carries the mint");
-  ok(r.score === 3550201 && r.scoreNormalised === 97 && r.lpLockedPct === 8.98, "safety: score, normalised, lpLockedPct");
-  ok(r.risks.length === 2 && r.risks[0].level === "danger" && r.riskCounts.danger === 1 && r.riskCounts.warn === 1, "safety: risks shaped + counted");
-  ok(r.riskLevel === "danger", "safety: riskLevel danger when a danger risk exists");
-  ok(r.token.symbol === "JUP" && r.token.holderCount === 835540 && r.token.isVerified === true, "safety: Jupiter exact-mint match picked (not the first row)");
+  ok(r.lpLockedPct === 8.98, "safety: lpLockedPct");
+  // The source's own score, risk levels and verdict words never reach the
+  // answer (owner decision 2026-11-24): only facts computed here.
+  ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/danger|"warn"|"good"/i.test(JSON.stringify(r)), "safety: no score, risk level, risk label or verdict word is passed through");
+  ok(r.flags.map((f) => f.id).join() === "lp-locked-under-50" && r.flags[0].value === 8.98 && r.unknown.length === 0, `safety: the named facts found, with values (${JSON.stringify(r.flags)})`);
+  ok(r.notice === TOKEN_FACTS_NOTICE, "safety: the fixed notice rides the answer");
+  ok(r.token.symbol === "JUP" && r.token.holderCount === 835540, "safety: Jupiter exact-mint match picked (not the first row)");
+  ok(!["isVerified", "organicScore", "organicScoreLabel"].some((k) => k in r.token), "safety: the aggregator's own verified flag and organic score are not passed through");
   ok(r.authorities.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === true, "safety: authorities from Jupiter audit");
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
   ok(Array.isArray(r.source) && r.source.includes("rugcheck") && typeof r.fetchedAt === "string", "safety: source + fetchedAt");
@@ -213,8 +218,8 @@ try {
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith(`/tokens/${PUMP}/report`) ? Promise.resolve(jsonRes({ ...RC_REPORT, mint: PUMP })) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
   ok(calls.length === 3 && calls.filter((c) => c.url.endsWith(`/tokens/${PUMP}/report`)).length === 1, `safety: a Jupiter miss reads the full report once (${calls.length} reads)`);
-  ok(r.riskLevel === "good" && r.scoreNormalised === 1 && r.risks.length === 0, "safety: score and risks still come from the summary (it carried them)");
-  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && r.token.isVerified === true && r.token.organicScore === null && r.token.launchpad === "Pump.Fun", "safety: token block from the report; Jupiter-only organic score stays null");
+  ok(!("riskLevel" in r) && !("scoreNormalised" in r) && r.flags.some((f) => f.id === "freeze-authority-live" && f.value === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar"), "safety: a live freeze authority from the report is a flag with its address; no score");
+  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && !("isVerified" in r.token) && !("organicScore" in r.token) && r.token.launchpad === "Pump.Fun", "safety: token block from the report; no outside verified flag or score");
   ok(r.authorities?.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === false && r.authorities.freezeAuthority === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar", "safety: authorities from the report (a live freeze authority reads live, with its address)");
   ok(r.holders === null, "safety: holders stays null without Jupiter (no measure is substituted)");
   ok(r.fullReport?.read === true && r.fullReport.needed.join(",") === "token,authorities" && r.fullReport.filled.join(",") === "token,authorities" && r.source.includes("rugcheck-report"), `safety: fullReport names what it filled (${JSON.stringify(r.fullReport)})`);
@@ -223,12 +228,13 @@ try {
   // the answer still lands, and fullReport says why.
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? Promise.resolve(textRes("x", 500)) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
-  ok(r.riskLevel === "good" && r.token === null && r.authorities === null && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
+  ok(r.token === null && r.authorities === null && r.unknown.some((u) => u.field === "mintAuthorityDisabled" && /full report/.test(u.reason)) && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
 
-  // A summary with no score: the report fills score and risks.
+  // A summary with no score no longer reads the full report: no published
+  // field needs it while Jupiter indexes the mint.
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes({ tokenProgram: "T", risks: [], lpLockedPct: 5 })) : url.endsWith("/report") ? Promise.resolve(jsonRes(RC_REPORT)) : Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])));
   r = await h("sol-token-safety")({ mint: JUP });
-  ok(r.scoreNormalised === 97 && r.risks.length === 2 && r.riskLevel === "danger" && r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport.filled.join(",") === "score,risks", `safety: a scoreless summary is completed from the report (${JSON.stringify(r.fullReport)})`);
+  ok(r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport === null && !calls.some((c) => c.url.endsWith("/report")), `safety: a scoreless summary needs no report read (${JSON.stringify(r.fullReport)})`);
 
   // Concurrent reads of one mint's full report share one request.
   stub((url) => url.endsWith(`/tokens/${JUP}/report`) ? new Promise((res) => setTimeout(() => res(jsonRes(RC_REPORT)), 20)) : Promise.reject(new Error("bad url " + url)));
@@ -253,9 +259,11 @@ try {
   ok(r.markets.total === 3 && r.markets.rows.length === 2 && r.markets.rows[0].pool === "M-big" && r.markets.rows[1].pool === "M-mid", "report: markets sorted by liquidity, cut to limit");
   ok(r.markets.rows[0].liquidityUsd === 1260729.14 && r.markets.rows[0].lpLockedPct === 50, "report: market liquidity + LP lock");
   ok(r.lockers.total === 1 && r.lockers.rows[0].type === "raydium_locker" && r.lockers.rows[0].unlockDate === "2027-01-15T08:00:00.000Z", "report: lockers shaped");
-  ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && r.verification.jupVerified === true && r.transferFee.pct === 0, "report: launchpad/holders/verification/transferFee");
+  ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && !("verification" in r) && r.transferFee.pct === 0, "report: launchpad/holders/transferFee; the source's own verification is not passed on");
   ok(!("knownAccounts" in r) && JSON.stringify(r).length < 4000, "report: compact (no knownAccounts echo)");
   ok(r.source === "rugcheck" && typeof r.fetchedAt === "string", "report: source + fetchedAt");
+  ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/"danger"|"warn"|LP Vault unlocked/.test(JSON.stringify(r)), "report: no score, risk level, risk label, rugged flag or verdict word is passed through");
+  ok(r.flags.map((f) => f.id).join() === "freeze-authority-live,metadata-mutable,top-holders-50-or-more" && r.flags[2].value === r.holders.concentration.top10Pct && r.notice === TOKEN_FACTS_NOTICE, `report: named facts computed from the report's fields, with the notice (${r.flags.map((f) => f.id)})`);
   ok(r.credit === RUGCHECK_ATTRIBUTION, "report: the answer credits RugCheck by name and link");
 
   // --------------------------------------------------------------------------
@@ -389,14 +397,15 @@ try {
   ok(/relevance order/.test(r.note), "search: relevance-order note when no fallback ran");
 
   // The ticker is busy on other chains: the search holds no Solana pair, so the
-  // mints come from the token index (verified first) and pairs are read by mint.
+  // mints come from the token index (in its own search order; its verified
+  // flag neither ranks nor is passed through) and pairs are read by mint.
   {
     const WIF = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm";
     const KWIF = "6Rwcmkz9yiYVM5EzyMcr4JsQPGEAWhcUvLvfBperYnUt";
     const SWORD = "5tCju6YNxHq5zrA6tGndr6F7TK42mpUFmeE31cSFpump";
     const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
     const tok = (id, symbol, name, isVerified) => ({ ...JUP_TOKEN, id, symbol, name, isVerified, tags: isVerified ? ["verified"] : ["unknown"] });
-    const JUP_WIF = [tok(SWORD, "swordcat", "cat wif sword", undefined), tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true), { id: "not a mint" }];
+    const JUP_WIF = [tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true), { id: "not a mint" }, tok(SWORD, "swordcat", "cat wif sword", undefined)];
     const base = (addr, symbol, name) => ({ baseToken: { address: addr, symbol, name }, quoteToken: { address: SOL, name: "Wrapped SOL", symbol: "SOL" } });
     const OTHER_CHAINS = [DS_PAIR({ chainId: "robinhood", pairAddress: "rh", ...base("0xrh", "WIF", "dogwifhat") }), DS_PAIR({ chainId: "ethereum", pairAddress: "eth", ...base("0xeth", "WIF", "WIF") })];
     const TOP = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "k1", liquidity: { usd: 9e9 }, ...base(KWIF, "KWIF", "Kitten Wif Hat") }), DS_PAIR({ pairAddress: "s1", ...base(SWORD, "swordcat", "cat wif sword") })];
@@ -414,9 +423,15 @@ try {
     ok(order === "w2,w1,k1,s1,wq", `search fallback: the first mint's pairs by liquidity, then the other mints in rank order, then quote-side pairs (got ${order})`);
     ok(r.totalSolanaPairs === 5 && r.returned === 5 && r.matched === 5 && r.complete === true, "search fallback: w1 from both reads is deduped by pair address");
     ok(r.fallback.ran === true && r.fallback.why === "no-solana-pairs" && r.fallback.status === "found", `search fallback: says why it ran (${JSON.stringify(r.fallback).slice(0, 120)})`);
-    ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && r.fallback.mints[0].isVerified === true && r.fallback.mints[0].symbol === "$WIF", "search fallback: verified mints first, invalid ids dropped");
+    ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && !("isVerified" in r.fallback.mints[0]) && r.fallback.mints[0].symbol === "$WIF", "search fallback: listed mints first, invalid ids dropped, no outside verified flag");
     ok(calls.some((c) => c.url === `https://api.dexscreener.com/tokens/v1/solana/${WIF},${KWIF},${SWORD}`) && calls.some((c) => c.url === `https://api.dexscreener.com/token-pairs/v1/solana/${WIF}`), "search fallback: pairs read by mint for Solana");
     ok(calls.length === 4 && /token index/.test(r.note), "search fallback: four reads, and the note explains the order");
+    // The index's verified flag never reorders its mints: an unflagged mint the
+    // index ranks first stays first.
+    stub(route({ jup: () => Promise.resolve(jsonRes([tok(SWORD, "swordcat", "cat wif sword", undefined), tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true)])) }));
+    r = await h("sol-token-search")({ query: "wif", limit: 10 });
+    ok(r.fallback.mints.map((m) => m.mint).join(",") === [SWORD, WIF, KWIF].join(",") && !JSON.stringify(r).includes("isVerified"), `search fallback: mints keep the token index's own order, never ranked by its verified flag (got ${r.fallback.mints.map((m) => m.symbol).join(",")})`);
+    ok(!/verified/i.test(SOLANA_INTEL_TOOLS.find((x) => x.slug === "sol-token-search").description), "the listing never says the index's mints are verified");
 
     // Solana rows that do not match the query: they follow the mints' pairs.
     stub(route({ search: [...OTHER_CHAINS, DS_PAIR({ pairAddress: "d1", ...base(BONK, "DOGE", "not it") }), DS_PAIR({ pairAddress: "w2", ...base(WIF, "XYZ", "relabeled") })] }));
@@ -457,7 +472,7 @@ try {
         return routed(url);
       });
       try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: spent budget with no rows resolved"); }
-      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps; nothing was charged/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
+      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps\. Retry shortly\.$/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
       finally { Date.now = realNow; }
     }
 
@@ -552,7 +567,7 @@ try {
   r = await tokenIndexLookup(JUP, 5);
   ok(r.count === 2 && r.tokens[0].mint === JUP && r.tokens[1].symbol === "jlUSDC", "lookup: exact mint match sorted first");
   const t0 = r.tokens[0];
-  ok(t0.holderCount === 835540 && t0.marketCapUsd === 675335464.9800633 && t0.organicScore === 99.31 && t0.isVerified === true, "lookup: profile fields");
+  ok(t0.holderCount === 835540 && t0.marketCapUsd === 675335464.9800633 && !("organicScore" in t0) && !("isVerified" in t0) && !("organicScoreLabel" in t0) && !t0.tags.some((x) => /verif|strict/.test(x)), "lookup: profile fields; no outside verified flag, score or rating tag");
   ok(t0.audit.mintAuthorityDisabled === true && t0.audit.topHoldersPct === 15.28 && t0.firstPool.id === "2psp", "lookup: audit + first pool");
   ok(t0.stats24h.numTraders === 1191 && t0.stats24h.priceChangePct === -2.4, "lookup: 24h stats");
 
@@ -627,7 +642,7 @@ try {
     const t0 = Date.now();
     const out = await h("sol-token-safety")({ mint: PUMP });
     const ms = Date.now() - t0;
-    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && out.riskLevel === "good" && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
+    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && !("riskLevel" in out) && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
       `a stalled report fill gives up at its own ${D.RUGCHECK_FALLBACK_MS} ms cap and the safety answer still lands (${ms} ms, ${JSON.stringify(out.fullReport)})`);
   }
   // The RPC fallback is bounded: with RugCheck publishing no holder table and
@@ -707,6 +722,24 @@ for (const slug of ["sol-token-report", "sol-token-holders"]) {
 }
 for (const slug of ["sol-token-safety", "sol-token-report", "sol-token-holders"]) {
   ok(SOLANA_INTEL_TOOLS.find((x) => x.slug === slug).discovery.output.example.credit === RUGCHECK_ATTRIBUTION, `${slug}: published example carries the RugCheck credit`);
+}
+
+// A tool listed whatever RUGCHECK_TOOLS says never points a buyer at one the
+// switch unlists (src/rugcheck-switch.js): its description, its example and
+// every note string in the kit's source name only tools that are always listed.
+{
+  const { RUGCHECK_SLUGS } = await import("../src/rugcheck-switch.js");
+  const { readFileSync } = await import("node:fs");
+  const names = [...RUGCHECK_SLUGS];
+  const named = (text) => names.filter((n) => new RegExp(`\\b${n}\\b`).test(text));
+  for (const t of SOLANA_INTEL_TOOLS.filter((x) => !RUGCHECK_SLUGS.has(x.slug))) {
+    const hits = named(`${t.description} ${JSON.stringify(t.discovery || {})}`);
+    ok(hits.length === 0, `${t.slug}: names no switched-off tool (${hits.join(", ") || "none"})`);
+  }
+  const src = readFileSync(new URL("../src/tools/solana-intel-kit.js", import.meta.url), "utf8");
+  const notes = [...src.matchAll(/^const (\w+_NOTE) = (["`])([\s\S]*?)\2;$/gm)];
+  const noteHits = notes.filter(([, , , body]) => named(body).length).map(([, n]) => n);
+  ok(notes.length >= 2 && noteHits.length === 0, `the kit's answer notes name no switched-off tool (${notes.length} read; naming one: ${noteHits.join(", ") || "none"})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

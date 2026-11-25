@@ -84,6 +84,7 @@ import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
+import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, START_NOW_FIELD, followupsOptedOut, startNowAgreed, consentRecordOf } from "./checkout-consent.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 // ---- Public reports -------------------------------------------------------
@@ -185,7 +186,7 @@ export const HUMAN_PRODUCTS = {
   "insider-report": { label: "Insider flow report (Form 4)", price: 200, kind: "insider", slug: "insider-report", inputField: "ticker", inputLabel: "a US stock ticker" },
   "market-brief": { label: "Market / competitor brief", price: 200, kind: "research", slug: "market-brief", inputField: "query", inputLabel: "a market, category or company" },
   "ticker-pack": { label: "Ticker pack: dossier, insider flow and holders", price: 400, kind: "ticker", slug: "ticker-pack", inputField: "ticker", inputLabel: "a US stock ticker" },
-  "linkedin-article": { label: "LinkedIn article, ready to publish", price: 400, kind: "linkedin", slug: "linkedin-article", inputField: "topic", inputLabel: "the topic of your article" },
+  "linkedin-article": { label: "Professional article, ready to publish", price: 400, kind: "linkedin", slug: "linkedin-article", inputField: "topic", inputLabel: "the topic of your article" },
 };
 
 // Applied at module load: each product's card price comes from its agent tier,
@@ -717,8 +718,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const input = String(inputValue ?? "").trim();
     if (!input) { const e = new Error(`Please provide ${p.inputLabel}.`); e.statusCode = 400; throw e; }
     if (input.length > 2000) { const e = new Error("Input is too long."); e.statusCode = 400; throw e; }
-    const session = await stripe.checkout.sessions.create({
+    // The buyer accepts the terms (checkbox, naming arbitration and the class
+    // waiver), sees the refund rule above the pay button, asks for the report
+    // to start at once (the withdrawal acknowledgment), and may turn the
+    // follow-up emails off (src/checkout-consent.js).
+    const session = await createWithConsent(stripe, {
       mode: "payment",
+      custom_text: { submit: { message: REPORT_REFUND_LINE } },
+      custom_fields: [START_NOW_FIELD, FOLLOWUPS_FIELD],
       // Promotion codes are created in the Stripe dashboard (a first-report
       // code, a partner code); the one-shot flow accepted none until 2026-08-28.
       allow_promotion_codes: true,
@@ -739,7 +746,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       cancel_url: `${baseUrl}/reports?canceled=1`,
       // No customer account created; a one-off charge.
       payment_intent_data: { description: `Agent402 ${p.label}` },
-    });
+    }, baseUrl);
     return { id: session.id, url: session.url };
   }
 
@@ -1057,10 +1064,12 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // this target prefilled (the retention loop); a kind with no monitor
     // simply gets no offer. See src/report-upgrade.js. The signed receipt of
     // the purchase rides along when one was signed.
-    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null }).catch(() => {});
+    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null, startNow: startNowAgreed(session) }).catch(() => {});
     // Post-purchase sequence (src/followups.js): the only moment the buyer's
     // address is in hand next to what they bought. Never stored on the record.
-    if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
+    // A buyer who chose "No follow-up emails" at checkout is passed as such,
+    // and the sequence is never started for them.
+    if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input, followupsOptOut: followupsOptedOut(session) }); } catch { /* follow-ups never break delivery */ } }
     // Book what Stripe actually collected (a promotion code lowers it), never the list price.
     const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
     try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null, source: cleanSaleSource(session.metadata?.source) }); } catch { /* accounting never breaks delivery */ }
@@ -1117,6 +1126,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             ...(typeof bundle.disclaimer === "string" && bundle.disclaimer ? { disclaimer: bundle.disclaimer } : {}),
             // The grounding check's sentence (src/report-grounding.js), when it has one.
             ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
+            // The consent the checkout recorded (terms accepted, start at
+            // once), kept with the purchase record as /privacy says.
+            consent: consentRecordOf(session),
             at: new Date(now()).toISOString(),
           };
           // A paid purchase gets a signed receipt over the checkout and the

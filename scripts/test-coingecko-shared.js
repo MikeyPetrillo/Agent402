@@ -160,7 +160,7 @@ const okCount = (rs) => rs.filter((r) => r.status === 200).length;
   const misses = () => [A, B].reduce((n, s) => n + (s.log().match(/the shared store did not answer/g) || []).length, 0);
   ok(upstream <= CAP, `a burst of 40 distinct requests over both servers sends the upstream no more than the minute cap (${upstream} of ${CAP}; shared-store misses logged: ${misses()})`);
   ok(upstream === CAP && okCount(rs) === CAP, `and the whole cap is usable (${okCount(rs)} answered)`);
-  ok(rs.filter((r) => r.status !== 200).every((r) => r.status === 503 && /not charged/i.test(JSON.stringify(r.body))), "every request past the cap is a 503 that says nobody paid");
+  ok(rs.filter((r) => r.status !== 200).every((r) => r.status === 503 && /Nothing was charged\./.test(JSON.stringify(r.body))), "every request past the cap is a 503 that says nobody paid");
   stop();
 }
 {

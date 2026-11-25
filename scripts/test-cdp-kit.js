@@ -8,6 +8,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { leastOurs } from "./lib/ours-clock.js";
 import { generateKeyPairSync, createVerify, verify as edVerify } from "node:crypto";
+import { runAsRouteCall } from "../src/not-charged.js";
 
 delete process.env.CDP_API_KEY_ID;
 delete process.env.CDP_API_KEY_SECRET;
@@ -18,7 +19,9 @@ const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
-const tool = (slug) => CDP_TOOLS.find((t) => t.slug === slug);
+// Each handler is called as the route binder calls it (src/not-charged.js
+// runAsRouteCall), so a refusal carries the charge sentence a buyer reads.
+const tool = (slug) => { const t = CDP_TOOLS.find((x) => x.slug === slug); return t && { ...t, handler: (...args) => runAsRouteCall(() => t.handler(...args)) }; };
 const rejects = async (fn, status, msg) => {
   try { await fn(); ok(false, `${msg} (did not throw)`); }
   catch (e) { ok(e.statusCode === status, `${msg} (got ${e.statusCode}: ${String(e.message).slice(0, 60)})`); }

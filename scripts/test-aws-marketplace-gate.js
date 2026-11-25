@@ -467,7 +467,9 @@ await new Promise((r) => srv.close(r));
       const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
       const peg = CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
       const declared = AWS_DEFAULT_SLUGS.filter((sl) => sl === "stablecoin-peg");
-      ok(declared.length === 0 || typeof peg?.refAnswer === "function", "stablecoin-peg, in the default listing, declares its resale answer");
+      const { RAW_MARKET_FIELDS } = await import("../src/resale-terms.js");
+      const pegText = JSON.stringify(peg?.discovery?.output?.example || {});
+      ok(declared.length === 0 || (typeof peg?.refAnswer !== "function" && !RAW_MARKET_FIELDS.some((k) => pegText.includes(`"${k}":`))), "stablecoin-peg, in the default listing, answers no source figure, so its public answer is the one sold");
     }
 
     // Paid, per client address and per buyer; a refused payment stays usable.

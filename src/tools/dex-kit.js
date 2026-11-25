@@ -143,7 +143,7 @@ export const DEX_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Look up the Uniswap V3 pool address for a token pair + fee tier on Ethereum, Base, Polygon, Arbitrum, or Optimism. Pass either order (tokenA/tokenB) - the factory sorts internally. Returns 0x0…0 if no pool has been deployed for that combination yet.",
+      "Look up the Uniswap V3 pool address for a token pair + fee tier on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet. Pass either order (tokenA/tokenB) - the factory sorts internally. Returns 0x0…0 if no pool has been deployed for that combination yet.",
     tags: ["crypto", "uniswap", "dex", "v3", "pool", "evm"],
     discovery: {
       bodyType: "json",

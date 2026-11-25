@@ -1,4 +1,4 @@
-// Smoke test for agent402-llamaindex. Expects a FREE_MODE server reachable at
+// Smoke test for agent402-function-tools. Expects a FREE_MODE server reachable at
 // AGENT402_BASE_URL (defaults to http://localhost:3000). Self-installs
 // agent402-client and llamaindex if they're not in node_modules.
 import { execSync } from "node:child_process";
@@ -62,7 +62,7 @@ async function main() {
   const out3 = await execute("hash", { text: "hello world", algo: "sha256" });
   if (JSON.stringify(out) !== JSON.stringify(out3)) throw new Error("bundled execute() disagreed with tool.call");
 
-  console.log(`PASS — agent402-llamaindex: ${tools.length} tool(s) generated, call() returned a real result.`);
+  console.log(`PASS: agent402-function-tools: ${tools.length} tool(s) generated, call() returned a real result.`);
 }
 
 // Spending caps pass through to agent402-client: with none set the client's

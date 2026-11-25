@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (8 scripts, one process each)
+# @step 1: Offline suites (9 scripts, one process each)
 # /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
 t node scripts/test-route-envelope.js
 # Tool correctness regressions (20 wrong-answer bugs from the review; boots free-mode, TZ=UTC)
@@ -33,12 +33,16 @@ t node scripts/test-mcp-error-redaction.js
 t node scripts/test-mcp-x402.js
 # x402 MCP wire on the hosted connector: a flagship's first ask carries the twin's PaymentRequired beside the MPP challenges, the official @x402/mcp client (installed --no-save by the step before) pays it and reads the settle receipt, memory.read keyed on the signed payer, replay refused, settle failure and error answers unsettled with no output, MPP wins when both are sent, a free tool at its limit offers x402, paid calls meet their own larger per-IP transport limit, the copy names only the wires offered (paid boot, stub facilitator, in-process mounts)
 t node scripts/test-mcp-x402-connector.js
+# x402 PaymentRequired as structuredContent: every flagship's ask carries it (it validates against the listed outputSchema), catalog.call's envelope does not, and the reference SDK clients (v1 and v2, tools listed) read every unpaid ask as an isError result, never -32602 (paid boot, decide listed, stub facilitator, loopback only)
+t node scripts/test-mcp-x402-structured.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
 # Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth.js
 # Connector sign-in pages as a person and a screen reader meet them: one h1 per step and on the error page, error lines with role=alert tied to their field and in the error color after the cascade, a lockout that disables the code form and offers a new code, Allow before Deny, the balance page linked, no key named (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth-pages.js
+# Class guard, per-key limits: every spelling of an address or mailbox is one key, every limiter in src/ registered with its identity, and the limiters batches 6 and 7 touched hold their bound rotated across a /64, a /48, mailbox spellings and payment headers, sequentially and in parallel (offline, bare express, port 0)
+t node scripts/test-limiter-identity.js
 
 # @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)

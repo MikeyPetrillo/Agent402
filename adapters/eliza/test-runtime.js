@@ -1,4 +1,4 @@
-// elizaos-plugin-agent402 against a REAL elizaOS runtime (the registry review
+// agent402-actions-plugin against a REAL elizaOS runtime (the registry review
 // of 2026-09-14 asked for exactly this, and it is right that a stub runtime
 // proves nothing about the host):
 //
@@ -81,7 +81,7 @@ const imp = (m) => import(pathToFileURL(join(work, "node_modules", m, JSON.parse
 const core = await imp("@elizaos/core");
 const sqlMod = await imp("@elizaos/plugin-sql");
 const bootstrapMod = await imp("@elizaos/plugin-bootstrap");
-const pluginMod = await imp("elizaos-plugin-agent402");
+const pluginMod = await imp("agent402-actions-plugin");
 const plugin = pluginMod.default;
 const coreVersion = JSON.parse(readFileSync(join(work, "node_modules", "@elizaos", "core", "package.json"), "utf8")).version;
 console.log(`@elizaos/core ${coreVersion}; plugin ${pkg.name}@${pkg.version} from ${tgz.split("/").pop()}`);

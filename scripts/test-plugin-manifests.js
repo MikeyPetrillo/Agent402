@@ -80,5 +80,17 @@ if (tags.length) {
 } else {
   console.log("note - no release tags in this checkout; tag comparison not run");
 }
+// The display fields a plugin directory shows (author, owner, developer)
+// carry the trade name, not the full legal sentence.
+{
+  const { TRADE_NAME } = await import("../src/legal-entity.js");
+  const fsm = await import("node:fs");
+  const readJson = (f) => JSON.parse(fsm.readFileSync(new URL(`../${f}`, import.meta.url), "utf8"));
+  const codex = readJson(".codex-plugin/plugin.json");
+  const market = readJson(".claude-plugin/marketplace.json");
+  const claude = readJson("plugins/agent402/.claude-plugin/plugin.json");
+  const names = [codex.author?.name, codex.interface?.developerName ?? codex.developerName, market.owner?.name, ...(market.plugins || []).map((p) => p.author?.name).filter(Boolean), claude.author?.name].filter((v) => v !== undefined);
+  ok(names.length >= 4 && names.every((n) => n === TRADE_NAME), `plugin manifests' display names read "${TRADE_NAME}" (${JSON.stringify(names)})`);
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

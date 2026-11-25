@@ -131,17 +131,17 @@ try {
   // The same premium on the prose and document surfaces.
   const llms = await (await fetch(`${base}/llms.txt`)).text();
   // Chain bullets stay bare (chain: asset (CAIP-2)); the premium and the floor are stated once in the x402 paragraph.
-  if (!/on Optimism every call quotes \$0\.001 above its list price/.test(llms)) fail("/llms.txt", "the x402 paragraph does not name the Optimism premium");
+  if (!/on OP Mainnet every call quotes \$0\.001 above its list price/.test(llms)) fail("/llms.txt", "the x402 paragraph does not name the Optimism premium");
   if (/every call costs at least \$/.test(llms)) fail("/llms.txt", "names a floor with none set");
-  if (/\[Optimism\]\([^)]*\): USDC \(`eip155:10`\);/.test(llms)) fail("/llms.txt", "a chain bullet carries a clause");
+  if (/\[OP Mainnet\]\([^)]*\): USDC \(`eip155:10`\);/.test(llms)) fail("/llms.txt", "a chain bullet carries a clause");
   const llmsFull = await (await fetch(`${base}/llms-full.txt`)).text();
-  if (!/on Optimism every call quotes \$0\.001 above its list price/.test(llmsFull) || !/premiumUsdByNetwork/.test(llmsFull)) fail("/llms-full.txt", "does not name the Optimism premium and the /api/pricing field");
+  if (!/on OP Mainnet every call quotes \$0\.001 above its list price/.test(llmsFull) || !/premiumUsdByNetwork/.test(llmsFull)) fail("/llms-full.txt", "does not name the Optimism premium and the /api/pricing field");
   const openapi = await (await fetch(`${base}/openapi.json`)).json();
   if (!/premiumUsdByNetwork/.test(String(openapi?.info?.["x-guidance"] || ""))) fail("/openapi.json", "info.x-guidance does not name payment.premiumUsdByNetwork");
   const op = openapi?.paths?.["/api/hash"]?.post?.["x-payment-info"];
   if (JSON.stringify(op?.premiumUsdByNetwork) !== JSON.stringify({ optimism: PREMIUM_USD })) fail("/openapi.json", `POST /api/hash x-payment-info.premiumUsdByNetwork is ${JSON.stringify(op?.premiumUsdByNetwork)}`);
   const mcp = await (await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "payment.info", arguments: {} } }) })).text();
-  if (!/on Optimism every call quotes \$0\.001 above its list price/.test(mcp) || !/premiumUsdByNetwork/.test(mcp)) fail("/mcp payment.info", "does not name the Optimism premium and the /api/pricing field");
+  if (!/on OP Mainnet every call quotes \$0\.001 above its list price/.test(mcp) || !/premiumUsdByNetwork/.test(mcp)) fail("/mcp payment.info", "does not name the Optimism premium and the /api/pricing field");
 
   // A $0.001 route asks 1000 USDG base units on Robinhood, exactly what it
   // asks on Base (no floor).

@@ -1,23 +1,28 @@
 // Public RPCs for the EVM rails we settle on, read by the refund runner and by
 // the settle path's on-chain proof. Overridable per chain via EVM_RPC_<id> or
-// REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no entry has no RPC:
-// a caller refuses loudly rather than reading through a guessed endpoint.
+// REFUND_RPC_<id> (e.g. REFUND_RPC_8453). Every default is an endpoint whose
+// terms permit commercial use (src/rpc-terms.js); a chain with no such public
+// default (Monad) reads the keyed Alchemy lane when ALCHEMY_API_KEY is set.
+// EVM_RPC_BACKUPS are permitted lanes read after the keyed one (Monad's and
+// Sei's second lanes, each cited in PERMITTED_RPC_SOURCES). A chain with none
+// has no RPC: a caller refuses loudly rather than reading through a guessed
+// endpoint.
+import { PUBLICNODE_RPCS, ONFINALITY_RPCS, alchemyRpcFor } from "./rpc-terms.js";
+
 export const EVM_RPCS = {
   "eip155:8453": "https://mainnet.base.org",
   // polygon-rpc.com was shut off 2026-07-31 (probe: "tenant disabled", 403) and
   // was the ONLY Polygon RPC here, so every Polygon refund held unpaid.
   "eip155:137": "https://polygon-bor-rpc.publicnode.com",
   "eip155:42161": "https://arb1.arbitrum.io/rpc",
-  "eip155:43114": "https://api.avax.network/ext/bc/C/rpc",
-  "eip155:10": "https://mainnet.optimism.io",
+  "eip155:43114": PUBLICNODE_RPCS.avalanche,
+  "eip155:10": PUBLICNODE_RPCS.optimism,
   "eip155:42220": "https://forno.celo.org",
   "eip155:1329": "https://evm-rpc.sei-apis.com",
-  // Rails that had no entry until the all-chains verifier sweep - without one
-  // their rows held as "no RPC configured", which is safe but never repays.
-  "eip155:143": "https://rpc.monad.xyz",
-  // rpc.robinhoodchain.com answers an EMPTY body; the host the rest of the repo
-  // and Robinhood's own docs use is this one (probe: chainId 0x1237).
-  "eip155:4663": "https://rpc.mainnet.chain.robinhood.com",
+  // Monad (eip155:143) has no public default whose terms permit commercial
+  // use: it reads the keyed lane, then its backup (evmRpcFor below).
+  // Robinhood Chain through PublicNode (probe 2026-11-24: chainId 0x1237).
+  "eip155:4663": PUBLICNODE_RPCS.robinhood,
   // Arc mainnet public RPC (probe 2026-10-20: chainId 0x13b2, USDC at
   // 0x3600...0000 answers decimals() 6). Refund proof and settle chain proof.
   "eip155:5042": "https://rpc.mainnet.arc.io",
@@ -28,10 +33,29 @@ export const EVM_RPCS = {
   "eip155:57073": "https://rpc-gel.inkonchain.com",
 };
 
+/** Permitted lanes read after the default and the keyed lane. OnFinality's
+ *  public Monad endpoint is rate limited (a handful of reads a second), so it
+ *  stands behind the keyed lane; Sei's PublicNode endpoint (probe 2026-11-24:
+ *  chainId 0x531) stands behind the Sei default. */
+export const EVM_RPC_BACKUPS = Object.freeze({
+  "eip155:143": Object.freeze([ONFINALITY_RPCS.monad]),
+  "eip155:1329": Object.freeze([PUBLICNODE_RPCS.sei]),
+});
+
 /** The RPC URL for an EVM network (CAIP-2), or null. */
 export function evmRpcFor(network, env = process.env) {
   const n = String(network || "");
   if (!n.startsWith("eip155:")) return null;
   const id = n.split(":")[1];
-  return (env[`EVM_RPC_${id}`] || env[`REFUND_RPC_${id}`] || EVM_RPCS[n] || "").trim() || null;
+  return (env[`EVM_RPC_${id}`] || env[`REFUND_RPC_${id}`] || EVM_RPCS[n] || alchemyRpcFor(n, env) || EVM_RPC_BACKUPS[n]?.[0] || "").trim() || null;
+}
+
+/** Every permitted lane for an EVM network: the operator's override, the
+ *  public default, the keyed lane and the backups, each once. */
+export function evmRpcLanesFor(network, env = process.env) {
+  const n = String(network || "");
+  if (!n.startsWith("eip155:")) return [];
+  const id = n.split(":")[1];
+  return [env[`EVM_RPC_${id}`], env[`REFUND_RPC_${id}`], EVM_RPCS[n], alchemyRpcFor(n, env), ...(EVM_RPC_BACKUPS[n] || [])]
+    .map((u) => String(u || "").trim()).filter((u, i, a) => u && a.indexOf(u) === i);
 }

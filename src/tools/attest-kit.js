@@ -34,6 +34,7 @@ import { saleByTxFresh, setAttestation, queuedSaleWrites } from "../sales-ledger
 import { withLease } from "../state-db.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve, spendRefusalFields } from "../external-spend-guard.js";
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Slugs whose sales are never attestable (memory reads, the usage report):
 // set by server.js from the catalog's own identity-bound predicate.
@@ -144,7 +145,7 @@ export function normalizeTx(input) {
 let chainPromise = null;
 async function realChain() {
   const pk = (process.env.X402_UPSTREAM_BUYER_KEY || "").trim();
-  if (!pk) throw bad("Attestations need the Base spending wallet (X402_UPSTREAM_BUYER_KEY), which is not configured on this server. Nothing was charged.", 503);
+  if (!pk) throw bad(`Attestations need the Base spending wallet (X402_UPSTREAM_BUYER_KEY), which is not configured on this server.${notChargedHere()}`, 503);
   chainPromise ??= (async () => {
     const [{ createPublicClient, createWalletClient, http, fallback, decodeEventLog }, { privateKeyToAccount }, { base }] = await Promise.all([
       import("viem"), import("viem/accounts"), import("viem/chains"),
@@ -175,10 +176,10 @@ async function realChain() {
           if (again && again.uid && again.uid !== ZERO_BYTES32) return;
           const gas = await publicClient.estimateGas({ account, to: SCHEMA_REGISTRY_ADDRESS, data: (await import("viem")).encodeFunctionData({ abi: REGISTRY_ABI, functionName: "register", args: [ATTEST_SCHEMA, ZERO_ADDRESS, false] }) });
           const usd = await costUsd(gas);
-          if (usd > SCHEMA_MAX_GAS_USD()) throw bad(`Registering the attestation schema would cost about $${usd.toFixed(4)} in gas, over the $${SCHEMA_MAX_GAS_USD()} ceiling. Nothing was charged; retry when Base gas is lower.`, 503);
+          if (usd > SCHEMA_MAX_GAS_USD()) throw bad(`Registering the attestation schema would cost about $${usd.toFixed(4)} in gas, over the $${SCHEMA_MAX_GAS_USD()} ceiling.${notChargedHere()} Retry when Base gas is lower.`, 503);
           const hash = await walletClient.writeContract({ address: SCHEMA_REGISTRY_ADDRESS, abi: REGISTRY_ABI, functionName: "register", args: [ATTEST_SCHEMA, ZERO_ADDRESS, false] });
           const rcpt = await publicClient.waitForTransactionReceipt({ hash, timeout: 90_000 });
-          if (rcpt.status !== "success") throw bad("Registering the attestation schema failed on chain. Nothing was charged.", 503);
+          if (rcpt.status !== "success") throw bad(`Registering the attestation schema failed on chain.${notChargedHere()}`, 503);
           console.log(`[attest] schema ${uid} registered on Base in ${hash}`);
           // The public RPC is load-balanced: the first live run estimated the
           // attest against a node that had not seen the registration block and
@@ -209,7 +210,7 @@ async function realChain() {
         return serial(async () => {
           const hash = await walletClient.writeContract({ address: EAS_ADDRESS, abi: EAS_ABI, functionName: "attest", args: [{ schema: uid, data: { recipient, expirationTime: 0n, revocable: false, refUID: ZERO_BYTES32, data, value: 0n } }] });
           const rcpt = await publicClient.waitForTransactionReceipt({ hash, timeout: 90_000 });
-          if (rcpt.status !== "success") throw bad("The attestation transaction reverted on chain. Nothing was charged.", 503);
+          if (rcpt.status !== "success") throw bad(`The attestation transaction reverted on chain.${notChargedHere()}`, 503);
           let attestedUid = null;
           for (const log of rcpt.logs) {
             if (log.address.toLowerCase() !== EAS_ADDRESS) continue;
@@ -218,7 +219,7 @@ async function realChain() {
               if (ev.eventName === "Attested") { attestedUid = ev.args.uid; break; }
             } catch { /* not the Attested event */ }
           }
-          if (!attestedUid) throw bad("The attestation transaction succeeded but carried no Attested event. Nothing was charged.", 502);
+          if (!attestedUid) throw bad(`The attestation transaction succeeded but carried no Attested event.${notChargedHere()}`, 502);
           return { uid: attestedUid, attestTx: hash, block: String(rcpt.blockNumber) };
         });
       },
@@ -268,7 +269,7 @@ export function makeAttestHandler(deps = {}) {
     // and a non-EVM buyer was never offered the route, never charged.
     const caller = payerOf(req);
     if (!caller && freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE, 400);
-    if (!caller) throw bad("Attestations are written for the buyer of a sale, so this call must be paid with a signed EVM authorization from the wallet that made the purchase. Nothing was charged.", 403);
+    if (!caller) throw bad(`Attestations are written for the buyer of a sale, so this call must be paid with a signed EVM authorization from the wallet that made the purchase.${notChargedHere()}`, 403);
     const sale = await lookup(tx);
     // The three refusals below say the same thing on purpose: a wallet that did
     // not make a purchase learns nothing about whether the tx is ours, what it
@@ -276,14 +277,14 @@ export function makeAttestHandler(deps = {}) {
     // The log names which of them it was (the answer never does).
     const notYours = (why) => {
       noteRefusal(log, why, tx, caller);
-      return bad(`No sale of yours settled in transaction ${tx}. Attestations cover calls this wallet paid for on this server; check the hash from your own receipt. Nothing was charged.`, 403);
+      return bad(`No sale of yours settled in transaction ${tx}. Attestations cover calls this wallet paid for on this server; check the hash from your own receipt.${notChargedHere()}`, 403);
     };
     if (!sale) throw notYours("no_sale");
     if (!sale.payer) throw notYours("sale_without_payer");
     if (String(sale.payer).toLowerCase() !== String(caller).toLowerCase()) throw notYours("other_payer");
-    if (identityBoundSlugs.has(sale.slug)) throw bad("This sale is of a wallet-scoped route (memory or usage) and is not attestable: an attestation is public and permanent. Nothing was charged.", 403);
+    if (identityBoundSlugs.has(sale.slug)) throw bad(`This sale is of a wallet-scoped route (memory or usage) and is not attestable: an attestation is public and permanent.${notChargedHere()}`, 403);
     if (!/^[0-9a-f]{64}$/i.test(String(sale.responseSha256 || ""))) {
-      throw bad(`Your sale in ${tx} has no recorded response digest - it was a streamed or binary response, or was served before digests were recorded (2026-09-03). There is nothing to bind the payment to, so no attestation is written. Nothing was charged.`, 422);
+      throw bad(`Your sale in ${tx} has no recorded response digest - it was a streamed or binary response, or was served before digests were recorded (2026-09-03). There is nothing to bind the payment to, so no attestation is written.${notChargedHere()}`, 422);
     }
     const uid = await schemaUid();
     const fields = attestationFields(sale);
@@ -310,7 +311,7 @@ export function makeAttestHandler(deps = {}) {
     // against the Base wallet's daily ceiling first (a refusal there is a
     // pause, not a charge), then corrected to the estimate.
     const allowed = await reserve(null, MAX_GAS_USD(), { chain: "base" });
-    if (!allowed.ok) throw Object.assign(bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503), spendRefusalFields(allowed));
+    if (!allowed.ok) throw Object.assign(bad(`Attestations are briefly paused: ${allowed.reason}${notChargedHere()} Retry later.`, 503), spendRefusalFields(allowed));
     const handle = allowed.handle ?? null;
     // server.js resolves this on the post-settlement finish hook (the
     // seller-payability rule); without it the booking stands for the whole
@@ -326,7 +327,7 @@ export function makeAttestHandler(deps = {}) {
       const data = await encodeAttestationData(fields);
       const estimate = await chain.estimateUsd(uid, fields.recipient, data);
       if (!(estimate <= MAX_GAS_USD())) {
-        throw bad(`Base gas is high right now: this attestation would cost about $${Number(estimate).toFixed(4)}, over the $${MAX_GAS_USD()} ceiling. Nothing was charged; retry later.`, 503);
+        throw bad(`Base gas is high right now: this attestation would cost about $${Number(estimate).toFixed(4)}, over the $${MAX_GAS_USD()} ceiling.${notChargedHere()} Retry later.`, 503);
       }
       spend.adjustSpend(handle, estimate);
       stage = "send";
@@ -346,8 +347,8 @@ export function makeAttestHandler(deps = {}) {
       const noFunds = /insufficient funds/i.test(msg);
       if (stage === "estimate" || noFunds) spend.adjustSpend(handle, 0);
       if (e?.statusCode) throw e;
-      if (noFunds) throw bad("Attestation is temporarily unavailable. Nothing was charged; retry later.", 503);
-      throw bad(`Attestation failed before it could be confirmed (${msg.slice(0, 140)}). Nothing was charged.`, 502);
+      if (noFunds) throw bad(`Attestation is temporarily unavailable.${notChargedHere()} Retry later.`, 503);
+      throw bad(`Attestation failed before it could be confirmed (${msg.slice(0, 140)}).${notChargedHere()}`, 502);
     }
     });
   };
@@ -362,8 +363,8 @@ async function underWalletLease(fn, { waitMs = 20_000 } = {}) {
   for (;;) {
     const r = await withLease("attest-wallet", { ttlMs: 90_000 }, () => fn());
     if (r.ran) return r.result;
-    if (r.reason !== "held" && r.reason !== "busy") throw bad("Attestations are briefly unavailable. Nothing was charged; retry shortly.", 503);
-    if (Date.now() >= until) throw bad("Another attestation is being written right now. Nothing was charged; retry in a few seconds.", 503);
+    if (r.reason !== "held" && r.reason !== "busy") throw bad(`Attestations are briefly unavailable.${notChargedHere()} Retry shortly.`, 503);
+    if (Date.now() >= until) throw bad(`Another attestation is being written right now.${notChargedHere()} Retry in a few seconds.`, 503);
     await sleep(400);
   }
 }
@@ -379,7 +380,7 @@ export const ATTEST_TOOLS = [
     // buyer's payment settles. Read by spendsBeforeSettlement.
     spendsOwnWallet: true,
     description:
-      "Write an on-chain attestation (Ethereum Attestation Service on Base) that binds a call you paid for to the bytes you received: the tool slug, sha256 of the JSON response, the settlement chain and transaction, the payer, the time served and the price, signed by this server's wallet. Give it the settlement transaction from the PAYMENT-RESPONSE (or Payment-Receipt) header of any settled call; the attestation UID and its public page on base.easscan.org come back. Use it when an agent has to prove afterwards what data it acted on. Only the buyer can attest a sale: this call must be paid with a signed EVM authorization from the same wallet, and sales of wallet-scoped routes (memory, usage) are never attestable. The record is public and permanent: it names the payer and the tool. One attestation per sale (a repeat returns the existing UID); refused, and not charged on x402, when the transaction is not a sale of this server, when the response was streamed or binary, or when Base gas would exceed the tool's own ceiling.",
+      "Write an on-chain attestation (Ethereum Attestation Service on Base) that binds a call you paid for to the bytes you received: the tool slug, sha256 of the JSON response, the settlement chain and transaction, the payer, the time served and the price, signed by this server's wallet. Give it the settlement transaction from the PAYMENT-RESPONSE (or Payment-Receipt) header of any settled call; the attestation UID and its public page on base.easscan.org come back. Use it when an agent has to prove afterwards what data it acted on. Only the buyer can attest a sale: this call must be paid with a signed EVM authorization from the same wallet, and sales of wallet-scoped routes (memory, usage) are never attestable. The record is public and permanent: it names the payer and the tool, and no one, this server included, can change or delete it. One attestation per sale (a repeat returns the existing UID); refused, and not charged on x402, when the transaction is not a sale of this server, when the response was streamed or binary, or when Base gas would exceed the tool's own ceiling.",
     tags: ["attestation", "eas", "provenance", "receipt", "audit", "base", "x402"],
     discovery: {
       bodyType: "json",

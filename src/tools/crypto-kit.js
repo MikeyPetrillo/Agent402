@@ -23,12 +23,13 @@ const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, addCredit, COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
-import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
+import { markResaleBarred, markResaleComputed, MARKET_DATA_RESALE_REASON, markResaleCleared, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamErrorText } from "./redact.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -207,7 +208,7 @@ async function jsonLoad(safeUrl, host, { isCg }) {
     if (s === 429) throw bad(`${host} rate-limited the request - retry shortly`, 503);
     if (s >= 500) throw bad(`${host} upstream HTTP ${s} - try again later`, 502);
     if (isCg && (s === 401 || s === 403) && !CG_PLAN_CODES.has(cgErrorCode(text))) {
-      throw bad(`${host} is not configured on this deployment. You were not charged.`, 503);
+      throw bad(`${host} is not configured on this deployment.${notChargedHere()}`, 503);
     }
     // Redact the FULL upstream body before slicing (a secret straddling the
     // 200-char cut would otherwise leave an unredactable prefix): the CoinGecko
@@ -392,6 +393,8 @@ function passesScreen(row, filters) {
   return true;
 }
 
+/** stablecoin-peg's formulas, carried in its answer as `method`. */
+const STABLECOIN_PEG_METHOD = "deviationBps: (price now - 1) x 10000; maxDeviation24hBps: the larger distance from $1 of the 24-hour high and low, in basis points; capRank: place by market cap among the coins listed; marketCapSharePct: market cap over the listed coins' summed market cap x 100; status: on-peg within 50 bps, stressed within 200 bps, depegged beyond.";
 
 export const CRYPTO_TOOLS = [
   {
@@ -710,7 +713,7 @@ export const CRYPTO_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): current price, deviation in basis points, 24h high/low, worst 24h deviation, market cap, and an on-peg / stressed / depegged status.",
+      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): deviation in bps now and worst over 24h, share of the listed market cap, and an on-peg / stressed / depegged status; `method` states each formula.",
     tags: ["crypto", "stablecoin", "peg", "usdt", "usdc", "risk", "monitoring"],
     discovery: {
       input: {},
@@ -724,8 +727,8 @@ export const CRYPTO_TOOLS = [
           peg: "USD $1.00",
           count: 2,
           coins: [
-            { id: "tether", symbol: "USDT", name: "Tether", price: 0.998868, deviationBps: -11.32, high24h: 0.999372, low24h: 0.998674, maxDeviation24hBps: 13.26, marketCap: 184092462233, status: "on-peg" },
-            { id: "usd-coin", symbol: "USDC", name: "USDC", price: 0.999819, deviationBps: -1.81, high24h: 0.999923, low24h: 0.99953, maxDeviation24hBps: 4.7, marketCap: 73033499074, status: "on-peg" },
+            { id: "tether", symbol: "USDT", name: "Tether", deviationBps: -11.32, maxDeviation24hBps: 13.26, capRank: 1, marketCapSharePct: 71.6, status: "on-peg" },
+            { id: "usd-coin", symbol: "USDC", name: "USDC", deviationBps: -1.81, maxDeviation24hBps: 4.7, capRank: 2, marketCapSharePct: 28.4, status: "on-peg" },
           ],
         },
       },
@@ -744,7 +747,10 @@ export const CRYPTO_TOOLS = [
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
       if (data.length === 0) throw bad("No CoinGecko data for the requested coins - check the ids/symbols", 422);
       const bps = (p) => (typeof p === "number" ? +((p - 1) * 10000).toFixed(2) : null);
-      const coins = data.map((c) => {
+      const caps = data.map((c) => (typeof c.market_cap === "number" && c.market_cap > 0 ? c.market_cap : 0));
+      const capTotal = caps.reduce((a, b) => a + b, 0);
+      const capPlace = new Map([...data.keys()].filter((k) => caps[k] > 0).sort((x, y) => caps[y] - caps[x]).map((k, idx) => [k, idx + 1]));
+      const coins = data.map((c, k) => {
         const dev = bps(c.current_price);
         // Worst 24h deviation from the high/low extremes. When BOTH source
         // fields are missing this is null (unknown), not 0.00 — a fabricated
@@ -760,16 +766,14 @@ export const CRYPTO_TOOLS = [
           id: c.id,
           symbol: (c.symbol || "").toUpperCase() || null,
           name: c.name ?? null,
-          price: c.current_price ?? null,
           deviationBps: dev,
-          high24h: c.high_24h ?? null,
-          low24h: c.low_24h ?? null,
           maxDeviation24hBps: worst == null ? null : +worst.toFixed(2),
-          marketCap: c.market_cap ?? null,
+          capRank: capPlace.get(k) ?? null,
+          marketCapSharePct: caps[k] > 0 && capTotal > 0 ? +((caps[k] / capTotal) * 100).toFixed(2) : null,
           status,
         };
       });
-      return { peg: "USD $1.00", count: coins.length, coins };
+      return { peg: "USD $1.00", count: coins.length, coins, method: STABLECOIN_PEG_METHOD };
     },
   },
 ];
@@ -782,20 +786,9 @@ for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO
 // a deviation and a band computed here.
 markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
 markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
-// On a /ref copy and on /aws (both resold through a third party) stablecoin-peg serves what it
-// computes and the credit, without the source's own figures per coin (price,
-// 24h high and low, market cap). The public route's answer is unchanged.
-export const STABLECOIN_PEG_REF_RAW_FIELDS = Object.freeze(["price", "high24h", "low24h", "marketCap"]);
-markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
-  if (!answer || typeof answer !== "object" || !Array.isArray(answer.coins)) return answer;
-  const coins = answer.coins.map((c) => {
-    if (!c || typeof c !== "object") return c;
-    const kept = { ...c };
-    for (const k of STABLECOIN_PEG_REF_RAW_FIELDS) delete kept[k];
-    return kept;
-  });
-  return { ...answer, coins };
-});
+// stablecoin-peg answers no source figure per coin (no price, 24h high or
+// low, or market cap), on every surface alike, so the /ref and /aws copies
+// serve the public answer as it is.
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // A call that ends in an error counts its CoinGecko reads on the unsettled
@@ -803,4 +796,4 @@ markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
-markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], "computed over market data whose terms allow products that incorporate it");
+markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], MARKET_DATA_CLEARANCE);

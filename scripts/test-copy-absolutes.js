@@ -28,6 +28,7 @@
 // that were wrong are forbidden outright in served copy.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
@@ -445,11 +446,12 @@ const FORBIDDEN = [
     ]),
   },
   {
-    // Copy written for every reader says "plain language": naming one
-    // language for clear writing leaves out readers of every other. Hyphen or
-    // space, any case, in copy and in comments alike.
-    re: /\bplain[- ]english\b/i,
-    why: 'say "plain language": the phrase names one language for clear writing',
+    // Neither "plain English" nor "plain language": the first names one
+    // language for clear writing and leaves out readers of every other, and
+    // both are a qualifier the sentence reads better without ("the guide to
+    // x402 and MPP"). Hyphen or space, any case, in copy and in comments alike.
+    re: /\bplain[- ](?:english|language)\b/i,
+    why: 'drop the qualifier: say "the guide to x402 and MPP", not "the plain-language guide" or "plain English"',
     exempt: new Map([
       ["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"],
       ["src/x402-index.js", "a comment quotes a placeholder value a listing may carry, as written"],
@@ -541,11 +543,13 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."],
                        ["<control>", "x402 and MPP explained in plain English, for people."],
                        ["<control>", "A Plain-English guide to the terms."],
+                       ["<control>", "x402 and MPP explained in plain language, for people."],
+                       ["<control>", "A Plain-Language guide to the terms."],
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 41;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 32 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 43;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 34 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -953,66 +957,207 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     `a restated clause that says the transfer is recorded as owed says how it is repaid (${clause})${unrepaid.length ? ` - NO REPAYMENT: ${unrepaid.join(" | ")}` : ""}`);
 }
 
-// --- a converted module says "not charged" through the shared sentence only ---
+// --- a served module says "not charged" through the shared sentence only ------
 // The route binder adds the Tempo push exception to one exact sentence
-// (src/not-charged.js NOT_CHARGED), and a handler called request-less (a
-// skill-pack, decide or route-execute step) runs inside a charged answer,
-// where the claim is false. So in a module converted to notChargedOn(req),
-// a refusal (bad, refuse, new Error, or a *MESSAGE constant) carries the
-// claim only through notChargedOn / NOT_CHARGED, never as typed words. The
-// span read is the whole call, so a message split across lines is read too.
+// (src/not-charged.js NOT_CHARGED), a settle-first run restates it once its
+// payment settled (src/settle-first-body.js), and a handler run as a step (a
+// skill-pack, decide, route-execute or bundle leg) answers inside a charged
+// answer, where the claim is false. So everywhere in src/ outside the copy
+// pages, a handler makes the claim through notChargedOn(req) /
+// notChargedHere() / NOT_CHARGED, never as typed words. Every line that still
+// types it is counted below with why it may: a gate that answers before or
+// instead of the handler (true whoever called), a description stating policy
+// with its rail and the settle-first sentence, or a log line. The claim is
+// read in every wording: "not", "never" or a contraction, then "charged" or
+// "billed"; "nothing was charged"; "no charge"; "uncharged" (a quoted token
+// or a hyphenated name is a contract value, not a claim).
 {
-  const CONVERTED = ["src/tools/decide-kit.js", "src/tools/route-execute.js", "src/tools/llm-gateway-kit.js", "src/bound-request-url.js", "src/tools/stt-kit.js", "src/tools/ocr-kit.js"];
-  // A typed claim kept on purpose, each with why it can never print request-less.
+  const CLAIM = /(?:\b(?:not|never)|n['’]t) (?:be |been )?(?:charged|billed)\b|\bnothing (?:is|was|has been) (?:charged|billed)\b|\bno charge\b|(?<!["'-])\bun(?:charged|billed)\b(?!["'-])/i;
+  // Each reason was read against the code path for every payment method. A
+  // Tempo push transfer is final before the call: a text it can meet either
+  // carries the exception itself, is the exact sentence passed through the
+  // binder's withPushException, or goes out through the push gate's body
+  // rewrite after the claim (src/push-refusal-body.js, proven above).
+  const X402 = "an x402 verify or settle refusal: only an x402 payment meets it, and nothing settled";
+  const GATE = "a gate's refusal before any handler runs or any payment settles: true for every caller it answers";
+  const POLICY = "a description stating policy with its rail (and the settle-first sentence where the route can settle first)";
+  const LOG = "an operator log or ledger line, never sent to a buyer";
+  // file -> [lines that type the claim, why]. The count is pinned, so a new
+  // typed claim in a listed file fails here until it is converted or counted.
   const KEEP = new Map([
-    ["src/tools/llm-gateway-kit.js:Input too large", "the claim is on the metered branch only, and a metered tier is never dispatched request-less (dispatchable refuses a def.quote tool); the same error is the pre-payment refusal server.js answers"],
-    ["src/tools/decide-kit.js:Unknown decisionId", "also the pre-payment 404 server.js answers before any gate, and decide-execute is never a step (it is long-running, which dispatchable refuses)"],
+    ["src/not-charged.js", [2, "the shared sentence and the pattern that removes it from a delivered answer"]],
+    ["src/prepayment-refusal.js", [1, "the binder's rewrite of the shared sentence into its push form"]],
+    ["src/push-refusal-body.js", [3, "the push gate's matchers for the claim"]],
+    ["src/async-jobs.js", [2, "the job notice scoped to x402 with the settle-first sentence, and the unfinished-run summary, which says a paid and settled call is recorded as owed and only otherwise that nothing was charged"]],
+    ["src/cdn-sync-window.js", [1, "a refusal before every gate that carries the push exception itself"]],
+    ["src/challenge-life.js", [1, "a card or Tempo pull challenge refused before the run: nothing ran"]],
+    ["src/avm-validity.js", [1, "an Algorand payment refused before the run for its validity window"]],
+    ["src/evm-validity.js", [1, "an EVM authorization refused before the run for its validity window"]],
+    ["src/inflight-cover.js", [6, "the cover admission's refusals before the handler (src/inflight-cover.js), for payments taken after the handler"]],
+    ["src/idempotency.js", [2, "a 409 for a second request while the first runs: this request claims no credential and places no hold on any method (a push transfer is held by the first)"]],
+    ["src/hangup-settlement.js", [2, "the x402 before-settle refusal (x402 only), and the client-gone text, written to a closed connection where the charge was cancelled; a push transfer in that state is booked as owed by the hang-up recorder and no buyer reads the body"]],
+    ["src/server.js", [9, "the exact sentence passed through withPushException (drain middleware, drain abort, composite restart, replay-store outage), the option-A 402 for an upto or batched payment, and the 499 bodies written to a closed connection; a settle-first run's failure is restated after the claim (src/settle-first-body.js)"]],
+    ["src/mcp-http.js", [8, "the connector's own summary of an HTTP answer, with the push clause where Tempo is offered and none on a body that says it settled before the run (settledBeforeRun), and its own refusals before any call"]],
+    ["src/mcp-tasks.js", [2, "a task's restart notice when the sales ledger holds no sale for the run, with the push exception and the settle-first sentence"]],
+    ["src/mcp-oauth.js", [2, "the connector's sign-in refusal: no tool call is made"]],
+    ["src/credits.js", [2, "the credits gate when no hold could be placed: credits only, nothing held"]],
+    ["src/credits-account.js", [2, "a prepaid credits notice: credits only"]],
+    ["src/first-call-allowance.js", [1, "the note on a served first call: x402 EVM exact only, and the before-settle hook skips settlement"]],
+    ["src/gateway-settle-breaker.js", [3, "a refusal keyed on the paying request's own key (a request-less step holds none and is never refused); a claimed push reads it through the push gate's rewrite"]],
+    ["src/gateway-wire.js", [1, "Circle Gateway reported the batched payment failed: that rail only, nothing settled to us"]],
+    ["src/mpp-stripe.js", [6, "the card gate before any capture (card only), and log lines"]],
+    ["src/mpp-subscriptions.js", [2, "a subscription's first pull payment that did not settle, and a log line"]],
+    ["src/mpp-tempo.js", [14, "the Tempo gate's own refusals before the credential is checked, each with a push form the gate substitutes (TEMPO_PUSH_NOT_CHECKED), the pull-signature refusals, and log lines"]],
+    ["src/payment-reject.js", [10, X402]],
+    ["src/payments.js", [6, X402]],
+    ["src/settle-compliance.js", [2, "a settlement refused by the compliance check or our own screen: nothing was submitted, and the 402 says charged: false"]],
+    ["src/svm-facilitator-split.js", [2, X402]],
+    ["src/svm-funding-refusal.js", [1, X402]],
+    ["src/verify-hint.js", [4, X402]],
+    ["src/x402-payer-screen.js", [3, X402]],
+    ["src/returning-wallet.js", [1, "the returning-wallet rule: a payment at the lower amount from another wallet is refused 402 before the run"]],
+    ["src/referral-gate.js", [37, "the referral gate's own refusals, each before its payment settles or with nothing settled (an answer over the marketplace bound says only that this server did not settle), and log lines"]],
+    ["src/sanctions-screen.js", [1, "a Tempo payment this server would have broadcast (a pull or a subscription) and did not: no push transfer reaches it"]],
+    ["src/model-catalog.js", [1, "the unknown-model refusal server.js answers before any gate through withPushException; already the exact sentence"]],
+    ["src/conformance.js", [8, "the conformance rows: scoped per rail, with the settle-first sentence on the settle row"]],
+    ["src/discovery.js", [1, POLICY]],
+    ["src/ledger-catalog.js", [1, POLICY]],
+    ["src/og-cards.js", [1, "a monitor's billing line on a share card (no run on a quiet day), not a refusal"]],
+    ["src/plan-sketch.js", [1, POLICY]],
+    ["src/refund-lookup.js", [1, POLICY]],
+    ["src/search-landings.js", [1, POLICY]],
+    ["src/settlement-footnote.js", [1, POLICY]],
+    ["src/what-is-mpp.js", [1, POLICY]],
+    ["src/gateway-nanopayments.js", [1, LOG]],
+    ["src/payment-verify.js", [1, LOG]],
+    ["src/stripe-unconfirmed-readback.js", [2, LOG]],
+    ["src/tempo-buyer.js", [1, LOG]],
+    ["src/x402-buyer.js", [3, LOG]],
+    ["src/tools/weather-kit.js", [1, LOG]],
+    ["src/tools/attest-kit.js", [1, POLICY]],
+    ["src/tools/cdp-kit.js", [1, "SQL_WALK_CHARGE, the walk's billing rule in its description, with the Tempo exception"]],
+    ["src/tools/dub-kit.js", [1, POLICY]],
+    ["src/tools/image-gen-kit.js", [2, POLICY]],
+    ["src/tools/llm-images-fast-kit.js", [2, POLICY]],
+    ["src/tools/price-webhook-kit.js", [1, POLICY]],
+    ["src/tools/redact-chat-kit.js", [1, POLICY]],
+    ["src/tools/search.js", [1, POLICY]],
+    ["src/tools/decide-kit.js", [2, "the decide-execute description (scoped to x402; Tempo is not offered for a long-running route) and UNKNOWN_DECISION_MESSAGE, the exact sentence, also the pre-payment 404 server.js answers"]],
+    ["src/tools/llm-gateway-kit.js", [4, "three descriptions scoped to x402 or carrying the Tempo exception, and inputTooLargeError's metered branch: the exact sentence, never a step (dispatchable refuses a def.quote tool), also the pre-payment refusal answered through withPushException"]],
   ]);
-  const CLAIM = /\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b|\bno charge\b|\b(?:run|spent) or charged\b|\bwere not charged\b/i;
-  // The text of each refusal call: from "bad(" (or refuse(, new Error() to its
-  // matching paren, read past string and template literals.
-  function refusalSpans(src) {
-    const out = [];
-    const starts = /\b(?:bad|refuse|new Error)\(|\bconst [A-Z_]*MESSAGE[A-Z_]* =/g;
-    let m;
-    while ((m = starts.exec(src))) {
-      let i = m.index + m[0].length, depth = m[0].endsWith("(") ? 1 : 0;
-      const stack = [];
-      for (; i < src.length; i++) {
-        const c = src[i], q = stack[stack.length - 1];
-        if (q === "'" || q === '"') { if (c === "\\") i++; else if (c === q) stack.pop(); continue; }
-        if (q === "`") { if (c === "\\") i++; else if (c === "`") stack.pop(); else if (c === "$" && src[i + 1] === "{") { stack.push("${"); i++; } continue; }
-        if (c === "'" || c === '"' || c === "`") { stack.push(c); continue; }
-        if (q === "${") { if (c === "{") stack.push("{"); else if (c === "}") stack.pop(); continue; }
-        if (q === "{") { if (c === "}") stack.pop(); else if (c === "{") stack.push("{"); continue; }
-        if (depth === 0 && (c === ";" || c === "\n")) break;
-        if (c === "(") depth++;
-        else if (c === ")" && --depth === 0) { i++; break; }
-      }
-      out.push(src.slice(m.index, i));
-    }
-    return out;
+  // file -> digest of its kept lines (digestOf below): the lines KEEP counts.
+  const KEEP_TEXT = {
+    "src/async-jobs.js": "9d56634172b6",
+    "src/avm-validity.js": "edaedc34a4d5",
+    "src/cdn-sync-window.js": "3a140c7b17d4",
+    "src/challenge-life.js": "49662e5b39dd",
+    "src/conformance.js": "16f4212b1d19",
+    "src/credits-account.js": "6d9e5be31612",
+    "src/credits.js": "e55688fadbae",
+    "src/discovery.js": "a7fd1cfbd6f1",
+    "src/evm-validity.js": "faeb2c9d2597",
+    "src/first-call-allowance.js": "e3fa889310ca",
+    "src/gateway-nanopayments.js": "8195a65add13",
+    "src/gateway-settle-breaker.js": "271c4552d092",
+    "src/gateway-wire.js": "47c1f5dbf3d4",
+    "src/hangup-settlement.js": "39b7a8f9bd39",
+    "src/idempotency.js": "aae111b2e1fc",
+    "src/inflight-cover.js": "757b7352f77d",
+    "src/ledger-catalog.js": "ad7b15abca2d",
+    "src/mcp-http.js": "5315d5b9dffe",
+    "src/mcp-oauth.js": "d6e99eb92b8e",
+    "src/mcp-tasks.js": "a5c50e019ed3",
+    "src/model-catalog.js": "f96f3dd01c15",
+    "src/mpp-stripe.js": "1d2acf78f02b",
+    "src/mpp-subscriptions.js": "016e6171f1ea",
+    "src/mpp-tempo.js": "9fe94d0f1e45",
+    "src/not-charged.js": "fc818bcb71aa",
+    "src/og-cards.js": "46909f1e756d",
+    "src/payment-reject.js": "c121513e5fd1",
+    "src/payment-verify.js": "1b38526bfbd6",
+    "src/payments.js": "b6d08afcb90e",
+    "src/plan-sketch.js": "4cadea04b304",
+    "src/prepayment-refusal.js": "160294f17ecd",
+    "src/push-refusal-body.js": "8063db9fb6ca",
+    "src/referral-gate.js": "0ece5181eede",
+    "src/refund-lookup.js": "af094b08a40a",
+    "src/returning-wallet.js": "608dd5b31b28",
+    "src/sanctions-screen.js": "b85694d37ee4",
+    "src/search-landings.js": "1f5673d60270",
+    "src/server.js": "ec5a19844841",
+    "src/settle-compliance.js": "681d7db3bda8",
+    "src/settlement-footnote.js": "e70e62457c89",
+    "src/stripe-unconfirmed-readback.js": "0d1626729a57",
+    "src/svm-facilitator-split.js": "3afac15f3c3a",
+    "src/svm-funding-refusal.js": "c00679c3beff",
+    "src/tempo-buyer.js": "1407c610e202",
+    "src/tools/attest-kit.js": "0a7ec988cee1",
+    "src/tools/cdp-kit.js": "a081d5aac2f7",
+    "src/tools/decide-kit.js": "c75892754664",
+    "src/tools/dub-kit.js": "1dd69d7461ab",
+    "src/tools/image-gen-kit.js": "6880524cbf4f",
+    "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
+    "src/tools/llm-images-fast-kit.js": "8cf052b9164e",
+    "src/tools/price-webhook-kit.js": "80b132972db7",
+    "src/tools/redact-chat-kit.js": "cfc201c0b1d5",
+    "src/tools/search.js": "aa3228d46d93",
+    "src/tools/weather-kit.js": "0b0bfd77c1f2",
+    "src/verify-hint.js": "0bdb69dae5ad",
+    "src/what-is-mpp.js": "2c6f81654c74",
+    "src/x402-buyer.js": "3fbb3bc1c69d",
+    "src/x402-payer-screen.js": "9baacb05f5e1",
+  };
+  const typed = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line) && CLAIM.test(line));
+  // A claim split across lines ("not " + "charged", or a message wrapped
+  // inside one literal) is read on the module with its comment lines dropped,
+  // string pieces joined and every run of whitespace one space: more claims
+  // there than on the lines one by one is a split claim.
+  const CLAIM_G = new RegExp(CLAIM.source, "gi");
+  const joined = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).join("\n")
+    .replace(/(["'`])\s*\+\s*\n\s*\1/g, "").replace(/(["'`])\s*\n\s*\+\s*\1/g, "").replace(/\s+/g, " ");
+  const perLine = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).reduce((n, line) => n + (line.match(CLAIM_G) || []).length, 0);
+  const splitClaims = (text) => Math.max(0, (joined(text).match(CLAIM_G) || []).length - perLine(text));
+  // The kept lines' own text is pinned too (a digest of the lines, each with
+  // its whitespace closed up), so one claim swapped for another under the
+  // same count fails until the new line is read and the digest updated.
+  const digestOf = (lines) => createHash("sha256").update(lines.map((l) => l.trim().replace(/\s+/g, " ")).sort().join("\n")).digest("hex").slice(0, 12);
+  const served = files.filter((f) => /^src\/.*\.js$/.test(f) && !COPY_SURFACES.test(f) && f !== "src/changelog.js");
+  ok(served.length >= 250 && served.includes("src/tools/cdp-kit.js") && served.includes("src/upstream-deadline.js"), `read ${served.length} served modules (a collapsed list must fail)`);
+  const wrong = [];
+  for (const rel of served) {
+    const lines = typed(read(rel) || "");
+    const kept = KEEP.get(rel)?.[0] ?? 0;
+    const text = read(rel) || "";
+    if (lines.length > kept) wrong.push(`${rel}: ${lines.length} typed claim line(s), ${kept} kept - ${lines.map((l) => l.trim().slice(0, 80)).join(" | ").slice(0, 400)}`);
+    else if (lines.length < kept) wrong.push(`${rel}: the kept count (${kept}) is stale, ${lines.length} found; lower it so a new typed claim cannot hide under it`);
+    else if (kept && KEEP_TEXT[rel] !== digestOf(lines)) wrong.push(`${rel}: a kept claim line changed (digest ${digestOf(lines)}, pinned ${KEEP_TEXT[rel] || "none"}); read each line against the reason kept, then pin the new digest in KEEP_TEXT - ${lines.map((l) => l.trim().slice(0, 80)).join(" | ").slice(0, 400)}`);
+    const split = splitClaims(text);
+    if (split) wrong.push(`${rel}: ${split} claim(s) split across lines - ${(joined(text).match(CLAIM_G) || []).slice(0, 4).join(" | ")}; write it on one line through the shared sentence`);
   }
-  const typedClaims = (rel, src) => refusalSpans(src)
-    .filter((span) => CLAIM.test(span) && ![...KEEP.keys()].some((k) => k.startsWith(`${rel}:`) && span.includes(k.slice(rel.length + 1))))
-    .map((span) => `${rel}: ${span.replace(/\s+/g, " ").slice(0, 110)}`);
-  const found = [];
-  let spans = 0;
-  for (const rel of CONVERTED) {
-    const src = read(rel) || "";
-    spans += refusalSpans(src).length;
-    found.push(...typedClaims(rel, src));
-  }
-  ok(spans >= 150, `read ${spans} refusal spans across the converted modules (a collapsed reader must fail)`);
-  ok(typedClaims("<control>", 'throw bad("The service failed - not charged; retry shortly", 503);').length === 1
-     && typedClaims("<control>", "throw bad(cond\n  ? \"a - not charged\"\n  : \"b\", 504);").length === 1
-     && typedClaims("<control>", 'export const WALLET_LOW_MESSAGE = "Unavailable. Nothing was charged; retry later.";').length === 1
-     && typedClaims("<control>", "throw bad(`The service failed.${notChargedOn(req)} Retry shortly.`, 503);").length === 0,
-     "control: a typed claim in a one-line, a split and a constant refusal is caught; the shared sentence is not");
-  const unusedKeep = [...KEEP.keys()].filter((k) => { const rel = k.split(":")[0]; return !refusalSpans(read(rel) || "").some((sp) => CLAIM.test(sp) && sp.includes(k.slice(rel.length + 1))); });
-  ok(unusedKeep.length === 0, `every kept typed claim still exists (a stale entry would excuse a new one)${unusedKeep.length ? `: ${unusedKeep.join(" | ")}` : ""}`);
-  ok(found.length === 0, `converted modules type no "not charged" claim in a refusal${found.length ? ` - TYPED: ${found.join(" | ")}` : ""}`);
-  for (const rel of CONVERTED) ok(/from "(?:\.\.?\/)+not-charged\.js"/.test(read(rel) || ""), `${rel} imports the shared sentence`);
+  for (const rel of Object.keys(KEEP_TEXT)) if (!KEEP.has(rel)) wrong.push(`${rel}: a pinned digest with no kept count`);
+  for (const rel of KEEP.keys()) if (!served.includes(rel)) wrong.push(`${rel}: kept but not a served module`);
+  ok(typed('throw bad("The service failed - not charged; retry shortly", 503);').length === 1
+     && typed("  ? \"a. Nothing was charged.\"\n  : \"b\", 504);").length === 1
+     && typed('const hint = "You were not charged.";').length === 1
+     && typed('const hint = "The run failed, so you won\'t be charged.";').length === 1
+     && typed('throw bad("The source did not answer; this call fails uncharged.", 503);').length === 1
+     && typed('throw bad("Busy, not billed. Retry shortly.", 503);').length === 1
+     && typed("// a 4xx is not charged\nthrow bad(`The service failed.${notChargedOn(req)} Retry shortly.`, 503);\nthrow bad(`Busy.${notChargedHere()}`, 503);\nconst OUTCOMES = [\"charged\", \"uncharged\"];\nconst NAME = \"decide-replan-uncharged\";").length === 0,
+     "control: a typed claim in a refusal, a split message, a hint, a contraction, \"uncharged\" and \"not billed\" is caught; the shared sentence, a comment and a quoted token are not");
+  ok(splitClaims('throw bad("The service failed, you were not " +\n  "charged.", 503);') === 1
+     && splitClaims("throw bad(`The service failed, you were not\n  charged.`, 503);") === 1
+     && splitClaims('throw bad("Busy. Nothing was charged.", 503);') === 0
+     && splitClaims('throw bad("Busy.", 503);\n// not\n// charged') === 0,
+     "control: a claim split over concatenated pieces or wrapped inside one literal is caught; a claim on one line and words in comments are not");
+  ok(digestOf(["  a  b "]) === digestOf(["a b"]) && digestOf(["x", "y"]) === digestOf(["y", "x"]) && digestOf(["Nothing was charged."]) !== digestOf(["You were not charged."]),
+     "control: the pinned digest ignores spacing and order, and a swapped claim changes it");
+  ok(wrong.length === 0, `no served module types a "not charged" claim outside the kept list${wrong.length ? ` - ${wrong.join(" || ")}` : ""}`);
+  // The sentence is printed where it is true: the direct dispatchers mark a
+  // route call, every in-process executor marks its step.
+  ok(/runAsRouteCall\(\(\) => tool\.handler\(input, req\)\)/.test(read("src/server.js") || "") && /runAsRouteCall\(\(\) => entry\.def\.handler\(params, callReq\)\)/.test(read("src/mcp-http.js") || ""),
+     "the HTTP tool route and the hosted connector run the handler as a route call");
+  const steps = [["src/tools/decide-kit.js", /runAsStep\(\(\) => Promise\.resolve\(def\.handler\(toolParams\)\)\)/], ["src/tools/decide-kit.js", /runAsStep\(\(\) => router\.handler\(/], ["src/tools/route-execute.js", /runAsStep\(\(\) => def\.handler\(params\)\)/], ["src/tools/skill-runner.js", /runAsStep\(\(\) => handler\(input\)\)/], ["src/tools/bundle-kit.js", /runAsStep\(\(\) => legTool\(slug\)\.handler\(input, ctx\)\)/]];
+  for (const [rel, re] of steps) ok(re.test(read(rel) || ""), `${rel} runs its step marked (${re.source.slice(0, 40)})`);
 }
 
 // --- the shared sentence composes with the push rewrite, in every refusal ----
@@ -1024,13 +1169,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // note, and every other payer reads the message as written.
 {
   const { renderRefusal, expectedForPush, malformed } = await import("./lib/push-refusal-render.js");
-  // The template literal around each notChargedOn call, with the call printed
+  // The template literal around each notChargedOn / notChargedHere call, with the call printed
   // as on a route call and every other interpolation as a plain word.
   function sharedSentenceMessages(src) {
     const out = [];
     for (const line of src.split("\n")) {
       if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) continue;
-      const printed = line.replace(/\$\{notChargedOn\(\w+\)\}/g, " Nothing was charged.");
+      const printed = line.replace(/\$\{notCharged(?:On\(\w+\)|Here\(\))\}/g, " Nothing was charged.");
       let at = -1;
       while ((at = printed.indexOf("Nothing was charged.", at + 1)) !== -1) {
         const open = printed.lastIndexOf("`", at), close = printed.indexOf("`", at);
@@ -1167,7 +1312,21 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const list = text.lastIndexOf("recovery: [", m.index);
       const listEnd = list < 0 ? -1 : text.indexOf("\n    ],", list);
       if (list >= 0 && listEnd > m.index && carries(text.slice(list, listEnd))) continue;
-      if (!carries(text.slice(Math.max(0, m.index - 800), end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+      // Markdown: the sentence must sit in the claim's own paragraph (blank
+      // lines bound it), never borrowed from a neighbor's; a table row keeps
+      // the reach to the sentence under its table.
+      let start = Math.max(0, m.index - 800);
+      if (/\.md$/.test(rel)) {
+        const p0 = text.lastIndexOf("\n\n", m.index);
+        start = p0 < 0 ? 0 : p0 + 2;
+        if (!isRow(lineAt(m.index))) {
+          let p1 = text.indexOf("\n\n", m.index);
+          // A claim in a heading is carried by the paragraph the heading opens.
+          if (/^#{1,6}\s/.test(lineAt(m.index)) && p1 >= 0) { const p2 = text.indexOf("\n\n", p1 + 2); p1 = p2; }
+          end = p1 < 0 ? text.length : p1;
+        }
+      }
+      if (!carries(text.slice(start, end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
     // Word for word: every copy of the family's words is one of its sentences.
     if (rel !== "src/settle-first-copy.js") {
@@ -1229,7 +1388,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);
   ok([..."A failed x402 call is not charged.".matchAll(GENERAL)].length === 1 && !carries("A failed x402 call is not charged. Retry later."),
-    "control: the bare claim is matched and is not taken as carrying the sentence");  ok(["so on x402 a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged.",
+    "control: the bare claim is matched and is not taken as carrying the sentence");
+  ok(["Over x402 you weren't charged.", "you wasn\u2019t charged", "a failed call takes no money", "you will not be charged", "you won't be charged", "no money is taken"].every((t) => [...t.matchAll(notChargedClaims())].length === 1),
+    "control: the contracted and money forms of the claim are matched (weren't charged, will not be charged, takes no money)");  ok(["so on x402 a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged.",
     "| 502 | a source answered with a failure | retry later; not charged on x402 |", "On x402 a call the tool fails is not charged: settlement runs after the tool.",
     "the ordinary failure case costs nothing and needs no refund.", "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.",
     "Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the x402 buyer is not charged for a failure.",

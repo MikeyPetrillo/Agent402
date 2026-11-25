@@ -8,11 +8,14 @@
 //     A worker whose language data cannot be initialized answers 503 inside
 //     the startup deadline instead of holding the request.
 //  3. The pin table covers exactly the languages the tool accepts.
+//  4. The real engine reads the published fixture into the answer's lines:
+//     text, box and a two-place confidence per line (tesseract.js returns
+//     lines only when asked for its page tree; ocrLines reads it and the TSV).
 // Needs eng, spa, fra and deu installed (node scripts/fetch-tessdata.js tessdata
 // eng spa fra deu); a missing file is a failure, not a skip.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, readdirSync, rmSync, copyFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, copyFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,7 +58,7 @@ writeFileSync(join(dataDir, "ita.traineddata.gz"), gzipSync(Buffer.from("not a t
 process.env.OCR_TESSDATA_DIR = dataDir;
 process.env.OCR_INIT_TIMEOUT_MS = "4000";
 process.chdir(workDir);
-const { OCR_TOOLS, OCR_WORKER_MAX, SUPPORTED_LANGS, __ocrTest } = await import("../src/tools/ocr-kit.js");
+const { OCR_TOOLS, OCR_WORKER_MAX, SUPPORTED_LANGS, ocrLines, __ocrTest } = await import("../src/tools/ocr-kit.js");
 const ocr = OCR_TOOLS.find((t) => t.slug === "image-ocr").handler;
 
 ok(JSON.stringify([...SUPPORTED_LANGS].sort()) === JSON.stringify(Object.keys(TESSDATA_SHA256).sort()), "every accepted language has a pinned data file, and no extra pins");
@@ -75,6 +78,33 @@ for (let k = 0; k < 16; k++) {
 }
 ok(worstWorkers <= OCR_WORKER_MAX, `at most ${OCR_WORKER_MAX} language workers held across 16 alternating calls (worst ${worstWorkers})`);
 ok(worstPorts <= OCR_WORKER_MAX, `evicted workers are terminated: worker handles stay at or under ${OCR_WORKER_MAX} (worst ${worstPorts})`);
+
+{
+  // 4. the published example, read by the real engine.
+  const png = readFileSync(new URL("../assets/fixtures/sample-text.png", import.meta.url));
+  const a = await ocr({ image: png.toString("base64"), lang: "eng" });
+  const want = OCR_TOOLS.find((t) => t.slug === "image-ocr").discovery.output.example;
+  ok(a.lineCount === 2 && a.lines.length === 2, `the fixture reads as two lines (${a.lineCount})`);
+  ok(a.text === want.text, `its text is the published example's (${JSON.stringify(a.text)})`);
+  ok(JSON.stringify(a.lines) === JSON.stringify(want.lines), `its lines (text, two-place confidence, box) are the published example's: ${JSON.stringify(a.lines)}`);
+  ok(a.confidence === want.confidence, `its page confidence is the published example's (${a.confidence})`);
+  ok(JSON.stringify(Object.keys(a)) === JSON.stringify(Object.keys(want)), `the answer's fields are the published example's (${Object.keys(a).join(", ")})`);
+}
+{
+  // ocrLines: a line with no word clipped at 0 gets its words' mean; one with
+  // a clipped word, a box two lines share, or a mean off the tree's whole
+  // number keeps the tree's number.
+  const line = (text, confidence, x0) => ({ text: `${text}\n`, confidence, bbox: { x0, y0: 0, x1: x0 + 10, y1: 5 } });
+  const tsvLine = (x0, confs) => [`4\t1\t1\t1\t1\t0\t${x0}\t0\t10\t5\t-1\t`, ...confs.map((c, i) => `5\t1\t1\t1\t1\t${i + 1}\t${x0}\t0\t4\t5\t${c}\tw`)].join("\n");
+  const data = {
+    blocks: [{ paragraphs: [{ lines: [line("a", 94, 0), line("b", 34, 20), line("c", 50, 40)] }, { lines: [line("d", 70, 60), line("e", 71, 60)] }] }],
+    tsv: [tsvLine(0, [94.123456, 94.556789]), tsvLine(20, [84.6, 0]), tsvLine(40, [60.1, 61]), tsvLine(60, [70.5]), tsvLine(60, [71.5])].join("\n"),
+  };
+  const got = ocrLines(data);
+  ok(JSON.stringify(got.map((l) => l.confidence)) === JSON.stringify([94.34, 34, 50, 70, 71]), `ocrLines: words' mean, else the tree's number (${got.map((l) => l.confidence).join(", ")})`);
+  ok(got[0].text === "a" && got[0].bbox.x1 === 10, "ocrLines: trailing whitespace trimmed, box kept");
+  ok(ocrLines({ text: "x" }).length === 0 && ocrLines({ blocks: null }).length === 0 && ocrLines(null).length === 0, "ocrLines: no page tree reads as no lines");
+}
 
 try { await ocr({ image: img, lang: "jpn" }); ok(false, "a language without local data should be refused"); }
 catch (e) { ok(e.statusCode === 503 && /not installed/.test(e.message), `a language without local data answers 503 (${e.statusCode}: ${e.message})`); }

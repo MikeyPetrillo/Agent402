@@ -1,7 +1,11 @@
-# agent402-langchain (Python)
+# agent402-structured-tools (Python)
 
 Turn [Agent402](https://agent402.tools)'s catalog of 500+ pay-per-call tools
-and skill packs into **LangChain** tools for Python agents.
+and skill packs into structured tools for Python agents, for use with LangChain.
+
+Works with LangChain for Python (`langchain-core`). Agent402 is not affiliated with or endorsed by LangChain.
+
+Formerly `agent402-langchain`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; this package pays wallet-only tools through the `x402_fetch` callable you pass (below).
 
@@ -10,11 +14,11 @@ via built-in proof-of-work - no wallet, no API keys. Live-data tools (market
 data, web search, EDGAR, on-chain) are wallet-only and settle in USDC.
 
 ```bash
-pip install "agent402-langchain[langchain]"
+pip install "agent402-structured-tools[langchain]"
 ```
 
 ```python
-from agent402_langchain import Agent402Toolkit
+from agent402_structured_tools import Agent402Toolkit
 
 toolkit = Agent402Toolkit(base_url="https://agent402.tools")
 tools = toolkit.get_tools()   # four meta-tools your agent can call
@@ -25,7 +29,7 @@ LLMs both choke on thousands of tools):
 
 | Tool | What it does |
 | --- | --- |
-| `agent402_find` | Resolve a plain-language task to the best tool (slug, price, schema, example) |
+| `agent402_find` | Resolve a task description to the best tool (slug, price, schema, example) |
 | `agent402_route` | Cross-seller x402 router across the sellers Agent402 indexes |
 | `agent402_call` | Call a tool by slug - auto-pays via proof-of-work (free) or your x402 fetch (paid) |
 | `agent402_about` | The service manifest (identity, payment options, trust signals) |

@@ -22,7 +22,11 @@
 //   markResaleCleared(tools, slugs, "the source")   resaleCleared: true and
 //                       resaleClearedBy, the source it was cleared for.
 // A tool that reaches no upstream (the server's compute reading) has nothing
-// to clear. Every other tool is refused at boot with RESALE_NOT_CLEARED_REASON
+// to clear, unless its answer serves facts compiled from outside sources (a
+// calendar, a rule table): such a tool declares each source beside its
+// handler (markContentSources: the source, its license and whether that
+// license allows passing the facts on), and is sold through a third party
+// only when it also carries a clearance mark. Every other tool is refused at boot with RESALE_NOT_CLEARED_REASON
 // (resaleClearanceRefusal), so a new tool, or one whose source is not cleared,
 // cannot be listed by a setting alone (scripts/test-resale-clearance.js).
 //
@@ -35,6 +39,14 @@ export const RESALE_COMPUTED = "computed";
 /** The market-data source's terms (cited in src/tools/coingecko-rate.js) bar
  *  resale or syndication of its data through a third party. */
 export const MARKET_DATA_RESALE_REASON = "raw pass-through of a data source whose terms bar resale or syndication through a third party";
+/** The Wikimedia Foundation's API usage guidelines bar sublicensing,
+ *  leasing or rebranding access to its APIs (search-suggest). */
+export const WIKIMEDIA_API_RESALE_REASON = "a relay of a Wikimedia Foundation API, whose usage guidelines bar sublicensing access to it";
+/** The New York Fed's terms of use ask that its content be made available
+ *  with the same permissions, conditions and restrictions and no more
+ *  restrictive terms; a third party's marketplace adds its own terms, so the
+ *  tools that serve its rates are not sold through one. */
+export const NYFED_PASS_ON_RESALE_REASON = "serves New York Fed rates, whose terms bar passing them on under more restrictive terms than its own";
 /** The holiday source's terms (cited in src/tools/holiday-source.js) forbid
  *  operating a holiday portal or republishing its dataset. */
 export const HOLIDAY_PORTAL_RESALE_REASON = "a whole-year holiday list from a source whose terms bar a holiday portal";
@@ -78,10 +90,32 @@ export function resaleClearanceRefusal(def, { compute = false, env = process.env
   const barred = resaleBarredReason(def);
   if (barred) return barred;
   if (!def || typeof def !== "object") return RESALE_NOT_CLEARED_REASON;
-  if (def.resaleCleared === true || compute === true) return null;
+  if (def.resaleCleared === true) return null;
+  // Reaching no upstream clears a tool only when none of its facts come from
+  // an outside source (markContentSources).
+  if (compute === true && !hasContentSources(def)) return null;
   const seam = testSeam("RESALE_CLEARED_FOR_TEST", env);
   if (seam && seam.split(",").map((x) => x.trim()).includes(def.slug)) return null;
   return RESALE_NOT_CLEARED_REASON;
+}
+
+/** Mark `slugs` of `tools` as serving facts compiled from outside sources,
+ *  each `{ name, url, license, redistribution, credit? }` (`redistribution`:
+ *  whether that license allows the facts to be passed on, true or false;
+ *  `credit`: the line it asks a user to keep, if any). A tool so
+ *  marked is never cleared for resale by reaching no upstream alone
+ *  (resaleClearanceRefusal). */
+export function markContentSources(tools, slugs, sources) {
+  const list = Array.isArray(sources) ? sources : [];
+  if (!list.length || !list.every((x) => x && typeof x.name === "string" && x.name.trim() && /^https:\/\//.test(String(x.url || "")) && typeof x.license === "string" && x.license.trim() && typeof x.redistribution === "boolean")) {
+    throw new Error("resale terms: each content source names itself, its https URL, its license and whether it allows redistribution");
+  }
+  return mark(tools, slugs, { contentSources: Object.freeze(list.map((x) => Object.freeze({ name: x.name, url: x.url, license: x.license, redistribution: x.redistribution, ...(typeof x.credit === "string" && x.credit ? { credit: x.credit } : {}) }))) });
+}
+
+/** Does `def` serve facts compiled from outside sources? */
+export function hasContentSources(def) {
+  return Array.isArray(def?.contentSources) && def.contentSources.length > 0;
 }
 
 /** Mark `slugs` of `tools` as computing their answer from such a source. */
@@ -96,14 +130,75 @@ export function resaleBarredReason(def) {
   return why.slice(0, 200);
 }
 
+/** The clearance a tool computed over market data carries (markResaleCleared's
+ *  source): the source's terms allow products that incorporate its data, not
+ *  its own figures resold as they came. The owner's rule for that source: a
+ *  tool is listed and sold this way only when its answer is computed here
+ *  (ranks, percentiles, shares, deviations, ratios, bands, scores, flags), so
+ *  a tool cleared this way answers no field named in RAW_MARKET_FIELDS at any
+ *  depth, on any surface (its public route as much as /ref and /aws).
+ *  scripts/test-resale-clearance.js reads every such tool's published example,
+ *  and the kits' suites drive the handlers. */
+export const MARKET_DATA_CLEARANCE = "computed over market data whose terms allow products that incorporate it";
+
+/** Field names that hold a market-data source's own figures, or a USD amount
+ *  read or summed from them (a coin's price, market cap, fully diluted value,
+ *  volume, all-time high and low, the 24-hour range, supply counts, the
+ *  source's own percent changes, a pool's liquidity or reserve, a venue's
+ *  funding rate, basis, quoted bid-ask or open interest, a trade's size):
+ *  never answered by a tool cleared with MARKET_DATA_CLEARANCE. A share,
+ *  ratio, deviation, percentile, rank, band or score computed here is named
+ *  otherwise and is not on the list. */
+export const RAW_MARKET_FIELDS = Object.freeze([
+  "price", "currentPrice", "marketCap", "marketCapUsd", "fullyDilutedValuation", "fdv", "volume24h", "totalVolume", "volumeUsd", "volume24hUsd",
+  "ath", "atl", "high24h", "low24h", "circulatingSupply", "totalSupply", "maxSupply", "circulating",
+  "medianPriceUsd", "volumeWeightedPriceUsd",
+  "change24hPct", "change7dPct", "change30dPct", "change1yPct", "athChangePct", "athDrawdownPct",
+  "liquidityUsd", "reserveUsd", "lockedLiquidityPct", "medianUsd", "p90Usd", "largestUsd",
+  "fundingPct", "fundingRate", "basisPct", "bidAskPct", "openInterestUsd", "totalUsd", "minPct", "maxPct",
+]);
+
+/** Top-level answer fields a tool stopped returning because each held a
+ *  market-data source's own figure (RAW_MARKET_FIELDS). The listing parity
+ *  check (scripts/test-bazaar-listing-parity.js) reads it: a field named here
+ *  may leave a route's published sample, and every one must be gone from it. */
+export const WITHDRAWN_SOURCE_FIELDS = Object.freeze({
+  "exchange-spread": Object.freeze(["medianPriceUsd", "volumeWeightedPriceUsd"]),
+  "dex-pool-health": Object.freeze(["liquidityUsd", "volume24hUsd", "lockedLiquidityPct"]),
+});
+
 /** Declare, beside a tool's handler, what its answer becomes on a /ref copy
  *  and on /aws (both resell through a third party):
  *  `transform(answer)` returns the answer the referral gate serves (a new
  *  value; it never changes the one it is given). The public route serves the
- *  handler's own answer, untouched. */
-export function markRefAnswer(tools, slugs, transform) {
+ *  handler's own answer, untouched. `rawFields` names every field the
+ *  transform drops, as a path ("coins[].price", "rows[].supply.total",
+ *  "medianPriceUsd"); the clearance suite reads each one in the published
+ *  example and requires it gone from the resold answer. */
+export function markRefAnswer(tools, slugs, transform, rawFields) {
   if (typeof transform !== "function") throw new Error("resale terms: a /ref answer transform must be a function");
-  return mark(tools, slugs, { refAnswer: transform });
+  if (!Array.isArray(rawFields) || rawFields.length === 0 || !rawFields.every((p) => typeof p === "string" && /^[A-Za-z0-9_]+(\[\])?(\.[A-Za-z0-9_]+(\[\])?)*$/.test(p))) {
+    throw new Error("resale terms: a /ref answer transform names the raw fields it drops (rawFields, paths such as \"coins[].price\")");
+  }
+  return mark(tools, slugs, { refAnswer: transform, refRawFields: Object.freeze([...rawFields]) });
+}
+
+/** The values at `path` ("rows[].supply.total") in `value`: [] when the path
+ *  is absent. Arrays marked "[]" are walked element by element. */
+export function valuesAtPath(value, path) {
+  let cur = [value];
+  for (const part of String(path).split(".")) {
+    const each = part.endsWith("[]");
+    const key = each ? part.slice(0, -2) : part;
+    const next = [];
+    for (const v of cur) {
+      if (!v || typeof v !== "object" || Array.isArray(v) || !Object.hasOwn(v, key)) continue;
+      const got = v[key];
+      if (each) { if (Array.isArray(got)) next.push(...got); } else next.push(got);
+    }
+    cur = next;
+  }
+  return cur;
 }
 
 /** The answer a /ref copy (src/referral-gate.js) and an /aws sale

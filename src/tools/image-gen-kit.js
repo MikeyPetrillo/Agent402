@@ -40,6 +40,7 @@ import { capturePostHogGatewayUsage } from "../posthog.js";
 import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 import { settleBeforeUpstreamHolding } from "../settle-first.js";
 import { hardCapHold } from "../upstream-hard-caps.js";
+import { notChargedHere } from "../not-charged.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -250,7 +251,7 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
     if (isSafetyRefusal(error, msg)) {
       moderationStats.refusals[sentLevel]++;
       const cats = refusalCategories(msg);
-      throw bad("The model's content check refused this prompt. This 400 is not charged on x402; rephrase the prompt and try again."
+      throw bad(`The model's content check refused this prompt.${notChargedHere()} Rephrase the prompt and try again.`
         + (cats ? ` Flagged: ${cats}.` : "")
         + (moderation === "auto" && !fellBack ? ' This call chose moderation "auto", the stricter level; "low" is the default level.' : ""), 400);
     }

@@ -50,7 +50,7 @@ facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(0, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const FAC = `http://127.0.0.1:${facilitator.address().port}`;
 
 // ---- 1. the builder alone: quote-only, misconfig, network mapping ----
@@ -134,7 +134,7 @@ ok(CLI_NETWORKS.base === "eip155:8453" && CLI_NETWORKS.polygon === "eip155:137" 
   // Drive it in-process to read the quote it would advertise.
   const { default: express } = await import("express");
   const e = express(); e.use(mw); e.get("/x", (_q, r) => r.json({ ok: 1 }));
-  const srv = e.listen(0); await new Promise((r) => srv.once("listening", r));
+  const srv = e.listen(0, "127.0.0.1"); await new Promise((r) => srv.once("listening", r));
   const r = await fetch(`http://127.0.0.1:${srv.address().port}/x`);
   const req = JSON.parse(Buffer.from(r.headers.get("payment-required") || "", "base64").toString("utf8"));
   ok(r.status === 402 && req.accepts?.[0]?.network === "eip155:137" && req.accepts[0].payTo === PAYTO && req.accepts[0].amount === "5000", `TOLLBOOTH_NETWORK=polygon, PRICE=$0.005 -> accepts eip155:137, 5000 base units, our payTo (got ${r.status} ${req.accepts?.[0]?.network} ${req.accepts?.[0]?.amount})`);
@@ -312,7 +312,7 @@ facilitator.close();
 // two directly, so `npx agent402-tollbooth` - the command five docs pages tell
 // you to run - started nothing at all and exited 0. Every test here invoked
 // index.js BY PATH, which is the one way to call it that cannot see the bug.
-// Same defect as agent402-openclaw 0.1.0/0.1.1, and the same reason it hid.
+// Same defect as agent402-model-provider 0.1.0/0.1.1, and the same reason it hid.
 {
   const { mkdtempSync, symlinkSync, rmSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

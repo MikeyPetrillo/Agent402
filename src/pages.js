@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { EDGAR_MARK_NOTICE, namesEdgar } from "./mark-notices.js";
 import { SERVER_VERSION } from "./server-version.js";
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
@@ -18,6 +19,7 @@ import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
+import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { getWalletHtml } from "./get-a-wallet.js";
@@ -342,6 +344,7 @@ function curlExample(baseUrl, tool) {
  *  as keep the text within 80 characters (the first is always given); the rest
  *  are counted ("and 2 more"), three short words a narrow cell keeps together
  *  on its last line, where a name cut mid-word left one fragment alone. */
+const LONE_NAME_CHARS = 12;
 export function objectFieldsSample(v, max = 80) {
   const keys = Object.keys(v);
   const head = `${keys.length} field${keys.length === 1 ? "" : "s"}`;
@@ -349,6 +352,9 @@ export function objectFieldsSample(v, max = 80) {
   const tail = (shown) => (shown < keys.length ? ` and ${keys.length - shown} more` : "");
   let shown = 1;
   while (shown < Math.min(keys.length, 6) && `${head}: ${keys.slice(0, shown + 1).join(", ")}${tail(shown + 1)}`.length <= max) shown += 1;
+  // A whole list that would end on one long name leaves that name alone on a
+  // narrow cell's last line: count it instead, so the line ends "and 1 more".
+  if (shown === keys.length && shown >= 2 && keys[shown - 1].length >= LONE_NAME_CHARS) shown -= 1;
   return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
 }
 
@@ -589,6 +595,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const body = `<div class="tp-wrap">
   ${crumbs.nav}
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
+  ${namesEdgar(tool) ? `<p class="tp-mark-notice" style="font-size:var(--fs-xs);color:var(--faint);margin:-4px 0 12px;max-width:76ch;">${e(EDGAR_MARK_NOTICE)}</p>` : ""}
   <div class="tp-badge">${
     computePayable
       ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(pw.short)} in USDC</span>`
@@ -634,7 +641,7 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.0</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.1</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -862,6 +869,9 @@ ${ledgerFooterCompact()}`;
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // The 429 every catalog operation can answer: the unpaid-request limits, and
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
+// The region refusal (src/sanctioned-regions.js), on every paid operation
+// while the block is on: answered before any payment is verified or settled.
+const OPENAPI_451 = Object.freeze({ description: "Unavailable in the caller's region (reason unavailable_in_region), before any payment is verified or settled: charged false on x402; a Tempo push transfer is not claimed." });
 const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
@@ -894,7 +904,7 @@ const REFUND_LOOKUP_SCHEMA = {
   properties: {
     tx: { type: "string" },
     found: { type: "boolean", description: "True exactly when status is not none." },
-    status: { type: "string", enum: ["owed", "sending", "paid", "void", "none"] },
+    status: { type: "string", enum: ["owed", "sending", "held", "paid", "void", "none"] },
     priceUsd: { type: ["number", "null"], description: "Price of the call this payment bought; the amount a refund repays." },
     amountUsd: { type: ["number", "null"], description: "Same as priceUsd." },
     network: { type: ["string", "null"], description: "CAIP-2 network the payment settled on." },
@@ -910,7 +920,7 @@ const REFUND_LOOKUP_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          status: { type: "string", enum: ["owed", "sending", "paid", "void"] },
+          status: { type: "string", enum: ["owed", "sending", "held", "paid", "void"] },
           priceUsd: { type: "number" },
           amountUsd: { type: "number" },
           refundTx: { type: ["string", "null"] },
@@ -967,6 +977,7 @@ const SKILL_PACK_PROMPT_SCHEMA = Object.freeze({
 });
 
 export function openapiSpec(baseUrl, catalog) {
+  const geoBlockOn = sanctionsGeoBlockEnabled();
   const paths = {};
   // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
   // 402 offers tempo on. Marked per operation and indexed at the top level.
@@ -1020,6 +1031,7 @@ export function openapiSpec(baseUrl, catalog) {
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
         // One shared object (the description is the same on every route).
         429: OPENAPI_429,
+        ...(geoBlockOn ? { 451: OPENAPI_451 } : {}),
       },
       "x-price": tool.price,
       ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),
@@ -1169,7 +1181,7 @@ export function openapiSpec(baseUrl, catalog) {
     operationId,
     security: [],
     summary: "Refund status of one transaction's payments, by the payment transaction",
-    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, refundTx once sent, and refunds (every refund recorded for that transaction). One transaction per ask; never a wallet's list, never a wallet address, the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
+    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, held for review, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, refundTx once sent, and refunds (every refund recorded for that transaction). One transaction per ask; never a wallet's list, never a wallet address, the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
     tags: ["refunds"],
     parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 }, example: REFUND_LOOKUP_EXAMPLE_TX }],
     responses: {
@@ -1325,6 +1337,11 @@ export function openapiSpec(baseUrl, catalog) {
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "help@agent402.tools", url: baseUrl },
+      // The terms every paid and free call is made under (the same URL the
+      // x402 manifest, every 402 body and the MCP connector name), and the
+      // server's own license.
+      termsOfService: `${baseUrl}/terms`,
+      license: { name: "AGPL-3.0-or-later", identifier: "AGPL-3.0-or-later" },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":

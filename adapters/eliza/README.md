@@ -1,25 +1,29 @@
-# elizaos-plugin-agent402
+# agent402-actions-plugin
 
-[Agent402](https://agent402.tools) as an [elizaOS](https://github.com/elizaOS/eliza)
-plugin: pay-per-call web tools (web search, page render, PDFs, OCR, market and
+[Agent402](https://agent402.tools) as an actions plugin for use with [elizaOS](https://github.com/elizaOS/eliza):
+pay-per-call web tools (web search, page render, PDFs, OCR, market and
 crypto data, SEC filings, DNS/TLS checks) your agent can find and call. Agent402
 answers x402 and MPP (Machine Payments Protocol) on the same 402; this plugin pays
 in USDC over x402 from an EVM wallet or with an Agent402 credits key. Free-tier tools
 pay with proof-of-work and need neither. Agentic Finance for elizaOS agents: every paid
 call is quoted before it is paid and bounded by the ceilings you set.
 
+Works with elizaOS. Agent402 is not affiliated with or endorsed by the elizaOS project.
+
+Formerly `elizaos-plugin-agent402`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
+
 ## Install
 
 ```bash
-elizaos plugins add elizaos-plugin-agent402
-# or: bun add elizaos-plugin-agent402
+elizaos plugins add agent402-actions-plugin
+# or: bun add agent402-actions-plugin
 ```
 
 Character config:
 
 ```json
 {
-  "plugins": ["elizaos-plugin-agent402"],
+  "plugins": ["agent402-actions-plugin"],
   "settings": {
     "AGENT402_CREDITS_KEY": "a402_...",
     "AGENT402_MAX_PER_CALL_USD": "1"
@@ -42,7 +46,7 @@ free tier still works.
 
 | Action | What it does | Cost |
 |---|---|---|
-| `AGENT402_FIND` | Plain-language task in, best-matching tools out: slug, price, whether payment is needed, a ready example input. Parameters: `task` (required), `k`. | Free |
+| `AGENT402_FIND` | Task description in, best-matching tools out: slug, price, whether payment is needed, a ready example input. Parameters: `task` (required), `k`. | Free |
 | `AGENT402_CALL` | Runs one tool and returns its JSON. Parameters: `slug`, `params` (both optional: with neither, the tool is chosen from the message and the last `AGENT402_FIND` result, see below). Proof-of-work for free-tier tools; the credits key or wallet for wallet-only tools, never above `AGENT402_MAX_PER_CALL_USD` (default $5) or, when set, the rolling `AGENT402_DAILY_LIMIT_USD`. | $0.001 and up, quoted in every 402 |
 | `AGENT402_ABOUT` | What Agent402 is, how it is paid, live tool counts. | Free |
 

@@ -1,3 +1,4 @@
+import { notChargedHere } from "../not-charged.js";
 // Frankfurter v2 adapter: ECB reference rates in the shapes the FX tools
 // already serve.
 //
@@ -24,6 +25,16 @@
 // the source: every FX answer names it in `source`, and every FX tool's
 // description ends with the "ecb" sentence (src/data-attribution.js).
 // Frankfurter's own code is MIT.
+/** How a rate between `from` and `to` relates to the ECB's own quotes (the
+ *  ECB publishes each currency against the euro): stated on every FX answer,
+ *  since the ECB's terms ask that a change such as a computed rate be stated. */
+export function ecbRateBasis(from, to) {
+  const f = String(from || "").toUpperCase(), t = String(to || "").toUpperCase();
+  if (f === t) return "same currency: no conversion";
+  if (f === "EUR") return "ECB euro reference rate as published";
+  if (t === "EUR") return "inverse of the ECB euro reference rate, computed";
+  return "cross rate computed from ECB euro reference rates";
+}
 export const ECB_FX_SOURCE = "European Central Bank euro foreign exchange reference rates (via Frankfurter)";
 export const FRANKFURTER_V2 = "https://api.frankfurter.dev/v2";
 
@@ -93,7 +104,7 @@ export function fxSourceUnavailable(cause) {
   const sc = cause?.statusCode;
   if (sc && sc < 500 && cause?.upstreamStatus === undefined) return cause;
   return Object.assign(
-    new Error("The European Central Bank reference rates could not be read right now. Retry in a few minutes; you were not charged."),
+    new Error(`The European Central Bank reference rates could not be read right now.${notChargedHere()} Retry in a few minutes.`),
     { statusCode: 503, retryAfter: 300, attribution: "upstream" },
   );
 }

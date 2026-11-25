@@ -24,13 +24,12 @@
 // credentials. Both are off for this process and its child.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -66,7 +65,7 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
   ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER, "user-agent": "agent402-client/0.8.21" }, "::ffff:127.0.0.1")) === "mcp", "the loopback marker wins over a User-Agent");
   ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER })) === "http", "the marker from a remote socket is plain http");
   ok(sp.salePathOf(req({ "user-agent": "agent402-client/0.8.21" })) === "agent402-client/0.8.21", "an agent402-client User-Agent books its product token");
-  ok(sp.salePathOf(req({ "user-agent": "agent402-strands/0.1.13 agent402-client/0.8.21" })) === "agent402-strands/0.1.13", "an adapter built on the client books the adapter's own token");
+  ok(sp.salePathOf(req({ "user-agent": "agent402-agent-loop-tools/0.1.13 agent402-client/0.8.21" })) === "agent402-agent-loop-tools/0.1.13", "an adapter built on the client books the adapter's own token");
   ok(sp.salePathOf(req({ "user-agent": "agent402-mcp/0.13.23" })) === "agent402-mcp/0.13.23", "the stdio MCP package books its token");
   ok(sp.salePathOf(req({ "user-agent": "curl/8.7.1" })) === "http" && sp.salePathOf(req({})) === "http", "any other User-Agent, or none, is http");
   ok(sp.salePathOf(req({ "user-agent": "agent402-unknown/1.0" })) === "http", "an unlisted package-looking token is http");
@@ -96,8 +95,8 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
     const used = /"User-Agent": USER_AGENT/.test(src) || /new Agent402\(\{ userAgent: USER_AGENT/.test(src);
     ok(ua === `${pkg.name}/${pkg.version}` && used, `${a}: sends ${pkg.name}/${pkg.version} (${ua})`);
   }
-  const py = readFileSync(new URL("../adapters/langchain-py/agent402_langchain/__init__.py", import.meta.url), "utf8");
-  ok(/_USER_AGENT = f"agent402-langchain-py\/\{__version__\}"/.test(py) && (py.match(/"User-Agent": _USER_AGENT/g) || []).length === 3, "langchain-py sends agent402-langchain-py/<version> on every request");
+  const py = readFileSync(new URL("../adapters/langchain-py/agent402_structured_tools/__init__.py", import.meta.url), "utf8");
+  ok(/_USER_AGENT = f"agent402-structured-tools-py\/\{__version__\}"/.test(py) && (py.match(/"User-Agent": _USER_AGENT/g) || []).length === 3, "langchain-py sends agent402-structured-tools-py/<version> on every request");
   const mcpSrc = readFileSync(new URL("../mcp/index.js", import.meta.url), "utf8");
   ok(/h\.set\("user-agent", `agent402-mcp\/\$\{VERSION\}`\)/.test(mcpSrc), "the stdio MCP package sends agent402-mcp/<version>");
 }
@@ -172,13 +171,13 @@ ok(OUR_EVM_WALLETS.has(GW_TEST_BUYER), "the Gateway test buyer is in OUR_EVM_WAL
 }
 
 // ---- booted half -------------------------------------------------------------------
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
+let FAC_PORT = 0;
 const OP = "test-sale-path-operator-token-0123456789";
 const TX = `0x${"5a".repeat(32)}`;
 const BOOT_DB = join(TMP, "boot-sales.db");
 let proc = null, facilitator = null;
-const serverLog = [];
+let srv = null;
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
   req.on("end", () => {
@@ -192,23 +191,22 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+// Port 0 everywhere, each port read back (scripts/lib/boot-server.js for the server).
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+FAC_PORT = facilitator.address().port;
 const cleanup = () => { try { proc?.kill("SIGKILL"); } catch { /* */ } facilitator?.close(); rmSync(TMP, { recursive: true, force: true }); };
 try {
-  proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  srv = await bootServer({
+    env: { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", STATE_DATABASE_URL: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: BOOT_DB, HANGUP_FORGIVE_FILE: join(TMP, "hangup.json") },
-    stdio: ["ignore", "pipe", "pipe"],
+    stores: false, timeoutMs: 60_000,
   });
-  const keep = (chunk) => { for (const line of String(chunk).split("\n")) if (line.trim()) serverLog.push(line.slice(0, 400)); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
-  ok(up, "paid server booted");
-  if (!up) throw new Error("server did not boot");
+  proc = srv.child;
+  B = srv.url;
+  ok(true, "paid server booted");
   const unpaid = await fetch(`${B}/api/uuid`);
   ok(unpaid.status === 402, `unpaid uuid -> 402 (got ${unpaid.status})`);
   const accepted = (JSON.parse(Buffer.from(unpaid.headers.get("payment-required"), "base64").toString("utf-8")).accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
@@ -255,7 +253,7 @@ try {
   ok(/\.\.\.mcpLoopbackHeaders\(\{ callId, runKey(, \w+)* \}\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads (with the paid replay's call id and a task run's key)");
 } catch (e) {
   ok(false, e?.stack || String(e));
-  for (const l of serverLog.slice(-25)) console.error("  server:", l);
+  for (const l of (srv?.log() || "").split("\n").filter((x) => x.trim()).slice(-25)) console.error("  server:", l.slice(0, 400));
 }
 cleanup();
 console.log(`\n${pass} passed, ${failed} failed`);

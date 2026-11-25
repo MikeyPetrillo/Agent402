@@ -2,8 +2,7 @@
 // vulnerability reports, help@ for everything else. The personal mailbox
 // appears only where another record fixes the address: the copyright agent's
 // block on /terms (the address registered for that agent), the package
-// author fields (they change with a release), the default a registry claim
-// was made under, and the contact a data source's fair-access policy was
+// author fields (they change with a release), and the contact a data source's fair-access policy was
 // given. Any other tracked file that names it fails here.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync } from "node:child_process";
@@ -19,12 +18,9 @@ const HELP = "help@agent402.tools", SECURITY = "security@agent402.tools";
 // file -> how many times it may name the personal mailbox, and why.
 const KEPT = new Map([
   ["src/terms.js", [2, "the copyright agent's registered address, as link and text"]],
-  ["src/server.js", [1, "the default maintainer address of the registry manifest"]],
   ["src/tools/edgar-kit.js", [1, "the contact in the User-Agent given to the filings source"]],
-  ["docs/configuration.md", [1, "generated from the registry manifest default"]],
   ["scripts/test-compliance-surfaces.js", [1, "reads the copyright agent block"]],
   ["scripts/test-edgar-kit.js", [1, "the same User-Agent"]],
-  ["scripts/test-glama-manifest.js", [2, "reads the registry manifest default"]],
 ]);
 const isAuthorFile = (f) => /(^|\/)package\.json$|(^|\/)pyproject\.toml$/.test(f);
 const tracked = execFileSync("git", ["grep", "-l", "-F", PERSONAL, "--", "."], { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean).filter((f) => f !== "scripts/test-role-addresses.js");

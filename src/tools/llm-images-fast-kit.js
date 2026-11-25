@@ -56,6 +56,7 @@ import { shared } from "../shared-limits.js";
 import { payerFromRequest } from "../payer.js";
 import { reportProgress } from "../job-progress.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
+import { notChargedHere } from "../not-charged.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -373,7 +374,7 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimp
     // (src/cdn-sync-window.js): a fallback link that cannot finish in what is
     // left is not started, and the call ends with a 504 (not charged).
     const linkTimeoutMs = cdnLinkTimeoutMs(req, IMAGE_LINK_TIMEOUT_MS, started);
-    if (linkTimeoutMs == null) throw bad("The image did not finish within the time this connection waits for an answer - not charged; retry, or send Prefer: respond-async for a job link", 504);
+    if (linkTimeoutMs == null) throw bad(`The image did not finish within the time this connection waits for an answer.${notChargedHere()} Retry, or send Prefer: respond-async for a job link.`, 504);
     if (!linkBounds(link)) {
       lastErr = bad("Image tier temporarily unavailable", 503);
       continue;
@@ -546,13 +547,13 @@ async function videosHandler(input, req) {
   while (status !== "completed") {
     if (status === "failed") {
       const why = typeof st?.error === "string" ? st.error : (st?.error?.message || "");
-      throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""}. This call is not charged on x402`, 502);
+      throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""}.${notChargedHere()}`, 502);
     }
     if (Date.now() - started > VIDEOS_MAX_WAIT_MS()) {
-      const waited = `Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s. This call is not charged on x402`;
-      if (!parkKey) throw bad(`${waited}; send the request again to start a new clip`, 504);
+      const waited = `Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s.${notChargedHere()}`;
+      if (!parkKey) throw bad(`${waited} Send the request again to start a new clip.`, 504);
       await parkVideoJob(parkKey, id);
-      throw Object.assign(bad(`${waited}; send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip`, 504), { videoParked: true });
+      throw Object.assign(bad(`${waited} Send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip.`, 504), { videoParked: true });
     }
     await sleep(videosPollWaitMs(Date.now() - started));
     // A transient poll failure (5xx, 429, network, timeout, garbled body)

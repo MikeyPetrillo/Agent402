@@ -208,9 +208,13 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
         const tag = `paid boot (${label}, ${protocol})`;
         ok(r.status === 0, `${tag}: the check exits 0${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
         // market.quote is a flagship only where the catalog lists stock-quote
-        // (this boot has no stock provider, so seven flagships and catalog.call).
-        const stockListed = (r.summary?.checks || []).some((c) => c.name.startsWith("catalog: /api/pricing") && c.ok && c.detail === "stock-quote listed");
-        const want = stockListed ? 9 : 8;
+        // (this boot has no stock provider), macro.series only where it lists
+        // us-macro-series: the six listed paid flagships, macro.series when
+        // listed, the former web.search by name, and catalog.call.
+        const pricingCheck = (r.summary?.checks || []).find((c) => c.name.startsWith("catalog: /api/pricing") && c.ok);
+        const stockListed = /^stock-quote listed/.test(String(pricingCheck?.detail || ""));
+        const macroListed = /\bus-macro-series listed/.test(String(pricingCheck?.detail || ""));
+        const want = 8 + (stockListed ? 1 : 0) + (macroListed ? 1 : 0);
         ok(!stockListed, `${tag}: the catalog of a boot with no stock provider does not list stock-quote`);
         const unpaid = (r.summary?.checks || []).filter((c) => / without payment: /.test(c.name));
         ok(unpaid.length === want && unpaid.every((c) => c.ok), `${tag}: every listed flagship and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length}, want ${want})`);
@@ -230,7 +234,8 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
 // ------------------------------------------------------------ stub control
 
 const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "sellers.list", "demand.request"];
-const CORE_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
+const CORE_FLAGSHIP_TOOLS = ["pdf.markdown", "weather.current", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
+const FORMER_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news"];
 const text = (obj, extra = {}) => ({ content: [{ type: "text", text: JSON.stringify(obj) }], ...extra });
 
 /** A connector that answers exactly the shapes the check reads, on both
@@ -242,7 +247,7 @@ function stubConnector(brk = null, { stock = true } = {}) {
   // does not list stock-quote, and the reverse.
   const catalogStock = brk === "stock-listed-off" ? false : brk === "stock-unlisted-on" ? true : stock;
   const toolStock = brk === "stock-listed-off" ? true : brk === "stock-unlisted-on" ? false : stock;
-  const FLAGSHIP_TOOLS = toolStock ? [...CORE_FLAGSHIP_TOOLS.slice(0, 4), "market.quote", ...CORE_FLAGSHIP_TOOLS.slice(4)] : CORE_FLAGSHIP_TOOLS;
+  const FLAGSHIP_TOOLS = toolStock ? [...CORE_FLAGSHIP_TOOLS, "market.quote"] : CORE_FLAGSHIP_TOOLS;
   const app = express();
   app.get("/api/pricing", (_req, res) => res.json({ endpoints: [{ slug: "hash" }, { slug: "unit-convert" }, ...(catalogStock ? [{ slug: "stock-quote" }] : [])] }));
   app.use(express.json({ limit: "1mb" }));
@@ -252,7 +257,7 @@ function stubConnector(brk = null, { stock = true } = {}) {
       instructions: "Stub connector for the client check: call catalog.find with your task, then catalog.call.",
     });
     server.setRequestHandler("tools/list", async () => ({
-      tools: [...META_TOOLS, ...FLAGSHIP_TOOLS]
+      tools: [...META_TOOLS, ...FLAGSHIP_TOOLS, ...(brk === "former-listed" ? ["web.search"] : [])]
         .filter((name) => !(brk === "missing-tool" && name === "demand.request"))
         .map((name) => ({
           name,
@@ -276,7 +281,7 @@ function stubConnector(brk = null, { stock = true } = {}) {
         return text(result, { structuredContent: { slug: "hash", result } });
       }
       if (name === "catalog.call" && args.slug === "search" && brk === "paid-runs") return text({ results: [{ title: "ran unpaid" }] });
-      if (FLAGSHIP_TOOLS.includes(name) || name === "catalog.call") {
+      if (FLAGSHIP_TOOLS.includes(name) || FORMER_FLAGSHIP_TOOLS.includes(name) || name === "catalog.call") {
         const offer = { x402Version: 2, error: "Payment required", resource: { url: "http://stub/mcp" }, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60 }] };
         return { content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: `${name} needs per-call payment: run npx agent402-mcp with AGENT_KEY.` }], isError: true, ...(brk === "ask-in-structured" && name === "browser.render" ? { structuredContent: offer } : {}) };
       }
@@ -299,6 +304,7 @@ const EXPECTED_FAILS = {
   "stock-listed-off": /^FAIL - tools\/list: .*market\.quote is listed but the catalog does not list stock-quote/m,
   "stock-unlisted-on": /^FAIL - tools\/list: .*missing: market\.quote/m,
   "paid-runs": /^FAIL - catalog\.call search without payment: /m,
+  "former-listed": /^FAIL - tools\/list: .*former flagships are listed: web\.search/m,
 };
 
 for (const protocol of PROTOCOLS) {

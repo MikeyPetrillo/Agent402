@@ -18,7 +18,9 @@ ok(EXEC_TIERS.length > 0 && typeof buildRouteExecuteTool === "function", "route-
 ok(/spendsOwnWallet: true,[\s\S]{0,200}paysThirdPartySeller: true,/.test(re), "route-execute's tier definition is flagged");
 for (const [file, slug] of [["tools/seller-payability-kit.js", "seller-payability"], ["tools/decide-kit.js", "decide-execute"]]) {
   const s = src(file);
-  const at = s.indexOf(`slug: "${slug}"`);
+  // The definition's own line (a slug named inside a call, such as a refund
+  // row's, is not the definition).
+  const at = s.search(new RegExp(`\\n\\s+slug: "${slug}",\\n`));
   ok(at > 0 && /paysThirdPartySeller: true,/.test(s.slice(at, at + 1200)), `${slug} is flagged`);
 }
 // The flight routes buy each answer from an outside seller with our wallet: flagged too.
@@ -29,7 +31,56 @@ for (const [file, slug] of [["tools/seller-payability-kit.js", "seller-payabilit
 // Network gas is an ordinary cost of our own service, not a third-party purchase.
 ok(!/paysThirdPartySeller/.test(src("tools/attest-kit.js")), "attest-kit.js is not flagged");
 
-ok(paysThirdParty({ paysThirdPartySeller: true }) === true && paysThirdParty({ spendsOwnWallet: true }) === false && paysThirdParty(null) === false, "only the explicit flag counts");
+ok(paysThirdParty({ paysThirdPartySeller: true }) === true && paysThirdParty(null) === false && paysThirdParty({ slug: "x" }) === false, "the explicit flag counts; a plain route is not in the class");
+ok(paysThirdParty({ slug: "new-buyer", spendsOwnWallet: true }) === true, "a route that spends our wallet is in the class without the flag (derived, so a forgotten flag still refuses card money)");
+ok(paysThirdParty({ slug: "attest", spendsOwnWallet: true }) === false, "attest's gas is a cost of our own service: the one listed exception");
+
+// THE CLASS IS DERIVED FROM IMPORTS. Every tool kit whose imports reach
+// src/external-spend-guard.js (directly, or through another kit under
+// src/tools/) is read; every tool definition in it must be in the class, or
+// carry a reason here. A new kit that buys with our wallet is found by its
+// import, never by a name typed into this test.
+{
+  const { readdirSync } = await import("node:fs");
+  const { toolDefObjects } = await import("./lib/tool-def-objects.js");
+  const toolsDir = new URL("../src/tools/", import.meta.url);
+  const files = readdirSync(toolsDir).filter((f) => f.endsWith(".js"));
+  const imports = new Map(files.map((f) => [f, [...src(`tools/${f}`).matchAll(/^\s*(?:import|export)\s[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1])]));
+  const reaches = new Map();
+  const reachesGuard = (f, seen = new Set()) => {
+    if (reaches.has(f)) return reaches.get(f);
+    if (seen.has(f)) return false;
+    seen.add(f);
+    const deps = imports.get(f) || [];
+    const v = deps.includes("../external-spend-guard.js") || deps.some((d) => d.startsWith("./") && files.includes(d.slice(2)) && reachesGuard(d.slice(2), seen));
+    reaches.set(f, v);
+    return v;
+  };
+  const kits = files.filter((f) => reachesGuard(f));
+  // Kits whose spend is our own service's cost, not a purchase from a seller.
+  const OWN_SERVICE_KITS = { "attest-kit.js": "pays network gas for our own attestation" };
+  // Definitions in a buying kit that buy nothing themselves.
+  const NOT_BUYING = { "decide": "sells a plan written by our planner; it buys from no seller" };
+  ok(["route-execute.js", "flights-kit.js", "seller-payability-kit.js", "decide-kit.js", "attest-kit.js"].every((k) => kits.includes(k)), `the import walk finds the kits that spend our wallet (${kits.join(", ")})`);
+  let defs = 0;
+  for (const kit of kits) {
+    if (OWN_SERVICE_KITS[kit]) continue;
+    for (const o of toolDefObjects(src(`tools/${kit}`))) {
+      defs++;
+      // The definition's own slug is its first slug key (an example nested
+      // further in can name another tool's).
+      const m = /\bslug:\s*(?:"([^"]+)"|([\w.]+))/.exec(o.text) || [];
+      const slug = m[1] || m[2];
+      if (NOT_BUYING[slug]) continue;
+      const flagged = /\bpaysThirdPartySeller:\s*true\b/.test(o.text) || (/\bspendsOwnWallet:\s*true\b/.test(o.text) && !["attest"].includes(slug));
+      ok(flagged, `${kit} ${slug}: a definition in a kit that buys with our wallet is wallet-only`);
+    }
+  }
+  ok(defs >= 5, `the walk read the definitions (${defs})`);
+  // Control: a definition in such a kit with neither flag is caught.
+  const control = toolDefObjects('export const T = [{ route: "POST /api/x", slug: "x", category: "agent", price: "$0.01", description: "a { brace } in text", handler: async () => ({}) }];');
+  ok(control.length === 1 && !/paysThirdPartySeller:\s*true/.test(control[0].text) && !/spendsOwnWallet:\s*true/.test(control[0].text), "control: an unflagged definition is found and would fail");
+}
 
 // Both card-funded gates are handed the flag by the server.
 const server = src("server.js");

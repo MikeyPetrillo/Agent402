@@ -1,4 +1,6 @@
-# Cloudflare Agents + Agent402 - integration guide
+# Using Agent402 with Cloudflare Agents
+
+Cloudflare is a trademark of Cloudflare, Inc. Agent402 is independent and is not affiliated with or endorsed by Cloudflare.
 
 Agent402 is an x402 seller - 500+ pay-per-call tools at
 `https://agent402.tools`. This guide shows how a Cloudflare Worker
@@ -97,7 +99,7 @@ This is a streamable-HTTP MCP server. Four meta-tools drive it - `catalog.search
 (browse candidates), `catalog.find` (resolve a task to one pick), `catalog.call`
 (run by slug) and `payment.info` (how paying and spend caps work) - alongside
 `server.describe`, `demand.request` (`sellers.list` too when a wallet is set) and the flagship tools listed
-first-class by name (`web.search`, `web.answer`, `web.news`, `browser.render`,
+first-class by name (`pdf.markdown`, `macro.series`, `weather.current`, `browser.render`,
 `audio.transcribe`, `memory.read`, `memory.write`). A
 Cloudflare Agent can connect to it as a remote MCP server:
 
@@ -150,7 +152,7 @@ multi-tool skill packs run $0.001 to $0.093, and the report products (research,
 dossier, fund, SEC filing, domain audit, token risk, recall, insider) run
 $0.60 to $2.00 over x402 or MPP, or $2 to $5 by card at
 https://agent402.tools/reports, where the price includes payment processing.
-Networks: Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei,
-Optimism, Arc, Ink, Stellar and Algorand (USDC), plus Robinhood Chain (USDG) - 14 in
+Networks: Base, Solana, Polygon, Arbitrum One, Monad, Celo, Avalanche C-Chain, Sei,
+OP Mainnet, Arc, Ink, Stellar and Algorand (USDC), plus Robinhood Chain (USDG) - 14 in
 total. MPP (Machine Payments Protocol) is accepted on the same 402 (Base/Celo,
 or natively on Tempo).

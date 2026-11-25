@@ -53,6 +53,7 @@ import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
 import { readTextCapped } from "../capped-body.js";
 import { cachedSpendingWalletStatus, spendingWalletReadsLow, walletLowMessage } from "./route-execute.js";
+import { notChargedOn } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -281,7 +282,7 @@ export function buildSellerPayabilityTool({
       const settleableMs = evmCredentialSettleableMs(req, { nowMs: now() });
       if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
         adjustSpend(spendHandle, 0);
-        throw bad("Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.", 504);
+        throw bad(`Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent.${notChargedOn(req)} Retry with a fresh authorization: a stock client signs 300 s ahead.`, 504);
       }
       // Nothing is signed from a wallet that reads low (a cached reading).
       if (spendChain === "base" && await spendingWalletReadsLow(spendingWalletStatus)) {
@@ -376,7 +377,7 @@ export function buildSellerPayabilityTool({
     paysThirdPartySeller: true,
     price: "$0.10",
     description:
-      "Buy one call from an x402 seller endpoint right now and report exactly what happened: the unpaid call's status, the 402 decoded (accepts, chains, payTo, asset, price), whether the accept's EIP-712 domain name matches the token it names (the defect that silently makes a whole catalog unpayable), whether a stock client's signed payment was accepted, the settlement receipt and transaction, a slice of the response body, and the time each leg took. Ends in plain-language flags, never a score. This is the live counterpart to seller-dossier, which reports what we already know: this one spends real USDC from our own wallet to find out. Point it at your own endpoint before you launch, or at a seller you are about to route money to. Up to $0.02 of the seller's price per check.",
+      "Buy one call from an x402 seller endpoint right now and report exactly what happened: the unpaid call's status, the 402 decoded (accepts, chains, payTo, asset, price), whether the accept's EIP-712 domain name matches the token it names (the defect that silently makes a whole catalog unpayable), whether a stock client's signed payment was accepted, the settlement receipt and transaction, a slice of the response body, and the time each leg took. Ends in written flags, never a score. This is the live counterpart to seller-dossier, which reports what we already know: this one spends real USDC from our own wallet to find out. Point it at your own endpoint before you launch, or at a seller you are about to route money to. Up to $0.02 of the seller's price per check.",
     tags: ["x402", "seller", "payability", "payment", "402", "check", "verify", "settlement", "debug", "pre-launch",
       "is my endpoint payable", "why is nobody paying me", "test my x402 endpoint", "can an agent pay this", "eip-712", "domain"],
     discovery: {

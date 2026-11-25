@@ -69,7 +69,8 @@ for (const [name, v] of Object.entries(pinned.dependencies)) ok(pkg.dependencies
 // CI recompiles the artifact from source with the pinned solc and diffs it.
 const ci = expandedDeployWorkflow();
 ok(ci.includes("node scripts/test-agentkit-data-to-deploy.js"), "this test runs in a CI lane");
-ok(/install_solc\(\) \{ npm i --no-save --ignore-scripts --no-audit --no-fund solc@0\.8\.28; \}\n\s*install_solc \|\| \{[^}\n]*echo "::warning::solc@0\.8\.28 install failed[^}\n]*install_solc; \}\n\s*node contracts\/compile\.js/.test(ci) && ci.includes("git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json"), "CI recompiles the artifact from the committed source and requires byte equality");
+ok(/install_solc\(\) \{ npm i --prefix "\$SOLC_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund solc@0\.8\.28; \}\n\s*install_solc \|\| \{[^}\n]*echo "::warning::solc@0\.8\.28 install failed[^}\n]*install_solc; \}\n\s*node contracts\/compile\.js/.test(ci) && ci.includes("git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json"), "CI recompiles the artifact from the committed source and requires byte equality");
+ok(/export SOLC_DIR="\$RUNNER_TEMP\/solc-0\.8\.28"/.test(ci), "the compiler is installed in a directory of its own, so the install never resolves the example's own dependencies (a renamed package not yet published)");
 ok(!/--silent solc@/.test(ci), "the solc install is not silent: a failed install prints why, and is retried once with a warning");
 
 console.log(`test-agentkit-data-to-deploy: ${n} assertions ok`);

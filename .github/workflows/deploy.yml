@@ -965,7 +965,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: CDP kit live check (onramp session and SQL — skips without secrets)
+      - name: CDP kit live check (onramp session and SQL; skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
           CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
@@ -974,7 +974,7 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
-      - name: OpenClaw provider plugin (agent402-openclaw — offline, stub gateway)
+      - name: OpenClaw provider plugin (agent402-model-provider, offline, stub gateway)
         run: node openclaw/test.js
 
       # The plugin against a REAL OpenClaw (npm openclaw@latest): plugins install,
@@ -1013,7 +1013,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # elizaos-plugin-agent402 against a REAL elizaOS runtime (2026-09-15): the
+      # agent402-actions-plugin against a REAL elizaOS runtime (2026-09-15): the
       # packed artifact + @elizaos/core, plugin-sql (PGlite) and plugin-bootstrap
       # from the registry, a real AgentRuntime, the runtime's own dispatcher on a
       # plain user message. Once on `latest` (1.x) and once on `beta` (2.x). The
@@ -2550,16 +2550,19 @@ jobs:
           # source: a bytecode edit that leaves the .sol alone would pass the
           # source-hash pin, so recompile with the pinned solc and diff the blob.
           # The install prints its own output and is retried once, so a registry
-          # hiccup names itself in the log instead of a silent exit 1.
+          # hiccup names itself in the log instead of a silent exit 1. The
+          # compiler goes in a directory of its own (SOLC_DIR), so the install
+          # never resolves the example's own dependencies from the registry.
           ( cd examples/agentkit-data-to-deploy
-            install_solc() { npm i --no-save --ignore-scripts --no-audit --no-fund solc@0.8.28; }
+            export SOLC_DIR="$RUNNER_TEMP/solc-0.8.28"; mkdir -p "$SOLC_DIR"
+            install_solc() { npm i --prefix "$SOLC_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund solc@0.8.28; }
             install_solc || { rc=$?; echo "::warning::solc@0.8.28 install failed (exit $rc); retrying once"; sleep 5; install_solc; }
-            node contracts/compile.js && rm -rf node_modules )
+            node contracts/compile.js )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
           # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)
           node scripts/test-adapter-paid-redirects.js
-          # Python adapter (agent402-langchain): requests-only keeps CI lean; the
+          # Python adapter (agent402-structured-tools): requests-only keeps CI lean; the
           # test skips the langchain-native path gracefully without langchain-core,
           # so this locks the spec + free proof-of-work call behavior.
           python3 -m pip install --quiet requests
@@ -2895,7 +2898,7 @@ jobs:
       - name: Start server in free mode (the strict sweep's server; the CI data keys)
         env:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
-          # The BLS-backed macro tools (fred-series, sahm-rule, cpi-yoy,
+          # The BLS-backed macro tools (us-macro-series, sahm-rule, cpi-yoy,
           # unemployment-rate, fed-funds) read BLS v2 with it, keyless v1 without.
           BLS_API_KEY: ${{ secrets.BLS_CI_API_KEY }}
           # The sweep's per-run BLS read cap (BLS_RUN_READ_CAP in
@@ -3751,7 +3754,7 @@ jobs:
           node client/test.js            # gate: the buyer SDK must pass before shipping
           node scripts/test-client-caps.js  # gate: spending-cap safety must pass too
 
-      - name: Gate agent402-openclaw (tests run with NO npm token in env)
+      - name: Gate agent402-model-provider (tests run with NO npm token in env)
         run: node openclaw/test.js
 
       - name: Boot FREE_MODE server for adapter tests
@@ -3764,57 +3767,57 @@ jobs:
           done
           curl -sf http://127.0.0.1:3090/health >/dev/null || { echo "FREE_MODE server failed to boot"; cat /tmp/a402-adapter.log; exit 1; }
 
-      - name: Gate agent402-openai-tools (tests run with NO npm token in env)
+      - name: Gate agent402-function-calling (tests run with NO npm token in env)
         run: |
           # Gate: tool list builds + execute() returns a real result against the FREE_MODE server.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/openai-tools/test.js
 
-      - name: Gate agent402-anthropic-tools (tests run with NO npm token in env)
+      - name: Gate agent402-messages-tools (tests run with NO npm token in env)
         run: |
           # Install agent402-client locally for the test (same self-bootstrap as openai-tools/test.js).
           ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/anthropic-tools/test.js
 
-      - name: Gate agent402-ai-sdk (tests run with NO npm token in env)
+      - name: Gate agent402-stream-tools (tests run with NO npm token in env)
         run: |
           # Test self-bootstraps agent402-client + ai (Vercel AI SDK) into its own node_modules.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/ai-sdk/test.js
 
-      - name: Gate agent402-langchain (tests run with NO npm token in env)
+      - name: Gate agent402-structured-tools (tests run with NO npm token in env)
         run: |
           # Test self-bootstraps agent402-client + @langchain/core + zod.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/langchain/test.js
 
-      - name: Gate agent402-openai-agents (tests run with NO npm token in env)
+      - name: Gate agent402-runner-tools (tests run with NO npm token in env)
         run: |
           # Test runs framework-agnostic spec path; @openai/agents is an
           # optional peerDep so consumers install it on their side.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/openai-agents/test.js
 
-      - name: Gate agent402-llamaindex (tests run with NO npm token in env)
+      - name: Gate agent402-function-tools (tests run with NO npm token in env)
         run: |
           # Test self-bootstraps agent402-client + llamaindex.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/llamaindex/test.js
 
-      - name: Gate agent402-strands (tests run with NO npm token in env)
+      - name: Gate agent402-agent-loop-tools (tests run with NO npm token in env)
         run: |
           # Test self-bootstraps agent402-client + stubs @strands-agents/sdk
           # so we don't pull AWS Bedrock + uuid + yaml transitively just to
           # verify the adapter shape.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/strands/test.js
 
-      - name: Gate agent402-agentkit (tests run with NO npm token in env)
+      - name: Gate agent402-action-provider (tests run with NO npm token in env)
         run: |
           # Test self-bootstraps agent402-client + stubs @coinbase/agentkit to
           # the one export the adapter uses (customActionProvider).
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/agentkit/test.js
 
-      - name: Gate elizaos-plugin-agent402 (tests run with NO npm token in env)
+      - name: Gate agent402-actions-plugin (tests run with NO npm token in env)
         run: |
           # Self-bootstraps agent402-client; no @elizaos/core at runtime (types only).
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/eliza/test.js
 
-      - name: Gate agent402-google-adk (tests run with NO npm token in env)
+      - name: Gate agent402-dev-kit-tools (tests run with NO npm token in env)
         run: |
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/google-adk/test.js
 
@@ -3981,7 +3984,7 @@ jobs:
               echo "--- npm exchange verdict, every publishable package ---"
               UNMATCHED_PENDING=""
               # Every directory a publish step below enters (scripts/test-deploy-release-order.js holds the two lists equal).
-              for DIR in mcp tollbooth client openclaw adapters/*/; do
+              for DIR in mcp tollbooth client openclaw adapters/*/ renamed/*/; do
                 [ -f "$DIR/package.json" ] || continue
                 PKG=$(node -p "const p=require('./$DIR/package.json'); p.private ? '' : (p.name || '')" 2>/dev/null || echo "")
                 [ -n "$PKG" ] || continue
@@ -4028,7 +4031,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-mcp@$VERSION is already on npm — nothing to do"
+            echo "agent402-mcp@$VERSION is already on npm, nothing to do"
             exit 0
           fi
           npm publish --provenance
@@ -4051,7 +4054,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-tollbooth@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-tollbooth@$VERSION is already on npm — nothing to do"
+            echo "agent402-tollbooth@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-tollbooth@$VERSION → https://www.npmjs.com/package/agent402-tollbooth"
@@ -4063,13 +4066,13 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-client@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-client@$VERSION is already on npm — nothing to do"
+            echo "agent402-client@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-client@$VERSION → https://www.npmjs.com/package/agent402-client"
           fi
 
-      - name: Publish agent402-openclaw to npm
+      - name: Publish agent402-model-provider to npm
         run: |
           cd openclaw
           VERSION=$(node -p "require('./package.json').version")
@@ -4077,127 +4080,149 @@ jobs:
           # version was published from a maintainer login (OIDC cannot create a
           # package that does not exist yet); the trusted publisher on npmjs.com
           # carries every version after it.
-          if npm view "agent402-openclaw@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-openclaw@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-model-provider@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-model-provider@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-openclaw@$VERSION → https://www.npmjs.com/package/agent402-openclaw"
+            echo "published agent402-model-provider@$VERSION → https://www.npmjs.com/package/agent402-model-provider"
           fi
 
-      - name: Publish agent402-openai-tools to npm
+      - name: Publish agent402-function-calling to npm
         run: |
           cd adapters/openai-tools
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
-          if npm view "agent402-openai-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-openai-tools@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-function-calling@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-function-calling@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-openai-tools@$VERSION → https://www.npmjs.com/package/agent402-openai-tools"
+            echo "published agent402-function-calling@$VERSION → https://www.npmjs.com/package/agent402-function-calling"
           fi
 
-      - name: Publish agent402-anthropic-tools to npm
+      - name: Publish agent402-messages-tools to npm
         run: |
           cd adapters/anthropic-tools
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
-          if npm view "agent402-anthropic-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-anthropic-tools@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-messages-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-messages-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-anthropic-tools@$VERSION → https://www.npmjs.com/package/agent402-anthropic-tools"
+            echo "published agent402-messages-tools@$VERSION → https://www.npmjs.com/package/agent402-messages-tools"
           fi
 
-      - name: Publish agent402-ai-sdk to npm
+      - name: Publish agent402-stream-tools to npm
         run: |
           cd adapters/ai-sdk
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-ai-sdk@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-ai-sdk@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-stream-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-stream-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-ai-sdk@$VERSION → https://www.npmjs.com/package/agent402-ai-sdk"
+            echo "published agent402-stream-tools@$VERSION → https://www.npmjs.com/package/agent402-stream-tools"
           fi
 
-      - name: Publish agent402-langchain to npm
+      - name: Publish agent402-structured-tools to npm
         run: |
           cd adapters/langchain
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-langchain@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-langchain@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-structured-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-structured-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-langchain@$VERSION → https://www.npmjs.com/package/agent402-langchain"
+            echo "published agent402-structured-tools@$VERSION → https://www.npmjs.com/package/agent402-structured-tools"
           fi
 
-      - name: Publish agent402-openai-agents to npm
+      - name: Publish agent402-runner-tools to npm
         run: |
           cd adapters/openai-agents
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-openai-agents@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-openai-agents@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-runner-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-runner-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-openai-agents@$VERSION → https://www.npmjs.com/package/agent402-openai-agents"
+            echo "published agent402-runner-tools@$VERSION → https://www.npmjs.com/package/agent402-runner-tools"
           fi
 
-      - name: Publish agent402-llamaindex to npm
+      - name: Publish agent402-function-tools to npm
         run: |
           cd adapters/llamaindex
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-llamaindex@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-llamaindex@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-function-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-function-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-llamaindex@$VERSION → https://www.npmjs.com/package/agent402-llamaindex"
+            echo "published agent402-function-tools@$VERSION → https://www.npmjs.com/package/agent402-function-tools"
           fi
 
-      - name: Publish agent402-strands to npm
+      - name: Publish agent402-agent-loop-tools to npm
         run: |
           cd adapters/strands
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-strands@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-strands@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-agent-loop-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-agent-loop-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-strands@$VERSION → https://www.npmjs.com/package/agent402-strands"
+            echo "published agent402-agent-loop-tools@$VERSION → https://www.npmjs.com/package/agent402-agent-loop-tools"
           fi
 
-      - name: Publish agent402-agentkit to npm
+      - name: Publish agent402-action-provider to npm
         run: |
           cd adapters/agentkit
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-agentkit@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-agentkit@$VERSION is already on npm - nothing to do"
+          if npm view "agent402-action-provider@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-action-provider@$VERSION is already on npm - nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-agentkit@$VERSION -> https://www.npmjs.com/package/agent402-agentkit"
+            echo "published agent402-action-provider@$VERSION -> https://www.npmjs.com/package/agent402-action-provider"
           fi
 
-      - name: Publish elizaos-plugin-agent402 to npm
+      - name: Publish agent402-actions-plugin to npm
         run: |
           cd adapters/eliza
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent. The FIRST version is published from a maintainer login
           # (OIDC cannot create a package that does not exist yet); the trusted
           # publisher on npmjs.com carries every version after it.
-          if npm view "elizaos-plugin-agent402@$VERSION" version >/dev/null 2>&1; then
-            echo "elizaos-plugin-agent402@$VERSION is already on npm - nothing to do"
+          if npm view "agent402-actions-plugin@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-actions-plugin@$VERSION is already on npm - nothing to do"
           else
             npm publish --provenance --access public
-            echo "published elizaos-plugin-agent402@$VERSION -> https://www.npmjs.com/package/elizaos-plugin-agent402"
+            echo "published agent402-actions-plugin@$VERSION -> https://www.npmjs.com/package/agent402-actions-plugin"
           fi
 
-      - name: Publish agent402-google-adk to npm
+      - name: Publish agent402-dev-kit-tools to npm
         run: |
           cd adapters/google-adk
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "agent402-google-adk@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-google-adk@$VERSION is already on npm — nothing to do"
+          if npm view "agent402-dev-kit-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-dev-kit-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-google-adk@$VERSION → https://www.npmjs.com/package/agent402-google-adk"
+            echo "published agent402-dev-kit-tools@$VERSION → https://www.npmjs.com/package/agent402-dev-kit-tools"
           fi
+
+      # The earlier names' last releases (renamed/, scripts/lib/package-renames.js):
+      # each depends on its new name and re-exports it, so they go out after every
+      # new name above, and one whose new name npm does not hold yet fails here
+      # instead of shipping a release that cannot install. Their trusted publishers
+      # are the ones the earlier names always had. Idempotent like the rest.
+      - name: Publish the earlier names' forwarding releases to npm
+        run: |
+          for DIR in renamed/*/; do
+            [ -f "$DIR/package.json" ] || continue
+            PKG=$(node -p "require('./$DIR/package.json').name")
+            VERSION=$(node -p "require('./$DIR/package.json').version")
+            TARGET=$(node -p "Object.keys(require('./$DIR/package.json').dependencies)[0]")
+            if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+              echo "$PKG@$VERSION is already on npm - nothing to do"; continue
+            fi
+            if ! npm view "$TARGET" version >/dev/null 2>&1; then
+              echo "::error::$PKG@$VERSION forwards to $TARGET, which npm does not hold yet"; exit 1
+            fi
+            ( cd "$DIR" && npm publish --provenance --access public )
+            echo "published $PKG@$VERSION -> https://www.npmjs.com/package/$PKG"
+          done
 
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
         env:
@@ -4309,7 +4334,7 @@ jobs:
           echo "deprecated $deprecated superseded version(s)"
 
       # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
-      # clawhub:agent402-openclaw`); their docs keep no static third-party
+      # clawhub:agent402-model-provider`); their docs keep no static third-party
       # catalog, so this release is the listing. Token-authenticated (repo secret
       # CLAWHUB_TOKEN, a ClawHub CLI token on the publisher account; the CLI reads
       # it from its config file, written under a job-scoped path so nothing lands
@@ -4330,7 +4355,7 @@ jobs:
       # A ClawHub refusal never holds production: the deploy job waits on this
       # job, and the install lines it ships need only npm and the MCP Registry.
       # So this step alone continues on error, and the next one warns.
-      - name: Publish agent402-openclaw to ClawHub
+      - name: Publish agent402-model-provider to ClawHub
         id: clawhub
         continue-on-error: true
         env:
@@ -5263,7 +5288,7 @@ jobs:
           echo "=== watch an agent pay an agent (live, no wallet) ==="
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
-          curl -s https://agent402.tools/api/stats | jq '{tools}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+          curl -s https://agent402.tools/api/stats | jq '{tools}' || echo "(/api/stats not live yet; it appears after this image rolls out)"
 
       # The render/media worker (agent402-worker) is its own Railway service,
       # built from Dockerfile.worker by an upload of this checkout; nothing

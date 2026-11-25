@@ -1,6 +1,10 @@
-# agent402-llamaindex
+# agent402-function-tools
 
-Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) - the open-source, self-hostable x402 + MCP server with 500+ pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+[Agent402](https://agent402.tools) tools as **FunctionTool instances**, for use with LlamaIndex TS. Agent402 is the open-source, self-hostable x402 + MCP server with 500+ pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+
+Works with LlamaIndex TS (`llamaindex`). Agent402 is not affiliated with or endorsed by LlamaIndex.
+
+Formerly `agent402-llamaindex`: the same API under a new name. Change the dependency and the import specifier; nothing else changes.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
@@ -12,7 +16,7 @@ Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) - the ope
 ## Install
 
 ```bash
-npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem
+npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-function-tools @x402/fetch @x402/core @x402/evm viem
 ```
 
 `llamaindex` is what this adapter builds its tools with; `@llamaindex/workflow`
@@ -24,7 +28,7 @@ and the `@x402/*` and `viem` packages pay wallet-only tools from your wallet.
 ```js
 import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
-import { agent402Tools } from "agent402-llamaindex";
+import { agent402Tools } from "agent402-function-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

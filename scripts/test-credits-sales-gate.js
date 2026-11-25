@@ -214,6 +214,16 @@ try {
     if (r.status === 429) refund429 = { retryAfter: r.headers.get("retry-after"), body: await r.json() };
   }
   ok(refund429 && Number(refund429.retryAfter) > 0 && refund429.body.status === "rate_limited", `repeated refund requests are limited with a status and Retry-After (${refund429?.retryAfter})`);
+  // Whichever bound answers first (the route's limiter or the failed-key
+  // hold for an unknown key), the 429 names when to come back.
+  {
+    let held = null;
+    for (let i = 0; i < 60 && !held; i++) {
+      const r = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"z".repeat(40)}`, "x-forwarded-for": `198.51.100.${(i % 250) + 1}` } });
+      if (r.status === 429) held = { retryAfter: r.headers.get("retry-after"), body: await r.json() };
+    }
+    ok(!held || Number(held.retryAfter) > 0, `every 429 on the refund route carries Retry-After (${held ? held.retryAfter : "no 429 reached"})`);
+  }
   const buyAfter = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
   ok(buyAfter.status !== 429, `a purchase from the same address is not limited by those refund requests (got ${buyAfter.status})`);
   const pageOnRes = await fetch(`${B}/credits`);

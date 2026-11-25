@@ -21,9 +21,12 @@ Loaded when a connector or front-door file is read.
   invalid-payment and settlement-failed results, `x402/payment-response` out), pure.
   `/mcp` wires both (`x402Loopback`, off in FREE_MODE): a flagship called by its listed name with a twin
   is asked and paid on the twin, `catalog.call` (and a flagship without a twin) on the slug's own HTTP
-  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, never
-  `structuredContent`: every paid tool lists an `outputSchema`, and the SDK client checks any
-  structuredContent against it, error results included) beside the MPP `_meta` challenges; a
+  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, and the same
+  object as `structuredContent` exactly when it validates against the called tool's listed `outputSchema`,
+  or the tool lists none: the SDK client checks any structuredContent against that schema, error results
+  included; `fitsListedOutputSchema`, the SDK's own ajv validator; the flagship schemas name no `required`
+  field so every flagship's ask carries it, catalog.call's envelope does not) beside the MPP `_meta`
+  challenges (`scripts/test-mcp-x402-structured.js`); a
   settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; a fixed-price
   unpaid offer (a twin's first ask, a free tool's at its limit) is read once per route and reused for 30 s
   (bounded, `offerCacheMax`), a route priced per request every time; MPP wins when
@@ -56,7 +59,9 @@ Loaded when a connector or front-door file is read.
   eras: read a per-request client capability from the raw body (`declaredCapabilities`), never from `req.params._meta`.
   Our own answers ahead of the SDK (tasks, skills, the deadline cutoff) carry `resultType` on a 2026-07-28 request, and a
   missing client capability there is a 400. `scripts/mcp-client-check.js` reads both (`MCP_CHECK_PROTOCOL=2026-07-28`
-  uses the v2 client); the stdio package still runs SDK v1.
+  uses the v2 client). Neither connector imports SDK v1: `@modelcontextprotocol/sdk` stays a root devDependency only as
+  the 2025-era reference CLIENT the interop suites and `mcp-client-check.js` drive (the v1 client is what most hosts
+  run), and as mppx's optional peer.
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with
@@ -77,7 +82,7 @@ Loaded when a connector or front-door file is read.
   ledger) claims neither and books nothing. The ledger is read only once loaded (bounded wait and
   pull); the database sweep leaves an orphan working while it has not loaded, for up to
   `limits.ledgerWaitMs` (5 minutes) (`scripts/test-mcp-task-orphan-charge.js`, `test-mcp-tasks-pg.js`).
-- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
+- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then the answer tool (slug `answer`, also callable as web.answer) takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)
   keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,

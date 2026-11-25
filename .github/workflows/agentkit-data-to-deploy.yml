@@ -49,4 +49,4 @@ jobs:
           [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
           echo "::add-mask::$BURNER_KEY"
           # Allowlisted env: the third-party tree sees the burner key and nothing else.
-          cd /tmp/akdeploy && env -i PATH="$PATH" HOME="$HOME" AGENT_WALLET_KEY="$BURNER_KEY" AGENT402_PAYEES="0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0" COIN="${COIN:-ETH}" DRY_RUN="${DRY_RUN:-0}" TARGET_URL="https://agent402.tools" AGENTKIT_ADAPTER="agent402-agentkit" node agent.js
+          cd /tmp/akdeploy && env -i PATH="$PATH" HOME="$HOME" AGENT_WALLET_KEY="$BURNER_KEY" AGENT402_PAYEES="0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0" COIN="${COIN:-ETH}" DRY_RUN="${DRY_RUN:-0}" TARGET_URL="https://agent402.tools" AGENTKIT_ADAPTER="agent402-action-provider" node agent.js

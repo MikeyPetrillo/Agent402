@@ -186,7 +186,7 @@ for (const [name, j] of Object.entries(jobs)) {
 // --- every marker the parser knows has an output, and the pass that spends
 // --- with the operator token never runs from a push ------------------------
 // The MARKERS list and the outputs block are two lists of the same names and
-// cannot drift apart. The listing pass (scripts/payai-listing-pass.js) pays
+// cannot drift apart. The listing pass (scripts/registry-listing-pass.js) pays
 // with the Base and Solana burners AND the operator token (the settle-via gate). A
 // job a commit subject can start is a job a branch push can start with a
 // modified script, so it is not a deploy.yml job at all: it is a job of
@@ -201,7 +201,7 @@ for (const [name, j] of Object.entries(jobs)) {
   for (const marker of markers) {
     ok(outputs.includes(marker.replace(/-/g, "_")), `marker [${marker}] has a markers output`);
   }
-  ok(!/node scripts\/payai-listing-pass\.js/.test(wfText), "deploy.yml never runs the listing pass: a push could carry a modified script to the operator token");
+  ok(!/node scripts\/registry-listing-pass\.js/.test(wfText), "deploy.yml never runs the listing pass: a push could carry a modified script to the operator token");
 
   const spend = load(readFileSync(new URL("../.github/workflows/spend.yml", import.meta.url), "utf8"));
   // One spend job per choice: a sub-workflow of the jobs a choice runs.
@@ -231,18 +231,18 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(String(inputs.max_price_usd?.default ?? "") === "" && Number(inputs.max_spend_usd?.default) >= 20, "no per-route cap by default; a per-run ceiling by default");
   ok(/bazaar-base/.test(String(inputs.legs?.default || "")) && /bazaar-solana/.test(String(inputs.legs?.default || "")) && /payai-solana/.test(String(inputs.legs?.default || "")) && /payai-base/.test(String(inputs.legs?.default || "")), "its default legs cover both registries on both chains");
   const ljobs = listing.jobs || {};
-  const spender = Object.values(ljobs).find((j) => (j.steps || []).some((st) => /payai-listing-pass\.js/.test(String(st.run || ""))));
+  const spender = Object.values(ljobs).find((j) => (j.steps || []).some((st) => /registry-listing-pass\.js/.test(String(st.run || ""))));
   ok(Object.values(ljobs).length === 2 && Object.values(ljobs).every((j) => JSON.stringify(j.permissions) === JSON.stringify({ contents: "read", issues: "write", actions: "read" })), "its token can read the tree and artifacts and write issues, nothing else");
   ok(!!spender?.concurrency?.group && spender?.concurrency?.["cancel-in-progress"] === false, "one run at a time: a second run queues behind the first instead of racing the burner's nonces");
   ok(!!spender, "a job in the listing workflow runs the pass");
   ok(String(spender?.environment || "") === "spending", "that job carries the spending environment");
   const run = (spender?.steps || []).map((st) => String(st.run || "")).join("\n");
-  ok(/scripts\/payai-listing-pass\.js --registry "\$REGISTRY" --chain "\$CHAIN" --live --include-upstream --max-spend "\$MAX_SPEND_USD" \$\{MAX_PRICE_USD:\+--max-price "\$MAX_PRICE_USD"\}/.test(run), "it runs each leg live, vendor-calling routes included, under the run ceiling, with the per-route cap only when one is given");
+  ok(/scripts\/registry-listing-pass\.js --registry "\$REGISTRY" --chain "\$CHAIN" --live --include-upstream --max-spend "\$MAX_SPEND_USD" \$\{MAX_PRICE_USD:\+--max-price "\$MAX_PRICE_USD"\}/.test(run), "it runs each leg live, vendor-calling routes included, under the run ceiling, with the per-route cap only when one is given");
   // The purchase memory: downloaded before the buy step, with the workflow
   // token only, and handed to every leg with the 14-day window.
   const steps = spender?.steps || [];
   const memAt = steps.findIndex((st) => /node scripts\/listing-pass-memory\.js --out bought --days 14\b/.test(String(st.run || "")));
-  const buyAt = steps.findIndex((st) => /payai-listing-pass\.js/.test(String(st.run || "")));
+  const buyAt = steps.findIndex((st) => /registry-listing-pass\.js/.test(String(st.run || "")));
   ok(memAt >= 0 && memAt < buyAt, "the purchase memory is downloaded before the step that spends");
   ok(memAt >= 0 && JSON.stringify(steps[memAt].env || {}) === JSON.stringify({ GH_TOKEN: "${{ github.token }}" }) && !steps[memAt].if && steps[memAt]["continue-on-error"] !== true, "the download carries the workflow token and no wallet secret, and a failed download stops the job");
   ok(/--bought bought --rebuy-after-days 14 /.test(run), "every leg reads the memory with the 14-day window");

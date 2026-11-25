@@ -1,4 +1,5 @@
-// agent402-agentkit - Agent402 as a Coinbase AgentKit action provider.
+// agent402-action-provider (formerly agent402-agentkit): Agent402 as an action
+// provider for use with AgentKit.
 //
 // Gives an AgentKit agent (a CDP, Privy, ZeroDev or viem-backed wallet
 // provider) three actions over the Agent402 catalog: find a tool for a
@@ -9,7 +10,7 @@
 // AgentKit's own x402 action provider derives it (toSigner + readContract).
 //
 //   import { AgentKit, CdpEvmWalletProvider } from "@coinbase/agentkit";
-//   import { agent402ActionProvider } from "agent402-agentkit";
+//   import { agent402ActionProvider } from "agent402-action-provider";
 //
 //   const walletProvider = await CdpEvmWalletProvider.configureWithWallet({ networkId: "base-mainnet" });
 //   const agentKit = await AgentKit.from({ walletProvider, actionProviders: [await agent402ActionProvider()] });
@@ -23,7 +24,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-agentkit/0.2.1";
+const USER_AGENT = "agent402-action-provider/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -102,7 +103,7 @@ export function resolveMaxPerCallUsd(v, warn = (m) => console.error(m)) {
   const n = raw === "" ? NaN : Number(raw);
   if (Number.isFinite(n) && n >= 0) return n === 0 ? null : n;
   const shown = String(v).length <= 16 ? JSON.stringify(String(v)) : "(a long value, not shown)";
-  warn(`[agent402-agentkit] maxPerCallUsd=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+  warn(`[agent402-action-provider] maxPerCallUsd=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
   return DEFAULT_MAX_PER_CALL_USD;
 }
 
@@ -150,7 +151,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
       "checks), payable over x402 in USDC or free via proof-of-work. Returns the best-matching tools with slug, price, " +
       "whether a wallet is needed, and a ready example. Free: no payment is made.",
     schema: z.object({
-      task: z.string().min(1).describe("What you need done, in plain language, e.g. 'extract the article at a URL'"),
+      task: z.string().min(1).describe("What you need done, in your own words, e.g. 'extract the article at a URL'"),
       k: z.number().int().min(1).max(10).optional().describe("How many matches to return (default 5)"),
     }),
     invoke: async ({ task, k = 5 }) => {
@@ -228,7 +229,7 @@ export async function agent402ActionProvider(opts = {}) {
   const actions = await agent402Actions(opts);
   let mod;
   try { mod = await import("@coinbase/agentkit"); }
-  catch { throw new Error("agent402-agentkit requires '@coinbase/agentkit' - install it with: npm install @coinbase/agentkit"); }
+  catch { throw new Error("agent402-action-provider requires '@coinbase/agentkit' - install it with: npm install @coinbase/agentkit"); }
   if (typeof mod.customActionProvider === "function") return mod.customActionProvider(actions);
   if (typeof mod.CustomActionProvider === "function") return new mod.CustomActionProvider(actions);
   throw new Error("@coinbase/agentkit does not expose customActionProvider - upgrade @coinbase/agentkit");
@@ -274,5 +275,5 @@ async function x402For(walletProvider, fetchImpl, { payees = null, guarded = fal
 
 async function loadZod() {
   try { const m = await import("zod"); return m.z || m.default?.z || m; }
-  catch { throw new Error("agent402-agentkit requires 'zod' - install it with: npm install zod"); }
+  catch { throw new Error("agent402-action-provider requires 'zod' - install it with: npm install zod"); }
 }

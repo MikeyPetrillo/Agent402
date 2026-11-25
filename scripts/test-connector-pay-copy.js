@@ -207,7 +207,9 @@ for (const boot of BOOTS) {
     const ask = await client.callTool({ name: "memory.read", arguments: {} });
     const offer = paymentRequiredOfResult(ask);
     const hasOffer = ask.isError === true && Array.isArray(offer?.accepts);
-    ok(ask.isError !== true || !("structuredContent" in ask), `${boot.label}: the ask carries no structuredContent, so a client that checks the tool's output schema reads it`);
+    // The client lists tools first (its output check is armed), so reaching
+    // here means it read the ask; a structuredContent there is the offer itself.
+    ok(ask.isError !== true || !("structuredContent" in ask) || (offer && JSON.stringify(ask.structuredContent) === JSON.stringify(offer)), `${boot.label}: the ask's structuredContent, when present, is the x402 offer itself, read by a client that checks the tool's output schema`);
     const askText = (ask.content || []).map((c) => c.text || "").join("\n");
     ok(!/structuredContent/.test(askText) && (boot.x402 ? /the JSON in its first text block/.test(askText) : true), `${boot.label}: the ask's text points at where the offer rides`);
     const hasMpp = Array.isArray(ask._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges);
@@ -261,7 +263,8 @@ await new Promise((r) => facilitator.close(r));
   ok(/are payable on the connector in the call\. Over x402,/.test(cf) && cf.includes('`_meta["x402/payment"]`') && cf.includes('`_meta["x402/payment-response"]`') && /Over MPP, the same result/.test(cf) && !/To pay over x402 instead/.test(cf), "docs/cloudflare-agents.md: both wires in the call, and the npm package is not the only x402 way");
   ok(/on the hosted MCP connector in the call \(over x402 or MPP\)/.test(flatOf("wiki/Payments-and-x402.md")), "wiki/Payments-and-x402.md: the connector takes x402 or MPP in the call");
   ok(/The same first answer carries an x402 PaymentRequired for an x402 MCP client; a call that carries both an MPP credential and an x402 payment is settled over MPP\./.test(flatOf("wiki/Paying-with-MPP.md")), "wiki/Paying-with-MPP.md: its connector paragraph names the x402 offer");
-  ok(!files.some((f) => /whose `structuredContent` is the x402|as (?:its|the tool result's) `structuredContent`/.test(flatOf(f))), "no static page says the x402 offer rides in structuredContent");
+  ok(/the same PaymentRequired also rides as `structuredContent` when it fits the tool's listed output schema[^.]*`catalog\.call`'s ask does not carry it/.test(flatOf("wiki/MCP-Connector.md")), "wiki/MCP-Connector.md: the x402 offer rides in structuredContent only where the listed schema admits it, never on catalog.call");
+  ok(!/carries no `structuredContent`/.test(flatOf("wiki/MCP-Connector.md")), "the MCP Connector wiki page no longer says the ask carries no structuredContent");
   ok(/A report runs long, so on the connector it is paid over MPP/.test(flatOf("wiki/Reports-and-Monitors.md")) && /long-running tool[^.]*is the exception over x402/.test(flatOf("wiki/MCP-Connector.md")), "the wiki scopes long-running tools out of x402 in the call");
   ok((flatOf("wiki/MCP-Connector.md").match(/\*\*x402 on `\/mcp`\.\*\*/g) || []).length === 1, "the MCP Connector page has one x402 paragraph");
   const wiki = readFileSync(join(ROOT, "wiki/MCP-Connector.md"), "utf8");

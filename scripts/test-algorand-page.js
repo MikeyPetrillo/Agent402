@@ -34,8 +34,8 @@ const rail = { balance: 0.042, recent: [
   { tx: "https://allo.info/tx/JZIB7WN5CLWSGJFJ7NX6UXCMJUZGUPA5DSXDKUWLTKWJ4KJWGPPQ", when: "2026-07-10T04:15:00Z", usd: 0.001, from: "ZKFACAZATPUUYUXVVVE7QWMMZTSMLGQVA4G4QKW7D2UI7FCIFE3QB2SHRE", external: false, internal: true },
 ] };
 let html = algorandPage("https://agent402.tools", { snapshot: snapOnlyUs, rail });
-ok(html.includes("Algorand x402 marketplace"), "title phrase present");
-ok((html.match(/Algorand x402 marketplace/g) || []).length >= 3, "phrase appears in title, h1 and description");
+ok(html.includes("Agent402 on Algorand") && !html.includes("Algorand x402 marketplace"), "title phrase present (the chain page is named Agent402 on Algorand)");
+ok((html.match(/Agent402 on Algorand/g) || []).length >= 3, "phrase appears in title, h1 and description");
 ok(html.includes("allo.info/tx/JZIB7WN5CLWSGJFJ7NX6UXCMJUZGUPA5DSXDKUWLTKWJ4KJWGPPQ"), "real receipt tx link rendered");
 ok(html.includes("1 seller live"), "honesty line rendered when only local seller");
 ok(html.includes("network=algorand"), "machine route-filter snippet present");

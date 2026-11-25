@@ -321,7 +321,7 @@
       }
     },
     {
-      "slug": "fred-series",
+      "slug": "us-macro-series",
       "name": "monthly unrate, one year",
       "input": {
         "seriesId": "UNRATE",
@@ -341,7 +341,7 @@
       }
     },
     {
-      "slug": "fred-series",
+      "slug": "us-macro-series",
       "name": "unknown series is a 404",
       "input": {
         "seriesId": "ZZQXNOPE"

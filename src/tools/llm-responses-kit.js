@@ -42,6 +42,7 @@ import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { settleBeforeUpstream } from "../settle-first.js";
 import { flattenNamespaceForResponses, attributeNamespaces } from "./tool-namespaces.js";
+import { notChargedHere } from "../not-charged.js";
 const OPENROUTER_RESPONSES_URL = "https://openrouter.ai/api/v1/responses";
 const MAX_TOOLS = 64;
 const MAX_INPUT_ITEMS = 200; // default; a tier may raise it (`maxInputItems`) - the metered tier does
@@ -430,7 +431,7 @@ export function makeResponsesHandler(routeTier) {
     if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
       const q = meteredResponsesQuoteUsd(input);
       if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
-        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served.`, 400);
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}.${notChargedHere()} Resend the request exactly as it should be served.`, 400);
       }
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the
@@ -627,14 +628,14 @@ function describe(tierSlug) {
   if (tierSlug === "v1-chat-metered") {
     return `OpenAI Responses API priced per request from the request itself. The 402 quotes the input (instructions, input items and tools), estimated from its tokens with headroom, plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.${compat ? ` ${compat}` : ""}`;
   }
-  const base = `OpenAI Responses API over x402 - point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes (a namespace is flattened into its functions; function_call items carry a namespace field on non-streamed output), server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
+  const base = `Responses-format chat over x402, compatible with the OpenAI Responses wire format: point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes (a namespace is flattened into its functions; function_call items carry a namespace field on non-streamed output), server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
   const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.${compat ? ` ${compat}` : ""}` : "";
   return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base + dflt;
 }
 
 export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([tierSlug, path]) => ({
   route: `POST ${path}`,
-  name: `Responses ${TIER_LABEL[tierSlug]} (OpenAI Responses API)`,
+  name: `Responses ${TIER_LABEL[tierSlug]} (Responses wire format)`,
   slug: `${tierSlug}-responses`,
   category: "llm",
   price: priceString(tierSlug),

@@ -173,13 +173,13 @@ try {
     const prop = (slug, field) => tools.get(slug)?.discovery.inputSchema.properties[field];
     const { SUPPORTED } = await import("../src/tools/dns.js");
     const { SUPPORTED_FREQ } = await import("../src/tools/us-macro-series.js");
-    const FRED_FREQ = new Set([...SUPPORTED_FREQ, "wef"]); // the codes fred-series' sources take
+    const FRED_FREQ = new Set([...SUPPORTED_FREQ, "wef"]); // the codes us-macro-series' sources take
     const { LANG_RE } = await import("../src/tools/llm-context-kit.js");
     const { VIDEOS_MAX_PROMPT_CHARS } = await import("../src/tools/llm-images-fast-kit.js");
     const each = async (slug, field, values) => { const out = []; for (const x of values) if (!fits(prop(slug, field), x) || !(await taken(slug, field, x))) out.push(x); return out; };
-    const dnsOut = await each("dns", "type", SUPPORTED), freqOut = await each("fred-series", "frequency", [...FRED_FREQ]);
+    const dnsOut = await each("dns", "type", SUPPORTED), freqOut = await each("us-macro-series", "frequency", [...FRED_FREQ]);
     ok(SUPPORTED.includes("CNAME") && dnsOut.length === 0 && prop("dns", "type").maxLength === undefined && !fits(prop("dns", "type"), "SRV") && !(await taken("dns", "type", "SRV")), `dns.type publishes the handler's own record types and each one is taken (${dnsOut.join(", ") || SUPPORTED.join(", ")})`);
-    ok(FRED_FREQ.has("wef") && freqOut.length === 0 && prop("fred-series", "frequency").maxLength === undefined && !fits(prop("fred-series", "frequency"), "zz") && !(await taken("fred-series", "frequency", "zz")), `fred-series.frequency publishes every frequency the handler takes and each one is taken (${freqOut.join(", ") || [...FRED_FREQ].join(", ")})`);
+    ok(FRED_FREQ.has("wef") && freqOut.length === 0 && prop("us-macro-series", "frequency").maxLength === undefined && !fits(prop("us-macro-series", "frequency"), "zz") && !(await taken("us-macro-series", "frequency", "zz")), `us-macro-series.frequency publishes every frequency the handler takes and each one is taken (${freqOut.join(", ") || [...FRED_FREQ].join(", ")})`);
     const langs = ["en", "en-gb", "abcdefgh", "abcdefgh-abcdefgh", "zh-hant"], langOut = await each("llm-context", "lang", langs);
     ok(langs.every((x) => LANG_RE.test(x)) && langOut.length === 0 && prop("llm-context", "lang").maxLength === 17 && !LANG_RE.test("abcdefgh-abcdefghi"), `llm-context.lang's cap is the longest code its rule takes (${langOut.join(", ") || "17: two parts of eight and the hyphen"})`);
     const xName = `@${"a".repeat(15)}`;

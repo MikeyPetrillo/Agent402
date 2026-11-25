@@ -11,6 +11,7 @@ import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js"
 import { headerText, escapeHtml } from "./email-text.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 import { CANCEL_EFFECT } from "./stripe-subscriptions.js";
+import { START_NOW_CONFIRMATION } from "./checkout-consent.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 // ZeptoMail region base (api.zeptomail.com default; .eu / .in for those regions).
@@ -200,7 +201,7 @@ function modelNoteParts(kind) {
   return { html: `<p style="color:#626970;font-size:12px;margin:0 0 16px">${escapeHtml(REPORT_MODEL_NOTE)}</p>`, text: `${REPORT_MODEL_NOTE}\n` };
 }
 
-export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "", receipt = null }) {
+export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "", receipt = null, startNow = false }) {
   const subj = `Your ${hdr(productLabel || "report", 60)} is ready`;
   const on = subjectOf ? ` on “${hdr(subjectOf)}”` : "";
   // Retention loop: if a monitor watches this kind of thing, offer it with the
@@ -210,6 +211,8 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
   const note = modelNoteParts(kind);
   const rcpt = receiptParts(receipt, baseUrl || originOf(reportUrl));
+  // The durable-medium confirmation of the start-now choice made at checkout.
+  const sn = startNow === true ? { html: `<p style="color:#626970;font-size:12px">${escapeHtml(START_NOW_CONFIRMATION)}</p>`, text: `\n${START_NOW_CONFIRMATION}\n` } : { html: "", text: "" };
   const upHtml = up
     ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
@@ -222,11 +225,12 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
     <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open your report →</a></p>
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
+    ${sn.html}
     ${upHtml}
     ${rcpt.html}
     <p style="color:#626970;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
   </div>`;
-  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}${rcpt.text}\nAgent402`;
+  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${sn.text}${upText}${rcpt.text}\nAgent402`;
   return { subject: subj, html, text };
 }
 
@@ -278,10 +282,12 @@ export function subscriptionPriceText({ priceCents = null, firstPeriodCents = nu
   return hasList ? `${priceUsd(list)} a month, billed in advance.` : "";
 }
 
-/** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
+/** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change | trial-ending. Best-effort.
+ *  trial-ending: a first month a promotion code made free ends on `renewsOn`
+ *  (YYYY-MM-DD), and the first full charge follows unless the subscriber cancels.
  *  `kind` is the monitored report's kind; without it a "digest" (the IPO
  *  watch's only reason) reads as the code-written IPO digest. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false, signedReceipt = null }) {
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false, signedReceipt = null, renewsOn = null, startNow = false }) {
   // A wallet (MPP) subscriber has no Stripe portal: its link is a status
   // endpoint, and it cancels with a POST to its cancel endpoint or by revoking
   // the authorization it signed. A card subscriber cancels in the portal the
@@ -305,9 +311,10 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     filing: `New 13F filing: ${t}`,
     problem: `We could not complete your ${lbl} for ${t}`,
     recall: `New FDA recall activity: ${t}`,
-    "safety-change": `Token risk changed: ${t}`,
+    "safety-change": `Token facts changed: ${t}`,
     "filing-new": `New SEC filing: ${t}`,
     digest: `${lbl}: this week's filings${t && t !== "all" ? ` for ${t}` : ""}`,
+    "trial-ending": `Your free month of the ${lbl} for ${t} ends soon`,
   };
   const leads = {
     welcome: `Your monitor for ${t} is active. Here is your first report, and we will email you again whenever something changes.`,
@@ -319,15 +326,20 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
       ? `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel (see below) and subscribe again with a corrected one.`
       : `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel or re-subscribe with a corrected one from the manage link below.`,
     recall: `The FDA recall feeds show new activity for ${t} since your last report:`,
-    "safety-change": `The on-chain safety picture for this token changed since your last brief:`,
+    "safety-change": `These on-chain facts about this token changed since your last brief:`,
     "filing-new": `${t} has filed with the SEC since your last report. Here is what landed, with the new document read and explained:`,
     digest: `Your weekly IPO pipeline digest is ready${t && t !== "all" ? ` (filers matching "${t}")` : ""}.`,
+    "trial-ending": (() => {
+      const full = Number.isFinite(Number(renewalCents)) && Number(renewalCents) > 0 ? Number(renewalCents) : Number(priceCents);
+      const amount = Number.isFinite(full) && full > 0 ? `$${(full / 100).toFixed(2)} a month` : "the monthly price";
+      return `The free first month of your monitor for ${t} ends${renewsOn ? ` on ${renewsOn}` : " soon"}. Unless you cancel before then, your card is charged ${amount} plus applicable tax, and again each month until you cancel.`;
+    })(),
   };
   const subj = subjects[reason] || `${lbl}: update for ${t}`;
   // A "problem" mail reports a run that produced nothing, so it carries no note.
-  const note = reason === "problem" ? { html: "", text: "" } : modelNoteParts(kind || (reason === "digest" ? "ipo" : null));
+  const note = reason === "problem" || reason === "trial-ending" ? { html: "", text: "" } : modelNoteParts(kind || (reason === "digest" ? "ipo" : null));
   const lead = leads[reason] || `Your ${lbl} has an update for ${t}.`;
-  // Plain-language "why you got this": recurring mail must say who asked for it
+  // A readable "why you got this": recurring mail must say who asked for it
   // and how to stop it, in words, next to the manage link (which stays the
   // keyed one the caller passed - never widened here).
   const why = `You are getting this because you subscribed to the ${lbl} for ${t} on agent402.tools. It runs on its own until you cancel.`;
@@ -342,8 +354,8 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   const priceText = subscriptionPriceText({ priceCents, firstPeriodCents, renewalCents });
   const pricePart = priceText ? `${priceText} ` : "";
   const termsUrl = `${originOf(reportUrl)}/terms`;
-  const renewal = (reason === "welcome" || (reason === "problem" && withTerms))
-    ? `Your subscription: ${pricePart}It renews each month until you cancel. ${cancelHow} ${CANCEL_EFFECT}`
+  const renewal = (reason === "welcome" || reason === "trial-ending" || (reason === "problem" && withTerms))
+    ? `Your subscription: ${pricePart}It renews each month until you cancel. ${cancelHow} ${CANCEL_EFFECT}${reason === "welcome" && startNow === true ? ` ${START_NOW_CONFIRMATION}` : ""}`
     : "";
   const renewalHtml = renewal ? `<p style="color:#3A3F45;font-size:13px;border-top:1px solid #D9DDE1;padding-top:14px;margin-top:22px">${escapeHtml(renewal)} <a href="${escapeAttr(termsUrl)}" style="color:#3A3F45">Terms</a></p>` : "";
   const renewalText = renewal ? `${renewal}\nTerms: ${termsUrl}\n\n` : "";

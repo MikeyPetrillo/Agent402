@@ -148,32 +148,43 @@ function envelopeBytesOf(paymentPayload) {
 const TX_HASH = /^[0-9a-f]{64}$/;
 
 /** The one invokeHostFunction operation of an envelope, or null. A fee bump
- *  is unwrapped to its inner transaction. */
+ *  is unwrapped to its inner transaction. Read with the stellar-sdk 17 XDR
+ *  layer: a union names its arm in `.type` and carries it as a property. */
 function soleInvokeOp(env) {
-  const kind = env?.switch?.().name;
+  const kind = env?.type;
   let tx = null;
-  if (kind === "envelopeTypeTx") tx = env.v1().tx();
+  if (kind === "envelopeTypeTx") tx = env.v1.tx;
   else if (kind === "envelopeTypeTxFeeBump") {
-    const inner = env.feeBump().tx().innerTx();
-    if (inner.switch().name !== "envelopeTypeTx") return null;
-    tx = inner.v1().tx();
+    const inner = env.feeBump.tx.innerTx;
+    if (inner?.type !== "envelopeTypeTx") return null;
+    tx = inner.v1.tx;
   } else return null;
-  const ops = tx.operations();
+  const ops = tx.operations;
   if (!Array.isArray(ops) || ops.length !== 1) return null;
-  const body = ops[0].body();
-  if (body.switch().name !== "invokeHostFunction") return null;
-  return body.invokeHostFunctionOp();
+  const body = ops[0].body;
+  if (body?.type !== "invokeHostFunction") return null;
+  return body.invokeHostFunctionOp;
+}
+
+/** The address credentials of a Soroban authorization entry (the legacy arm
+ *  and its CAP-71 V2 twin carry the same struct: address, nonce, expiration,
+ *  signature), or null for any other credential. */
+export function stellarAddressCredentialsOf(entry) {
+  const cred = entry?.credentials;
+  if (cred?.type === "sorobanCredentialsAddress") return cred.address;
+  if (cred?.type === "sorobanCredentialsAddressV2") return cred.addressV2;
+  return null;
 }
 
 /** `transfer(from, to, amount)` on a contract, or null. */
 function transferCallOf(sdk, op) {
-  const fn = op.hostFunction();
-  if (fn.switch().name !== "hostFunctionTypeInvokeContract") return null;
-  const call = fn.invokeContract();
-  if (call.functionName().toString() !== "transfer") return null;
-  const args = call.args();
+  const fn = op.hostFunction;
+  if (fn?.type !== "hostFunctionTypeInvokeContract") return null;
+  const call = fn.invokeContract;
+  if (call.functionName.toString() !== "transfer") return null;
+  const args = call.args;
   if (args.length !== 3) return null;
-  const contract = sdk.Address.fromScAddress(call.contractAddress()).toString();
+  const contract = sdk.Address.fromScAddress(call.contractAddress).toString();
   const from = sdk.scValToNative(args[0]);
   const to = sdk.scValToNative(args[1]);
   const amount = sdk.scValToNative(args[2]);
@@ -199,19 +210,19 @@ export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements
     const price = BigInt(String(paymentRequirements.amount));
     if (price <= 0n) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envBytes, "raw"));
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXdr(envBytes));
     if (!op) return null;
     const call = transferCallOf(sdk, op);
     if (!call || call.contract !== asset || call.to !== payTo || call.amount < price) return null;
     const auth = [];
-    for (const entry of op.auth()) {
-      const cred = entry.credentials();
-      if (cred.switch().name !== "sorobanCredentialsAddress") continue;
-      if (sdk.Address.fromScAddress(cred.address().address()).toString() !== call.from) continue;
-      auth.push(entry.toXDR("base64"));
+    for (const entry of op.auth) {
+      const a = stellarAddressCredentialsOf(entry);
+      if (!a) continue;
+      if (sdk.Address.fromScAddress(a.address).toString() !== call.from) continue;
+      auth.push(entry.toXdr("base64"));
     }
     if (!auth.length) return null;
-    return { payer: call.from, payTo, asset, amount: call.amount, hostFunction: op.hostFunction().toXDR("base64"), auth };
+    return { payer: call.from, payTo, asset, amount: call.amount, hostFunction: op.hostFunction.toXdr("base64"), auth };
   } catch {
     return null;
   }
@@ -231,19 +242,18 @@ export async function stellarAuthorizationsOf(paymentPayload) {
     const envBytes = envelopeBytesOf(paymentPayload);
     if (!envBytes) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envBytes, "raw"));
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXdr(envBytes));
     if (!op) return null;
     const call = transferCallOf(sdk, op);
     if (!call) return null;
     const out = [];
     const seen = new Set();
-    for (const entry of op.auth()) {
-      const cred = entry.credentials();
-      if (cred.switch().name !== "sorobanCredentialsAddress") continue;
-      const a = cred.address();
-      const signer = sdk.Address.fromScAddress(a.address()).toString();
+    for (const entry of op.auth) {
+      const a = stellarAddressCredentialsOf(entry);
+      if (!a) continue;
+      const signer = sdk.Address.fromScAddress(a.address).toString();
       if (signer !== call.from) continue;
-      const nonce = a.nonce().toString();
+      const nonce = a.nonce.toString();
       if (!/^-?[0-9]{1,20}$/.test(nonce) || seen.has(nonce)) continue;
       seen.add(nonce);
       out.push({ signer, nonce });
@@ -270,10 +280,10 @@ async function txCarriesPayment({ hash, signed, base, fetchImpl, timeoutMs }) {
   if (typeof tx.envelope_xdr !== "string" || !tx.envelope_xdr || tx.envelope_xdr.length > MAX_ENVELOPE_CHARS * 2) return false;
   try {
     const sdk = await import("@stellar/stellar-sdk");
-    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, "base64"));
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXdr(tx.envelope_xdr, "base64"));
     if (!op) return false;
-    if (op.hostFunction().toXDR("base64") !== signed.hostFunction) return false;
-    const onChain = new Set(op.auth().map((e) => e.toXDR("base64")));
+    if (op.hostFunction.toXdr("base64") !== signed.hostFunction) return false;
+    const onChain = new Set(op.auth.map((e) => e.toXdr("base64")));
     return signed.auth.every((a) => onChain.has(a));
   } catch {
     return false;

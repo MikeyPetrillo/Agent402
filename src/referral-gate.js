@@ -58,6 +58,7 @@
 //     made to produce; every payer only for a fault no payment can cause.
 //   - The tool's answer is kept, against the authorization, for a few minutes
 //     (REFERRAL_ANSWER_RETENTION_MS): a re-send of the same PAYMENT-SIGNATURE
+//     for the same call (referralCallDigestOf: method, path, query, body)
 //     returns it when the payment landed, with no second run and no second
 //     sale. A delivered mark is written before any answer byte goes out. The
 //     answer goes out in chunks confirmed as the socket takes them: all
@@ -83,7 +84,8 @@
 // The answer store is in this process: one replica serves today. With two, a
 // re-send that reaches the other replica reads the book and the replay guard
 // (both shared) and is refused as already used; it does not run again.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { bodyDigestOf } from "./body-digest.js";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { USDC_DOMAIN_BY_NETWORK } from "./evm-usdc-domain.js";
@@ -893,6 +895,39 @@ export function referralReplayKey(auth) {
   return `referral:${createHash("sha256").update(`${REFERRAL_NETWORK}\n${lc(auth.from)}\n${lc(auth.nonce)}`).digest("hex")}`;
 }
 
+/**
+ * The call a paid request makes: its method, path, query as sent, JSON body
+ * (bodyDigestOf, the digest the direct routes' idempotency binds to; a body
+ * that is text or bytes is hashed as sent) and whether the empty request ran
+ * the published example. A kept answer, in memory or at rest, carries the
+ * digest of the call it was paid for, and a re-send of the payment is served
+ * only when its call is the same one.
+ *
+ * Why: every field of a settled authorization and its signature is public in
+ * the settlement transaction's input, so the PAYMENT-SIGNATURE alone proves
+ * nothing about who is asking. The call is what the buyer holds that the
+ * chain does not show. Its residual reach: an input someone can guess (the
+ * empty request, a short lookup) can be sent with a header rebuilt from the
+ * chain; such a request is answered what it asked for, which is what the
+ * same input paid for. Not bound, and why: the client address and the
+ * connection (a buyer's re-send through the network may come from another),
+ * and an Idempotency-Key (a header an intermediary may set per request).
+ * A body that cannot be digested is bound to a value nothing else matches.
+ */
+export function referralCallDigestOf(req) {
+  const b = req?.body;
+  let body = "-";
+  try {
+    if (Buffer.isBuffer(b)) body = b.length ? `bytes:${createHash("sha256").update(b).digest("hex")}` : "-";
+    else if (typeof b === "string") body = b.length ? `text:${createHash("sha256").update(b, "utf8").digest("hex")}` : "-";
+    else if (b && typeof b === "object" && Object.keys(b).length) body = bodyDigestOf(req);
+  } catch { body = `unreadable:${randomUUID()}`; }
+  const url = String(req?.originalUrl || req?.url || "");
+  const qs = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const example = req?.__a402ReferralExample === true ? "1" : "0";
+  return createHash("sha256").update(`${String(req?.method || "").toUpperCase()} ${String(req?.path || "")}\n?${qs}\n${body}\nexample:${example}`).digest("hex");
+}
+
 /** Reason codes of this gate's own, with the sentence each answer carries. */
 export const REFERRAL_REASONS = Object.freeze({
   invalid_request: "The payment header does not decode to a payment. Nothing was charged.",
@@ -907,7 +942,7 @@ export const REFERRAL_REASONS = Object.freeze({
   invalid_exact_evm_payload_signature: "The signature is not the payer's own ECDSA signature over this ReceiveWithAuthorization. Nothing was charged.",
   authorization_validity_too_long: "The authorization expires too far ahead for this route. Nothing was charged. Sign one that expires within the time the 402 asks.",
   facilitator_unavailable: "The payment could not be checked right now. Nothing ran and nothing was charged. Retry shortly.",
-  settle_outcome_unknown: "The call ran, but whether the payment settled is not known yet. Send the same PAYMENT-SIGNATURE again: if the payment was charged, the answer is returned with its transaction and nothing runs or is charged twice; if it was not, nothing is owed.",
+  settle_outcome_unknown: "The call ran, but whether the payment settled is not known yet. Send the same request with the same PAYMENT-SIGNATURE again: if the payment was charged, the answer is returned with its transaction and nothing runs or is charged twice; if it was not, nothing is owed.",
   settle_refused: "The call ran, but the payment network refused to settle the payment. No charge is recorded; if one lands after all, the full price is recorded as owed to the paying wallet and repaid on Base after the payment is reviewed.",
   authorization_expired_unused: "This authorization expired without being used. Nothing was charged. Sign a new one to make the call again.",
   answer_unavailable: "This authorization was already used for a call whose answer is no longer held here. No charge is recorded for it here; whether one landed is still being read from the chain, and if one did, the full price is recorded as owed to the paying wallet and repaid on Base after the payment is reviewed.",
@@ -916,7 +951,7 @@ export const REFERRAL_REASONS = Object.freeze({
   authorization_used_unpaid: "This authorization was used on chain without a payment to this route being found (it was canceled, or used for another transfer), so the answer is not delivered. This route was not paid. If that was not your doing, check the paying wallet's transfers before signing again.",
   settled_to_another_merchant: "The payment network settled this payment to another merchant, not to this route: the amount left the paying wallet in the transaction named in this answer, we did not receive it, and nothing was delivered. No refund is recorded here for money this route did not receive. Take the transaction to the referral network whose link was used; this server has recorded it for its operator. Signing again would be a second payment.",
   payer_screen_unavailable: "The payment could not be checked right now. Nothing ran and nothing was charged. Retry shortly.",
-  settlement_unavailable: "The payment could not be settled because of a fault on this server's side. Nothing was charged. If the call ran, its answer is kept: send the same PAYMENT-SIGNATURE again later.",
+  settlement_unavailable: "The payment could not be settled because of a fault on this server's side. Nothing was charged. If the call ran, its answer is kept: send the same request with the same PAYMENT-SIGNATURE again later.",
   chain_unavailable: "The chain could not be read right now, so the payment could not be followed to its settlement. Nothing ran and nothing was charged. Retry shortly.",
   settlement_under_review: "This route is not taking this payment while an earlier settlement is being checked. Nothing ran and nothing was charged. Retry later.",
   settlement_unproven_refund_owed: "The payment was taken, but its settlement is not one this route can prove as its own, so the answer is not delivered. The full price is recorded as owed to the paying wallet. It is repaid on Base after the payment is reviewed; `transaction` and `refundStatusUrl` in this answer show where it stands.",
@@ -924,9 +959,9 @@ export const REFERRAL_REASONS = Object.freeze({
   rate_under_review: "This tool is not taking payments on this route while its settlement terms are being checked. Nothing ran and nothing was charged. Retry later.",
   settlement_book_full: "This route cannot record a new settlement right now. Nothing ran and nothing was charged. Retry in a minute.",
   settlement_store_down: "This route cannot record a settlement right now, so it is taking no paid call. Nothing ran and nothing was charged. Retry shortly.",
-  delivery_store_unavailable: "The payment settled, but the delivery could not be recorded, so the answer was not sent. Send the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs or is charged twice.",
+  delivery_store_unavailable: "The payment settled, but the delivery could not be recorded, so the answer was not sent. Send the same request with the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs or is charged twice.",
   answer_already_delivered: "This payment was settled and its answer was delivered. Each authorization buys one call: sign a new one to call again.",
-  settlement_store_unavailable: "The call ran, but the settlement could not be recorded, so the payment was not submitted. Nothing was charged. Send the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs twice.",
+  settlement_store_unavailable: "The call ran, but the settlement could not be recorded, so the payment was not submitted. Nothing was charged. Send the same request with the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs twice.",
   too_many_unsettled_runs: "Too many calls from this payer ran without their payment settling. Nothing was charged for this request. Retry after the time given.",
   too_many_runs_in_flight: "This payer already has the most paid calls this route runs at once. Nothing was charged for this request. Retry in a few seconds.",
   busy: "Too many paid calls are in flight on this route. Nothing ran and nothing was charged. Retry shortly.",
@@ -994,12 +1029,14 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  *                                             the gateway's own margin bound, src/tools/llm-gateway-kit.js MARGIN)
  * @param {({tx, netUsd, payer, slug, grossUsd}) => boolean|Promise<boolean>} o.amendSaleNet  correct THIS payment's booked net in place: the row of that payer, slug and gross under the transaction (true when a row changed)
  * @param {number} [o.sweepChainBudgetMs]      the wall time one sweep pass gives all its chain reads (SWEEP_CHAIN_BUDGET_MS)
+ * @param {(def) => object|null} [o.bazaarOf]  the extensions.bazaar block the tool's public route lists in its 402
+ *                                             (src/payments.js publicBazaarOf): the /ref 402 lists the same, with no pointer home
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
   preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, onRun = null,
   payerScreen, isolate, presentWindow, withCeiling, credentialLimiter, clientKey, draining, onSettledSale, payerHasPaid, oweRefund, amendSaleNet, answers, modelNetFloorBps = null,
-  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS, recordSplitLegs = null,
+  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS, recordSplitLegs = null, bazaarOf = null,
   log = console, now = Date.now,
 } = {}) {
   if (!config || !(defs instanceof Map) || !settler || !chain || !book || !replayGuard) throw new Error("referral gate: config, defs, settler, chain, book and replayGuard are required");
@@ -1016,7 +1053,7 @@ export function createReferralGate({
     deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, refusedUnread: 0, storeHeld: 0, sendsUnconfirmed: 0, debtClaimLost: 0, deliveryLostToDebt: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
     signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, answerTooLarge: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
-    settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
+    settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0, resendOtherCall: 0,
   };
   const line = (level, text) => { try { (log[level] || log.log).call(log, `[referral] ${text}`); } catch { /* a log never breaks a call */ } };
   const refusalLog = createLineSampler({ now, print: (text) => line("warn", text) });
@@ -1982,12 +2019,17 @@ export function createReferralGate({
     const agentId = headerText(req.headers["x-referrer-buyer-agent-id"]);
     return {
       x402Version: 2,
-      resource: { url: `${origin}/ref/${def.slug}`, description: String(def.name || def.slug).slice(0, 200), mimeType: "application/json" },
+      // What the call returns, before paying: the description the catalog
+      // publishes for the tool, less any sentence that points home.
+      resource: { url: `${origin}/ref/${def.slug}`, description: refDescriptionOf(def), mimeType: "application/json" },
       accepts: [requirement],
       extensions: {
         attributionToken: typeof token === "string" && token.length <= REFERRAL_TOKEN_MAX_CHARS && PRINTABLE_ASCII.test(token) ? token : "",
         ...(typeof agentId === "string" && agentId && agentId.length <= REFERRAL_AGENT_ID_MAX_CHARS ? { buyerAgentId: agentId } : {}),
         setup_url: config.setupUrl,
+        // The input, its schema and the example answer the public route's 402
+        // lists (info.input and schema), with no pointer home.
+        ...refBazaarOf(def),
       },
       // A request with no input runs the tool's published example (below):
       // the 402 for it says so and shows that input, in a field of this
@@ -2013,6 +2055,46 @@ export function createReferralGate({
     if (Array.isArray(value)) return value.map((v) => withoutPointers(v, depth + 1)).filter((v) => v !== undefined);
     const out = {};
     for (const [k, v] of Object.entries(value)) { const w = withoutPointers(v, depth + 1); if (w !== undefined) out[k] = w; }
+    return out;
+  }
+  // The public listing's own words for a shortened example name the spec
+  // (src/payments.js examplePointer and its shortened strings): reworded
+  // here, in the /ref copy only, before any other text that points home is
+  // dropped.
+  const refListingText = (v) => {
+    if (typeof v !== "string") return v;
+    if (/^full example in \/openapi\.json$/.test(v)) return "example shortened to fit the listing";
+    const short = /^<(\d+) characters; the full example is in \/openapi\.json>$/.exec(v);
+    return short ? `<${short[1]} characters>` : v;
+  };
+  function refListingCopy(value, depth = 0) {
+    if (typeof value === "string") return withoutPointers(refListingText(value));
+    if (!value || typeof value !== "object" || depth > 16) return value;
+    if (Array.isArray(value)) return value.map((v) => refListingCopy(v, depth + 1)).filter((v) => v !== undefined);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) { const w = refListingCopy(v, depth + 1); if (w !== undefined) out[k] = w; }
+    return out;
+  }
+  /** `{ bazaar }` as the tool's public route lists it, or {} when it lists none. */
+  function refBazaarOf(def) {
+    if (typeof bazaarOf !== "function") return {};
+    let block = null;
+    try { block = bazaarOf(def); } catch { block = null; }
+    if (!block || typeof block !== "object") return {};
+    const copy = refListingCopy(block);
+    return copy && typeof copy === "object" && Object.keys(copy).length ? { bazaar: copy } : {};
+  }
+  /** The catalog description (what /api/pricing publishes) with a direct
+   *  route named by its tool ("/api/contract-abi" reads "contract-abi"), then
+   *  sentence by sentence, less any sentence that still names this host or
+   *  one of its paths; the tool's name when nothing is left. */
+  const refDescriptions = new Map();
+  function refDescriptionOf(def) {
+    if (refDescriptions.has(def.slug)) return refDescriptions.get(def.slug);
+    const text = typeof def.description === "string" ? def.description.trim().replace(/(^|[\s("'])\/api\/([a-z0-9][a-z0-9-]*)\b/g, "$1$2") : "";
+    const kept = text ? text.split(/(?<=[.!?])\s+(?=[A-Z0-9("'])/).filter((sentence) => sentence && !pointsHome(sentence)).join(" ").trim() : "";
+    const out = kept || String(def.name || def.slug);
+    refDescriptions.set(def.slug, out);
     return out;
   }
   function scrub(body) {
@@ -2341,7 +2423,7 @@ export function createReferralGate({
       restPrune();
       if (entry.bytes <= REFERRAL_PERSISTED_ANSWER_MAX_BYTES && atRestBytes + entry.bytes <= REFERRAL_PERSISTED_BYTES_MAX) {
         try {
-          if (await answers.put(entry.key, { text: entry.text, wrap: entry.wrap, digest: entry.digest, slug: entry.slug, payment: entry.payment, requirement: entry.requirement, expiresAt: entry.expiresAt })) {
+          if (await answers.put(entry.key, { text: entry.text, wrap: entry.wrap, digest: entry.digest, callDigest: entry.callDigest, slug: entry.slug, payment: entry.payment, requirement: entry.requirement, expiresAt: entry.expiresAt })) {
             atRest.set(entry.key, { bytes: entry.bytes, expiresAt: entry.expiresAt });
             atRestBytes += entry.bytes;
           }
@@ -2637,9 +2719,19 @@ export function createReferralGate({
     // A payment whose answer is kept: the re-send path, never a second run.
     // An answer past its retention is gone, whether or not a prune has run yet.
     if (kept.has(key) && now() >= kept.get(key).expiresAt) dropKept(key);
+    // The call this request makes: a kept answer is served only to the call
+    // it was paid for (referralCallDigestOf). Worked out once, and only for a
+    // request that carries a payment whose signature verified.
+    const callDigest = referralCallDigestOf(req);
+    const consumed = () => { counters.replays++; res.setHeader("X-Payment-Replay", "consumed"); return res.status(409).json({ error: "Payment authorization already used. Each payment authorization (nonce) is single-use - sign a fresh authorization to make another paid call.", reason: "consumed" }); };
     const held = kept.get(key);
     if (held) {
-      if (held.digest !== digest || held.slug !== def.slug) { counters.replays++; res.setHeader("X-Payment-Replay", "consumed"); return res.status(409).json({ error: "Payment authorization already used. Each payment authorization (nonce) is single-use - sign a fresh authorization to make another paid call.", reason: "consumed" }); }
+      if (held.digest !== digest || held.slug !== def.slug) return consumed();
+      // The same payment with another call: answered as a used authorization.
+      // Nothing is read, settled, marked or closed for it, so the entry stays
+      // the buyer's (a re-send of the paid call is served; an answer never
+      // delivered is still owed back by the sweep).
+      if (held.callDigest !== callDigest) { counters.resendOtherCall++; return consumed(); }
       return resend(req, res, held);
     }
     // An authorization the book still holds open with no answer here (the
@@ -2651,11 +2743,17 @@ export function createReferralGate({
     let stored = null;
     if (open) { try { stored = await answers.get(key); } catch { stored = null; } }
     if (open && open.delivered !== true && stored && stored.digest === digest && stored.slug === def.slug && typeof stored.text === "string") {
+      // An answer at rest is the same: served only to the call it was paid
+      // for. One stored before the call was recorded (no `callDigest`) is
+      // served to no request: the entry is left open as it is, so a charged
+      // buyer's refund is written by the sweep once the answer is past its
+      // retention, and nothing a request sends can mark it delivered.
+      if (stored.callDigest !== callDigest) { counters.resendOtherCall++; return consumed(); }
       // The answer was stored at rest for the open entry (this process
       // restarted, or dropped it from memory): restored, and served by the
       // re-send path.
       const charged = (open.state === "charged-undelivered" || open.state === "unconfirmed") && typeof open.tx === "string" && open.tx ? open.tx : null;
-      const restored = { key, digest, slug: def.slug, text: stored.text, wrap: stored.wrap === true, bytes: Buffer.byteLength(stored.text), amount: String(open.amount), requirement: stored.requirement, payment: stored.payment, auth, payer, validBeforeMs: (Number(open.validBefore) || 0) * 1000, fromBlock: open.fromBlock ?? null, hangup: open.hangup || null, contradicted: open.state === "contradicted", laneKeys: laneKeysOf(req, payer), charged, landed: !!charged, unconfirmed: open.state === "unconfirmed", unpaid: false, saleBooked: open.saleBooked === true, delivered: false, settleAttempts: Number(open.attempts) || 1, lastReason: open.reason || null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: !charged, everInDoubt: true, at: now(), expiresAt: Number(stored.expiresAt) };
+      const restored = { key, digest, callDigest, slug: def.slug, text: stored.text, wrap: stored.wrap === true, bytes: Buffer.byteLength(stored.text), amount: String(open.amount), requirement: stored.requirement, payment: stored.payment, auth, payer, validBeforeMs: (Number(open.validBefore) || 0) * 1000, fromBlock: open.fromBlock ?? null, hangup: open.hangup || null, contradicted: open.state === "contradicted", laneKeys: laneKeysOf(req, payer), charged, landed: !!charged, unconfirmed: open.state === "unconfirmed", unpaid: false, saleBooked: open.saleBooked === true, delivered: false, settleAttempts: Number(open.attempts) || 1, lastReason: open.reason || null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: !charged, everInDoubt: true, at: now(), expiresAt: Number(stored.expiresAt) };
       keep(restored);
       counters.restoredAnswers++;
       return resend(req, res, restored);
@@ -2992,7 +3090,7 @@ export function createReferralGate({
       // the reason no forgiveness ticket was granted (a spent budget: a repeat
       // hang-up, held for review), else a first one inside the budget.
       const goneReason = (ticket && !ticket.granted && ticket.reason) || "settle in flight";
-      const entry = { key, digest, slug: def.slug, text, wrap, bytes, amount, requirement, payment: sent, auth, payer, validBeforeMs, fromBlock, hangup: null, goneReason, laneKeys, charged: null, landed: false, unpaid: false, saleBooked: false, delivered: false, settleAttempts: 0, lastReason: null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: false, everInDoubt: false, at: now() };
+      const entry = { key, digest, callDigest, slug: def.slug, text, wrap, bytes, amount, requirement, payment: sent, auth, payer, validBeforeMs, fromBlock, hangup: null, goneReason, laneKeys, charged: null, landed: false, unpaid: false, saleBooked: false, delivered: false, settleAttempts: 0, lastReason: null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: false, everInDoubt: false, at: now() };
 
       // The buyer left before settlement starts. With a forgiveness ticket the
       // payment is not settled (the direct routes' rule, on this route's own

@@ -163,7 +163,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);text-wrap:balance;">How to pay for <span style="color:var(--accent);">one call</span></h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every paid route answers an unpaid request with a 402 that names the price and every way to pay it.</strong> Pay with a stablecoin from a wallet over ${link("/what-is-x402", "x402")} or ${link("/what-is-mpp", "MPP")}, with a card where the price allows it, with a prepaid key, or with a solved puzzle on the pure-CPU tools. Same URL, same answer, same receipt.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves. New to x402 or MPP? ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)} explains both in plain language.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves. New to x402 or MPP? ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)} explains both.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);${mono}font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">ON THIS PAGE</div>
@@ -298,10 +298,10 @@ claude mcp add --transport http -s user agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.17.1
 
 # a credits key${creditsKeyQualifier()} works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.17.0`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.17.1`)}
   ${p(getWalletHtml({ link, code }))}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}

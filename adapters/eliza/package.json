@@ -1,7 +1,7 @@
 {
-  "name": "elizaos-plugin-agent402",
-  "version": "0.3.2",
-  "description": "elizaOS plugin for Agent402 (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 prepaid credits key, under optional per-call and daily ceilings; pure-CPU tools are free via proof-of-work.",
+  "name": "agent402-actions-plugin",
+  "version": "0.4.0",
+  "description": "Agent402 actions plugin for use with elizaOS (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 prepaid credits key, under optional per-call and daily ceilings; pure-CPU tools are free via proof-of-work. Formerly elizaos-plugin-agent402.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -33,7 +33,7 @@
     "mcp"
   ],
   "license": "MIT",
-  "author": "Havok Holdings LLC",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git",

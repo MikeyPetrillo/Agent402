@@ -52,10 +52,10 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const BUDGET = handlerBudgetMs();
 const SLACK_MS = 1500;
-const DEADLINE_RE = /^([\w .-]+?) did not answer the ([\w -]+) read within our (\d+) s limit; nothing was charged - retry shortly(?:; Memento fallback also failed: .*)?$/;
+const DEADLINE_RE = /^([\w .-]+?) did not answer the ([\w -]+) read within our (\d+) s limit\.(?: Nothing was charged\.)? Retry shortly\.(?: Memento fallback also failed: .*)?$/;
 // Our budget spent before any request left: names no upstream as slow.
-const SPENT_RE = /^No ([\w .-]+?) ([\w -]+) read was sent: our (\d+) s limit for this call was used up by its earlier steps; nothing was charged - retry shortly$/;
-const UNREACHABLE_RE = /^([\w .-]+?) is unreachable from here \(([\w -]+) read failed before any answer\); nothing was charged - retry shortly$/;
+const SPENT_RE = /^No ([\w .-]+?) ([\w -]+) read was sent: our (\d+) s limit for this call was used up by its earlier steps\.(?: Nothing was charged\.)? Retry shortly\.$/;
+const UNREACHABLE_RE = /^([\w .-]+?) is unreachable from here \(([\w -]+) read failed before any answer\)\.(?: Nothing was charged\.)? Retry shortly\.$/;
 const timeoutErr = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
 /** A fetch that never answers and rejects only when the tool's signal aborts.
  *  The signal is kept on the call record: AbortSignal.timeout holds its signal
@@ -101,6 +101,14 @@ const keepAlive = setInterval(() => {}, 1000);
     && !/upstream deadline/.test(d.message) && /our 8 s limit/.test(d.message),
     `the deadline class is a 503 naming OUR limit, attributed to our side (our limit passing is no verdict on the upstream), in the probe's words (${d.message})`);
   ok(runnerProbeLabel(503, { error: d.message }) === "RugCheck", "the strict sweep's runner probe reads the shared wording");
+  // The charge sentence is the shared one, printed inside a route call only (src/not-charged.js).
+  {
+    const { runAsRouteCall, runAsStep } = await import("../src/not-charged.js");
+    const onRoute = runAsRouteCall(() => [upstreamDeadline("RugCheck", "report summary", 8000), upstreamUnreachable("Chain data", "eth_call"), budgetSpentError("RugCheck", "report", 20_000), upstreamDeadline("Speech upstream", "speech", 25_000, { input: { size: 1900, max: 2000 } })]);
+    ok(onRoute.slice(0, 3).every((e) => / Nothing was charged\. Retry shortly\.$/.test(e.message)) && / Nothing was charged\.$/.test(onRoute[3].message), `on a route call each class says nothing was charged (${onRoute[0].message})`);
+    const asStep = runAsRouteCall(() => runAsStep(() => [upstreamDeadline("RugCheck", "report summary", 8000), upstreamUnreachable("Chain data", "eth_call"), budgetSpentError("RugCheck", "report", 20_000)]));
+    ok([d, ...asStep].every((e) => !/charged/i.test(e.message) && /\. Retry shortly\.$/.test(e.message)), `as a step, or with no caller marked, none makes the claim (${asStep[0].message})`);
+  }
   const u = upstreamUnreachable("Chain data", "eth_call");
   ok(u.statusCode === 503 && u.attribution === "unknown" && u.hint === "connect-failed" && u.upstreamFailure === "unreachable" && UNREACHABLE_RE.test(u.message) && isUpstreamFailure(u),
     `the unreachable class is a 503 whose side is unknown: no answer came back (${u.message})`);

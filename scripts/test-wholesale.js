@@ -169,6 +169,20 @@ ok(wholesaleFamily("compute", ctx).tools.map((t) => t.slug).join(",") === "hash"
   ok(wholesalePage("https://x.test", cat, c2.powSlugs).includes(">1</td>"), "the page counts the same compute tools as the JSON");
 }
 {
+  // A proof-of-work tool whose facts come from outside sources is passed on
+  // only when every source's license allows it, and its row says so per source.
+  const open = { slug: "cal-open", name: "C", price: "$0.001", contentSources: [{ name: "GOV.UK", url: "https://www.gov.uk/bank-holidays.json", license: "Open Government Licence v3.0", redistribution: true, credit: "Contains public sector information licensed under the Open Government Licence v3.0." }] };
+  const closed = { slug: "cal-closed", name: "D", price: "$0.001", contentSources: [{ name: "a site", url: "https://example.org/", license: "personal use only", redistribution: false }] };
+  const cat = { ...fakeCatalog, "GET /api/cal-open": open, "GET /api/cal-closed": closed };
+  const c3 = { ...ctx, catalog: cat, powSlugs: new Set(["hash", "cal-open", "cal-closed"]) };
+  const fam = wholesaleFamily("compute", c3);
+  ok(fam.tools.map((t) => t.slug).join(",") === "cal-open,hash", `a tool whose source bars redistribution is not offered; one whose sources allow it is (${fam.tools.map((t) => t.slug).join(",")})`);
+  const r = fam.tools.find((t) => t.slug === "cal-open");
+  ok(Array.isArray(r.sources) && r.sources[0].license === "Open Government Licence v3.0" && r.sources[0].redistribution === "allowed with the credit" && r.credit.includes("Open Government Licence"), "its row names each source, its license, that redistribution is allowed, and the credit to keep");
+  ok(!("sources" in fam.tools.find((t) => t.slug === "hash")), "a tool with no outside facts carries no sources field");
+  ok(!/exchange calendars/.test(WHOLESALE_FAMILIES.find((f) => f.id === "compute").source), "the compute family does not describe outside facts as its own");
+}
+{
   // Charged or not on a failure depends on the rail: said once, rail by rail.
   const charging = idx.errorCodes.charging || "";
   ok(idx.errorCodes.refundTerms === `https://x.test${REFUND_TERMS_PATH}`, `the error codes link the refund terms (${idx.errorCodes.refundTerms})`);

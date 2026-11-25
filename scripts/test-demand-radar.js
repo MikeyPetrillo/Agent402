@@ -173,10 +173,11 @@ const agg = (clusters, over = {}) => ({
   const src = readFileSync(new URL("../src/tools/x402-kit.js", import.meta.url), "utf8");
   ok(/computeDemandRadar\(getWishesAggregate\(\{ limit: [0-9_]+, detailed: true \}\), i\)/.test(src), "demand-radar handler reads the detailed aggregate (cluster rows), not the public beacon");
   let threw = null;
-  try { computeDemandRadar({ distinctClusters: 1055, totalWishes: 4010, threshold: 5, qualifiedClusters: 1 }, { minCount: 1 }); }
+  const { runAsRouteCall } = await import("../src/not-charged.js");
+  try { runAsRouteCall(() => computeDemandRadar({ distinctClusters: 1055, totalWishes: 4010, threshold: 5, qualifiedClusters: 1 }, { minCount: 1 })); }
   catch (e) { threw = e; }
   ok(threw && threw.statusCode === 502, `a beacon-only aggregate (1055 clusters, no rows) REFUSES 502 instead of selling the hollow envelope (got ${threw ? threw.statusCode : "a 200"})`);
-  ok(threw && /not charged/.test(threw.message) && /1055/.test(threw.message), "the refusal says nobody was charged and names what the board claimed");
+  ok(threw && /Nothing was charged\./.test(threw.message) && /1055/.test(threw.message), "the refusal says nobody was charged and names what the board claimed");
   // ...and the honest empties still answer 200: a genuinely empty board, and a
   // filter the CALLER chose that matched nothing.
   ok(computeDemandRadar({ distinctClusters: 0, totalWishes: 0, threshold: 5, clusters: [] }, {}).matchedClusters === 0, "a genuinely empty board still answers (0 clusters, 0 rows)");

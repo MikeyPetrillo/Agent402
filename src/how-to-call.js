@@ -98,6 +98,11 @@ export function howToCallFor(def) {
 // so a call whose example is large (an image as base64, a long schema) goes
 // out as its method and URL only, and the example is not sent twice.
 export const MAX_CALL_BYTES = 1024;
+// The other verb's form repeats the example (a GET URL holds it again, URL
+// encoded), so it rides only while it is short: past this many bytes the call
+// keeps its primary form, and the example is not sent a second time. The room
+// it frees is what the 402 body's terms fields use (src/payment-required-body.js).
+export const MAX_ALTERNATE_BYTES = 256;
 export const MAX_402_CALL_BYTES = MAX_CALL_BYTES;
 
 /** The call for `def` within MAX_CALL_BYTES: the full call when it fits, else
@@ -118,6 +123,11 @@ function boundedCall(def, bodyFields) {
   if (bodyFields && typeof bodyFields === "object" && call.body && typeof call.body === "object") {
     call = { ...call, body: { ...call.body, ...bodyFields } };
     delete call.alternate;
+  }
+  if (call.alternate) {
+    let alt = Infinity;
+    try { alt = Buffer.byteLength(JSON.stringify(call.alternate), "utf8"); } catch { /* sized as too large */ }
+    if (alt > MAX_ALTERNATE_BYTES) { call = { ...call }; delete call.alternate; }
   }
   let bytes = Infinity;
   try { bytes = Buffer.byteLength(JSON.stringify(call), "utf8"); } catch { /* sized as too large */ }

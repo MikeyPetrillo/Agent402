@@ -2,7 +2,7 @@
 //
 // What this proves:
 //   1. agent402-client resolves a slug and calls the tool with PoW payment.
-//   2. The adapter (agent402-anthropic-tools) wraps the same client to produce
+//   2. The adapter (agent402-messages-tools) wraps the same client to produce
 //      Anthropic tool-use definitions (name, description, input_schema) + an
 //      execute() dispatcher.
 //   3. Payment is handled underneath — sub-second proof-of-work for free tools,

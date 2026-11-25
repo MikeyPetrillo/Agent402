@@ -1,17 +1,17 @@
-# CODEOWNERS — require code-owner review on security-sensitive paths (audit F01).
+# CODEOWNERS: require code-owner review on security-sensitive paths (audit F01).
 #
 # @MikeyPetrillo is the operating maintainer (Havok Holdings LLC). This file only
 # DECLARES the owners; enforcement (required code-owner review, no direct push)
 # is configured in a repository ruleset on the default branch and the deploy
 # branch. Keep this list tight: it should cover the CI/CD control plane, the
-# container/deploy surface, and the payment/replay/idempotency code — the paths
+# container/deploy surface, and the payment/replay/idempotency code: the paths
 # where an unreviewed change could take over production or move money.
 
 # CI/CD control plane
 /.github/workflows/            @MikeyPetrillo
 /.github/CODEOWNERS            @MikeyPetrillo
 
-# Dependency surface — a new runtime dependency is a new supply-chain trust
+# Dependency surface: a new runtime dependency is a new supply-chain trust
 # boundary regardless of which file it's wired into; require review at the
 # point it's introduced, not just at the CI/CD or payment paths it might
 # later touch.

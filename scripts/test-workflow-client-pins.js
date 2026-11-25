@@ -22,8 +22,7 @@ const strip = (v) => String(v).replace(/^[\^~]/, "");
 const rootDeps = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).dependencies || {};
 // Every @x402/* package ships at one version, so an @x402 literal is held to
 // its own root row when package.json declares the package (one held back on
-// its own, @x402/stellar on the Stellar SDK major, keeps its row) and to the
-// root's @x402/express otherwise; @solana/kit and @solana-program/* to their
+// its own keeps its row) and to the root's @x402/express otherwise; @solana/kit and @solana-program/* to their
 // own root rows.
 const X402_VERSION = strip(rootDeps["@x402/express"]);
 ok(/^\d+\.\d+\.\d+$/.test(X402_VERSION), `root @x402/express declares an exact-looking version (${X402_VERSION})`);

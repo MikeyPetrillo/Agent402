@@ -15,7 +15,7 @@ This is the safe rollout. Each phase is reversible by changing one flag and rede
 ## Prereqs
 
 - A Node 20+ runtime in front of your site (`agent402-tollbooth` declares `engines.node >= 20`) (Express, or a Cloudflare Worker, or a Next.js middleware - all supported).
-- A wallet address to receive USDC on a chain your x402 facilitator settles. The reverse-proxy CLI builds settlement for USDC on Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Sei and Monad; other rails take the library API with the matching x402 scheme. (Or skip it entirely and accept proof-of-work only - no wallet needed.)
+- A wallet address to receive USDC on a chain your x402 facilitator settles. The reverse-proxy CLI builds settlement for USDC on Base, Polygon, Arbitrum One, OP Mainnet, Avalanche C-Chain, Celo, Sei and Monad; other rails take the library API with the matching x402 scheme. (Or skip it entirely and accept proof-of-work only - no wallet needed.)
 - ~30 minutes.
 
 ## Phase 1: Observe (10 minutes)

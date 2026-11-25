@@ -164,7 +164,7 @@ jobs:
           LOCKV() { node -p "require('./package-lock.json').packages['node_modules/$1'].version"; }
           VIEM=$(LOCKV viem); STELLAR=$(LOCKV @stellar/stellar-sdk); SOLKIT=$(LOCKV @solana/kit)
           echo "lock-pinned: viem@$VIEM @stellar/stellar-sdk@$STELLAR @solana/kit@$SOLKIT"
-          npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 @x402/svm@2.32.0 @x402/stellar@2.30.0 "@stellar/stellar-sdk@$STELLAR" "@solana/kit@$SOLKIT" "viem@$VIEM"
+          npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 @x402/svm@2.32.0 @x402/stellar@2.32.0 "@stellar/stellar-sdk@$STELLAR" "@solana/kit@$SOLKIT" "viem@$VIEM"
           echo "installed viem: $(node -p "require('viem/package.json').version") mppx: $(node -p "require('./node_modules/mppx/package.json').version")"
       - name: Buy one tool from production (real USDC)
         id: canary
@@ -176,6 +176,9 @@ jobs:
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
           UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+          # The keyed lane (src/rpc-terms.js): the only permitted RPC for the
+          # Monad funding read (CHAIN_FUNDING). Never printed; unset skips it.
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
           # Celo legs draw prepaid facilitator credits: the 13:17 run, hand
           # dispatches and any run whose gate found Celo stale buy on Celo;
           # the other scheduled runs skip it.

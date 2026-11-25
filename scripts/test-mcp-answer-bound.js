@@ -129,10 +129,10 @@ const CATALOG = {
 // that), over it in bytes.
 const WIDE_TEXT = "\u20ac".repeat(Math.floor(MAX / 2.5));
 CATALOG["GET /api/wide"] = { ...def("wide", async () => ({ label: "wide", text: WIDE_TEXT })), description: "wide test tool", tags: ["wide"] };
-// A flagship (web.search) whose answer is past the ceiling.
+// A tool called by name (web.search: a former flagship, still callable by that name) whose answer is past the ceiling.
 const FLAG_ROWS = Array.from({ length: 3000 }, (_, i) => ({ title: `t${i}`, url: `https://example.com/${i}`, description: "d".repeat(40), age: null }));
 CATALOG["GET /api/search"] = { ...def("search", async () => ({ query: "q", count: FLAG_ROWS.length, results: FLAG_ROWS })), description: "flagship test tool", tags: ["flagship"] };
-// A flagship (web.news) whose answer fits compact and passes the ceiling indented.
+// A tool called by name (web.news, likewise) whose answer fits compact and passes the ceiling indented.
 const NEWS_WANT = { query: "q", count: 2000, results: Array.from({ length: 2000 }, () => ({ title: "t", url: null })) };
 CATALOG["GET /api/search-news"] = { ...def("search-news", async () => NEWS_WANT), description: "news test tool", tags: ["news"] };
 // An answer under the ceiling whose serializations are recorded: each call
@@ -145,7 +145,7 @@ for (let i = 0; i < 60; i++) CATALOG[`GET /api/w${i}`] = def(`w${i}`, async () =
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 mountMcp(app, CATALOG, { baseUrl: "http://localhost", isComputePayable: () => true, taskStoreDir: join(TMP, "store") });
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 let rpcId = 0;

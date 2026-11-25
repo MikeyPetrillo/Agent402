@@ -3,7 +3,7 @@
 
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { INTEGRATIONS, NO_WALLET_NOTE, CREDITS_HELD } from "./integration-pages.js";
-import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { listedPlatformIntegrations } from "./platform-integrations.js";
 
 // Rows are derived from the per-package pages, so the hub lists exactly the
 // packages that have an /integrations/<slug> page.
@@ -60,7 +60,7 @@ export function ledgerIntegrationsPage(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Agent platforms</h2>
     <div style="border:1px solid var(--hairline);background:var(--card);">
-      ${PLATFORM_INTEGRATIONS.map((p, i) => adapterRow({ name: esc(p.name), desc: esc(p.line), pkg: esc(p.surface), slug: p.slug }, i === PLATFORM_INTEGRATIONS.length - 1)).join("\n      ")}
+      ${listedPlatformIntegrations().map((p, i, all) => adapterRow({ name: esc(p.name), desc: esc(p.line), pkg: esc(p.surface), slug: p.slug }, i === all.length - 1)).join("\n      ")}
     </div>
   </section>
 
@@ -69,9 +69,9 @@ export function ledgerIntegrationsPage(baseUrl) {
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// same shape everywhere</div>
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
     ${codeBlock(`<span style="color:var(--on-panel-faint);"># pick your stack
-</span>npm install agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
+</span>npm install agent402-function-calling @x402/fetch @x402/core @x402/evm viem
 
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 <span style="color:var(--on-panel-faint);">// web search, then a cited answer, paid per call from a wallet (payFetch: an @x402/fetch fetch)
 </span>const { tools, execute } = await agent402Tools({ slugs: ["search","answer"], freeOnly: false, fetch: payFetch });
 <span style="color:var(--on-panel-faint);">// pass tools to openai.chat.completions.create({ tools })

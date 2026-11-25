@@ -33,6 +33,7 @@ function bad(message, statusCode = 400) {
 }
 
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
+import { notChargedHere } from "../not-charged.js";
 const SOURCE = "coingecko";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -267,7 +268,7 @@ async function cgLoad(key, path, reduce = null) {
       let code = null;
       try { const b = await res.json(); code = Number(b?.status?.error_code ?? b?.error?.status?.error_code); } catch { /* no body */ }
       if (code === 10005 || code === 10012) throw bad("Market data upstream refused the request: outside the plan's allowed range (history is limited to the past 365 days) or an endpoint this plan does not serve", 422);
-      throw bad("Market data is not configured on this deployment. You were not charged.", 503);
+      throw bad(`Market data is not configured on this deployment.${notChargedHere()}`, 503);
     }
     if (s >= 500) throw bad(`Market data upstream HTTP ${s} - try again later`, 502);
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);
@@ -1226,18 +1227,29 @@ const RWA_SPOT_UNITS = Object.freeze({ gold: "xau", silver: "xag" });
 const RWA_SPOT_NAMES = Object.freeze({ xau: "XAU spot", xag: "XAG spot" });
 /** Whether an RWA row has a reference this kit reads. */
 export const rwaHasReference = (id) => Object.hasOwn(RWA_SPOT_UNITS, String(id ?? ""));
+// The reference is a second read behind the market read, through the same
+// minute bucket and upstream: it can be refused (the bucket's last token went
+// to the market read, an upstream 429 or 5xx) while the market read stands.
+// A reference that is not read is null with `referenceStatus` saying why,
+// never a number: a table row that is missing, zero or not a number is not a
+// price, so it cannot read as 0.
+//   read                   referencePrice is the spot rate
+//   rate_table_unreadable  the exchange-rate table could not be read now
+//   rate_not_listed        the table holds no usable rate for the metal or the currency
+const positiveNum = (v) => { const n = num(v); return n != null && n > 0 ? n : null; };
 /** The reference price per unit in `currency`, read from the exchange-rate
- *  table: { xau, xag } (null where the table lacks one), or null when the
- *  table cannot be read. Never throws: the market answer stands without it. */
+ *  table: { xau, xag } (null where the table lacks a usable rate), or null
+ *  when the table cannot be read. Never throws: the market answer stands
+ *  without it. */
 async function rwaSpotPrices(currency) {
   let data;
   try { ({ data } = await cgGet("/exchange_rates", {}, TTL.price)); } catch { return null; }
   const r = data?.rates;
-  const per = num(r?.[currency]?.value);
+  const per = positiveNum(r?.[currency]?.value);
   const out = {};
   for (const unit of Object.values(RWA_SPOT_UNITS)) {
-    const oz = num(r?.[unit]?.value);
-    out[unit] = per != null && oz != null && oz > 0 ? per / oz : null;
+    const oz = positiveNum(r?.[unit]?.value);
+    out[unit] = per != null && oz != null ? per / oz : null;
   }
   return out;
 }
@@ -1246,13 +1258,13 @@ async function rwaSpotPrices(currency) {
 export function rwaTracking(row, spot) {
   const unit = rwaHasReference(row?.id) ? RWA_SPOT_UNITS[row.id] : null;
   if (!unit) return null;
-  const ref = spot ? spot[unit] : null;
+  const ref = spot ? positiveNum(spot[unit]) : null;
   const price = num(row?.price);
-  const sig = (v) => (v == null ? null : +v.toPrecision(8));
   return {
     reference: RWA_SPOT_NAMES[unit],
-    referencePrice: sig(ref),
-    premiumBps: ref && price != null ? +(((price - ref) / ref) * 10_000).toFixed(2) : null,
+    referencePrice: ref == null ? null : +ref.toPrecision(8),
+    premiumBps: ref != null && price != null ? +(((price - ref) / ref) * 10_000).toFixed(2) : null,
+    referenceStatus: ref != null ? "read" : (spot ? "rate_not_listed" : "rate_table_unreadable"),
   };
 }
 /** Add `tracking` to every shaped row, reading the reference only when a row needs it. */
@@ -1309,7 +1321,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.006",
     description:
-      "Live market rows for tokenized real-world assets (stocks, ETFs and commodities such as gold), ranked by market cap or volume a page at a time: price, market cap, 24h volume, 24h high and low and change, in your currency. Filter by type or pass ids. Figures are the onchain wrappers' markets (what is tokenized and trading), not the underlying's exchange listing. Each row carries tracking against its reference asset: a tokenized commodity (gold, silver) against the troy-ounce spot rate, with referencePrice and premiumBps (positive = above the reference); a stock or ETF has tracking: null, since no price for the listed share is read here. Cached in-process for 60 seconds.",
+      "Live market rows for tokenized real-world assets (stocks, ETFs and commodities such as gold), ranked by market cap or volume a page at a time: price, market cap, 24h volume, 24h high and low and change, in your currency. Filter by type or pass ids. Figures are the onchain wrappers' markets (what is tokenized and trading), not the underlying's exchange listing. Each row carries tracking against its reference asset: a tokenized commodity (gold, silver) against the troy-ounce spot rate, with referencePrice, premiumBps (positive = above the reference) and referenceStatus (read, or why referencePrice is null: rate_table_unreadable, rate_not_listed); a stock or ETF has tracking: null, since no price for the listed share is read here. Cached in-process for 60 seconds.",
     tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "market-data", "price"],
     discovery: {
       input: { type: "stock", order: "market_cap_desc", perPage: 10 },
@@ -1354,7 +1366,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.006",
     description:
-      "One tokenized real-world asset by id (gold, nvidia, tesla, spy ...): identity, type, image and web slug joined with its onchain market row - price, market cap, 24h volume and change in your currency, and tracking against its reference asset (gold and silver against the troy-ounce spot rate: referencePrice and premiumBps; null for a stock or ETF). Cached upstream reads, one answer. Use rwa-list to find the id.",
+      "One tokenized real-world asset by id (gold, nvidia, tesla, spy ...): identity, type, image and web slug joined with its onchain market row - price, market cap, 24h volume and change in your currency, and tracking against its reference asset (gold and silver against the troy-ounce spot rate: referencePrice, premiumBps and referenceStatus; null for a stock or ETF). Cached upstream reads, one answer. Use rwa-list to find the id.",
     tags: ["crypto", "rwa", "tokenized", "stock", "commodity", "market-data", "profile"],
     discovery: {
       input: { id: "gold", currency: "usd" },
@@ -1369,7 +1381,7 @@ const RWA_TOOLS = [
         example: {
           source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
           id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", webSlug: "gold", lastUpdated: "2026-09-02T18:49:00Z",
-          market: { id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", currency: "usd", price: 4376.6, marketCap: 5219552133, volume24h: 557496353, high24h: 4394.94, low24h: 4289.36, change24h: 42.77, change24hPct: 0.98698, marketCapChange24h: 44135859, marketCapChange24hPct: 0.8528, lastUpdated: "2026-09-02T18:49:00Z", tracking: { reference: "XAU spot", referencePrice: 4361.2, premiumBps: 35.31 } },
+          market: { id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", currency: "usd", price: 4376.6, marketCap: 5219552133, volume24h: 557496353, high24h: 4394.94, low24h: 4289.36, change24h: 42.77, change24hPct: 0.98698, marketCapChange24h: 44135859, marketCapChange24hPct: 0.8528, lastUpdated: "2026-09-02T18:49:00Z", tracking: { reference: "XAU spot", referencePrice: 4361.2, premiumBps: 35.31, referenceStatus: "read" } },
         },
       },
     },

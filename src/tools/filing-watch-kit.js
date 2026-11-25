@@ -37,6 +37,7 @@ import { fetchXmlText, edgarGetJson, edgarUserAgent } from "./edgar-kit.js";
 import { parseForm4 } from "./insider-flow-kit.js";
 import { extractFilingExcerpts } from "./dossier-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -206,7 +207,7 @@ export function exhibitFromIndexHeaders(html, cikInt, accession) {
   return null;
 }
 
-// Plain-language names for the forms a filing watch actually sees. A form not
+// Readable names for the forms a filing watch actually sees. A form not
 // listed here is described by its bare code - never guessed at.
 const FORM_LABELS = {
   "8-K": "current report (material event)",
@@ -631,7 +632,7 @@ function makeFilingHandlerInner(tierSlug) {
     const name = pr.name || ticker || pr.cik;
     const symbol = pr.ticker || ticker || (pr.tickers?.[0] || "");
     if (!pr.filings.length && !allowEmpty) {
-      throw bad(`${name} (CIK ${pr.cik}) has no SEC filings in the last ${days} days${forms.length ? ` matching ${forms.join(", ")}` : ""}${exclude.length ? ` after excluding ${exclude.join(", ")}` : ""}. Not charged - widen "days" (max 365) or drop the form filter.`, 422);
+      throw bad(`${name} (CIK ${pr.cik}) has no SEC filings in the last ${days} days${forms.length ? ` matching ${forms.join(", ")}` : ""}${exclude.length ? ` after excluding ${exclude.join(", ")}` : ""}.${notChargedHere()} Widen "days" (max 365) or drop the form filter.`, 422);
     }
 
     // 2) DOCUMENTS (bounded count AND bytes).
@@ -680,7 +681,7 @@ function makeFilingHandlerInner(tierSlug) {
     // at least one primary document whenever there was one to read. A >= 400
     // cancels settlement, so an EDGAR incident is never charged for.
     if (selected.length && !read.length) {
-      throw bad(`Could not read any of the ${selected.length} primary document${selected.length === 1 ? "" : "s"} from SEC EDGAR (upstream: ${fetched.map((x) => x.err).filter(Boolean).slice(0, 2).join("; ")}). Not charged - please retry.`, 502);
+      throw bad(`Could not read any of the ${selected.length} primary document${selected.length === 1 ? "" : "s"} from SEC EDGAR (upstream: ${fetched.map((x) => x.err).filter(Boolean).slice(0, 2).join("; ")}).${notChargedHere()} Please retry.`, 502);
     }
 
     // 3) SOURCES: each document read, then every other filing, then the index.
@@ -721,7 +722,7 @@ function makeFilingHandlerInner(tierSlug) {
 9. COUNTS: every count you state (filings, forms, documents read, forms parsed, filings not fetched) is the figure given in a block header below, never your own tally of a list. The documents read in full, the routine forms parsed and the filings not fetched add up to the filings found.
 10. TERMINOLOGY: Forms 3, 4 and 5 are Section 16 ownership reports; a Form 144 is a notice of proposed sale under Securities Act Rule 144, not a Section 16 report. Name each form for what it is.
 
-Write a well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many filings, which forms, the date range, and the single most consequential item), WHAT WAS FILED (each filing in the window, grouped by form, in plain language), WHAT THE DOCUMENTS SAY (the substance of the ${read.length} document${read.length === 1 ? "" : "s"} read in full - the event, the numbers as stated, the terms, the parties), WHAT CHANGED (per rule 5), and WHAT TO WATCH (concrete follow-ups a reader can verify in future filings - never a recommendation, per rule 7).
+Write a well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many filings, which forms, the date range, and the single most consequential item), WHAT WAS FILED (each filing in the window, grouped by form, in clear wording), WHAT THE DOCUMENTS SAY (the substance of the ${read.length} document${read.length === 1 ? "" : "s"} read in full - the event, the numbers as stated, the terms, the parties), WHAT CHANGED (per rule 5), and WHAT TO WATCH (concrete follow-ups a reader can verify in future filings - never a recommendation, per rule 7).
 
 === COMPANY ===
 ${name} · CIK ${pr.cik}${symbol ? ` · ticker ${symbol}` : ""}${pr.exchanges?.length ? ` · listed ${pr.exchanges.join(", ")}` : ""}${pr.sic ? ` · SIC ${pr.sic}` : ""}${pr.fiscalYearEnd ? ` · fiscal year end ${pr.fiscalYearEnd}` : ""}
@@ -739,7 +740,7 @@ ${docBlocks || "(no primary document was read for this window)"}`;
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Filing report synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Filing report synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 
@@ -830,7 +831,7 @@ export const FILING_WATCH_TOOLS = [
     slug: "filing-report",
     category: "llm",
     price: FILING_TIERS["filing-report"].price,
-    description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained in plain language, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
+    description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained with citations to each one, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
     tags: ["sec", "edgar", "filings", "8-k", "10-q", "10-k", "s-1", "proxy", "report", "equity", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 30 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeFilingHandler("filing-report"),

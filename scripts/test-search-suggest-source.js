@@ -33,17 +33,18 @@ const opensearch = (q, titles) => new Response(JSON.stringify([q, titles, titles
     const { url, init } = seen[0];
     ok(seen.length === 1 && url.origin === "https://en.wikipedia.org" && url.pathname === "/w/api.php", `one read of en.wikipedia.org/w/api.php (${url.origin}${url.pathname})`);
     const p = url.searchParams;
-    ok(p.get("action") === "opensearch" && p.get("search") === "machine lear" && p.get("limit") === "2" && p.get("namespace") === "0" && p.get("format") === "json", `opensearch with the trimmed query and the caller's count (${p})`);
+    ok(p.get("action") === "opensearch" && p.get("search") === "machine lear" && p.get("limit") === "20" && p.get("namespace") === "0" && p.get("format") === "json", `opensearch with the trimmed query, reading 20 titles to keep for the prefix (${p})`);
     const ua = init?.headers?.["User-Agent"] || "";
     ok(/bot/i.test(ua) && /https:\/\/agent402\.tools/.test(ua) && /@agent402\.tools/.test(ua) && !/^Mozilla/.test(ua), `the User-Agent names the client, says bot and gives contact details (${ua})`);
     ok(a.query === "machine lear" && a.count === 2 && JSON.stringify(a.suggestions) === JSON.stringify(["Machine learning", "Machine learning in biology"]), `the answer keeps { query, count, suggestions } capped at count (${JSON.stringify(a)})`);
     ok(a.credit === WIKIPEDIA_CREDIT && /wikipedia\.org/.test(a.credit) && /CC BY-SA 4\.0/.test(a.credit), "every answer carries the source's credit with its link and license");
-    const keys = Object.keys(a).filter((k) => !["query", "count", "suggestions", "credit"].includes(k));
+    ok(a.licenseUrl === "https://creativecommons.org/licenses/by-sa/4.0/" && /Not affiliated with or endorsed by the Wikimedia Foundation/.test(a.affiliation) && a.sourceUrl === "https://en.wikipedia.org", "every answer carries the license link as its own field and says it is not affiliated with the Foundation");
+    const keys = Object.keys(a).filter((k) => !["query", "count", "suggestions", "credit", "licenseUrl", "sourceUrl", "affiliation"].includes(k));
     ok(keys.every((k) => k === "untrustedContent" || k === "_provenance" || /untrusted|provenance/i.test(k)), `no other field changes (${keys.join(", ") || "none"})`);
     const d = await tool.handler({ q: "x" });
-    ok(new URL(String(seen[1].url)).searchParams.get("limit") === "5" && d.count === 3, "the default count is 5");
-    await tool.handler({ q: "x", count: 99 });
-    ok(new URL(String(seen[2].url)).searchParams.get("limit") === "20", "count is capped at 20");
+    ok(d.count === 3 && d.suggestions.length === 3, "the default count is 5 (the source listed 3)");
+    const big = await tool.handler({ q: "y", count: 99 });
+    ok(new URL(String(seen[2].url)).searchParams.get("limit") === "20" && big.count === 3, "count is capped at 20");
   } finally { globalThis.fetch = realFetch; }
 }
 ok(ATTRIBUTIONS.wikipedia === WIKIPEDIA_ATTRIBUTION && tool.attribution === "wikipedia" && tool.description.endsWith(WIKIPEDIA_ATTRIBUTION), "the description ends with the Wikipedia attribution sentence");
@@ -87,15 +88,46 @@ for (const [status, want] of [[429, 503], [500, 502], [403, 502]]) {
   let reads = 0;
   globalThis.fetch = async () => { reads++; return opensearch("a", ["A"]); };
   try {
-    for (let k = 0; k < src.SUGGEST_MAX_PER_MINUTE; k++) await tool.handler({ q: "a" });
+    for (let k = 0; k < src.SUGGEST_MAX_PER_MINUTE; k++) await tool.handler({ q: `a${k}` });
     ok(reads === src.SUGGEST_MAX_PER_MINUTE && slept.length === 0, `${src.SUGGEST_MAX_PER_MINUTE} reads in one minute run without waiting`);
     ok(src.SUGGEST_MAX_PER_MINUTE < 200, "the ceiling sits under the source's 200 a minute for an identified bot");
-    let e; try { await tool.handler({ q: "a" }); } catch (x) { e = x; }
+    let e; try { await tool.handler({ q: "a-more" }); } catch (x) { e = x; }
     ok(e?.statusCode === 503 && reads === src.SUGGEST_MAX_PER_MINUTE, `one more inside the same minute is a 503 with no read (${e?.statusCode})`);
     t += 60_000 - src.SUGGEST_MAX_WAIT_MS + 1; // room opens within the wait bound
-    const a = await tool.handler({ q: "a" });
+    const a = await tool.handler({ q: "a-late" });
     ok(a.count === 1 && slept.length === 1 && slept[0] > 0 && slept[0] <= src.SUGGEST_MAX_WAIT_MS && reads === src.SUGGEST_MAX_PER_MINUTE + 1, `a caller within ${src.SUGGEST_MAX_WAIT_MS} ms of room waits, then reads (slept ${slept[0]} ms)`);
   } finally { globalThis.fetch = realFetch; src._setSuggestClockForTest(); }
+}
+
+// --- the prefix cache: a repeated prefix never reaches the source again ---
+{
+  src._setSuggestClockForTest();
+  let reads = 0;
+  globalThis.fetch = async () => { reads++; return opensearch("deep le", ["Deep learning", "Deep Learning (album)", "Deep lead"]); };
+  try {
+    const one = await tool.handler({ q: "deep le", count: 2 });
+    const two = await tool.handler({ q: "  DEEP   le ", count: 3 });
+    ok(reads === 1 && JSON.stringify(one.suggestions) === JSON.stringify(["Deep learning", "Deep Learning (album)"]) && two.count === 3, `the same prefix in another case or spacing is served from the cache, at the caller's count (${reads} read)`);
+    ok(src.suggestPrefixKey("  Deep\tLE ") === "deep le" && src.SUGGEST_CACHE_MAX > 0 && src.SUGGEST_CACHE_TTL_MS > 0, "the cache key is the normalized prefix, and the cache is bounded in size and age");
+    let t = 9_000_000;
+    src._setSuggestClockForTest(() => t, async (ms) => { t += ms; });
+    await tool.handler({ q: "deep le" });
+    t += src.SUGGEST_CACHE_TTL_MS + 1;
+    await tool.handler({ q: "deep le" });
+    ok(reads === 3, `an entry past its age is read again (${reads} reads)`);
+    const fails = async () => { globalThis.fetch = async () => new Response("no", { status: 500 }); try { await tool.handler({ q: "never kept" }); } catch { /* 502 */ } };
+    await fails();
+    globalThis.fetch = async () => { reads++; return opensearch("never kept", ["Never Kept"]); };
+    const after = await tool.handler({ q: "never kept" });
+    ok(after.count === 1, "a failed read is not kept");
+  } finally { globalThis.fetch = realFetch; src._setSuggestClockForTest(); }
+}
+// --- never sold through a third party ---
+{
+  const R = await import("../src/resale-terms.js");
+  ok(tool.resale === "barred" && R.resaleClearanceRefusal(tool) === R.WIKIMEDIA_API_RESALE_REASON && R.resaleClearanceRefusal(tool, { compute: true }) === R.WIKIMEDIA_API_RESALE_REASON, "search-suggest is barred from every resale surface, with the reason");
+  const { AWS_LISTING_SLUGS } = await import("../src/aws-listing.js");
+  ok(!AWS_LISTING_SLUGS.includes("search-suggest") && tool.resaleCleared !== true, "search-suggest is on no resale list and carries no clearance");
 }
 
 // --- a bounded line of waiting callers ---

@@ -140,7 +140,7 @@ for (const name of ["anthropic-tools", "openai-tools", "llamaindex", "strands"])
   ok(err && err.message === "agent402_find failed (GET /api/find): HTTP 503 after 3 attempts: The server is busy" && h2.counts["/api/find"] === 3, `agentkit: 3 shed 503s fail clearly (${err && err.message})`);
 }
 
-// 4) elizaos-plugin-agent402: AGENT402_ABOUT reads /api/pricing on global fetch.
+// 4) agent402-actions-plugin: AGENT402_ABOUT reads /api/pricing on global fetch.
 {
   const { aboutAction } = await import(pathToFileURL(join(ROOT, "adapters", "eliza", "index.js")).href);
   const runtime = { getSetting: (k) => (k === "AGENT402_BASE_URL" ? BASE : null) };
@@ -152,7 +152,7 @@ for (const name of ["anthropic-tools", "openai-tools", "llamaindex", "strands"])
   ok(!bad.success && /GET \/api\/pricing: HTTP 503 after 3 attempts/.test(bad.text) && h2.counts["/api/pricing"] === 3, `eliza: 3 shed 503s fail clearly (${bad.text})`);
 }
 
-// 5) agent402-openclaw: the model table read (GET /v1/models).
+// 5) agent402-model-provider: the model table read (GET /v1/models).
 {
   const { loadRoutes } = await import(pathToFileURL(join(ROOT, "openclaw", "proxy.js")).href);
   const h = stubHost({ "/v1/models": 1 });

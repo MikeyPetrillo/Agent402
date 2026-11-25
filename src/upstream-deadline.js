@@ -47,7 +47,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withRunCeiling, ceilingLeftMs } from "./run-ceiling.js";
 import { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } from "./evm-validity.js";
-import { notChargedOn } from "./not-charged.js";
+import { notChargedOn, notChargedHere } from "./not-charged.js";
 
 /** The whole handler, every read included, answers inside this: the budget of
  *  the keyless data kits, whose reads answer in well under a second, sized so
@@ -245,12 +245,12 @@ export function upstreamDeadline(label, step, ms, { input = null } = {}) {
   if (heavyInput(input)) {
     const unit = input.unit || "chars";
     return Object.assign(
-      bad(`${limit}; this input (${input.size} of at most ${input.max} ${unit}) is long enough to outlast that limit, so a shorter one is more likely to finish; nothing was charged`, 503),
+      bad(`${limit}; this input (${input.size} of at most ${input.max} ${unit}) is long enough to outlast that limit, so a shorter one is more likely to finish.${notChargedHere()}`, 503),
       { attribution: ATTRIBUTION.OURS, hint: KIND.SMALLER_INPUT, upstreamFailure: "deadline" },
     );
   }
   return Object.assign(
-    bad(`${limit}; nothing was charged - retry shortly`, 503),
+    bad(`${limit}.${notChargedHere()} Retry shortly.`, 503),
     { attribution: ATTRIBUTION.OURS, hint: KIND.OUR_DEADLINE, upstreamFailure: "deadline" },
   );
 }
@@ -261,7 +261,7 @@ export function upstreamDeadline(label, step, ms, { input = null } = {}) {
  *  `budgetSpent` says nothing left this server. */
 export function budgetSpentError(label, step, ms) {
   return Object.assign(
-    bad(`No ${label} ${step} read was sent: our ${secondsOf(ms)} s limit for this call was used up by its earlier steps; nothing was charged - retry shortly`, 503),
+    bad(`No ${label} ${step} read was sent: our ${secondsOf(ms)} s limit for this call was used up by its earlier steps.${notChargedHere()} Retry shortly.`, 503),
     { attribution: ATTRIBUTION.OURS, hint: KIND.BUDGET_SPENT, upstreamFailure: "deadline", budgetSpent: true },
   );
 }
@@ -297,18 +297,18 @@ export const isDnsFailure = (err) => isOurResolverFailure(err) || isNameNotFound
 export function upstreamUnreachable(label, step, cause = null) {
   if (cause && isNameNotFound(cause)) {
     return Object.assign(
-      bad(`${label} could not be reached: its host name did not resolve (${step} read, no request sent); nothing was charged - retry shortly`, 503),
+      bad(`${label} could not be reached: its host name did not resolve (${step} read, no request sent).${notChargedHere()} Retry shortly.`, 503),
       { attribution: ATTRIBUTION.UNKNOWN, hint: KIND.CONNECT_FAILED, upstreamFailure: "unreachable" },
     );
   }
   if (cause && isOurResolverFailure(cause)) {
     return Object.assign(
-      bad(`${label} could not be reached: this server's DNS lookup for its host failed (${step} read, no request sent); nothing was charged - retry shortly`, 503),
+      bad(`${label} could not be reached: this server's DNS lookup for its host failed (${step} read, no request sent).${notChargedHere()} Retry shortly.`, 503),
       { attribution: ATTRIBUTION.OURS, hint: KIND.OUR_EGRESS, upstreamFailure: "unreachable" },
     );
   }
   return Object.assign(
-    bad(`${label} is unreachable from here (${step} read failed before any answer); nothing was charged - retry shortly`, 503),
+    bad(`${label} is unreachable from here (${step} read failed before any answer).${notChargedHere()} Retry shortly.`, 503),
     { attribution: ATTRIBUTION.UNKNOWN, hint: KIND.CONNECT_FAILED, upstreamFailure: "unreachable" },
   );
 }

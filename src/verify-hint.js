@@ -248,7 +248,7 @@ export function svmStaleBlockhashHint() {
   };
 }
 
-/** The plain-language hint. Pure; exported for tests. */
+/** The readable hint. Pure; exported for tests. */
 export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false, detail = "", svmPayer = null, payTo = null }) {
   const r = typeof reason === "string" ? reason : "";
   const net = typeof network === "string" ? network : "";

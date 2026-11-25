@@ -71,7 +71,7 @@ ${REPO_URL}
 
 - Search the live web and answer questions with citations
   (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`).
-- Resolve a plain-language task to the right tool, with its price, input
+- Resolve a task description to the right tool, with its price, input
   schema and a ready example (\`/api/find?q=<task>\`).
 - Call any of ${total} tools (${powCount} of them free via
   proof-of-work): rendering, PDFs, OCR, images, conversions, data lookups,
@@ -121,9 +121,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -- npx -y agent402-mcp@0.17.1
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -131,7 +131,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.17.0"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.17.1"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 

@@ -1,6 +1,6 @@
 name: AgentKit adapter live proof
 
-# Proves agent402-agentkit with a REAL AgentKit wallet provider against
+# Proves agent402-action-provider with a REAL AgentKit wallet provider against
 # production: ViemWalletProvider over the canary burner pays a wallet-only tool
 # over x402 through agent402_call. Installs @coinbase/agentkit from the
 # registry (its real dependency tree, ~minutes) in a scratch dir with no secrets
@@ -40,4 +40,4 @@ jobs:
           # Allowlisted env: the third-party tree sees the burner key it needs
           # to sign and nothing else (no POW_SECRET: the burner payer is
           # classified internal by address in the sales ledger already).
-          cd /tmp/akproof && env -i PATH="$PATH" HOME="$HOME" BURNER_KEY="$BURNER_KEY" TARGET_URL="https://agent402.tools" AGENTKIT_ADAPTER="agent402-agentkit" node agentkit-live.js
+          cd /tmp/akproof && env -i PATH="$PATH" HOME="$HOME" BURNER_KEY="$BURNER_KEY" TARGET_URL="https://agent402.tools" AGENTKIT_ADAPTER="agent402-action-provider" node agentkit-live.js

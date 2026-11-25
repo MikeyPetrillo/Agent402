@@ -4,6 +4,7 @@ import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
+import { runAsRouteCall } from "./not-charged.js";
 import { runAsCallerOf } from "./dispatch-caller.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
@@ -24,7 +25,7 @@ class McpError extends ProtocolError {
 // Connectors), ChatGPT, or any MCP client that speaks streamable HTTP.
 //
 // This is the authless free tier. It runs in the same process as the tools and
-// lists a FLAGSHIP set (search/answer front door + render/data/STT/memory) plus
+// lists a FLAGSHIP set (PDF, macro series, weather, render, data, STT, memory) plus
 // meta discovery tools. Pure-CPU tools still execute free via call_tool /
 // find_tool; wallet-only flagships return paid-access setup pointing at the
 // npm `agent402-mcp` server with a funded AGENT_KEY. Payment identity can't
@@ -129,9 +130,14 @@ import { KALSHI_SLUGS, kalshiNotOffered } from "./kalshi-switch.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
+  FORMER_FLAGSHIP_MCP_NAMES,
   META_MCP_NAMES,
   MCP_CALL_ALIASES,
   resolveListedName,
+  plainToolName,
+  plainToolText,
+  plainNamesHandler,
+  PLAIN_TOOL_NAMES_VALUE,
   FLAGSHIP_OPEN_WORLD,
   FLAGSHIP_WRITERS,
   FLAGSHIP_OUTPUT_SCHEMAS,
@@ -141,6 +147,7 @@ import {
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
+  mcpTermsLine,
   clipToolDescription,
   mcpJsonResult,
   outputSchemaFromExample,
@@ -483,13 +490,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // (mcp/networks.js, every rail since 0.13.25, pinned by test-legal-claims.js);
   // a CAIP-2 id works on every published version. Arc is shown by its CAIP-2
   // id so the setup line works on versions before 0.13.25 too.
-  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", robinhood: "Robinhood Chain", arc: "Arc", ink: "Ink" };
-  const SETUP_NAMED = ["Base", "Polygon", "Arbitrum", "Robinhood Chain", "Arc"];
+  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum One", monad: "Monad", celo: "Celo", avalanche: "Avalanche C-Chain", sei: "Sei", optimism: "OP Mainnet", robinhood: "Robinhood Chain", arc: "Arc", ink: "Ink" };
+  const SETUP_NAMED = ["Base", "Polygon", "Arbitrum One", "Robinhood Chain", "Arc"];
   const presetOf = (name) => Object.keys(NPM_EVM_PRESETS).find((k) => NPM_EVM_PRESETS[k] === name);
   const otherEvm = RAILS.filter((r) => r.chainId && !SETUP_NAMED.includes(r.name)).map((r) => (presetOf(r.name) ? `${presetOf(r.name)} (${r.caip2})` : `${r.name} ${r.caip2}`));
   // The variables a reader sets on the npm server; the wallet warning is its
   // own sentence after the command (NPM_WALLET_WARNING).
-  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum One; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
   const NPM_WALLET_WARNING = "Use a new wallet holding only a few dollars of USDC, never your main wallet.";
   // MPP start-here set (src/mpp-flagship.js) as served by this connector's
   // catalog, prices read from it. Surfaced in payment.info.
@@ -545,7 +552,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     : null;
 
   // Flagship first-class tools: demand SKUs agents should see without a
-  // find_tool round-trip (search/answer front door + render/data/STT/memory).
+  // find_tool round-trip (PDF, macro series, weather, render, data, STT, memory).
   // Most are wallet-only on this authless connector — calling one returns
   // paid-access setup (same as call_tool on a wallet slug). The long catalog
   // stays behind search_tools / find_tool / call_tool. Total tools/list size
@@ -588,6 +595,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     return { ...def, route: `${method} ${mcpX402PathOf(def.slug)}` };
   };
 
+  /** The outputSchema tools/list gives a flagship: the hand-written one,
+   *  else the one inferred from its published example (made once). */
+  const inferredOutputSchemas = new Map();
+  const flagshipOutputSchemaOf = (def) => {
+    if (FLAGSHIP_OUTPUT_SCHEMAS[def.slug]) return FLAGSHIP_OUTPUT_SCHEMAS[def.slug];
+    if (!inferredOutputSchemas.has(def.slug)) inferredOutputSchemas.set(def.slug, outputSchemaFromExample(def.discovery?.output?.example));
+    return inferredOutputSchemas.get(def.slug);
+  };
+  /** The outputSchema a payment-required result for this call is held to
+   *  (src/mcp-x402.js fitsListedOutputSchema): a listed flagship's own,
+   *  catalog.call's envelope, or none for a name that is not listed (a former
+   *  flagship), which no client holds to a schema. */
+  const listedOutputSchemaOf = (def, isNamed) => {
+    if (!isNamed) return META_OUTPUT_SCHEMAS["catalog.call"];
+    return flagshipSet.has(def.slug) ? flagshipOutputSchemaOf(def) : null;
+  };
+
   const schemaOf = (def) => {
     const s = def.discovery?.inputSchema;
     return s ? { type: "object", ...s } : { type: "object" };
@@ -621,6 +645,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   for (const [alias, canonical] of Object.entries(MCP_CALL_ALIASES)) {
     const slug = dottedToSlug[canonical];
     if (slug && flagshipSet.has(slug)) namedToolSlugs.set(alias, slug);
+  }
+  // Former flagships (the main connector only): never listed, still callable
+  // by every name they were listed under. Not a flagship here, so a call is
+  // priced and paid on the tool's own HTTP route, as catalog.call is.
+  if (!profile?.flagshipSlugs) {
+    const formerBySlug = Object.fromEntries(Object.entries(FORMER_FLAGSHIP_MCP_NAMES).map(([slug, dotted]) => [dotted, slug]));
+    for (const [slug, dotted] of Object.entries(FORMER_FLAGSHIP_MCP_NAMES)) {
+      if (!tools.has(slug) || namedToolSlugs.has(dotted)) continue;
+      namedToolSlugs.set(dotted, slug);
+      namedToolSlugs.set(dotted.replace(/\./g, "_"), slug);
+      if (!namedToolSlugs.has(slug)) namedToolSlugs.set(slug, slug);
+      if (!namedToolSlugs.has(toSnake(slug))) namedToolSlugs.set(toSnake(slug), slug);
+    }
+    for (const [alias, canonical] of Object.entries(MCP_CALL_ALIASES)) {
+      const slug = formerBySlug[canonical];
+      if (slug && tools.has(slug) && !namedToolSlugs.has(alias)) namedToolSlugs.set(alias, slug);
+    }
   }
   for (const [alias, slug] of Object.entries(LEGACY_MCP_ALIASES)) {
     if (tools.has(slug)) {
@@ -743,13 +784,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null, plainNames = false } = {}) {
+    const plainText = (t) => (plainNames ? plainToolText(t) : t);
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() }),
+        description: plainText(mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() })),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {
@@ -771,9 +813,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() }),
+        instructions: plainText(profile?.instructions ? `${profile.instructions}\n${mcpTermsLine(baseUrl)}` : mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() })),
       },
     );
+    // A plain-names listing (?tool_names=underscore) names every tool in its
+    // plain spelling everywhere it answers (plainNamesHandler).
+    if (plainNames) {
+      const set = server.setRequestHandler.bind(server);
+      server.setRequestHandler = (method, handler) => set(method, plainNamesHandler(method, handler));
+    }
 
     // Skill packs are exposed as MCP prompts: each pack becomes a discoverable
     // prompt the client can render in a slash menu (Claude Desktop, Cursor,
@@ -855,7 +903,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Resolve a task to the one best Agent402 tool",
           annotations: { title: "Resolve a task to the one best Agent402 tool", ...SAFE },
           description:
-            "Resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
+            "Resolve a task description to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
           inputSchema: {
             type: "object",
             properties: {
@@ -898,9 +946,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
-        // Flagship demand tools — listed first-class so agents see search/answer
-        // as the front door without a discovery round-trip. Wallet-only on this
-        // authless connector: calling returns paid-access setup.
+        // Flagship demand tools — listed first-class so agents see them
+        // without a discovery round-trip. Wallet-only on this authless
+        // connector: calling returns the payment offer or paid-access setup.
         ...[...flagshipSet].map((slug) => {
           const { def, free } = tools.get(slug);
           const ann = flagshipHints(slug);
@@ -910,8 +958,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const walletNote = free
             ? ""
             : ` This hosted connector holds no wallet: ${inCallWires ? `pay it here, in the call, over ${inCallWires}, or ` : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 client.`;
-          const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
-            || outputSchemaFromExample(def.discovery?.output?.example);
+          const outSchema = flagshipOutputSchemaOf(def);
           return {
             name: mcpNameOf(slug),
             title: def.name,
@@ -936,7 +983,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           inputSchema: {
             type: "object",
             properties: {
-              need: { type: "string", maxLength: 500, description: 'What you needed and could not find, in plain language, e.g. "convert a HEIC image to JPEG" or "look up a UK company by registration number"' },
+              need: { type: "string", maxLength: 500, description: 'What you needed and could not find, in your own words, e.g. "convert a HEIC image to JPEG" or "look up a UK company by registration number"' },
               context: { type: "string", maxLength: 300, description: "Optional: what you were trying to accomplish, or the input you had - helps disambiguate similar-sounding requests." },
             },
             required: ["need"],
@@ -1000,7 +1047,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           },
           outputSchema: META_OUTPUT_SCHEMAS["sellers.list"],
         }] : []),
-      ]),
+      ]).map((t) => (plainNames ? { ...t, name: plainToolName(t.name) } : t)),
     }));
 
     /** Paid tool over native MPP: loopback to the real paid route.
@@ -1195,7 +1242,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (!read.ok) {
         // The payment cannot be used: nothing was sent to any paywall.
         const offer = await x402Offer(target, params, ip, signal);
-        return (offer && buildInvalidPaymentResult(offer, { reason: read.reason, message: read.message }))
+        return (offer && buildInvalidPaymentResult(offer, { reason: read.reason, message: read.message, outputSchema: listedOutputSchemaOf(def, isNamed) }))
           || { content: [{ type: "text", text: `Agent402 (${def.slug}): ${read.message} - not charged.` }], isError: true };
       }
       const paymentSignature = paymentSignatureHeader(read.payment);
@@ -1279,7 +1326,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (failedSettle) return failedSettle;
         const offer = paymentRequiredFromHeader(r.headers.get("payment-required")) || await x402Offer(target, params, ip, signal);
         const why = [offer?.error, body.error, body.hint].find((v) => typeof v === "string" && v.trim() && !/^payment required$/i.test(v.trim()));
-        const out = offer && buildInvalidPaymentResult(offer, { reason: why || "Payment verification failed" });
+        const out = offer && buildInvalidPaymentResult(offer, { reason: why || "Payment verification failed", outputSchema: listedOutputSchemaOf(def, isNamed) });
         return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): the payment was refused${why ? ` (${String(why).slice(0, 200)})` : ""} - not charged.` }], isError: true };
       }
       if (r.status >= 500) {
@@ -1354,7 +1401,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // No MPP challenge on the 402 (gates not minting for this route):
           // the x402 offer alone when there is one, else the paid-access
           // instructions rather than an empty ask.
-          const x402Only = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true, mpp: false }) }) : null;
+          const x402Only = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true, mpp: false }), outputSchema: listedOutputSchemaOf(entry.def, isNamed) }) : null;
           return x402Only || { content: [{ type: "text", text: walletRequiredText(entry.def, { mpp: false }) }], isError: true };
         }
         const problem = problemOf(r.json);
@@ -1377,9 +1424,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (!presented && softAsk) {
           const mppMeta = { [MCP_PAYMENT_REQUIRED_META]: { httpStatus: 402, challenges, ...(problem ? { problem } : {}) } };
           // Both wires on one result: the x402 PaymentRequired as JSON in the
-          // first text block (never structuredContent), the MPP challenges
+          // first text block (and as structuredContent where it validates
+          // against the tool's listed outputSchema), the MPP challenges
           // unchanged in _meta, the readable text after.
-          const both = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true }), mppMeta }) : null;
+          const both = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true }), mppMeta, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }) : null;
           if (both) return both;
           return {
             content: [{ type: "text", text: walletRequiredText(entry.def) }],
@@ -1739,7 +1787,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",
             positioning: `${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, ${mppMethodsSummary().enabled ? "over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402" : "over x402"}. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
-            // Flagship-first positioning: search/answer as the default job,
+            // Flagship-first positioning: the front door's first call,
             // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {
               firstJob: `${frontDoor.firstCall}${catalog["POST /api/decide"] ? " A job with more than one step: call decide.plan, then decide.execute (the plan fee is credited toward the run)." : ""} Otherwise catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini; /v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.`,
@@ -1995,7 +2043,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // No MPP gates: the x402 offer alone, when this boot has a paywall.
             // A long call gets the text alone (its HTTP route, as a job).
             const offer = isLongCall(entry.def) ? null : await x402Offer(x402TargetOf(entry.def, isNamed), paidParamsOf(args, isNamed), ip, signal);
-            return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }) }))
+            return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }), outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
               || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           }
           return await payOverMpp(entry, req.params, args, isNamed, ip, signal, ctx?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_META]);
@@ -2007,7 +2055,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
           const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal, { reuse: true });
-          return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }))
+          return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt`, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
             || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }
         // Flagship tools called by name: args IS the params (no envelope).
@@ -2053,7 +2101,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const tooDeep = inputDepthRefusal(params);
           if (tooDeep) throw Object.assign(new Error(tooDeep), { statusCode: 400 });
           const callReq = { headers: {}, query: params, body: params, ip, signal };
-          result = await runAsCallerOf(callReq, () => entry.def.handler(params, callReq));
+          result = await runAsCallerOf(callReq, () => runAsRouteCall(() => entry.def.handler(params, callReq)));
         } catch (handlerErr) {
           // statusCode lets the analytics dispatcher split 4xx (bad input) from
           // 5xx (handler/upstream broke). errorMessage flows into the diagnostic
@@ -2369,7 +2417,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (quiet) res.set("Cache-Control", "private, no-store");
       // A connector grant (src/mcp-oauth.js, resolved from this request's
       // bearer before this handler) pays this request's paid calls from credits.
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null };
+      // ?tool_names=underscore lists each tool under a name of letters, digits,
+      // _ and - only, for a host that refuses a dot in a tool name
+      // (plainToolName); every call resolves either spelling.
+      const plainNames = req.query?.tool_names === PLAIN_TOOL_NAMES_VALUE;
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null, plainNames };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });

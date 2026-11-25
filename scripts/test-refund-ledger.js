@@ -305,6 +305,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(releaseStuckSend(r.id, "oops") === false, "a paid row can never be released back to owed");
 }
 
+// 16b2. A decide-execute run's unspent budget (class decide-unspent) is an
+//       owed row like any other: listed, and read on the alarm word only
+//       past the same notice grace.
+{
+  __resetRefunds();
+  const { decideUnspentNote, isDecideUnspentRefund } = await import("../src/tools/decide-kit.js");
+  recordRefundOwed({ slug: "decide-execute", network: "eip155:8453", payer: "0xD", priceUsd: 0.01, tx: "0xdecide", httpStatus: 200, requestId: "run_x", note: decideUnspentNote("run_x") });
+  const row = listRefunds({ status: "owed" }).find((x) => x.evidence === "0xdecide");
+  ok(row && isDecideUnspentRefund(row) && row.priceUsd === 0.01, `a decide-unspent row is listed owed under its class (${row?.note})`);
+  ok(refundAlarmStatus().status === "ok", "...reads ok inside the notice grace");
+  const past = refundAlarmStatus({ now: Date.now() + 16 * 60_000 });
+  ok(past.status === "owed" && past.owedCount === 1, "...and owed past it, like every other buyer's debt");
+  __resetRefunds();
+}
+
 // 16c. The alarm word: owed too long reads "aging", a row left mid-send reads
 //      "stuck", and the public view never needs more than the word.
 {

@@ -25,6 +25,7 @@
 // RUGCHECK_PAUSE=off disables the pause (reads still report, nothing pauses).
 import { RUGCHECK_SLUGS } from "./rugcheck-switch.js";
 import { errorCodeField } from "./stable-error-code.js";
+import { NOT_CHARGED } from "./not-charged.js";
 
 const DEFAULT_AFTER = 3;
 const DEFAULT_PAUSE_MS = 5 * 60_000;
@@ -121,7 +122,7 @@ export function rugcheckInputKey(url) {
  * to a RugCheck-backed route answers 503 with Retry-After and is not charged.
  * `routes` lists the "METHOD /path" keys the RugCheck-backed tools serve on.
  */
-export function rugcheckPauseMiddleware(routes, pause = rugcheckPause) {
+export function rugcheckPauseMiddleware(routes, pause = rugcheckPause, { pushException = (req, message) => message } = {}) {
   const keys = new Set(routes);
   return (req, res, next) => {
     const m = req.method === "HEAD" ? "GET" : req.method;
@@ -131,7 +132,7 @@ export function rugcheckPauseMiddleware(routes, pause = rugcheckPause) {
     if (!s.paused) return next();
     res.set("Cache-Control", "no-store").set("Retry-After", String(s.retryAfterSeconds));
     return res.status(503).json({
-      error: `RugCheck, the source of this tool, is not answering right now, so the RugCheck-backed tools are paused. Not charged - retry in about ${s.retryAfterSeconds} s.`,
+      error: pushException(req, `RugCheck, the source of this tool, is not answering right now, so the RugCheck-backed tools are paused. ${NOT_CHARGED} Retry in about ${s.retryAfterSeconds} s.`),
       attribution: "upstream",
       retryAfterSeconds: s.retryAfterSeconds,
       ...errorCodeField(503),

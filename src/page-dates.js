@@ -30,6 +30,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { CHAIN_PAGES } from "./market-page.js";
 import { termsPage } from "./terms.js";
 import { privacyPage } from "./privacy.js";
+import { dpaPage } from "./dpa.js";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -54,6 +55,7 @@ export const PAGE_SOURCES = {
   "/tollbooth": ["src/tollbooth-landing.js"],
   "/integrations": ["src/ledger-integrations.js"],
   "/integrations/agentcore": ["src/agentcore-page.js"],
+  "/integrations/claude-managed-agents": ["src/managed-agents-page.js"],
   "/pricing": ["src/ledger-pricing.js"],
   "/changelog": ["src/changelog.js"],
   "/quickstart": ["src/quickstart.js"],
@@ -67,6 +69,7 @@ export const PAGE_SOURCES = {
   "/markets": ["src/markets.js"],
   "/decide": ["src/decide-page.js"],
   "/security": ["src/security-page.js"],
+  "/accessibility": ["src/accessibility-page.js"],
   "/wholesale": ["src/wholesale-page.js", "src/wholesale.js", "src/stable-error-code.js"],
   "/trust": ["src/trust-page.js"],
   "/crawler": ["src/crawler-page.js"],
@@ -111,7 +114,7 @@ export const FAMILY_SOURCES = [
  *  published date is that module's first commit, their modified date the
  *  page's lastmod. Family entries (blog, guides, learn, integrations, skill
  *  packs) are dated one by one in the table's `entries`. */
-export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
+export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/integrations/claude-managed-agents", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
 /** The module whose first commit dates each article page. */
 export function articleSourceFiles() {
   return [...new Set(ARTICLE_PAGES.map((p) => (PAGE_SOURCES[p] || [])[0]).filter(Boolean))].sort();
@@ -169,7 +172,7 @@ let legalDates = null;
 export function legalLastmod(path) {
   if (!legalDates) {
     const read = (fn) => { try { return validDay((String(fn("https://agent402.tools")).match(LEGAL_RE) || [])[1]); } catch { return null; } };
-    legalDates = { "/terms": read(termsPage), "/privacy": read(privacyPage) };
+    legalDates = { "/terms": read(termsPage), "/privacy": read(privacyPage), "/dpa": read(dpaPage) };
   }
   return legalDates[path] || null;
 }
@@ -211,7 +214,7 @@ export function packLastmod(slug) {
 /** lastmod for a sitemap path, or null when nothing truthful is known. */
 export function pageLastmod(path) {
   const p = String(path || "").split("?")[0];
-  if (p === "/terms" || p === "/privacy") return legalLastmod(p);
+  if (p === "/terms" || p === "/privacy" || p === "/dpa") return legalLastmod(p);
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
   // A wiki page under /docs is dated by its own markdown file.

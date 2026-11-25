@@ -12,6 +12,7 @@
 //   node scripts/test-onchain-sql-pacer.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync } from "node:crypto";
+import { runAsRouteCall } from "../src/not-charged.js";
 
 const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 process.env.CDP_API_KEY_ID = "organizations/test/apiKeys/test";
@@ -29,7 +30,10 @@ const ok = (cond, msg) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = "SELECT block_number FROM base.blocks";
-const tool = CDP_TOOLS.find((t) => t.slug === "onchain-sql");
+// The handler is called as the route binder calls it (src/not-charged.js
+// runAsRouteCall), so a refusal carries the charge sentence a buyer reads.
+const sqlDef = CDP_TOOLS.find((t) => t.slug === "onchain-sql");
+const tool = { ...sqlDef, handler: (...args) => runAsRouteCall(() => sqlDef.handler(...args)) };
 const run = (req) => tool.handler({ sql }, req);
 const J = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const realFetch = globalThis.fetch;

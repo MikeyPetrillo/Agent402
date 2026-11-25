@@ -160,7 +160,7 @@ const { createTempoGate } = await import("../src/mpp-tempo.js");
 
 const GATE = { secretKey: SECRET, realm: "agent402.tools", priceFor: () => ({ priceUsd: 0.001, identityBound: false }) };
 async function listen(app) {
-  const server = app.listen(0);
+  const server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   return { server, url: `http://127.0.0.1:${server.address().port}` };
 }

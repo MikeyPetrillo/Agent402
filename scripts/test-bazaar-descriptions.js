@@ -86,15 +86,14 @@ ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or ext
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
 // The FRED terms require their notice on every surface that serves the data.
-// No tool serves FRED data now (fred-series and the computed macro tools read
+// No tool serves FRED data now (us-macro-series and the computed macro tools read
 // the publishing agencies, src/tools/us-macro-series.js), so the set of FRED
 // routes derived from code must be empty: the macro kit's functions that reach
 // a FRED host, closed over the calls between them, and every tool whose
-// handler calls one. A tool that reaches FRED again must carry attribution
-// "fred", end its catalog text with the notice, and keep it in its listing at
-// the Bazaar cut and at the 402 budget's shorter cut.
+// handler calls one. No FRED attribution key is kept; a tool that reached
+// FRED again would add its notice back with the terms.
 {
-  const { FRED_NOTICE, attributionTailOf } = await import("../src/data-attribution.js");
+  const { NVD_NOTICE, ATTRIBUTIONS } = await import("../src/data-attribution.js");
   const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
   const { readdir } = await import("node:fs/promises");
   const FRED_HOST = /stlouisfed\.org/;
@@ -123,20 +122,13 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     if (FRED_HOST.test(await readFile(new URL(`../src/tools/${file}`, import.meta.url), "utf8"))) otherKits.push(file);
   }
   ok(otherKits.length === 0, `no other kit calls a FRED host directly (${otherKits.join(", ") || "none"})`);
-  for (const t of MACRO_TOOLS.filter((x) => x.attribution === "fred")) {
-    ok(attributionTailOf(t.description) === FRED_NOTICE, `${t.slug}: the catalog text ends with the FRED notice`);
-    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[t.slug] || t.description);
-    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
-    ok(listed.endsWith(FRED_NOTICE) && cut.endsWith(FRED_NOTICE) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, `${t.slug}: the listing keeps the FRED notice at both cuts (${listed.length} / ${cut.length} chars)`);
-    const live = (res?.endpoints || []).find((e) => e.slug === t.slug);
-    ok(!live || String(live.description || "").endsWith(FRED_NOTICE), `${t.slug}: the live catalog text ends with the notice`);
-  }
+  ok(!("fred" in ATTRIBUTIONS), "no FRED attribution key is kept: a tool that reaches FRED again adds its notice back with its terms");
   // The cut keeps a trailing attribution sentence for any route: the text
   // before it is shortened at a sentence end, and the notice is never cut.
   const lead = "A first sentence about the data that runs on for a while. A second sentence that adds detail and runs on further than the cut allows here.";
-  const kept = bazaarCapDescription(`${lead} ${FRED_NOTICE}`, 200);
-  ok(kept === `A first sentence about the data that runs on for a while. ${FRED_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
-  ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
+  const kept = bazaarCapDescription(`${lead} ${NVD_NOTICE}`, 94 + NVD_NOTICE.length);
+  ok(kept === `A first sentence about the data that runs on for a while. ${NVD_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
+  ok(bazaarCapDescription(`${lead} Not the notice.`, 94 + NVD_NOTICE.length).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
 }
 // Every source whose terms require an attribution (src/data-attribution.js):
 // the set is read from code, the tools' `attribution` marks across every kit
@@ -184,7 +176,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
   // "fred" stays a known source with no tool serving it (see the FRED block above).
-  ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts["us-agencies"] >= 1 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
   // Floors read from the catalog, not typed: a tool whose published example
   // answer names a source in its \`source\` field is marked with that source,
   // so a retirement lowers the floor and a lost mark fails.
@@ -227,7 +219,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   }
   ok(packsWithSources >= 10, `the packs whose tools need an attribution are read from their steps (${packsWithSources})`);
   // The cut keeps a run of two sentences whole, as a two-source pack needs.
-  const two = `${ATTRIBUTIONS.fred} ${ATTRIBUTIONS.coingecko}`;
+  const two = `${ATTRIBUTIONS.nvd} ${ATTRIBUTIONS.coingecko}`;
   const kept2 = bazaarCapDescription(`${lead2()} ${two}`, CHALLENGE_SHORT_DESCRIPTION_MAX);
   ok(kept2.endsWith(two) && kept2.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && attributionTailOf(kept2) === two, `cut: a run of two attribution sentences stays whole (got ${JSON.stringify(kept2.slice(-80))})`);
   function lead2() { return "A first sentence about the data that runs on for a while. ".repeat(8).trim(); }
@@ -287,6 +279,22 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   const all = fitChallenge(block, long, declare, 200);
   ok(all.trimmed.join() === "input-descriptions-short,input-descriptions,input-types-only,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
     "budget: input detail goes before the description and the sample output, which go last (the pointer takes the output schema with it)");
+  // A cut description takes back the room the listing has left at the end: a
+  // listing a few bytes over keeps all but those bytes' worth of its text (not
+  // the fixed short cut), and one whose sample output became the pointer
+  // regrows into the room the sample left.
+  {
+    const bare = { input: { q: "x" }, output: { type: "json", example: { ok: true } } };
+    const sentences = Array.from({ length: 9 }, (_, i) => `Sentence number ${i} says what the tool does.`).join(" ");
+    const near = fitChallenge(bare, sentences, declare, JSON.stringify(declare(bare)).length + sentences.length - 5);
+    ok(near.description.length > CHALLENGE_SHORT_DESCRIPTION_MAX && near.description.length >= sentences.length - 60 && near.bytes <= JSON.stringify(declare(bare)).length + sentences.length - 5 && !isExamplePointer(near.slim.output.example),
+      `budget: a listing a few bytes over keeps nearly all its description (${near.description.length} of ${sentences.length} chars)`);
+    const heavy = { input: { q: "x" }, output: { type: "json", example: { rows: Array.from({ length: 80 }, (_, i) => ({ i })) } } };
+    const budget = JSON.stringify(declare({ ...heavy, output: { type: "json", example: { truncated: true, note: "full example in /openapi.json" } } })).length + sentences.length + 10;
+    const regrown = fitChallenge(heavy, sentences, declare, budget);
+    ok(isExamplePointer(regrown.slim.output.example) && regrown.description === sentences && regrown.bytes <= budget,
+      `budget: after the sample output gives way the description regrows into the room it left (${regrown.description.length} of ${sentences.length} chars)`);
+  }
   // A tool's own sample output can carry a "truncated" field (a paged list): it is still trimmed.
   const paged = { ...block, output: { type: "json", example: { truncated: true, results: Array.from({ length: 60 }, (_, i) => ({ id: i })) } } };
   ok(isExamplePointer(fitChallenge(paged, "short", declare, 200).slim.output.example), "budget: a sample output with its own truncated field is still replaced by the pointer");

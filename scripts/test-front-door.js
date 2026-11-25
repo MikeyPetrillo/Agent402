@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";
 import { BAZAAR_DESCRIPTIONS, isExamplePointer } from "../src/payments.js";
 import {
-  FRONT_DOOR_SLUG, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, RECOVERY_ANCHOR, FIRST_CALL_FREE_COPY,
+  FRONT_DOOR_SLUG, FRONT_DOOR_QUERY, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, RECOVERY_ANCHOR, FIRST_CALL_FREE_COPY,
   LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION, frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd, paidWiresPhrase,
 } from "../src/front-door.js";
 import { RAILS } from "../src/rails.js";
@@ -40,6 +40,8 @@ import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, failed = 0;
+// The first call is named by its flagship name when it has one, else by its slug.
+const frontName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG] || FRONT_DOOR_SLUG;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.log(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EM_DASH = /[—–]/;
@@ -117,12 +119,12 @@ function assertAccess(label, text, powCount, wires) {
   const catOn = cat(3, "$0.777");
   const on = frontDoorMarkdown(catOn, B);
   ok(firstCallAllowanceEnabled() && FIRST_CALL_FREE_COPY.test(on), "unit: switch on, the access line offers the free first call");
-  ok(on.includes(`to ${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG]} or ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.90)`), "unit: the clause names the eligible tools and the cap from the allowance config");
+  ok(on.includes(`to answer or ${frontName} (at or under $0.90)`), "unit: the clause names the eligible tools (a tool that is not a flagship by its slug) and the cap from the allowance config");
   ok([agentsMd(B, catOn), JSON.stringify(frontDoorJson(catOn, B)), JSON.stringify(frontDoor402Json(catOn, B))].every((s) => FIRST_CALL_FREE_COPY.test(s)), "unit: switch on, agents.md, the JSON block and the 402 part carry the clause (the JSON memo follows the switch)");
   ok(agentsMd(B, catOn).includes("nor for a free first call (a re-send of its payment inside the replay window is refused and not charged)"), "unit: switch on, the replay line excludes a free first call");
   process.env.FIRST_CALL_ALLOWANCE_MAX_USD = "0.6";
   const capped = frontDoorMarkdown(catOn, B);
-  ok(capped.includes(`to ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.60)`) && !new RegExp(`call to [^(]*${FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG].replace(".", "\\.")}`).test(capped), "unit: a tool over the cap is left out of the clause");
+  ok(capped.includes("to answer (at or under $0.60)") && !new RegExp(`call to [^(]*\\b${frontName}\\b`).test(capped), "unit: a tool over the cap is left out of the clause");
   process.env.FIRST_CALL_ALLOWANCE = "off";
   ok(!agentsMd(B, catOn).includes("free first call (a re-send"), "unit: switch off, the replay line does not mention a free first call");
   ok(!FIRST_CALL_FREE_COPY.test(frontDoorMarkdown(catOn, B)) && !FIRST_CALL_FREE_COPY.test(JSON.stringify(frontDoorJson(catOn, B))), "unit: switch back off, the clause is gone from markdown and the memoized JSON");
@@ -308,22 +310,22 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   ok(!!row && typeof row.price === "string" && /^\$\d/.test(row.price), `${tag}: the catalog prices the first call (${FRONT_DOOR_SLUG}: ${row?.price})`);
   const PRICE = row?.price;
   const ROUTE = `${row?.method} ${row?.path}`;
-  const mcpName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG];
+  const mcpName = frontName;
   const pow = await (await fetch(`${B}${POW_LIST_PATH}`)).json();
   const powCount = Array.isArray(pow.eligibleTools) ? pow.eligibleTools.length : -1;
   ok(powCount > 0, `${tag}: ${POW_LIST_PATH} lists the proof-of-work tools (${powCount})`);
 
   const assertFirstCall = (label, text) => {
     ok(text.includes(`${PRICE} per call`), `${label}: the first call quotes the catalog price ${PRICE}`);
-    ok(strip(text).includes(`${row.method} ${BASE_URL}${row.path}?q=`), `${label}: ...and the catalog route ${ROUTE}`);
-    ok(text.startsWith(mcpName), `${label}: ...named by its MCP name ${mcpName}`);
+    ok(strip(text).includes(`${row.method} ${BASE_URL}${row.path}?${FRONT_DOOR_QUERY}`), `${label}: ...and the catalog route ${ROUTE}`);
+    ok(strip(text).startsWith(mcpName), `${label}: ...named ${mcpName}`);
     const priced = [...text.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => `$${m[1]}`);
     const catalogPrices = new Set((pricing.endpoints || []).map((e) => e.price));
     ok(priced.length >= 1 && priced.every((p) => catalogPrices.has(p)), `${label}: every price in the first-call line is a catalog price (${priced.join(", ")})`);
   };
   const assertUse = (label, text) => {
     const t = strip(text);
-    ok(/^You need live web data/.test(t) && /; not when you already hold the URL/.test(t) && /local computation/.test(t), `${label}: use when and do not use when share one line`);
+    ok(/^You need current public data/.test(t) && /; not when you already hold the URL/.test(t) && /local computation/.test(t), `${label}: use when and do not use when share one line`);
     ok(t.endsWith(`When a call fails: ${AGENTS_MD_PATH}.`), `${label}: the use line points at ${AGENTS_MD_PATH} for failures`);
   };
 
@@ -420,7 +422,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   const s = await readSurfaces(B, "off", { door402: false });
   const texts = { "/llms.txt": s.llms, [AGENTS_MD_PATH]: s.agents, "server.describe": JSON.stringify(s.fd), "402 body": JSON.stringify(s.body402) };
   for (const [where, text] of Object.entries(texts)) ok(!FIRST_CALL_FREE_COPY.test(text), `off: ${where} offers no free first call`);
-  ok(s.hdr.resource?.description === BAZAAR_DESCRIPTIONS[FRONT_DOOR_SLUG], "402 header: the listing description is the curated copy, untrimmed");
+  ok(BAZAAR_DESCRIPTIONS[FRONT_DOOR_SLUG] ? s.hdr.resource?.description === BAZAAR_DESCRIPTIONS[FRONT_DOOR_SLUG] : typeof s.hdr.resource?.description === "string" && s.hdr.resource.description.length > 0, "402 header: the listing description is the curated copy, untrimmed, where one is written");
   {
     const r = await fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
     const body = JSON.parse(await r.text());
@@ -455,9 +457,9 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
 
   // Origin-level descriptions lead with the first call.
   const openapi = await (await fetch(`${B}/openapi.json`)).json();
-  ok(String(openapi.info?.description || "").startsWith(`First call: ${s.ROUTE}?q=`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
+  ok(String(openapi.info?.description || "").startsWith(`First call: ${s.ROUTE}?${FRONT_DOOR_QUERY}`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
   const manifest = await (await fetch(`${B}/.well-known/x402`)).json();
-  ok(String(manifest.summary || "").startsWith(`First call: ${s.ROUTE}?q=`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
+  ok(String(manifest.summary || "").startsWith(`First call: ${s.ROUTE}?${FRONT_DOOR_QUERY}`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
   ok(!EM_DASH.test(openapi.info.description.slice(0, 300)) && !EM_DASH.test(manifest.summary.slice(0, 300)), "no em or en dash in either lead sentence");
   ok(!FIRST_CALL_FREE_COPY.test(openapi.info.description) && !FIRST_CALL_FREE_COPY.test(manifest.summary), "off: neither origin description offers a free first call");
   stopProc();
@@ -486,7 +488,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     const e = (s.pricing.endpoints || []).find((x) => x.slug === slug);
     return e ? Number(String(e.price).replace(/[^0-9.]/g, "")) : NaN;
   };
-  ok(named.length > 0 && named.includes(FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG]) && named.every((n) => priceOf(n) > 0 && priceOf(n) <= cap), `on: every tool the clause names is a catalog route at or under the cap, web.search among them (${named.join(", ")})`);
+  ok(named.length > 0 && named.includes(FLAGSHIP_MCP_NAMES["pdf-to-markdown"]) && named.every((n) => priceOf(n) > 0 && priceOf(n) <= cap), `on: every tool the clause names is a catalog route at or under the cap, pdf.markdown among them (${named.join(", ")})`);
   ok(named.every((n) => Object.values(FLAGSHIP_MCP_NAMES).includes(n)), "on: with no slug list set, the clause names flagships only");
   stopProc();
 }

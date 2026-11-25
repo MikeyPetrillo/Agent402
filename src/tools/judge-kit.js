@@ -25,6 +25,7 @@ import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
 import { noteJudgeBackend, noteJudgeWalk } from "../judge-timing.js";
 import { settleBeforeUpstream, isSettleFirstRefusal } from "../settle-first.js";
+import { notChargedHere } from "../not-charged.js";
 
 // FOUR MODELS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then the same Jev version over OpenRouter (a second route to one model),
@@ -212,13 +213,13 @@ export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders =
   catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; e.mayBeBilled = true; throw e; }
   if (!res.ok) {
     // Relay the CLASS, never the body: it can echo the buyer's own state back.
-    if (res.status === 401 || res.status === 403) { const e = new Error(JUDGMENT_KEY_REFUSED); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_KEY); }
-    if (res.status === 402) { const e = new Error(JUDGMENT_BALANCE_OUT); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE); }
+    if (res.status === 401 || res.status === 403) { const e = new Error(`${JUDGMENT_KEY_REFUSED}${notChargedHere()} Retry later.`); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_KEY); }
+    if (res.status === 402) { const e = new Error(`${JUDGMENT_BALANCE_OUT}${notChargedHere()} Retry later.`); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE); }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
     // The upstream answers some of its own failures with 499 and an
     // internal_server_error body (seen 2026-10-15 on an image request): its
     // fault, not the request's, so it is a 503 to retry, not a 400 to fix.
-    if (res.status === 499 || /"error_type"\s*:\s*"internal_server_error"/.test(text || "")) { const e = new Error("Judgment upstream had an internal error. Retry shortly; nothing was charged."); e.statusCode = 503; e.mayBeBilled = false; throw e; }
+    if (res.status === 499 || /"error_type"\s*:\s*"internal_server_error"/.test(text || "")) { const e = new Error(`Judgment upstream had an internal error.${notChargedHere()} Retry shortly.`); e.statusCode = 503; e.mayBeBilled = false; throw e; }
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;
   }

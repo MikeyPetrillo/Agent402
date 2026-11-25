@@ -66,15 +66,15 @@ async function child(mode, dir) {
 
   if (mode === "global") {
     const { installTlsDistrust, addDistrustedSpkiForTests, withDistrust, tlsDistrustInstalled } = await import(join(ROOT, "src/tls-distrust.js"));
-    const { setGlobalDispatcher, Agent, fetch: undiciFetch } = await import("undici");
+    const { setGlobalDispatcher, Agent, Dispatcher1Wrapper, fetch: undiciFetch } = await import("undici");
     installTlsDistrust();
     // The dispatcher src/server.js installs.
-    setGlobalDispatcher(new Agent({ connect: withDistrust({ family: 4 }) }));
+    setGlobalDispatcher(new Agent({ allowH2: false, connect: withDistrust({ family: 4 }) }));
     const paths = {
       "global fetch": (u) => viaFetch(u),
       "https.get": (u) => viaHttpsGet(u),
       "undici fetch (package)": (u) => async () => (await undiciFetch(u)).text(),
-      "undici Agent without explicit option": (u) => viaFetch(u, { dispatcher: new Agent() }),
+      "undici Agent without explicit option": (u) => viaFetch(u, { dispatcher: new Dispatcher1Wrapper(new Agent()) }),
       "tls.connect": (u) => () => new Promise((res, rej) => {
         const s = tls.connect({ host: "localhost", port: Number(new URL(u).port) }, () => { s.end(); res("ok"); });
         s.on("error", rej);
@@ -229,8 +229,8 @@ for (const [f, spec] of [["src/server.js", "./tls-distrust-boot.js"], ["worker/s
   ok(readFileSync(join(ROOT, f), "utf8").includes(`import "${spec}";`), `${f} installs the refusal at boot`);
 }
 const serverSrc = readFileSync(join(ROOT, "src/server.js"), "utf8");
-ok(/setGlobalDispatcher\(new UndiciAgent\(\{ connect: withDistrust\(\{ family: 4 \}\) \}\)\)/.test(serverSrc), "src/server.js's global dispatcher keeps family 4 and adds the refusal");
-for (const f of ["src/x402-buyer.js", "src/tempo-buyer.js"]) ok(/new UndiciAgent\(\{ connect: withDistrust\(\) \}\)/.test(readFileSync(join(ROOT, f), "utf8")), `${f}'s trusted dispatcher carries the refusal`);
+ok(/setGlobalDispatcher\(new UndiciAgent\(\{ allowH2: false, connect: withDistrust\(\{ family: 4 \}\) \}\)\)/.test(serverSrc), "src/server.js's global dispatcher keeps family 4 and adds the refusal");
+for (const f of ["src/x402-buyer.js", "src/tempo-buyer.js"]) ok(/fetchAgent\(\{ connect: withDistrust\(\) \}\)/.test(readFileSync(join(ROOT, f), "utf8")), `${f}'s trusted dispatcher carries the refusal`);
 ok(/buildConnector\(\{ lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS, checkServerIdentity \}\)/.test(readFileSync(join(ROOT, "src/tools/fetch-guard.js"), "utf8")), "the SSRF dispatcher's connector carries the refusal");
 // Deliberate exceptions stay as they were.
 ok(/rejectUnauthorized: false/.test(readFileSync(join(ROOT, "src/tools/kit.js"), "utf8")), "src/tools/kit.js keeps its rejectUnauthorized: false (certificate inspection)");

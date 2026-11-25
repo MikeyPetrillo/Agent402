@@ -1,4 +1,5 @@
-// agent402-strands: drop-in Strands Agents (TypeScript) tools for Agent402.
+// agent402-agent-loop-tools: Agent402 tools for use with Strands Agents (TypeScript).
+// Formerly agent402-strands.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into Strands
 // `tool({...})` instances the agent can invoke, with payment handled for you
@@ -6,23 +7,20 @@
 // x402+USDC for wallet-only tools when you pass a payFetch).
 //
 //   import { Agent } from "@strands-agents/sdk";
-//   import { agent402Tools } from "agent402-strands";
+//   import { agent402Tools } from "agent402-agent-loop-tools";
 //
 //   const { tools } = await agent402Tools({ slugs: ["extract","hash","render"] });
 //   const agent = new Agent({ tools });
 //   const out = await agent.invoke("Hash 'hello world' with sha256");
 //
-// Built for Amazon Bedrock AgentCore: Strands is the framework AgentCore Payments
-// surfaces as its preferred SDK, and AgentCore Payments orchestrates x402,
-// which is exactly what Agent402 speaks. The two halves snap together with
-// zero glue beyond this adapter.
+// Works with Strands Agents wherever it runs, including on Amazon Bedrock AgentCore.
 
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-strands/0.2.2";
+const USER_AGENT = "agent402-agent-loop-tools/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -162,7 +160,7 @@ async function loadStrands() {
   try {
     return await import("@strands-agents/sdk");
   } catch {
-    throw new Error("agent402-strands requires '@strands-agents/sdk'. Install it with: npm install @strands-agents/sdk");
+    throw new Error("agent402-agent-loop-tools requires '@strands-agents/sdk'. Install it with: npm install @strands-agents/sdk");
   }
 }
 
@@ -170,7 +168,7 @@ async function loadZod() {
   try {
     return await import("zod");
   } catch {
-    throw new Error("agent402-strands requires 'zod'. Install it with: npm install zod");
+    throw new Error("agent402-agent-loop-tools requires 'zod'. Install it with: npm install zod");
   }
 }
 

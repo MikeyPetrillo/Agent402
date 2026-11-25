@@ -1,13 +1,16 @@
-// Our own settler for Robinhood Chain (eip155:4663), the last settle fallback
-// after the facilitators ROBINHOOD_FACILITATOR_URL lists.
+// Our own settler for Robinhood Chain (eip155:4663) and Ink (eip155:57073),
+// the last settle fallback after the facilitators ROBINHOOD_FACILITATOR_URL
+// (or INK_FACILITATOR_URL) lists. Each chain has its own key
+// (ROBINHOOD_RELAYER_KEY, INK_RELAYER_KEY), its own minimum, its own caps and
+// its own lease (OWN_RELAYER_NETWORKS below); one client settles one chain.
 //
-// A buyer's payment on 4663 is a signed EIP-3009 transferWithAuthorization for
-// USDG: anyone may submit it, and the submitter pays the gas. The listed
+// A buyer's payment on 4663 (or 57073) is a signed EIP-3009 transferWithAuthorization for
+// USDG (Ink: USDC): anyone may submit it, and the submitter pays the gas. The listed
 // facilitators submit it for free from their own gas wallets; when they cannot
 // (a wallet run dry answers a revert for every payment), this client submits
 // the same authorization from our relayer wallet (ROBINHOOD_RELAYER_KEY; key
 // present = on). It settles our own sales only: the network, the token and the
-// recipient (our treasury for 4663) are fixed at boot and anything else is
+// recipient (our treasury) are fixed at boot and anything else is
 // refused before any read or write. It pays the gas of every sale it settles,
 // so a sale whose price is under ROBINHOOD_RELAYER_MIN_PRICE_USD
 // (src/network-floors.js; its default is the constant there) is refused the same way, nothing
@@ -30,22 +33,42 @@
 //     package then reports a missing receipt as settlement_pending WITH that
 //     hash, which the fallback chain treats as possibly on-chain and stops.
 //     The EIP-3009 nonce also means at most one transfer can ever land.
-// Success is only a mined receipt with status 1 and the USDG Transfer the
+// Success is only a mined receipt with status 1 and the token Transfer the
 // authorization names (the package checks the event).
 
-import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, parseAbi, verifyTypedData as verifyTypedDataLocal } from "viem";
+import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, parseAbi, serializeTransaction, verifyTypedData as verifyTypedDataLocal } from "viem";
+import { paysL1DataFee, readL1Fee } from "./op-stack-l1-fee.js";
 const AUTH_STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
 import { privateKeyToAccount } from "viem/accounts";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { positiveNum as num } from "./env-num.js";
-import { robinhoodRelayerMinUnits } from "./network-floors.js";
+import { robinhoodRelayerMinUnits, inkRelayerMinUnits } from "./network-floors.js";
 import { OWN_SETTLER_SCREEN_REFUSED, OWN_SETTLER_SCREEN_REFUSED_TEXT, noteComplianceRefusal } from "./settle-compliance.js";
 
 export const OWN_RELAYER_NAME = "own relayer";
 
-/** Caps, env-tunable: the fee per gas (gwei), the gas limit, the receipt wait,
- *  and how long a submission waits for the relayer lock. */
-export function relayerSettings(env = process.env) {
+/**
+ * The chains our own relayer settles, each with what is its own: the token's
+ * label in refusals, the variable that names its minimum, the lease prefix
+ * (Robinhood keeps the name it always had, so a deploy overlap shares one
+ * lease) and the minimum in base units.
+ */
+export const OWN_RELAYER_NETWORKS = Object.freeze({
+  "eip155:4663": Object.freeze({ chain: "Robinhood Chain", token: "USDG", minVar: "ROBINHOOD_RELAYER_MIN_PRICE_USD", leasePrefix: "rh-relayer", minUnits: () => robinhoodRelayerMinUnits() }),
+  "eip155:57073": Object.freeze({ chain: "Ink", token: "USDC", minVar: "INK_RELAYER_MIN_PRICE_USD", leasePrefix: "ink-relayer", minUnits: () => inkRelayerMinUnits() }),
+});
+
+/** Caps, env-tunable per chain: the fee per gas (gwei), the gas limit, the
+ *  receipt wait, and how long a submission waits for the relayer lock. */
+export function relayerSettings(env = process.env, network = "eip155:4663") {
+  if (network === "eip155:57073") {
+    return {
+      maxFeeGwei: num(env.INK_RELAYER_MAX_GWEI, 5),
+      gasLimitCap: Math.round(num(env.INK_RELAYER_GAS_CAP, 200_000)),
+      receiptTimeoutMs: num(env.INK_RELAYER_RECEIPT_MS, 30_000),
+      lockWaitMs: num(env.INK_RELAYER_LOCK_WAIT_MS, 15_000),
+    };
+  }
   return {
     maxFeeGwei: num(env.ROBINHOOD_RELAYER_MAX_GWEI, 5),
     gasLimitCap: Math.round(num(env.ROBINHOOD_RELAYER_GAS_CAP, 200_000)),
@@ -56,12 +79,13 @@ export function relayerSettings(env = process.env) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// One submission at a time per relayer address in this process; the lease
-// serializes the replicas. withLease answers "held" while another container
-// has the row, so the acquire is retried until it is ours or the wait ends.
+// One submission at a time per relayer address and chain in this process; the
+// lease serializes the replicas. withLease answers "held" while another
+// container has the row, so the acquire is retried until it is ours or the
+// wait ends. The account nonce is per chain, so each chain has its own lock.
 const localQueues = new Map();
-async function withRelayerLock(address, { lockWaitMs, leaseImpl }, fn) {
-  const key = String(address).toLowerCase();
+async function withRelayerLock(address, { lockWaitMs, leaseImpl, leasePrefix = "rh-relayer" }, fn) {
+  const key = `${leasePrefix}-${String(address).toLowerCase()}`;
   const prev = localQueues.get(key) || Promise.resolve();
   let release;
   const mine = new Promise((r) => { release = r; });
@@ -72,7 +96,7 @@ async function withRelayerLock(address, { lockWaitMs, leaseImpl }, fn) {
     const withLease = leaseImpl || (await import("./state-db.js")).withLease;
     const deadline = Date.now() + lockWaitMs;
     for (;;) {
-      const r = await withLease(`rh-relayer-${key}`, { ttlMs: 120_000, failOpen: false, log: () => {} }, async (ctx) => fn(ctx));
+      const r = await withLease(key, { ttlMs: 120_000, failOpen: false, log: () => {} }, async (ctx) => fn(ctx));
       if (r.ran) return r.result;
       if (r.reason !== "held" || Date.now() >= deadline) throw Object.assign(new Error(`relayer lock not available (${r.reason})`), { relayerRefusal: true });
       await sleep(150);
@@ -103,20 +127,21 @@ const alreadyKnown = (e) => /already known|known transaction|already imported/i.
  * `settle(paymentPayload, requirements) -> SettleResponse`.
  * @param {object} o
  * @param {string} o.key - the relayer private key
- * @param {string} o.network - must be eip155:4663
- * @param {string} o.asset - the USDG contract
+ * @param {string} o.network - eip155:4663 or eip155:57073 (OWN_RELAYER_NETWORKS)
+ * @param {string} o.asset - the chain's token contract (USDG, or Ink's USDC)
  * @param {string} o.payTo - our treasury for this network
  * @param {string} o.rpcUrl - the chain's JSON-RPC endpoint
- * @param {bigint} [o.minUnits] - the least amount (USDG base units) a sale must
+ * @param {bigint} [o.minUnits] - the least amount (token base units) a sale must
  *   carry for this relayer to settle it; under it nothing is sent
  */
-export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, settings = relayerSettings(), minUnits = robinhoodRelayerMinUnits(), leaseImpl = null, log = console.warn, screen = null } = {}) {
+export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, settings = relayerSettings(process.env, network), minUnits = Object.hasOwn(OWN_RELAYER_NETWORKS, String(network)) ? OWN_RELAYER_NETWORKS[network].minUnits() : 0n, leaseImpl = null, log = console.warn, screen = null } = {}) {
   // The payer screen before any submission (src/own-settler-screen.js),
   // loaded on first use; a test passes its own.
   const ownScreen = () => import("./own-settler-screen.js");
   const screenPayer = async (a) => (screen || (await ownScreen()).screenOwnSettlerPayer)(a);
-  if (network !== "eip155:4663") throw new Error("the own relayer settles eip155:4663 only");
-  if (!rpcUrl) throw new Error("no RPC for eip155:4663");
+  const chain = Object.hasOwn(OWN_RELAYER_NETWORKS, String(network)) ? OWN_RELAYER_NETWORKS[network] : null;
+  if (!chain) throw new Error(`the own relayer settles ${Object.keys(OWN_RELAYER_NETWORKS).join(" or ")} only`);
+  if (!rpcUrl) throw new Error(`no RPC for ${network}`);
   const account = privateKeyToAccount(key);
   const chainId = Number(network.split(":")[1]);
   const token = getAddress(asset);
@@ -172,11 +197,11 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
 
   async function writeContractInner({ address, abi, functionName, args, dataSuffix }) {
       // Our sales only: the token, the call and the recipient are fixed.
-      if (!isAddressEqual(address, token) || functionName !== "transferWithAuthorization") throw Object.assign(new Error("own relayer refuses any call but USDG transferWithAuthorization"), { relayerRefusal: true });
+      if (!isAddressEqual(address, token) || functionName !== "transferWithAuthorization") throw Object.assign(new Error(`own relayer refuses any call but ${chain.token} transferWithAuthorization`), { relayerRefusal: true });
       if (!isAddressEqual(String(args?.[1] || "0x0000000000000000000000000000000000000000"), treasury)) throw Object.assign(new Error("own relayer refuses a transfer to any recipient but our treasury"), { relayerRefusal: true });
       let data = encodeFunctionData({ abi, functionName, args });
       if (dataSuffix && /^0x[0-9a-fA-F]*$/.test(dataSuffix)) data = `${data}${dataSuffix.slice(2)}`;
-      return withRelayerLock(account.address, { lockWaitMs: settings.lockWaitMs, leaseImpl }, async (ctx) => {
+      return withRelayerLock(account.address, { lockWaitMs: settings.lockWaitMs, leaseImpl, leasePrefix: chain.leasePrefix }, async (ctx) => {
         // A used authorization is refused here, not broadcast: the token may
         // treat a replayed nonce as a successful no-op (no revert in the
         // simulation), which would spend our gas for nothing. Read under the
@@ -196,7 +221,14 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
         const maxFeePerGas = gasPrice * 2n < cap ? gasPrice * 2n : cap;
         const tip = gasPrice / 10n;
         const maxPriorityFeePerGas = tip < maxFeePerGas ? tip : maxFeePerGas;
-        if (balance < gas * maxFeePerGas) throw Object.assign(new Error("own relayer balance cannot pay this settlement's gas"), { relayerRefusal: true, relayerFunds: true });
+        // On an OP Stack chain (Ink) the sender also pays the transaction's
+        // L1 data fee from its balance, priced by the chain's GasPriceOracle
+        // on the unsigned transaction; a fee that cannot be read sends nothing.
+        let l1Fee = 0n;
+        if (paysL1DataFee(network)) {
+          try { l1Fee = await readL1Fee(pub, serializeTransaction({ type: "eip1559", chainId, to: token, data, value: 0n, nonce, gas, maxFeePerGas, maxPriorityFeePerGas })); } catch (e) { throw Object.assign(new Error(`the L1 data fee could not be read (${String(e?.shortMessage || e?.message || e).slice(0, 80)}); nothing sent`), { relayerRefusal: true }); }
+        }
+        if (balance < gas * maxFeePerGas + l1Fee) throw Object.assign(new Error("own relayer balance cannot pay this settlement's gas"), { relayerRefusal: true, relayerFunds: true });
         if (!ctx.stillHeld()) throw Object.assign(new Error("relayer lock lost before signing"), { relayerRefusal: true });
         const raw = await account.signTransaction({ type: "eip1559", chainId, to: token, data, value: 0n, nonce, gas, maxFeePerGas, maxPriorityFeePerGas });
         const hash = keccak256(raw);
@@ -220,11 +252,11 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
   const scheme = new ExactEvmScheme(signer, { simulateInSettle: true, eip6492AllowedFactories: [] });
   const refuse = (reason, message, payer) => ({ success: false, errorReason: reason, errorMessage: message, transaction: "", network, payer, nothingSent: true });
 
-  /** Our sale on 4663 in USDG to our treasury, or nothing. */
+  /** Our sale on this chain in its token to our treasury, or nothing. */
   function ours(requirements) {
-    if (requirements?.network !== network || requirements?.scheme !== "exact") return "not an exact payment on eip155:4663";
+    if (requirements?.network !== network || requirements?.scheme !== "exact") return `not an exact payment on ${network}`;
     try {
-      if (!isAddressEqual(String(requirements.asset || ""), token)) return "not USDG";
+      if (!isAddressEqual(String(requirements.asset || ""), token)) return `not ${chain.token}`;
       if (!isAddressEqual(String(requirements.payTo || ""), treasury)) return "not our treasury";
     } catch { return "unreadable requirements"; }
     return null;
@@ -260,7 +292,7 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       if (paymentPayload?.accepted?.network && paymentPayload.accepted.network !== network) return refuse("own_relayer_refused", "payload names another network", payer);
       // A sale under the minimum is never ours to pay gas for: nothing is
       // read or sent, and the caller's earlier refusal stands.
-      if (!covers(requirements)) return refuse("own_relayer_below_minimum", "the sale's price is under the own relayer's minimum (ROBINHOOD_RELAYER_MIN_PRICE_USD)", payer);
+      if (!covers(requirements)) return refuse("own_relayer_below_minimum", `the sale's price is under the own relayer's minimum (${chain.minVar})`, payer);
       // A payer on the sanctions list is never submitted: nothing is read or
       // sent, and the refusal is final (src/settle-compliance.js).
       let listed = false;

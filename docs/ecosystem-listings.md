@@ -4,6 +4,9 @@
 
 Use this block (or any subset) wherever a directory asks what Agent402 is. Every
 claim below is served live; verify prices against `/api/pricing` before pasting.
+Third-party directories and marketplaces get this summary only: it names a tool
+only when its data terms are cleared for resale, so add nothing to it from the
+catalog without that check.
 
 - **What it is:** Agent402 is the payment and trust layer for agentic commerce:
   agents find, pay for and verify paid calls to Agent402, across x402 and
@@ -16,9 +19,8 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   the proven ones. Open source and self-hostable, with a pay-per-crawl
   tollbooth for sites and a buyer SDK.
 - **Catalog:** 500+ ready tools on the same rails, including multi-tool skill packs:
-  live web search and cited answers, headless browser, PDFs, OCR,
-  financial / SEC EDGAR / macro / on-chain data, an OpenAI-compatible LLM gateway
-  (`/v1`), durable wallet-keyed memory, 150+ pure-CPU utilities.
+  headless browser, PDFs, OCR, SEC filings, macro and on-chain data, computed
+  market answers, durable wallet-keyed memory, 150+ pure-CPU utilities.
 - **Decide (`POST /api/decide`, MCP `decide.plan`):** describe a job in plain
   language and get a call-ready plan over this catalog and outside x402 sellers
   with a recently verified 402: tools in order, fallbacks, params that validate,
@@ -32,18 +34,12 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   `stablecoin-depeg-watch`, `exchange-spread`, `dex-pool-health`,
   `dex-volume-board`, `defi-screener`, `chain-board`); Solana token markets (pairs, search, trending, prices);
   computed technical indicators and a whole-market pulse
-  ($0.002 to $0.004); broad coin/exchange coverage including price by token
-  contract address; indexed EVM chain reads (transfers, balances, allowances,
+  ($0.002 to $0.004); indexed EVM chain reads (transfers, balances, allowances,
   decoded receipts, block receipts, token price history); whole-site crawling
   (`site-map` $0.005, `site-crawl` $0.02); and page change detection
   (`page-change` $0.004).
-- **Images and video, flat per call:** `POST /v1/images/fast` $0.02,
-  `POST /v1/images/pro` $0.05, `POST /v1/images/generations` $0.08,
-  `POST /v1/videos/generations` $0.20 (one silent 4-second 720p clip). OpenAI
-  wire, so any OpenAI SDK works against base_url `https://agent402.tools/v1`;
-  priced per picture or per clip rather than per token.
-- **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo,
-  Avalanche, Sei, Optimism, Arc, Ink, Stellar, Algorand; USDG on Robinhood Chain - 14 chains),
+- **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum One, Monad, Celo,
+  Avalanche C-Chain, Sei, OP Mainnet, Arc, Ink, Stellar, Algorand; USDG on Robinhood Chain - 14 chains),
   MPP (Machine Payments Protocol) on the same 402 (Base/Celo, or natively on Tempo),
   free proof-of-work on the pure-CPU tools. A prepaid credits key, where sold or
   already issued (agent402.tools/credits says whether credits are on sale), pays Agent402's own
@@ -69,8 +65,8 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   re-runs weekly.
 - **MCP:** hosted connector `https://agent402.tools/mcp` (dotted tools:
   `catalog.search`, `catalog.find`, `catalog.call`, `payment.info`,
-  `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagships `web.search`,
-  `web.answer`, `web.news`, `browser.render`, `audio.transcribe`,
+  `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagships `pdf.markdown`,
+  `macro.series`, `weather.current`, `browser.render`, `audio.transcribe`,
   `memory.read`, `memory.write`); wallet-only tools are payable on the connector
   in the call, over x402 or MPP (the offer arrives in the tool result, the
   payment goes back in `_meta`). npm: `agent402-mcp` (stdio, pays by

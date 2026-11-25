@@ -16,7 +16,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
-import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, FETCH_TOKEN, BROWSER_FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA } from "./user-agents.js";
+import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, FETCH_TOKEN, BROWSER_FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA, SUGGEST_UA } from "./user-agents.js";
 import { ROBOTS_CACHE_MS, ROBOTS_UNREADABLE_CACHE_MS, ROBOTS_BRAND_TOKEN, ROBOTS_UNGATED_READS } from "./tools/robots-gate.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
@@ -62,6 +62,7 @@ const SECTIONS = [
       `<code>${esc(FETCH_UA)}</code>: a tool in our catalog fetching a URL its caller named, one request for one caller.`,
       `<code>${esc(BROWSER_FETCH_UA)}</code>: the same, for a tool that loads the page in a headless browser (render, screenshot, page speed): a browser's own string with the ${esc(FETCH_TOKEN)} token added, so the page renders as it does for a visitor (the page-speed tool's mobile measurement sends the mobile browser string with the same token).`,
       `<code>${esc(SITE_CRAWL_UA)}</code>: the multi-page site-crawl tool, run for one caller and limited to a few pages.`,
+      `<code>${esc(SUGGEST_UA)}</code>: the search-suggest tool reading Wikipedia's title suggestions for one caller, one request at a time; it reads no other host.`,
       `No request to a site in our index, or to a URL a caller names, carries the older <code>${esc(RETIRED_BARE_UA)}</code> token; it remains only on the requests some catalog tools make to the fixed data APIs they are built on.`,
       `A User-Agent is text anyone can copy, so a request carrying one of these strings at a volume or cadence this page does not describe may not be ours. We keep a count of the requests each of these components sends each host, per minute, for ${esc(span(REQUEST_LOG_KEEP_MS))}: email us the host and the timestamps from that window and we will check them against it.`,
     ],

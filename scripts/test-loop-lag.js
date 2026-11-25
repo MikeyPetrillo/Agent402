@@ -125,9 +125,12 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
   ok(turnsDuring(at0 - 10, Date.now()).some((t) => t.startsWith("thrower ")), "a turn that throws is timed as well");
   // The index wires the two spans the crawl stalls pointed at.
   const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
-  const passStart = idx.indexOf("const manifestPassAt = Date.now(), manifestPassT0 = performance.now();");
-  const passEnd = idx.indexOf("noteTurn(`crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`, manifestPassAt, performance.now() - manifestPassT0);");
-  ok(passStart > 0 && passEnd > passStart && idx.slice(passStart, passEnd).includes("mergeManifestIntoTools(") && idx.slice(passStart, passEnd).includes("stampDeclared("), "the crawl's manifest passes are timed as one span named with the seller's host");
+  // Each pass takes a crawl-lane turn of its own and is timed as a span named
+  // with the seller's host (scripts/test-crawl-cycle-turns.js bounds the turns).
+  const passStart = idx.indexOf("const passSpan = `crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`;");
+  const passEnd = idx.indexOf("tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));");
+  const passes = passStart > 0 && passEnd > passStart ? idx.slice(passStart, passEnd) : "";
+  ok(passes.includes("manifestPass(() => mergeManifestIntoTools(") && passes.includes("manifestPass(() => stampDeclared("), "the crawl's manifest passes are timed as spans named with the seller's host");
   ok(/finally \{\s*noteTurn\("route-index-shadow-finish", finishAt, performance\.now\(\) - finishT0\);/.test(idx), "the shadow build's unsliced finish is timed as its own span");
 }
 

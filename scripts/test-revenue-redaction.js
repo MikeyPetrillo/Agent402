@@ -64,7 +64,7 @@ const echoGet = createServer((req, res) => {
   res.writeHead(500, { "content-type": "application/json" });
   res.end(JSON.stringify({ message: `upstream said: ${req.url}` }));
 });
-await Promise.all([new Promise((r) => echoRpc.listen(0, r)), new Promise((r) => echoGet.listen(0, r))]);
+await Promise.all([new Promise((r) => echoRpc.listen(0, "127.0.0.1", r)), new Promise((r) => echoGet.listen(0, "127.0.0.1", r))]);
 
 let thrown = "";
 try {

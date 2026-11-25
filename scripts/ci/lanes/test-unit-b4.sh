@@ -216,6 +216,8 @@ t node scripts/test-stall-profiler.js
 t node scripts/test-offload-stalls.js
 # A registry-fallback crawl of a 77k-row seller takes its whole-list passes across turns (offline)
 t node scripts/test-fallback-crawl-turn.js
+# A crawl cycle on a production-sized index (discovery, two full cycles, the MPP crawl) holds no turn long: one crawl's step per loop iteration, the route index's slices on time (offline)
+t node scripts/test-crawl-cycle-turns.js
 # Ledger and index figures behind the stalled routes build across turns
 t node scripts/test-stall-routes.js
 t node scripts/test-manifest-input-schema.js

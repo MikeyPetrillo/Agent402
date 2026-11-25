@@ -42,7 +42,7 @@ app.post("/api/slow", async (req, res) => {
   if (failNext) { failNext = false; return res.status(500).json({ error: "boom" }); }
   res.json({ echo: req.body?.text ?? null, run: runs });
 });
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const B = `http://127.0.0.1:${server.address().port}`;
 const call = (body, idem) => fetch(`${B}/api/slow`, {
@@ -128,7 +128,7 @@ try {
   app2.use(express.json());
   app2.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/hold", freeMode: false, implicitReplay: () => true }));
   app2.post("/api/hold", async (req, res) => { await new Promise((r) => { release = r; }); res.json({ ok: true }); });
-  const s2 = app2.listen(0);
+  const s2 = app2.listen(0, "127.0.0.1");
   await new Promise((r) => s2.once("listening", r));
   const B2 = `http://127.0.0.1:${s2.address().port}`;
   const hdr = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x00", authorization: { from: "0x1111111111111111111111111111111111111111", nonce: `0x${"ef".repeat(32)}` } } })).toString("base64");
@@ -168,7 +168,7 @@ try {
   app7.use(cr7.gate((method, path) => (path === "/api/slow" ? { priceUsd: PRICE, slug: "slow" } : null)));
   app7.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/slow", freeMode: false }));
   app7.post("/api/slow", async (req, res) => { const n = ++runs7; if (!open) await new Promise((r) => waiting.push(r)); res.json({ run: n }); });
-  const s7 = app7.listen(0);
+  const s7 = app7.listen(0, "127.0.0.1");
   await new Promise((r) => s7.once("listening", r));
   const U = `http://127.0.0.1:${s7.address().port}/api/slow`;
   const hdr = { "content-type": "application/json", authorization: `Bearer ${KEY7}`, "idempotency-key": "k-close" };
@@ -214,7 +214,7 @@ try {
   app8.use(express.json());
   app8.use(createIdempotency({ isCatalogRoute: () => true, store, onReplay: async () => ({ serve: false, status: 503, retryAfter: 10, body: { error: "replay_pending" } }) }));
   app8.post("/api/x", (req, res) => res.json({ ran: true }));
-  const s8 = app8.listen(0);
+  const s8 = app8.listen(0, "127.0.0.1");
   await new Promise((r) => s8.once("listening", r));
   try {
     const r = await fetch(`http://127.0.0.1:${s8.address().port}/api/x`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k", "x-pow-solution": "t:1" }, body: "{}" });
@@ -236,7 +236,7 @@ try {
   app9.use(express.json());
   app9.use(createIdempotency({ isCatalogRoute: () => true, freeMode: true, store: slow }));
   app9.post("/api/y", (req, res) => { runs9++; res.json({ run: runs9 }); });
-  const s9 = app9.listen(0);
+  const s9 = app9.listen(0, "127.0.0.1");
   await new Promise((r) => s9.once("listening", r));
   const send = () => fetch(`http://127.0.0.1:${s9.address().port}/api/y`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k9", "x-pow-solution": "t:9" }, body: "{}" });
   try {
@@ -280,7 +280,7 @@ try {
     seen[status] = { released: released.length, finished };
     heldFinish?.();
   });
-  const s10 = app10.listen(0);
+  const s10 = app10.listen(0, "127.0.0.1");
   await new Promise((r) => s10.once("listening", r));
   const send = (status, key) => fetch(`http://127.0.0.1:${s10.address().port}/api/z`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": key, "x-pow-solution": `t:${key}` }, body: JSON.stringify({ status }) });
   try {
@@ -334,7 +334,7 @@ try {
   // /api/big: a real client that reads the headers of a large answer and
   // aborts while the body is still being written.
   app11.post("/api/big", (req, res) => { const n = ++runs11; res.json({ run: n, pad: "x".repeat(900 * 1024) }); });
-  const s11 = app11.listen(0);
+  const s11 = app11.listen(0, "127.0.0.1");
   await new Promise((r) => s11.once("listening", r));
   const base = `http://127.0.0.1:${s11.address().port}`;
   const hdr = (k) => ({ "content-type": "application/json", authorization: `Bearer ${KEY11}`, "idempotency-key": k });

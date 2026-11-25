@@ -25,6 +25,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CATALOG_FLOOR } from "./sync-count.js";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -152,8 +153,8 @@ const handledNames = new Set([...mcpSource.matchAll(/\bname\s*[!=]==\s*"([a-z0-9
 
 // Flagship catalog tools are listed under an MCP name that is NOT always the
 // slug with dashes swapped for underscores - FLAGSHIP_MCP_NAMES in
-// mcp-flagship.js renames them to Smithery dotted form (search is listed as
-// web.search). Reversing that map is what lets the "advertised but
+// mcp-flagship.js renames them to Smithery dotted form (pdf-to-markdown is
+// listed as pdf.markdown). Reversing that map is what lets the "advertised but
 // unimplemented" check resolve a listed name back to a real catalog entry.
 const flagshipSource = readFileSync(join(SRC, "mcp-flagship.js"), "utf8");
 const overrideBlock = flagshipSource.match(/FLAGSHIP_MCP_NAMES\s*=\s*\{([\s\S]*?)\n\};/);
@@ -164,8 +165,9 @@ for (const m of (overrideBlock?.[1] ?? "").matchAll(/(?:"([^"]+)"|([a-z0-9-]+)):
   slugForMcpName.set(m[3], m[1] ?? m[2]);
 }
 if (slugForMcpName.size === 0) throw new Error("could not parse FLAGSHIP_MCP_NAMES - the rename table moved, and this check would silently pass without it");
-assert(slugForMcpName.get("web.search") === "search", "FLAGSHIP_MCP_NAMES maps web.search → search");
-assert(slugForMcpName.get("web.answer") === "answer", "FLAGSHIP_MCP_NAMES maps web.answer → answer");
+assert(slugForMcpName.get("pdf.markdown") === "pdf-to-markdown", "FLAGSHIP_MCP_NAMES maps pdf.markdown → pdf-to-markdown");
+assert(slugForMcpName.get("weather.current") === "weather-current", "FLAGSHIP_MCP_NAMES maps weather.current → weather-current");
+assert(!slugForMcpName.has("web.search") && !slugForMcpName.has("web.answer"), "the former flagships are not in FLAGSHIP_MCP_NAMES");
 
 // Registered express routes, read from the source rather than probed, because
 // probing cannot distinguish "route does not exist" from "route exists but is
@@ -235,10 +237,10 @@ async function routeExists(ref) {
 }
 
 const pricing = await fetchLive("/api/pricing").then((r) => r.json());
-// Catalog floor (the same 400 sync-count enforces): grading against a thin or
+// Catalog floor (the one sync-count enforces): grading against a thin or
 // empty catalog would fail every route the manifest names, so refuse instead.
-if (!Array.isArray(pricing.endpoints) || pricing.endpoints.length < 400) {
-  throw new Error(`/api/pricing carried ${Array.isArray(pricing.endpoints) ? pricing.endpoints.length : "no"} endpoints (floor 400) - the target answered with something other than the catalog; refusing to grade`);
+if (!Array.isArray(pricing.endpoints) || pricing.endpoints.length < CATALOG_FLOOR) {
+  throw new Error(`/api/pricing carried ${Array.isArray(pricing.endpoints) ? pricing.endpoints.length : "no"} endpoints (floor ${CATALOG_FLOOR}) - the target answered with something other than the catalog; refusing to grade`);
 }
 const catalogRoutes = new Set((pricing.endpoints || []).map((e) => String(e.path).replace(/\/$/, "")));
 const catalogSlugs = new Set((pricing.endpoints || []).map((e) => e.slug).filter(Boolean));
