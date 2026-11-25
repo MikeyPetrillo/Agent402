@@ -126,6 +126,13 @@ for (const r of PACKAGE_RENAMES) {
   const py = load(readFileSync(join(ROOT, ".github/workflows/publish-langchain-py.yml"), "utf8"));
   const build = JSON.stringify(py.jobs?.build?.steps || []);
   ok(build.includes("adapters/langchain-py") && build.includes("renamed/agent402-langchain-py") && JSON.stringify(py.jobs?.publish?.steps || []).includes("skip-existing"), "the PyPI workflow builds both projects and skips a file PyPI already holds");
+  // The forwarding release publishes only after PyPI serves the new name.
+  const pySteps = py.jobs?.publish?.steps || [];
+  const iNew = pySteps.findIndex((st) => st.with?.["packages-dir"] === "dist/new/");
+  const iCheck = pySteps.findIndex((st) => /pypi\.org\/pypi\/agent402-structured-tools\/\$V\/json/.test(String(st.run || "")) && /exit 1/.test(String(st.run || "")));
+  const iShim = pySteps.findIndex((st) => st.with?.["packages-dir"] === "dist/shim/");
+  ok(iNew >= 0 && iCheck > iNew && iShim > iCheck && !pySteps.some((st) => st.with?.["packages-dir"] === "dist/"), `the PyPI forwarding release publishes only after PyPI serves the new name (${iNew} < ${iCheck} < ${iShim})`);
+  ok(build.includes("dist/new") && build.includes("dist/shim"), "the two PyPI projects build into separate directories");
 }
 
 // The claim run (scripts/package-renames.js claim --run) against a fake npm: a rerun
