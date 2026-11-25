@@ -150,6 +150,7 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/const x402PayerScreen = createX402PayerScreen\(\);/.test(server), "server.js mounts the screen with its real signer reader");
+  ok(/function flushStateQueues[\s\S]{0,200}const flushes = \[[^\]]*\bflushSanctionsEvents\b/.test(server) && /\bstartSanctionsJournalReplay\(\)/.test(server), "server.js writes pending sanctions changes on a graceful shutdown and replays the journal at boot");
   __resetX402PayerScreenForTests();
 }
 
@@ -371,6 +372,26 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     await settle();
     ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "direct routes (after verify): the same listed contract-wallet signer is refused and recorded");
 
+    // (g1) ONE write that fails, with no repeat after it, still lands once the store recovers.
+    {
+      const { mkdirSync } = await import("node:fs");
+      const blocker1 = join(dir, "not-a-dir-1");
+      writeFileSync(blocker1, "x");
+      const keepFile = process.env.SANCTIONS_EVENTS_FILE;
+      const oneAddr = "0x" + "f1".repeat(20);
+      try {
+        process.env.SANCTIONS_EVENTS_FILE = join(blocker1, "events.jsonl");
+        EV.__resetSanctionsEventsForTests();
+        const only = await EV.recordSanctionsEvent({ kind: "screen-hit", address: oneAddr, rail: "x402", route: "POST /api/hash" });
+        ok(only === null && EV.sanctionsEventWriteLimits().pending === 1, "setup: a single write is refused by the store and held pending");
+        rmSync(blocker1, { force: true });
+        mkdirSync(blocker1, { recursive: true });
+        await EV.flushSanctionsEvents();
+        const landedRow = readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.address === oneAddr);
+        ok(landedRow?.attempts === 1 && EV.sanctionsEventWriteLimits().pending === 0, `with no repeat after it, the one refused write lands once the store recovers (${landedRow ? "written" : "missing"})`);
+      } finally { process.env.SANCTIONS_EVENTS_FILE = keepFile; EV.__resetSanctionsEventsForTests(); }
+    }
+
     // (g) A write that fails is retried, and the attempts it gathered meanwhile are kept.
     const blocker = join(dir, "not-a-dir");
     writeFileSync(blocker, "x");
@@ -392,6 +413,21 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
       const third = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAcct.address, rail: "x402", route: "POST /api/hash" });
       ok(third && readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(failAcct.address), "and a new refusal after the recovery writes its row at once");
     } finally { process.env.SANCTIONS_EVENTS_FILE = goodFile; EV.__resetSanctionsEventsForTests(); }
+
+    // (h) A hard kill: a process records a hit, three repeats and an unproven count, is killed
+    //     with SIGKILL before its write-behind flush; the next process reads them all.
+    {
+      const { runRestartCase } = await import("./lib/sanctions-restart.js");
+      const restartFile = join(dir, "restart", "events.jsonl");
+      const addr = "0x" + "4b".repeat(20);
+      const res = runRestartCase({ env: { SANCTIONS_EVENTS_FILE: restartFile }, address: addr });
+      const hitRow = res.rows?.find((x) => x.address === addr);
+      const countRow = res.rows?.find((x) => x.aggregate && x.kind === "unproven-refusal");
+      ok(res.killedBy === "SIGKILL" && hitRow?.attempts === 4 && countRow?.count === 1 && res.rows.length === 2, `after a SIGKILL the next process reads every attempt and the count row (killed by ${res.killedBy}; attempts ${hitRow?.attempts}, count ${countRow?.count}${res.rows ? "" : `; ${res.readerErr || res.writerErr}`})`);
+      const again = runRestartCase({ env: { SANCTIONS_EVENTS_FILE: restartFile }, address: "0x" + "4c".repeat(20) });
+      const first = again.rows?.find((x) => x.address === addr);
+      ok(first?.attempts === 4 && again.rows?.filter((x) => x.aggregate).reduce((t, x) => t + x.count, 0) === 2, `a second kill and replay never counts the first one twice (attempts ${first?.attempts})`);
+    }
 
     // (e) Live control: a clean signed payment passes and records nothing.
     const n = (await rows()).length;

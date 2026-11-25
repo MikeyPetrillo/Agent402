@@ -630,7 +630,7 @@ import { settleComplianceView } from "./settle-compliance.js";
 import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
 import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
-import { recordSanctionsEvent, recordSanctionsAggregate, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
+import { recordSanctionsEvent, recordSanctionsAggregate, flushSanctionsEvents, startSanctionsJournalReplay, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
@@ -3146,6 +3146,8 @@ app.use(sanctionedRegionsMiddleware({
 }));
 // The report word's first read of the database (file mode reads at first use).
 { const t = setTimeout(contained("sanctions-events-refresh", () => { refreshSanctionsEvents().catch(() => {}); }), 2_000); t.unref?.(); }
+// Changes a killed process journaled and did not write: landed now, then while any remain.
+startSanctionsJournalReplay();
 // Money records past their retention period (src/ledger-retention.js): sales
 // and resolved refunds at 7 years, sanctions events at 10. A daily leased pass,
 // a dry run unless LEDGER_RETENTION=apply. Off with LEDGER_RETENTION=off.
@@ -15645,7 +15647,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushSanctionsEvents, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
