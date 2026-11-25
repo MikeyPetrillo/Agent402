@@ -92,6 +92,16 @@ try {
       lead.after(d);
       d.scrollIntoView({ block: "center" });
     });
+    // The scroll brings the strip's section into view, and its reveal slides
+    // it into place (a transform transition): tap where the strip ends up, not
+    // where it is mid-slide. Wait a frame for the observer to start the
+    // reveal, then for every running animation to finish.
+    await p.evaluate(async () => {
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+      await frame(); await frame();
+      await Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})));
+      await frame();
+    });
     const box = await p.locator('.bars[data-phone-ux-probe="1"]').boundingBox();
     await p.touchscreen.tap(box.x + box.width * (2.5 / 30), box.y + box.height / 2);
     const read = await p.evaluate(() => { const r = document.querySelector('.bars[data-phone-ux-probe="1"]').nextElementSibling; return r && r.classList.contains("bar-read") ? { t: r.textContent, live: r.getAttribute("aria-live") } : null; });
