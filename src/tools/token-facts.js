@@ -21,6 +21,7 @@
 // the Transfer logs a holder index reads (HOLDER_LOG_CAP).
 import { decodeAbiParameters, encodeFunctionData, formatUnits, hexToString, parseAbi } from "viem";
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
+import { readBytesCapped, declaredLength, discardBody, decodeUtf8 } from "../capped-body.js";
 import { evmRpcLanesFor } from "../evm-rpcs.js";
 import { PUBLICNODE_RPCS, alchemyRpcFor } from "../rpc-terms.js";
 
@@ -59,6 +60,15 @@ export const HOLDER_LOG_CAP = 10_000;
 // A Transfer log is about 0.5 KB as JSON; a history whose declared size passes
 // 2 KB a log holds HOLDER_LOG_CAP or more and is not parsed.
 export const HOLDER_LOG_MAX_BYTES = HOLDER_LOG_CAP * 2048;
+// BODY CAPS. Every answer read here is steered by the caller's contract
+// address, so each is read through readBytesCapped (src/capped-body.js) and
+// refused past its cap, declared or not, before any parse. A JSON-RPC batch
+// is at most ten getCode answers of a 24 KB contract (about 0.5 MB as hex);
+// a Sourcify record with every source file measured 2.1 MB on a large
+// verified project; 30 DEX pairs measured 35 KB.
+export const RPC_MAX_BYTES = 2 * 1024 * 1024;
+export const SOURCIFY_MAX_BYTES = 8 * 1024 * 1024;
+export const DEX_MAX_BYTES = 1024 * 1024;
 const SOURCIFY_READ_MS = 8_000;
 const DEX_READ_MS = 8_000;
 const OPTIONAL_FLOOR_MS = 2_500;
@@ -126,10 +136,22 @@ export function pctOf(part, whole) {
 // ---- RPC --------------------------------------------------------------------
 const LANE_REFUSAL = /rate|limit|too many|capacity|archive|personal token|unauthori[sz]ed|forbidden|method not (found|supported|available)|not supported|-32601|-32005/i;
 
+/** The JSON body of `res`, read at most `maxBytes` deep. A declared or read
+ *  size past the cap throws a 502 marked `tooLarge`; nothing past the cap is
+ *  buffered and nothing over it is parsed. */
+export async function readJsonCapped(res, maxBytes, ctx, what) {
+  const tooLarge = () => Object.assign(bad(`${what} is larger than ${maxBytes} bytes`, 502), { attribution: "upstream", tooLarge: true });
+  const declared = declaredLength(res);
+  if (declared != null && declared > maxBytes) { discardBody(res); throw tooLarge(); }
+  const { bytes, truncated } = await bodyUnderDeadline(readBytesCapped(res, maxBytes), ctx);
+  if (truncated) throw tooLarge();
+  return JSON.parse(decodeUtf8(bytes));
+}
+
 /** One JSON-RPC batch, lane by lane until one answers it whole. Each entry
  *  comes back as { result } or { error }; a lane that refuses the batch (an
  *  HTTP failure, a rate limit, an unreadable body) is passed over. */
-export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeoutMs = RPC_READ_MS, maxBytes = null } = {}) {
+export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeoutMs = RPC_READ_MS, maxBytes = RPC_MAX_BYTES } = {}) {
   let last = null;
   for (const url of lanes) {
     if (state.requests >= MAX_RPC_REQUESTS) throw Object.assign(bad(`the chain read's request budget (${MAX_RPC_REQUESTS}) was spent before ${step}`, 503), { attribution: "ours", budgetSpent: true });
@@ -141,14 +163,10 @@ export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeou
     try {
       const res = await upstreamFetch(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) }, ctx);
       if (!res.ok) { last = Object.assign(bad(`chain RPC answered HTTP ${res.status} for ${step}`, 502), { attribution: "upstream", upstreamStatus: res.status }); continue; }
-      // A declared body over the caller's bound is refused before it is read.
-      const declared = Number(res.headers.get("content-length"));
-      if (maxBytes != null && Number.isFinite(declared) && declared > maxBytes) {
-        try { await res.body?.cancel(); } catch { /* the refusal stands */ }
-        throw Object.assign(bad(`chain RPC answer for ${step} is larger than ${maxBytes} bytes`, 502), { attribution: "upstream", tooLarge: true });
-      }
+      // A body over the bound (declared, or counted as it arrives) is refused
+      // and not passed to the next lane: its size follows the contract read.
       let j;
-      try { j = await bodyUnderDeadline(res.json(), ctx); } catch (e) { last = e?.statusCode ? e : Object.assign(bad(`chain RPC returned an unreadable body for ${step}`, 502), { attribution: "upstream" }); continue; }
+      try { j = await readJsonCapped(res, maxBytes, ctx, `chain RPC answer for ${step}`); } catch (e) { if (e?.tooLarge) throw e; last = e?.statusCode ? e : Object.assign(bad(`chain RPC returned an unreadable body for ${step}`, 502), { attribution: "upstream" }); continue; }
       if (!Array.isArray(j) || j.length !== calls.length) { last = Object.assign(bad(`chain RPC did not answer the batch for ${step}`, 502), { attribution: "upstream" }); continue; }
       const byId = new Map(j.map((e) => [e?.id, e]));
       const out = calls.map((_, i) => byId.get(i + 1) || { error: { message: "missing" } });
@@ -175,7 +193,7 @@ export async function readSourcify(chainId, address) {
   if (res.status === 404) return { verified: false };
   if (!res.ok) throw Object.assign(bad(`Sourcify answered HTTP ${res.status}`, 502), { attribution: "upstream", upstreamStatus: res.status });
   let j;
-  try { j = await bodyUnderDeadline(res.json(), ctx); } catch (e) { if (e?.statusCode) throw e; throw Object.assign(bad("Sourcify returned an unreadable body", 502), { attribution: "upstream" }); }
+  try { j = await readJsonCapped(res, SOURCIFY_MAX_BYTES, ctx, "Sourcify answer"); } catch (e) { if (e?.statusCode) throw e; throw Object.assign(bad("Sourcify returned an unreadable body", 502), { attribution: "upstream" }); }
   const match = j?.match || j?.runtimeMatch || j?.creationMatch || null;
   if (!match) return { verified: false };
   const srcs = j?.sources && typeof j.sources === "object" ? Object.values(j.sources) : [];
@@ -197,7 +215,7 @@ export async function probeDexPairs({ chain, address }) {
   const res = await upstreamFetch(`https://api.dexscreener.com/token-pairs/v1/${c}/${address}`, { headers: { accept: "application/json" } }, ctx);
   if (!res.ok) throw Object.assign(bad(`upstream HTTP ${res.status}`, res.status === 429 ? 503 : 502), { upstreamStatus: res.status, attribution: "upstream" });
   let arr;
-  try { arr = await bodyUnderDeadline(res.json(), ctx); } catch (e) { if (e?.statusCode) throw e; throw Object.assign(bad("DEX pairs source returned an unreadable body", 502), { attribution: "upstream" }); }
+  try { arr = await readJsonCapped(res, DEX_MAX_BYTES, ctx, "DEX pairs answer"); } catch (e) { if (e?.statusCode) throw e; throw Object.assign(bad("DEX pairs source returned an unreadable body", 502), { attribution: "upstream" }); }
   const pairs = (Array.isArray(arr) ? arr : []).map((p) => ({
     dex: p.dexId || null, labels: Array.isArray(p.labels) ? p.labels.map(String).slice(0, 4) : [], pair: p.pairAddress || null,
     baseAddress: p.baseToken?.address || null, quoteAddress: p.quoteToken?.address || null, quote: p.quoteToken?.symbol || null,

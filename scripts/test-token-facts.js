@@ -7,8 +7,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { encodeAbiParameters, decodeFunctionData, parseAbi } from "viem";
 import {
-  readTokenFacts, readSourcify, simulateTrade, rpcBatch, holderIndex, taxPct, decodeText, abiFlags, minimalProxyTarget,
+  readTokenFacts, readSourcify, probeDexPairs, simulateTrade, rpcBatch, holderIndex, taxPct, decodeText, abiFlags, minimalProxyTarget,
   tokenRpcLanes, TOKEN_CHAINS, SLOTS, SIM_BUYER, MAX_RPC_REQUESTS, HOLDER_LOG_CAP, HOLDER_LOG_MAX_BYTES,
+  RPC_MAX_BYTES, SOURCIFY_MAX_BYTES, DEX_MAX_BYTES,
 } from "../src/tools/token-facts.js";
 import { isNonCommercialRpc } from "../src/rpc-terms.js";
 
@@ -299,6 +300,62 @@ const reason = (f, field) => f.limits.find((l) => l.field === field)?.reason || 
   const spent = await rpcBatch({ lanes: ["https://rpc.test/a"], requests: MAX_RPC_REQUESTS, deadline: Date.now() + 10_000 }, [{ method: "eth_blockNumber", params: [] }], "a read").then(() => null, (e) => e).finally(() => { globalThis.fetch = realFetch; });
   ok(spent?.statusCode === 503 && spent.budgetSpent === true && sent === 0, "a call whose request budget is spent sends nothing and says so");
   ok(SIM_BUYER === SIM_BUYER.toLowerCase() && /^0x[0-9a-f]{40}$/.test(SIM_BUYER), "the simulated buyer is a fixed address");
+}
+
+// ---- 10. body caps on every read ----------------------------------------------------------
+// Each read is steered by the caller's contract, so each body is counted as it
+// arrives and refused past its cap, with or without a declared Content-Length.
+{
+  // A body of `size` bytes served lazily in 64 KB chunks; `pulled` counts what was read.
+  const lazy = (size, { declare = false, prefix = "" } = {}) => {
+    const state = { pulled: 0 };
+    let sent = 0;
+    const head = Buffer.from(prefix);
+    const stream = new ReadableStream({
+      pull(ctrl) {
+        if (sent >= size) { ctrl.close(); return; }
+        const n = Math.min(65_536, size - sent);
+        const chunk = Buffer.alloc(n, 0x20);
+        if (sent === 0) head.copy(chunk, 0, 0, Math.min(head.length, n));
+        sent += n; state.pulled += n;
+        ctrl.enqueue(new Uint8Array(chunk));
+      },
+    });
+    const headers = new Headers({ "content-type": "application/json" });
+    if (declare) headers.set("content-length", String(size));
+    return { res: new Response(stream, { status: 200, headers }), state };
+  };
+  const withFetch = async (make, fn) => {
+    let calls = 0;
+    globalThis.fetch = async (url) => { calls++; return make(url); };
+    try { return { r: await fn().then((v) => v, (e) => e), calls }; } finally { globalThis.fetch = realFetch; }
+  };
+  const call = [{ method: "eth_call", params: [{ to: TOKEN, data: "0x06fdde03" }, "latest"] }];
+  const st = () => ({ lanes: ["https://rpc.test/a", "https://rpc.test/b"], requests: 0, deadline: Date.now() + 10_000 });
+  for (const declare of [false, true]) {
+    const how = declare ? "declared" : "undeclared";
+    let s;
+    const rpc = await withFetch(() => { const l = lazy(RPC_MAX_BYTES * 4, { declare, prefix: "[" }); s = l.state; return l.res; }, () => rpcBatch(st(), call, "token reads"));
+    ok(rpc.r?.statusCode === 502 && rpc.r.tooLarge === true && rpc.r.attribution === "upstream" && rpc.calls === 1 && s.pulled <= RPC_MAX_BYTES + 4 * 65_536, `${how === "declared" ? "a" : "an"} ${how} oversized JSON-RPC answer is refused 502 after one lane, read no further than its cap (${rpc.r?.statusCode}, ${s.pulled} bytes)`);
+    const sim = await withFetch(() => { const l = lazy(RPC_MAX_BYTES * 4, { declare, prefix: "[" }); s = l.state; return l.res; }, () => simulateTrade({ lanes: ["https://rpc.test/a"], requests: 0, deadline: Date.now() + 10_000 }, { token: TOKEN, pool: POOL, poolBal: 100n }));
+    ok(sim.r?.ran === false && sim.calls === 1 && s.pulled <= RPC_MAX_BYTES + 4 * 65_536, `${how === "declared" ? "a" : "an"} ${how} oversized simulation answer is not parsed: the simulation reports not run`);
+    const logs = await withFetch(() => { const l = lazy(HOLDER_LOG_MAX_BYTES + 1_000_000, { declare, prefix: "[" }); s = l.state; return l.res; }, () => holderIndex({ lanes: ["x"], requests: 0, deadline: Date.now() + 10_000 }, { chain: "base", token: TOKEN, supplyBig: 1n, env: {}, lane: "https://keyed.test/k" }));
+    ok(logs.r?.ok === false && /or more transfers/.test(logs.r.why) && s.pulled <= HOLDER_LOG_MAX_BYTES + 4 * 65_536, `${how === "declared" ? "a" : "an"} ${how} oversized Transfer history is refused at the log cap (${s.pulled} bytes)`);
+    const src = await withFetch(() => { const l = lazy(SOURCIFY_MAX_BYTES * 2, { declare, prefix: "{" }); s = l.state; return l.res; }, () => readSourcify(8453, TOKEN));
+    ok(src.r?.statusCode === 502 && src.r.tooLarge === true && src.r.attribution === "upstream" && s.pulled <= SOURCIFY_MAX_BYTES + 4 * 65_536, `${how === "declared" ? "a" : "an"} ${how} oversized Sourcify answer is refused 502 (${s.pulled} bytes)`);
+    const dex = await withFetch(() => { const l = lazy(DEX_MAX_BYTES * 4, { declare, prefix: "[" }); s = l.state; return l.res; }, () => probeDexPairs({ chain: "base", address: TOKEN }));
+    ok(dex.r?.statusCode === 502 && dex.r.tooLarge === true && dex.r.attribution === "upstream" && s.pulled <= DEX_MAX_BYTES + 4 * 65_536, `${how === "declared" ? "a" : "an"} ${how} oversized DEX pairs answer is refused 502 (${s.pulled} bytes)`);
+  }
+  // Real-size answers still pass: a code batch near ten 24 KB contracts, a 2.1 MB Sourcify record, 30 pairs.
+  const code = `0x${"ab".repeat(24_576)}`;
+  const big = await withFetch(() => new Response(JSON.stringify(Array.from({ length: 10 }, (_, i) => ({ jsonrpc: "2.0", id: i + 1, result: code }))), { status: 200 }), () => rpcBatch(st(), Array.from({ length: 10 }, () => ({ method: "eth_getCode", params: [TOKEN, "latest"] })), "holder code"));
+  ok(Array.isArray(big.r) && big.r.length === 10 && big.r[9].result === code, "ten full-size contract codes in one batch still read");
+  const srcBody = JSON.stringify({ match: "exact_match", abi: [], sources: { "a.sol": { content: `pragma solidity 0.8.0; ${"x".repeat(2_200_000)}` } }, compilation: { compilerVersion: "0.8.0" } });
+  const srcOk = await withFetch(() => new Response(srcBody, { status: 200 }), () => readSourcify(8453, TOKEN));
+  ok(srcOk.r?.verified === true && srcOk.r.sourceText.startsWith("pragma"), "a 2.2 MB Sourcify record still reads");
+  const pair = { dexId: "uniswap", pairAddress: POOL, baseToken: { address: TOKEN }, quoteToken: { address: IMPL, symbol: "WETH" }, liquidity: { usd: 1 }, info: { websites: [{ url: "https://x.test" }] }, labels: ["v2"] };
+  const dexOk = await withFetch(() => new Response(JSON.stringify(Array.from({ length: 30 }, () => pair)), { status: 200 }), () => probeDexPairs({ chain: "base", address: TOKEN }));
+  ok(dexOk.r?.totalPairs === 30, "thirty DEX pairs still read");
 }
 
 console.log(`\ntest-token-facts: ${pass} passed, ${fail} failed`);
