@@ -435,7 +435,14 @@ export const META_OUTPUT_SCHEMAS = {
   },
 };
 
-/** Flagship catalog-tool output schemas keyed by catalog slug. */
+/** Flagship catalog-tool output schemas keyed by catalog slug. Every field is
+ *  optional (no `required`), and none is typed against the x402
+ *  PaymentRequired's own fields (x402Version, error, resource, accepts,
+ *  extensions): a payment ask on the connector carries the PaymentRequired as
+ *  structuredContent only where it validates against the listed schema
+ *  (src/mcp-x402.js), and the reference SDK client holds every
+ *  structuredContent, error results included, to that schema.
+ *  scripts/test-mcp-x402-structured.js holds each one to it. */
 export const FLAGSHIP_OUTPUT_SCHEMAS = {
   "pdf-to-markdown": {
     type: "object",
@@ -446,7 +453,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       wordCount: { type: "integer" },
       markdown: { type: "string" },
     },
-    required: ["markdown"],
     additionalProperties: true,
   },
   "us-macro-series": {
@@ -470,7 +476,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       credit: { description: "The publisher's credit line" },
       terms: { description: "The publisher's terms for the data" },
     },
-    required: ["seriesId", "observations"],
     additionalProperties: true,
   },
   "weather-current": {
@@ -496,7 +501,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       },
       source: { type: "string" },
     },
-    required: ["current"],
     additionalProperties: true,
   },
   render: {
@@ -509,7 +513,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       rendered: { type: "boolean" },
       untrustedContent: { type: "boolean" },
     },
-    required: ["url", "markdown"],
   },
   "stock-quote": {
     type: "object",
@@ -535,7 +538,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       source: { type: "string" },
       note: { type: "string" },
     },
-    required: ["symbol", "price"],
   },
   transcribe: {
     type: "object",
@@ -548,7 +550,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       trimmedToCapSeconds: { type: "number", description: "Present only when the file's length could not be confirmed: the audio was transcribed up to this many seconds (the tier's cap)" },
       durationUnconfirmed: { type: "boolean", description: "Present (true) only with trimmedToCapSeconds: the file's full length was not confirmed" },
     },
-    required: ["text"],
   },
   "memory-read": {
     type: "object",
@@ -578,7 +579,6 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       persistent: { type: "boolean" },
       deleted: { type: "boolean" },
     },
-    required: ["key"],
     additionalProperties: true,
   },
 };
