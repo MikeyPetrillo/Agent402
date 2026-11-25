@@ -39,10 +39,23 @@
 //     signature proves, so the attacker-chosen address is never stored; and a
 //     `geo-payment` aggregate (a report) for the proven paid requests from a
 //     sanctioned region past that module's bounds.
-//   - Increments are written behind, within SANCTIONS_EVENT_FLUSH_MS, and
-//     before any operator read, filing or prune; a write that fails is kept and
-//     retried at the next flush. Per process (one replica): after a restart a
-//     repeat opens a new row, so the counts add up across rows.
+//   - DURABLE BEFORE IT IS WRITTEN. Every change (a new row, an attempt, an
+//     aggregate count) is first kept in the store's journal as a snapshot of
+//     the whole row (src/ledger-mirror.js createDeadLetter: a file beside the
+//     store, `<file>.pending.ndjson`; with the state database and
+//     LEDGER_JOURNAL_REDIS on, the shared Redis journal, local disk its
+//     fallback), the journal the money ledgers use. The row is then written
+//     behind, within SANCTIONS_EVENT_FLUSH_MS, and at once before any operator
+//     read, filing, prune or a graceful shutdown (flushStateQueues); a write
+//     that fails stays pending and its snapshots are freed for the replay. A
+//     journal entry is removed only after the row write that covers it
+//     committed. At boot, and on every operator read, replaySanctionsJournal
+//     lands what a killed process left: a snapshot is merged into the stored
+//     row by maximum (attempts, count, each reason's count, last seen), so a
+//     snapshot replayed twice, or an older one after a newer, never counts
+//     twice; a filed row is never changed by a replay. After a restart the
+//     dedupe keys start empty, so a repeat opens a new row and the counts add
+//     up across rows.
 //
 // RETENTION. pruneSanctionsEvents removes events older than ten years
 // (SANCTIONS_EVENTS_RETENTION_YEARS, never less than 10), dry run by default;
@@ -51,6 +64,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendF
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { stateDbEnabled, stateDbSchema, stateQuery, records } from "./state-db.js";
+import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 export const SANCTIONS_EVENTS_COLLECTION = "sanctions-events";
 export const REPORT_BUSINESS_DAYS = 10;
@@ -94,6 +108,45 @@ const aggregates = new Map(); // aggregate key -> row (this hour's)
 const pending = new Set();    // rows changed since the last write
 let flushTimer = null;
 let flushing = null;
+// The journal (see DURABLE BEFORE IT IS WRITTEN above), opened for the
+// store's current file and database; `meta` holds, per row id, the version of
+// the row's last change and the journal entries not yet covered by a write.
+let journalImpl = null, journalAt = "";
+const meta = new Map(); // row id -> { v, onDisk, ids: [{ id, v, j }] }
+function journal() {
+  const file = `${fileOf()}.pending.ndjson`;
+  const key = useDb() ? `${stateDbSchema()}:sanctionsEvents` : "";
+  const at = `${file}\u0000${key}`;
+  if (!journalImpl || journalAt !== at) { journalImpl = createDeadLetter({ file, name: "sanctionsEvents", journalKey: key }); journalAt = at; }
+  return journalImpl;
+}
+/** Keep a change: a snapshot of `row` in the journal first, then the row pending for its write. */
+function keep(row, { onDisk = true } = {}) {
+  let m = meta.get(row.id);
+  if (!m) { m = { v: 0, onDisk, ids: [] }; meta.set(row.id, m); }
+  m.v++;
+  let id = null, j = null;
+  try { j = journal(); id = j.add("sanctions-row", JSON.parse(JSON.stringify(row)), { pending: true }); } catch { id = null; }
+  if (id == null) console.error(`[sanctions-events] a change to ${row.id} could not be kept in the journal; it is held in memory until written`);
+  else m.ids.push({ id, v: m.v, j });
+  markDirty(row);
+}
+/** The write of version `v` of `row` committed: drop the journal entries it covers. */
+function landed(row, v) {
+  const m = meta.get(row.id);
+  if (!m) return;
+  m.onDisk = true;
+  const done = m.ids.filter((x) => x.v <= v);
+  m.ids = m.ids.filter((x) => x.v > v);
+  for (const x of done) { try { Promise.resolve(x.j.remove(x.id)).catch(() => {}); } catch { /* replayed again: the merge is idempotent */ } }
+  if (!m.ids.length && m.v === v && !pending.has(row)) meta.delete(row.id);
+}
+/** The write failed: free the row's journal entries for the replay (the row stays pending here too). */
+function unlanded(row) {
+  const m = meta.get(row.id);
+  if (!m) return;
+  for (const x of m.ids) { try { x.j.release(x.id); } catch { /* the entry stays */ } }
+}
 
 // The route class: the referral copies apart from the direct routes.
 const routeClassOf = (route) => {
@@ -112,30 +165,114 @@ function scheduleFlush() {
 }
 function markDirty(row) { pending.add(row); scheduleFlush(); }
 
-/** Write every row changed since the last write (repeats, aggregates, a
- *  failed write). Resolves the number written; a row whose write fails stays
- *  pending. Never throws. */
+/** Write every row changed since the last write (new rows, repeats,
+ *  aggregates, a failed write). Resolves the number written; a row whose
+ *  write fails stays pending (and its journal entries are freed for the
+ *  replay). Never throws. */
 export async function flushSanctionsEvents() {
   while (flushing) await flushing;
   if (!pending.size) return 0;
   const run = (async () => {
     const rows = [...pending];
     pending.clear();
+    const version = new Map(rows.map((r) => [r, meta.get(r.id)?.v ?? 0]));
     let n = 0;
+    const failed = (r, e) => { pending.add(r); unlanded(r); counts.flushFailures++; console.error(`[sanctions-events] a change to ${r.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); };
     if (useDb()) {
       for (const row of rows) {
-        try { await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, row); n++; }
-        catch (e) { pending.add(row); counts.flushFailures++; console.error(`[sanctions-events] a change to ${row.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); }
+        try { await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, JSON.parse(JSON.stringify(row))); n++; landed(row, version.get(row)); }
+        catch (e) { failed(row, e); }
       }
     } else {
-      try { loadFile(); saveFile(); n = rows.length; }
-      catch (e) { for (const r of rows) pending.add(r); counts.flushFailures++; console.error(`[sanctions-events] the events file was not rewritten (${String(e?.message || e).slice(0, 120)}); retrying`); }
+      loadFile();
+      if (rows.some((r) => meta.get(r.id)?.onDisk !== false)) {
+        // A change to a stored row: one rewrite, which holds every row in memory.
+        try { saveFile(); n = rows.length; for (const r of rows) landed(r, version.get(r)); }
+        catch (e) { for (const r of rows) failed(r, e); }
+      } else {
+        // Only new rows: one line each, each landed on its own.
+        for (const r of rows) {
+          try { appendFileRow(r); n++; landed(r, version.get(r)); }
+          catch (e) { failed(r, e); }
+        }
+      }
     }
     if (pending.size) scheduleFlush();
     return n;
   })();
   flushing = run;
   try { return await run; } finally { flushing = null; }
+}
+
+// A journaled snapshot merged into the stored row: by maximum, so a replay is
+// idempotent; a filed row is left as filed. Resolves the row to write, or null.
+function mergedRow(stored, snap) {
+  if (!stored) return snap;
+  if (stored.filedAt) return null;
+  const out = { ...stored };
+  let changed = false;
+  for (const f of ["attempts", "count"]) {
+    if (Number.isFinite(Number(snap[f])) && Number(snap[f]) > (Number(stored[f]) || 0)) { out[f] = Number(snap[f]); changed = true; }
+  }
+  if (snap.byReason && typeof snap.byReason === "object") {
+    out.byReason = { ...(stored.byReason || {}) };
+    for (const [k, v] of Object.entries(snap.byReason)) if (Number(v) > (Number(out.byReason[k]) || 0)) { out.byReason[k] = Number(v); changed = true; }
+  }
+  if (typeof snap.lastSeenAt === "string" && (!stored.lastSeenAt || snap.lastSeenAt > stored.lastSeenAt)) { out.lastSeenAt = snap.lastSeenAt; changed = true; }
+  return changed ? out : null;
+}
+async function mergeIntoStore(snap) {
+  if (useDb()) {
+    const stored = await records.get(SANCTIONS_EVENTS_COLLECTION, snap.id);
+    const row = mergedRow(stored, snap);
+    if (row) await records.put(SANCTIONS_EVENTS_COLLECTION, snap.id, row);
+    return;
+  }
+  const rows = loadFile();
+  const i = rows.findIndex((r) => r.id === snap.id);
+  const row = mergedRow(i >= 0 ? rows[i] : null, snap);
+  if (!row) return;
+  if (i >= 0) {
+    // This process's own copy of the row is updated in place, so its next write keeps the merge.
+    Object.assign(rows[i], row);
+    saveFile();
+  } else { rows.push(row); appendFileRow(row); }
+}
+
+let replaying = null;
+/**
+ * Land every journaled change a write has not covered (left by a process that
+ * was killed, or by a write that failed): each snapshot merged into its row
+ * (see mergedRow), then removed from the journal. One replay at a time.
+ * Resolves the number landed. Never throws.
+ */
+export function replaySanctionsJournal() {
+  if (replaying) return replaying;
+  replaying = (async () => {
+    let n = 0;
+    try {
+      n = await journal().drain(async (e) => {
+        const snap = e?.payload;
+        if (!snap || typeof snap !== "object" || typeof snap.id !== "string" || !snap.id.startsWith("se_") || !Object.prototype.hasOwnProperty.call(SANCTIONS_EVENT_KINDS, snap.kind)) return "drop";
+        await mergeIntoStore(snap);
+        return "landed";
+      });
+    } catch (e) { console.error(`[sanctions-events] the journal replay stopped (${String(e?.message || e).slice(0, 120)}); the next one retries`); }
+    if (n) {
+      console.warn(`[sanctions-events] landed ${n} journaled change(s)`);
+      if (useDb()) await refreshSanctionsEvents();
+    }
+    return n;
+  })().finally(() => { replaying = null; });
+  return replaying;
+}
+
+let replayTimer = null;
+/** Boot: replay the journal now, then while it holds entries (every `everyMs`). */
+export function startSanctionsJournalReplay({ everyMsInterval = 30_000 } = {}) {
+  replaySanctionsJournal().catch(() => {});
+  if (!replayTimer) replayTimer = everyMs(() => (journal().size() ? replaySanctionsJournal() : null), everyMsInterval);
+  return replayTimer;
 }
 
 /** The counts for the operator view: never an address. */
@@ -154,13 +291,16 @@ function newId(now) {
 function loadFile() {
   if (fileRows) return fileRows;
   fileRows = [];
+  const byId = new Map();
   const f = fileOf();
   try {
     if (existsSync(f)) {
       for (const line of readFileSync(f, "utf8").split("\n")) {
         if (!line.trim()) continue;
-        try { const r = JSON.parse(line); if (r && typeof r.id === "string") fileRows.push(r); } catch { /* a torn line is skipped */ }
+        try { const r = JSON.parse(line); if (r && typeof r.id === "string") byId.set(r.id, r); } catch { /* a torn line is skipped */ }
       }
+      // A row written twice (a write retried after it landed) is read once, as last written.
+      fileRows.push(...byId.values());
     }
   } catch (e) { console.warn(`[sanctions-events] could not read ${f}: ${String(e?.message || e).slice(0, 120)}`); }
   return fileRows;
@@ -215,7 +355,7 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
       seen.row.attempts = (Number(seen.row.attempts) || 1) + 1;
       seen.row.lastSeenAt = new Date(Math.max(now, Date.parse(seen.row.lastSeenAt || seen.row.at) || 0)).toISOString();
       counts.repeats++;
-      markDirty(seen.row);
+      keep(seen.row);
       return seen.row;
     }
     row = {
@@ -246,19 +386,18 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
     // Keyed before the write, so a repeat arriving meanwhile adds to this row.
     seenKeys.delete(key); seenKeys.set(key, { row, at: now });
     while (seenKeys.size > DEDUPE_KEYS_MAX) seenKeys.delete(seenKeys.keys().next().value);
-    if (useDb()) {
-      if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row);
-      await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, row);
-    } else {
-      loadFile().push(row);
-      appendFileRow(row);
-    }
+    if (useDb()) { if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row); }
+    else loadFile().push(row);
+    // In the journal first; then written now (a failure stays pending and journaled).
+    keep(row, { onDisk: false });
+    await flushSanctionsEvents();
+    if (pending.has(row)) { console.error(`[sanctions-events] ${kind} kept in the journal, not written yet; retrying`); return null; }
     counts.recorded++;
     console.warn(`[sanctions-events] recorded ${kind}${row.report ? ` (a ${row.report === "blocked" ? "blocked-property" : "rejected-transaction"} report is due by ${row.dueBy.slice(0, 10)})` : ""}`);
     return row;
   } catch (e) {
-    // A row built but not written is kept and written at the next flush.
-    if (row) { markDirty(row); console.error(`[sanctions-events] event not written yet (${String(e?.message || e).slice(0, 160)}); retrying at the next flush`); }
+    // A row built but not kept is held pending and written at the next flush.
+    if (row) { if (!pending.has(row) && !meta.has(row.id)) keep(row, { onDisk: false }); console.error(`[sanctions-events] event not written yet (${String(e?.message || e).slice(0, 160)}); retrying at the next flush`); }
     else console.error(`[sanctions-events] event NOT recorded (${String(e?.message || e).slice(0, 160)}); the log line above this one is the only record`);
     return null;
   }
@@ -289,7 +428,7 @@ export async function recordSanctionsAggregate(ev = {}, { now = Date.now() } = {
       row.byReason[reason] = (row.byReason[reason] || 0) + 1;
       row.lastSeenAt = new Date(Math.max(now, Date.parse(row.lastSeenAt) || 0)).toISOString();
       counts.aggregated++;
-      markDirty(row);
+      keep(row);
       return row;
     }
     if (aggregates.size > 1000) for (const [k, r] of aggregates) if (Date.parse(r.hourStart) < hourStart) aggregates.delete(k);
@@ -305,7 +444,7 @@ export async function recordSanctionsAggregate(ev = {}, { now = Date.now() } = {
     if (useDb()) {
       if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row);
     } else loadFile().push(row);
-    markDirty(row);
+    keep(row, { onDisk: false });
     return row;
   } catch (e) {
     console.error(`[sanctions-events] aggregate NOT recorded (${String(e?.message || e).slice(0, 160)})`);
@@ -347,6 +486,7 @@ export function sanctionsReportStatus() {
 
 /** The operator view: the unfiled reportable events in full, deadlines, and recent events. */
 export async function sanctionsEventsOperatorView({ now = Date.now(), recent = 100 } = {}) {
+  await replaySanctionsJournal();
   await flushSanctionsEvents();
   let unfiled, latest;
   if (useDb()) {
@@ -386,6 +526,7 @@ export async function markSanctionsEventsFiled({ ids = null, all = false, refere
   // Every change reaches the store first, and later attempts open new rows,
   // so a filed row never changes after its filing.
   seenKeys.clear(); aggregates.clear();
+  await replaySanctionsJournal();
   await flushSanctionsEvents();
   if (useDb()) {
     const list = await dbUnfiled();
@@ -439,9 +580,9 @@ export async function pruneSanctionsEvents({ apply = false, now = Date.now(), ye
 
 /** Tests: forget the file view and the database cache. */
 export function __resetSanctionsEventsForTests() { fileRows = null; dbCache = { at: 0, unfiled: null, error: null }; }
-/** Tests: forget the dedupe keys, the aggregates, pending changes and counts. */
+/** Tests: forget the dedupe keys, the aggregates, pending changes, the journal handle and counts. */
 export function __resetSanctionsEventLimitsForTests() {
-  seenKeys.clear(); aggregates.clear(); pending.clear();
+  seenKeys.clear(); aggregates.clear(); pending.clear(); meta.clear(); journalImpl = null; journalAt = "";
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   counts.recorded = 0; counts.repeats = 0; counts.aggregated = 0; counts.flushFailures = 0;
 }

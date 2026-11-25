@@ -48,3 +48,10 @@ if (!String(process.env.STATS_DB_DIR || "").trim()) {
     process.on(sig, onSignal);
   }
 }
+// The sanctions events store and its journal (src/sanctions-events.js) have the
+// same machine-wide default in the temp directory, and a journal left there is
+// replayed into the next suite's store: a suite gets its own beside the stats
+// store unless the caller named one.
+if (!String(process.env.SANCTIONS_EVENTS_FILE || "").trim()) {
+  process.env.SANCTIONS_EVENTS_FILE = join(process.env.STATS_DB_DIR, "sanctions-events.jsonl");
+}

@@ -29,6 +29,7 @@ const PATH_USD = "0x20C000000000000000000000b9537d11c60E8b50";
 process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
 process.env.SANCTIONS_PAYOUT_FILE = join(dir, "payout.json");
 process.env.SANCTIONS_LIST_URL = "http://fixture.local/SDN.XML";
+process.env.SANCTIONS_EVENTS_FILE = join(dir, "events.jsonl");
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 delete process.env.TEMPO_DATA_API_KEY;
 delete process.env.TEMPO_API_KEY;
@@ -130,6 +131,14 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   calls.length = 0;
   const v = await T.validateTempoCredential(header({ source: LISTED_1 }));
   ok(v.ok === false && v.cls === "screen-rejected", `a listed payer (source) is refused (${v.cls})`);
+  {
+    // A stated source no signature proves: refused, no row naming it, one count in the hour's aggregate.
+    const EV = await import("../src/sanctions-events.js");
+    await new Promise((r) => setTimeout(r, 30));
+    const view = await EV.sanctionsEventsOperatorView({ recent: 1000 });
+    const agg = view.recent.filter((r) => r.aggregate && r.kind === "unproven-refusal" && r.rail === "tempo");
+    ok(!view.recent.some((r) => !r.aggregate && String(r.address).toLowerCase() === LISTED_1.toLowerCase()) && agg.length === 1 && agg[0].byReason?.["unsigned-party"] >= 1 && agg[0].address === null, `the stated listed source gets no row; the refusal is counted in the Tempo unproven aggregate (${JSON.stringify(agg[0]?.byReason)})`);
+  }
   ok(calls.length === 0, `before any network call (${calls.join(",") || "none"})`);
   ok(!/0xbad0{35}1/i.test(v.error) && /0xbad0\.\.\.0001/.test(v.error), `the refusal names the address masked (${v.error})`);
   const line = T.logTempoRefusal({ method: "GET", path: "/x" }, { cls: v.cls, detail: v.error });
