@@ -717,7 +717,7 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-stream-tools (MIT)
     dependencies: none
     peer dependencies: ai >=3 <8, zod >=3 <5
-  agent402-tool-use (MIT)
+  agent402-messages-tools (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: none
   agent402-actions-plugin (MIT)
@@ -753,8 +753,8 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-ai-sdk (MIT; renamed, now agent402-stream-tools)
     dependencies: agent402-stream-tools ^0.3.0
     peer dependencies: none
-  agent402-anthropic-tools (MIT; renamed, now agent402-tool-use)
-    dependencies: agent402-tool-use ^0.3.0
+  agent402-anthropic-tools (MIT; renamed, now agent402-messages-tools)
+    dependencies: agent402-messages-tools ^0.3.0
     peer dependencies: none
   agent402-google-adk (MIT; renamed, now agent402-dev-kit-tools)
     dependencies: agent402-dev-kit-tools ^0.2.0

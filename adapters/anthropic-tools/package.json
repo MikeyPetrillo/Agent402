@@ -1,5 +1,5 @@
 {
-  "name": "agent402-tool-use",
+  "name": "agent402-messages-tools",
   "version": "0.3.0",
   "description": "Agent402 tools as tool-use definitions, for use with the Claude Messages API (Agentic Finance over x402 or MPP): turn tools from Agent402's catalog of 500+ pay-per-call tools and skill packs into tool definitions, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain. Formerly agent402-anthropic-tools.",
   "type": "module",

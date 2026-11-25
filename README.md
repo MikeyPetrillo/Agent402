@@ -98,7 +98,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 **Framework adapters** (drop-in tools for the major agent stacks - auto-payment underneath):
 [![npm](https://img.shields.io/npm/v/agent402-function-calling?label=openai-tools)](https://www.npmjs.com/package/agent402-function-calling)
-[![npm](https://img.shields.io/npm/v/agent402-tool-use?label=anthropic-tools)](https://www.npmjs.com/package/agent402-tool-use)
+[![npm](https://img.shields.io/npm/v/agent402-messages-tools?label=anthropic-tools)](https://www.npmjs.com/package/agent402-messages-tools)
 [![npm](https://img.shields.io/npm/v/agent402-stream-tools?label=ai-sdk)](https://www.npmjs.com/package/agent402-stream-tools)
 [![npm](https://img.shields.io/npm/v/agent402-structured-tools?label=langchain)](https://www.npmjs.com/package/agent402-structured-tools)
 [![npm](https://img.shields.io/npm/v/agent402-function-tools?label=llamaindex)](https://www.npmjs.com/package/agent402-function-tools)
@@ -523,7 +523,7 @@ If you're already on one of the stacks below - OpenAI, Anthropic, the Vercel AI 
 | Stack | npm | Returns |
 |---|---|---|
 | OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) | `tools[]` for `tools:` param |
-| Anthropic Messages API (`tool_use`) | [`agent402-tool-use`](https://www.npmjs.com/package/agent402-tool-use) | `tools[]` for `tools:` param |
+| Anthropic Messages API (`tool_use`) | [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools) | `tools[]` for `tools:` param |
 | Vercel AI SDK (`streamText` / `generateText`) | [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) | `Record<name, tool()>` |
 | LangChain JS / LangGraph | [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) | `FunctionTool[]` |
@@ -533,7 +533,7 @@ If you're already on one of the stacks below - OpenAI, Anthropic, the Vercel AI 
 | Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
 | LangChain **Python** / CrewAI | [`agent402-structured-tools`](https://pypi.org/project/agent402-structured-tools/) (PyPI) | `StructuredTool[]` from `Agent402Toolkit.get_tools()` - four meta-tools (find / route / call / about), not one per slug |
 
-Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-tool-use`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
+Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-messages-tools`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
 
 ```js
 // e.g. OpenAI - every adapter has the same surface.

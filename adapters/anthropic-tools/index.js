@@ -1,4 +1,4 @@
-// agent402-tool-use (formerly agent402-anthropic-tools): Agent402 tools as
+// agent402-messages-tools (formerly agent402-anthropic-tools): Agent402 tools as
 // tool-use definitions for use with the Claude Messages API.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into Claude tool
@@ -7,7 +7,7 @@
 // wallet-only tools when you pass a payFetch).
 //
 //   import Anthropic from "@anthropic-ai/sdk";
-//   import { agent402Tools } from "agent402-tool-use";
+//   import { agent402Tools } from "agent402-messages-tools";
 //
 //   const client = new Anthropic();
 //   const { tools, execute } = await agent402Tools({ slugs: ["extract","hash","render"] });
@@ -26,7 +26,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-tool-use/0.3.0";
+const USER_AGENT = "agent402-messages-tools/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It

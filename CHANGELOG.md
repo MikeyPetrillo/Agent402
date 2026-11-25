@@ -183,7 +183,7 @@ Operations:
   printing the key.
 Packages:
 - The framework packages take neutral names, same API: agent402-function-calling
-  0.3.0 (was agent402-openai-tools), agent402-tool-use 0.3.0
+  0.3.0 (was agent402-openai-tools), agent402-messages-tools 0.3.0
   (agent402-anthropic-tools), agent402-stream-tools 0.3.0 (agent402-ai-sdk),
   agent402-structured-tools 0.3.0 on npm and 0.2.0 on PyPI (agent402-langchain),
   agent402-function-tools 0.3.0 (agent402-llamaindex), agent402-dev-kit-tools

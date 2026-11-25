@@ -198,11 +198,11 @@ r = client.chat.completions.create(model="auto", messages=[{"role": "user", "con
 
 <span class="qs-label">Install</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>npm install agent402-function-calling
-# also: agent402-tool-use, agent402-stream-tools</code></pre></div>
+# also: agent402-messages-tools, agent402-stream-tools</code></pre></div>
 
 <span class="qs-label">Wire into your LLM call</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>import { agent402Tools } from "agent402-function-calling";
-// same shape: agent402-tool-use
+// same shape: agent402-messages-tools
 // payFetch: the wallet-paying fetch from the Pay with USDC tab
 
 // web search, then a cited answer: both paid per call from the wallet

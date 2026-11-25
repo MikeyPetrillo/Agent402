@@ -132,16 +132,16 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
     meta: "Agent402 tools as Anthropic Messages API tool definitions with an execute helper. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "Anthropic tool use",
     short: "Anthropic",
-    pkg: "agent402-tool-use",
+    pkg: "agent402-messages-tools",
     formerly: "agent402-anthropic-tools",
     dir: "adapters/anthropic-tools",
     docsSlug: "anthropic",
     shape: "per-slug",
     worksWith: ["Anthropic Messages API", "Any Claude model with tool use"],
     what: "Turns Agent402 tools into Anthropic Messages API tool definitions (`input_schema` format) for server-side agents and custom tool loops. For Claude clients that speak MCP, the hosted connector at /mcp is the shorter path; this package is for direct Messages API integrations.",
-    install: "npm install @anthropic-ai/sdk agent402-tool-use @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install @anthropic-ai/sdk agent402-messages-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-tool-use";
+import { agent402Tools } from "agent402-messages-tools";
 ${X402_FETCH}
 
 const client = new Anthropic();

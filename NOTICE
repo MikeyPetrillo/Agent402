@@ -43,7 +43,7 @@ one in the directory tree.
       - adapters/*         (the framework adapters: agent402-structured-tools,
                            agent402-function-tools, agent402-stream-tools,
                            agent402-function-calling, agent402-runner-tools,
-                           agent402-tool-use, agent402-dev-kit-tools,
+                           agent402-messages-tools, agent402-dev-kit-tools,
                            agent402-agent-loop-tools, agent402-action-provider,
                            agent402-actions-plugin, and the Python
                            agent402-structured-tools)

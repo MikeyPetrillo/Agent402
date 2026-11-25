@@ -1,4 +1,4 @@
-// Type declarations for agent402-tool-use. The runtime is index.js (plain ES modules on
+// Type declarations for agent402-messages-tools. The runtime is index.js (plain ES modules on
 // agent402-client); these declarations describe its public API.
 import type { Agent402, FetchLike } from "agent402-client";
 

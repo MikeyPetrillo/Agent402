@@ -44,7 +44,7 @@ export const CLIENT_PACKAGES = Object.freeze([
   "agent402-model-provider",
   "agent402-action-provider",
   "agent402-stream-tools",
-  "agent402-tool-use",
+  "agent402-messages-tools",
   "agent402-actions-plugin",
   "agent402-dev-kit-tools",
   "agent402-structured-tools",

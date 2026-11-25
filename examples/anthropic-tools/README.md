@@ -1,16 +1,16 @@
 # Anthropic tool-use + Agent402 -- runnable demo
 
-Proves that the [`agent402-tool-use`](https://www.npmjs.com/package/agent402-tool-use) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce Anthropic tool-use definitions (name, description, input_schema). The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
+Proves that the [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce Anthropic tool-use definitions (name, description, input_schema). The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
 
 ## Search the web, then answer (paid from a wallet)
 
 ```bash
-npm install @anthropic-ai/sdk agent402-tool-use @x402/fetch @x402/core @x402/evm viem
+npm install @anthropic-ai/sdk agent402-messages-tools @x402/fetch @x402/core @x402/evm viem
 ```
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-tool-use";
+import { agent402Tools } from "agent402-messages-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

@@ -10,7 +10,7 @@
 //   shimVersion the earlier name's last release: it forwards to the new name
 export const PACKAGE_RENAMES = Object.freeze([
   { registry: "npm", old: "agent402-openai-tools", name: "agent402-function-calling", dir: "adapters/openai-tools", version: "0.3.0", shimVersion: "0.2.3" },
-  { registry: "npm", old: "agent402-anthropic-tools", name: "agent402-tool-use", dir: "adapters/anthropic-tools", version: "0.3.0", shimVersion: "0.2.3" },
+  { registry: "npm", old: "agent402-anthropic-tools", name: "agent402-messages-tools", dir: "adapters/anthropic-tools", version: "0.3.0", shimVersion: "0.2.3" },
   { registry: "npm", old: "agent402-openai-agents", name: "agent402-runner-tools", dir: "adapters/openai-agents", version: "0.2.0", shimVersion: "0.1.15" },
   { registry: "npm", old: "agent402-google-adk", name: "agent402-dev-kit-tools", dir: "adapters/google-adk", version: "0.2.0", shimVersion: "0.1.15" },
   { registry: "npm", old: "agent402-agentkit", name: "agent402-action-provider", dir: "adapters/agentkit", version: "0.3.0", shimVersion: "0.2.2" },

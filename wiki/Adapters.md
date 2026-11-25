@@ -7,7 +7,7 @@ If your agent isn't an MCP client, there's an npm package that turns the Agent40
 | Stack | npm package | Returns |
 |---|---|---|
 | OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) | `tools[]` for the `tools:` param |
-| Anthropic Messages API (`tool_use`) | [`agent402-tool-use`](https://www.npmjs.com/package/agent402-tool-use) | `tools[]` for the `tools:` param |
+| Anthropic Messages API (`tool_use`) | [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools) | `tools[]` for the `tools:` param |
 | Vercel AI SDK (`streamText` / `generateText`) | [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) | `Record<name, tool()>` (four meta tools) |
 | LangChain JS / LangGraph | [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) | `DynamicStructuredTool[]` (four meta tools) |
 | LlamaIndex TS | [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) | `FunctionTool[]` |
@@ -17,7 +17,7 @@ If your agent isn't an MCP client, there's an npm package that turns the Agent40
 | Google ADK (Agent Development Kit) | [`agent402-dev-kit-tools`](https://www.npmjs.com/package/agent402-dev-kit-tools) | `FunctionTool[]` (four meta tools) |
 | OpenAI Agents SDK | [`agent402-runner-tools`](https://www.npmjs.com/package/agent402-runner-tools) | `tool()` instances for `new Agent({ tools })` (four meta tools) |
 
-Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-tool-use`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
+Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-messages-tools`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
 
 Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/main/adapters).
 
@@ -27,7 +27,7 @@ Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/mai
 
 The adapters come in two shapes.
 
-**Catalog tools** (`agent402-function-calling`, `agent402-tool-use`, `agent402-function-tools`, `agent402-agent-loop-tools`) turn the catalog tools you pick into native tool objects, one per slug:
+**Catalog tools** (`agent402-function-calling`, `agent402-messages-tools`, `agent402-function-tools`, `agent402-agent-loop-tools`) turn the catalog tools you pick into native tool objects, one per slug:
 
 ```ts
 agent402Tools(opts?: {
@@ -105,7 +105,7 @@ Same `tools` array works for `assistants.create({ tools })` and `responses.creat
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-tool-use";
+import { agent402Tools } from "agent402-messages-tools";
 
 const anthropic = new Anthropic();
 const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });

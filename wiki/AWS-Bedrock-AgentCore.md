@@ -72,7 +72,7 @@ const { tools } = await agent402Tools({
 
 More wallet-only tools (extract, render, screenshot and most of the catalog) go in the same `slugs` list beside `freeOnly: false`.
 
-That's the whole adapter. It has the same shape as the [OpenAI](https://www.npmjs.com/package/agent402-function-calling), [Anthropic](https://www.npmjs.com/package/agent402-tool-use) and [LlamaIndex](https://www.npmjs.com/package/agent402-function-tools) adapters; the [LangChain](https://www.npmjs.com/package/agent402-structured-tools) and [Vercel AI SDK](https://www.npmjs.com/package/agent402-stream-tools) adapters register four meta tools instead (see [[Adapters]]) - pick the one your code already uses.
+That's the whole adapter. It has the same shape as the [OpenAI](https://www.npmjs.com/package/agent402-function-calling), [Anthropic](https://www.npmjs.com/package/agent402-messages-tools) and [LlamaIndex](https://www.npmjs.com/package/agent402-function-tools) adapters; the [LangChain](https://www.npmjs.com/package/agent402-structured-tools) and [Vercel AI SDK](https://www.npmjs.com/package/agent402-stream-tools) adapters register four meta tools instead (see [[Adapters]]) - pick the one your code already uses.
 
 ## Option 3: Sell side - charge AgentCore agents with `agent402-tollbooth`
 

@@ -3772,7 +3772,7 @@ jobs:
           # Gate: tool list builds + execute() returns a real result against the FREE_MODE server.
           AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/openai-tools/test.js
 
-      - name: Gate agent402-tool-use (tests run with NO npm token in env)
+      - name: Gate agent402-messages-tools (tests run with NO npm token in env)
         run: |
           # Install agent402-client locally for the test (same self-bootstrap as openai-tools/test.js).
           ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent --ignore-scripts )
@@ -4099,16 +4099,16 @@ jobs:
             echo "published agent402-function-calling@$VERSION → https://www.npmjs.com/package/agent402-function-calling"
           fi
 
-      - name: Publish agent402-tool-use to npm
+      - name: Publish agent402-messages-tools to npm
         run: |
           cd adapters/anthropic-tools
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
-          if npm view "agent402-tool-use@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-tool-use@$VERSION is already on npm, nothing to do"
+          if npm view "agent402-messages-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-messages-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
-            echo "published agent402-tool-use@$VERSION → https://www.npmjs.com/package/agent402-tool-use"
+            echo "published agent402-messages-tools@$VERSION → https://www.npmjs.com/package/agent402-messages-tools"
           fi
 
       - name: Publish agent402-stream-tools to npm

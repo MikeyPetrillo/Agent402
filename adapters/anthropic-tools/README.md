@@ -1,4 +1,4 @@
-# agent402-tool-use
+# agent402-messages-tools
 
 [Agent402](https://agent402.tools) tools as **tool-use definitions**, for use with the Claude Messages API. Agent402 is the open-source, self-hostable x402 + MCP server with 500+ pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
 
@@ -18,7 +18,7 @@ Formerly `agent402-anthropic-tools`: the same API under a new name. Change the d
 ## Install
 
 ```bash
-npm install @anthropic-ai/sdk agent402-tool-use @x402/fetch @x402/core @x402/evm viem
+npm install @anthropic-ai/sdk agent402-messages-tools @x402/fetch @x402/core @x402/evm viem
 ```
 
 The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the free tier needs only the first two.
@@ -27,7 +27,7 @@ The `@x402/*` and `viem` packages pay wallet-only tools from your wallet; the fr
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-tool-use";
+import { agent402Tools } from "agent402-messages-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

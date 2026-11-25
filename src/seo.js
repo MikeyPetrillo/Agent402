@@ -695,7 +695,7 @@ ${listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-function-calling](https://www.npmjs.com/package/agent402-function-calling): with OpenAI function calling
-- [agent402-tool-use](https://www.npmjs.com/package/agent402-tool-use): with the Claude Messages API \`tool_use\`
+- [agent402-messages-tools](https://www.npmjs.com/package/agent402-messages-tools): with the Claude Messages API \`tool_use\`
 - [agent402-stream-tools](https://www.npmjs.com/package/agent402-stream-tools): with the AI SDK by Vercel
 - [agent402-structured-tools](https://www.npmjs.com/package/agent402-structured-tools): with LangChain.js / LangGraph
 - [agent402-function-tools](https://www.npmjs.com/package/agent402-function-tools): with LlamaIndex TS
