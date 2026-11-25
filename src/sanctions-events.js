@@ -22,17 +22,27 @@
 // skipped; a federal holiday only moves the true deadline later) and an
 // overdue count.
 //
-// WRITE LIMITS. A screen refuses before the payment settles, and some refuse
-// before it verifies, so a caller can make an event happen at will. The store
-// therefore writes at most one row per (kind, address, route class, and for a
-// location refusal its country or region) in SANCTIONS_EVENT_DEDUPE_MS, at
-// most SANCTIONS_EVENT_CLIENT_WINDOW_MAX rows per client address and
-// SANCTIONS_EVENT_WINDOW_MAX rows in all per SANCTIONS_EVENT_WINDOW_MS. An
-// event past a limit is not written: it is counted on the operator view
-// (`writeLimits`) and logged once a minute with no address. The rows already
-// written keep the report word `due`, so a flood never reads `clear`. The
-// operator's own records (a blocked refund from the refund run) pass with
-// `{ limit: false }`. Per process (one replica).
+// REPEATS AND AGGREGATES. Nothing a screen refuses is dropped from the record.
+//   - An event that names an address (every proven payer, payee or refund
+//     wallet) is one row per (kind, address, route class, and for a location
+//     refusal its country or region) for SANCTIONS_EVENT_DEDUPE_MS (a day): a
+//     repeat inside it adds one to the row's `attempts` and moves its
+//     `lastSeenAt`, never a second row. A row an operator marked filed takes no
+//     more attempts; the next one opens a new row. There is no cap on these
+//     rows: an address must be on the fixed list (or proven by its signature
+//     from a sanctioned region, bounded by src/sanctioned-regions.js), so the
+//     day's rows are bounded by the list and the dedupe.
+//   - recordSanctionsAggregate keeps what has no address worth keeping: one
+//     row per (kind, rail, route class, country, region) per clock hour with a
+//     `count` and a count per reason (`byReason`), never an address. Kind
+//     `unproven-refusal` (a record, no report): a refusal on an address no
+//     signature proves, so the attacker-chosen address is never stored; and a
+//     `geo-payment` aggregate (a report) for the proven paid requests from a
+//     sanctioned region past that module's bounds.
+//   - Increments are written behind, within SANCTIONS_EVENT_FLUSH_MS, and
+//     before any operator read, filing or prune; a write that fails is kept and
+//     retried at the next flush. Per process (one replica): after a restart a
+//     repeat opens a new row, so the counts add up across rows.
 //
 // RETENTION. pruneSanctionsEvents removes events older than ten years
 // (SANCTIONS_EVENTS_RETENTION_YEARS, never less than 10), dry run by default;
@@ -54,15 +64,17 @@ export const SANCTIONS_EVENT_KINDS = Object.freeze({
   "payout-refused": "rejected",    // a payout (router purchase, refund) to a listed address not sent
   "blocked-refund": "blocked",     // a refund owed to a wallet listed later: held as blocked property
   "geo-payment": "rejected",       // a paid request from a sanctioned region, refused before verification
+  "unproven-refusal": null,        // aggregate only: refusals on an address no signature proves (no address kept)
 });
 
-/** One row per key in this window (24 hours). */
+/** One row per key in this window (24 hours); a repeat adds to its attempts. */
 export const SANCTIONS_EVENT_DEDUPE_MS = 24 * 60 * 60 * 1000;
-/** The write window, and the rows written in it: in all, and per client address. */
-export const SANCTIONS_EVENT_WINDOW_MS = 60 * 60 * 1000;
-export const SANCTIONS_EVENT_WINDOW_MAX = 100;
-export const SANCTIONS_EVENT_CLIENT_WINDOW_MAX = 10;
+/** An aggregate row covers one clock hour. */
+export const SANCTIONS_AGGREGATE_MS = 60 * 60 * 1000;
+/** Increments reach the store within this time. */
+export const SANCTIONS_EVENT_FLUSH_MS = 2_000;
 const DEDUPE_KEYS_MAX = 10_000;
+const AGGREGATE_REASON_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
 const useDb = () => stateDbEnabled();
 const fileOf = (env = process.env) => env.SANCTIONS_EVENTS_FILE || join(existsSync("/data") ? "/data" : "/tmp", "agent402-sanctions-events.jsonl");
@@ -76,11 +88,12 @@ const clip = (v, n) => (v == null ? null : String(v).slice(0, n));
 const codeOf = (v, re) => { const s = v == null ? "" : String(v).trim().toUpperCase(); return re.test(s) ? s : null; };
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
-const limits = { recorded: 0, repeats: 0, capped: 0, clientCapped: 0 };
-const seenKeys = new Map();     // dedupe key -> time written
-let windowAt = 0, windowN = 0;  // the fixed write window, all writers
-const clientWindow = new Map(); // client -> rows written in this window
-let limitLoggedAt = 0;
+const counts = { recorded: 0, repeats: 0, aggregated: 0, flushFailures: 0 };
+const seenKeys = new Map();  // dedupe key -> { row, at }
+const aggregates = new Map(); // aggregate key -> row (this hour's)
+const pending = new Set();    // rows changed since the last write
+let flushTimer = null;
+let flushing = null;
 
 // The route class: the referral copies apart from the direct routes.
 const routeClassOf = (route) => {
@@ -90,33 +103,47 @@ const routeClassOf = (route) => {
 };
 // An EVM address is one key whatever its case; any other is kept exactly.
 const addressKeyOf = (a) => (a == null ? "-" : /^0x[0-9a-fA-F]{40}$/.test(String(a)) ? String(a).toLowerCase() : String(a));
+const COUNTRY_RE = /^[A-Z]{2}$/, REGION_RE = /^[A-Z]{2}-[A-Z0-9]{1,3}$/;
 
-/** The write limits' verdict for one event: null (write it) or the reason it is not written. */
-function limitVerdict(ev, kind, now) {
-  const key = [kind, addressKeyOf(ev.address), routeClassOf(ev.route), String(ev.country ?? ""), String(ev.region ?? ""), ev.address == null ? String(ev.ip ?? "") : ""].join("|");
-  const at = seenKeys.get(key);
-  if (at != null && now - at < SANCTIONS_EVENT_DEDUPE_MS && now >= at) { limits.repeats++; return "repeat"; }
-  if (now - windowAt >= SANCTIONS_EVENT_WINDOW_MS || now < windowAt) { windowAt = now; windowN = 0; clientWindow.clear(); }
-  if (windowN >= SANCTIONS_EVENT_WINDOW_MAX) { limits.capped++; return "capped"; }
-  const client = ev.ip == null || ev.ip === "" ? null : String(ev.ip).slice(0, 64);
-  if (client) {
-    const n = clientWindow.get(client) || 0;
-    if (n >= SANCTIONS_EVENT_CLIENT_WINDOW_MAX) { limits.clientCapped++; return "client-capped"; }
-    clientWindow.set(client, n + 1);
-    while (clientWindow.size > DEDUPE_KEYS_MAX) clientWindow.delete(clientWindow.keys().next().value);
-  }
-  windowN++;
-  seenKeys.delete(key); seenKeys.set(key, now);
-  while (seenKeys.size > DEDUPE_KEYS_MAX) seenKeys.delete(seenKeys.keys().next().value);
-  return null;
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => { flushTimer = null; flushSanctionsEvents().catch(() => {}); }, SANCTIONS_EVENT_FLUSH_MS);
+  flushTimer.unref?.();
+}
+function markDirty(row) { pending.add(row); scheduleFlush(); }
+
+/** Write every row changed since the last write (repeats, aggregates, a
+ *  failed write). Resolves the number written; a row whose write fails stays
+ *  pending. Never throws. */
+export async function flushSanctionsEvents() {
+  while (flushing) await flushing;
+  if (!pending.size) return 0;
+  const run = (async () => {
+    const rows = [...pending];
+    pending.clear();
+    let n = 0;
+    if (useDb()) {
+      for (const row of rows) {
+        try { await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, row); n++; }
+        catch (e) { pending.add(row); counts.flushFailures++; console.error(`[sanctions-events] a change to ${row.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); }
+      }
+    } else {
+      try { loadFile(); saveFile(); n = rows.length; }
+      catch (e) { for (const r of rows) pending.add(r); counts.flushFailures++; console.error(`[sanctions-events] the events file was not rewritten (${String(e?.message || e).slice(0, 120)}); retrying`); }
+    }
+    if (pending.size) scheduleFlush();
+    return n;
+  })();
+  flushing = run;
+  try { return await run; } finally { flushing = null; }
 }
 
-/** The write limits for the operator view: counts and settings, never an address. */
+/** The counts for the operator view: never an address. */
 export function sanctionsEventWriteLimits() {
   return {
-    recorded: limits.recorded, repeats: limits.repeats, capped: limits.capped, clientCapped: limits.clientCapped,
-    dedupeMs: SANCTIONS_EVENT_DEDUPE_MS, windowMs: SANCTIONS_EVENT_WINDOW_MS,
-    windowMax: SANCTIONS_EVENT_WINDOW_MAX, clientWindowMax: SANCTIONS_EVENT_CLIENT_WINDOW_MAX,
+    recorded: counts.recorded, repeats: counts.repeats, aggregated: counts.aggregated,
+    pending: pending.size, flushFailures: counts.flushFailures,
+    dedupeMs: SANCTIONS_EVENT_DEDUPE_MS, aggregateMs: SANCTIONS_AGGREGATE_MS,
   };
 }
 
@@ -167,9 +194,9 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
 
 /**
  * Record one event. Never throws into a serving path: resolves the stored
- * row, or null when the store did not take it (logged) or a write limit held
- * it back (counted; see WRITE LIMITS above; `limit: false` for an operator's
- * own record).
+ * row (for a repeat inside the dedupe window, the existing row with one more
+ * attempt; see REPEATS AND AGGREGATES above), or null when the store did not
+ * take it yet (logged; the write is retried at the next flush).
  * Fields: kind (required, a SANCTIONS_EVENT_KINDS key), address, rail,
  * network, amount (atomic units or USD as `amountUsd`), asset, route,
  * ip, country, region, listPublishDate, via, refundId, detail. A geo-payment
@@ -177,21 +204,21 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
  * 3166-2) code that was the refusal's reason, so a report can state it; no
  * other location value (city, coordinates, a header's own text) is stored.
  */
-export async function recordSanctionsEvent(ev = {}, { now = Date.now(), limit = true } = {}) {
+export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
+  let row = null, key = null;
   try {
     const kind = String(ev.kind || "");
-    if (!Object.prototype.hasOwnProperty.call(SANCTIONS_EVENT_KINDS, kind)) throw new Error(`unknown kind ${kind}`);
-    if (limit !== false) {
-      const held = limitVerdict(ev, kind, now);
-      if (held) {
-        if (held !== "repeat" && Date.now() - limitLoggedAt >= 60_000) {
-          limitLoggedAt = Date.now();
-          console.warn(`[sanctions-events] write limit reached (${held}); further ${kind} events in this window are counted, not written`);
-        }
-        return null;
-      }
+    if (!Object.prototype.hasOwnProperty.call(SANCTIONS_EVENT_KINDS, kind) || kind === "unproven-refusal") throw new Error(`unknown kind ${kind}`);
+    key = [kind, addressKeyOf(ev.address), routeClassOf(ev.route), codeOf(ev.country, COUNTRY_RE) || "", codeOf(ev.region, REGION_RE) || "", ev.address == null ? String(ev.ip ?? "") : "", ev.refundId == null ? "" : String(ev.refundId)].join("|");
+    const seen = seenKeys.get(key);
+    if (seen && now >= seen.at && now - seen.at < SANCTIONS_EVENT_DEDUPE_MS && !seen.row.filedAt) {
+      seen.row.attempts = (Number(seen.row.attempts) || 1) + 1;
+      seen.row.lastSeenAt = new Date(Math.max(now, Date.parse(seen.row.lastSeenAt || seen.row.at) || 0)).toISOString();
+      counts.repeats++;
+      markDirty(seen.row);
+      return seen.row;
     }
-    const row = {
+    row = {
       id: newId(now),
       at: new Date(now).toISOString(),
       kind,
@@ -213,19 +240,75 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now(), limit = 
       dueBy: SANCTIONS_EVENT_KINDS[kind] ? new Date(addBusinessDays(now)).toISOString() : null,
       filedAt: null,
       filedRef: null,
+      attempts: 1,
+      lastSeenAt: new Date(now).toISOString(),
     };
+    // Keyed before the write, so a repeat arriving meanwhile adds to this row.
+    seenKeys.delete(key); seenKeys.set(key, { row, at: now });
+    while (seenKeys.size > DEDUPE_KEYS_MAX) seenKeys.delete(seenKeys.keys().next().value);
     if (useDb()) {
-      await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, row);
       if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row);
+      await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, row);
     } else {
       loadFile().push(row);
       appendFileRow(row);
     }
-    limits.recorded++;
+    counts.recorded++;
     console.warn(`[sanctions-events] recorded ${kind}${row.report ? ` (a ${row.report === "blocked" ? "blocked-property" : "rejected-transaction"} report is due by ${row.dueBy.slice(0, 10)})` : ""}`);
     return row;
   } catch (e) {
-    console.error(`[sanctions-events] event NOT recorded (${String(e?.message || e).slice(0, 160)}); the log line above this one is the only record`);
+    // A row built but not written is kept and written at the next flush.
+    if (row) { markDirty(row); console.error(`[sanctions-events] event not written yet (${String(e?.message || e).slice(0, 160)}); retrying at the next flush`); }
+    else console.error(`[sanctions-events] event NOT recorded (${String(e?.message || e).slice(0, 160)}); the log line above this one is the only record`);
+    return null;
+  }
+}
+
+/**
+ * Count one refusal in this hour's aggregate row for (kind, rail, route
+ * class, country, region): `count` and `byReason[reason]` grow, `lastSeenAt`
+ * moves. No address is kept. `kind`: "unproven-refusal" (a refusal on an
+ * address no signature proves; a record, no report) or "geo-payment" (proven
+ * paid requests from a sanctioned region past that module's bounds; a
+ * report). Resolves the row, or null when the kind or reason is not one this
+ * store takes. Never throws.
+ */
+export async function recordSanctionsAggregate(ev = {}, { now = Date.now() } = {}) {
+  try {
+    const kind = String(ev.kind || "");
+    if (kind !== "unproven-refusal" && kind !== "geo-payment") throw new Error(`no aggregate for kind ${kind}`);
+    const reason = String(ev.reason || "");
+    if (!AGGREGATE_REASON_RE.test(reason)) throw new Error("an aggregate needs a reason word");
+    const hourStart = Math.floor(now / SANCTIONS_AGGREGATE_MS) * SANCTIONS_AGGREGATE_MS;
+    const rail = clip(ev.rail, 32), routeClass = routeClassOf(ev.route);
+    const country = codeOf(ev.country, COUNTRY_RE), region = codeOf(ev.region, REGION_RE);
+    const key = [kind, rail || "", routeClass, country || "", region || "", hourStart].join("|");
+    let row = aggregates.get(key);
+    if (row && !row.filedAt) {
+      row.count += 1;
+      row.byReason[reason] = (row.byReason[reason] || 0) + 1;
+      row.lastSeenAt = new Date(Math.max(now, Date.parse(row.lastSeenAt) || 0)).toISOString();
+      counts.aggregated++;
+      markDirty(row);
+      return row;
+    }
+    if (aggregates.size > 1000) for (const [k, r] of aggregates) if (Date.parse(r.hourStart) < hourStart) aggregates.delete(k);
+    const report = SANCTIONS_EVENT_KINDS[kind];
+    row = {
+      id: newId(now), at: new Date(now).toISOString(), kind, report, aggregate: true,
+      hourStart: new Date(hourStart).toISOString(), address: null, rail, routeClass, country, region,
+      count: 1, byReason: { [reason]: 1 }, lastSeenAt: new Date(now).toISOString(),
+      dueBy: report ? new Date(addBusinessDays(now)).toISOString() : null, filedAt: null, filedRef: null,
+    };
+    aggregates.set(key, row);
+    counts.aggregated++;
+    if (useDb()) {
+      if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row);
+    } else loadFile().push(row);
+    markDirty(row);
+    return row;
+  } catch (e) {
+    console.error(`[sanctions-events] aggregate NOT recorded (${String(e?.message || e).slice(0, 160)})`);
     return null;
   }
 }
@@ -264,6 +347,7 @@ export function sanctionsReportStatus() {
 
 /** The operator view: the unfiled reportable events in full, deadlines, and recent events. */
 export async function sanctionsEventsOperatorView({ now = Date.now(), recent = 100 } = {}) {
+  await flushSanctionsEvents();
   let unfiled, latest;
   if (useDb()) {
     await refreshSanctionsEvents();
@@ -299,6 +383,10 @@ export async function markSanctionsEventsFiled({ ids = null, all = false, refere
   if (want && !want.size) throw Object.assign(new Error("ids (array) or all: true required"), { statusCode: 400 });
   const filedAt = new Date(now).toISOString();
   const marked = [];
+  // Every change reaches the store first, and later attempts open new rows,
+  // so a filed row never changes after its filing.
+  seenKeys.clear(); aggregates.clear();
+  await flushSanctionsEvents();
   if (useDb()) {
     const list = await dbUnfiled();
     for (const r of list) {
@@ -331,6 +419,7 @@ export async function pruneSanctionsEvents({ apply = false, now = Date.now(), ye
   const cutoff = new Date(now);
   cutoff.setUTCFullYear(cutoff.getUTCFullYear() - Math.max(SANCTIONS_RETENTION_MIN_YEARS, years));
   const cutIso = cutoff.toISOString();
+  await flushSanctionsEvents();
   const keep = (r) => !(typeof r.at === "string" && r.at < cutIso) || (r.report && !r.filedAt);
   if (useDb()) {
     const t = `${stateDbSchema()}.records`;
@@ -350,8 +439,9 @@ export async function pruneSanctionsEvents({ apply = false, now = Date.now(), ye
 
 /** Tests: forget the file view and the database cache. */
 export function __resetSanctionsEventsForTests() { fileRows = null; dbCache = { at: 0, unfiled: null, error: null }; }
-/** Tests: forget the write limits' state and counts. */
+/** Tests: forget the dedupe keys, the aggregates, pending changes and counts. */
 export function __resetSanctionsEventLimitsForTests() {
-  seenKeys.clear(); clientWindow.clear(); windowAt = 0; windowN = 0; limitLoggedAt = 0;
-  limits.recorded = 0; limits.repeats = 0; limits.capped = 0; limits.clientCapped = 0;
+  seenKeys.clear(); aggregates.clear(); pending.clear();
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  counts.recorded = 0; counts.repeats = 0; counts.aggregated = 0; counts.flushFailures = 0;
 }

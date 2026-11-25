@@ -630,7 +630,7 @@ import { settleComplianceView } from "./settle-compliance.js";
 import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
 import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
-import { recordSanctionsEvent, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
+import { recordSanctionsEvent, recordSanctionsAggregate, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
@@ -3117,18 +3117,21 @@ app.use(securityHeaders());
 app.use(sanctionedRegionsMiddleware({
   // A payment is recorded as a reportable event only when its signature
   // proves its payer: an x402 exact authorization to our payTo, its signer
-  // recovered (verifiedGeoPayer). Anything else is counted only.
+  // recovered (verifiedGeoPayer). Anything else is counted in the hour's
+  // aggregate row, with no address.
   verify: (req) => verifiedGeoPayer(req, { payTo: WALLET_ADDRESS }),
   // A Tempo push credential names a transfer already sent. It is recorded
   // only when it paid THIS server: a challenge we issued (the Tempo gate's own
   // HMAC, realm, currency and recipient check) and a transfer the chain shows
   // to our Tempo payTo in our currency (a bounded read, null on any doubt).
   // The event names the chain's sender and value, never the credential's own
-  // `source` or amount; anything else is counted only.
+  // `source` or amount; anything else is counted in the hour's aggregate row.
   pushSender: (req) => ourTempoPushTransfer(String(req.headers?.authorization || ""), { secretKey: process.env.MPP_SECRET_KEY || "", realm: new URL(BASE_URL).host }),
   // The location headers are read in memory; the event keeps only the
   // sanctioned country or region code that is the refusal's reason.
-  record: ({ req, payer, country, region, pushHash, amount: pushAmount = null, asset: pushAsset = null }) => {
+  record: ({ req, payer, country, region, pushHash, amount: pushAmount = null, asset: pushAsset = null, aggregate = false, kind = null, reason = null }) => {
+    // Unproven, or past the gate's bounds: the hour's aggregate row (no address).
+    if (aggregate) return recordSanctionsAggregate({ kind, reason, rail: pushHash ? "tempo" : "x402", route: `${req.method} ${req.path}`, country, region });
     let network = null, amount = null, asset = null;
     if (pushHash) {
       return recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "tempo", network: "tempo", amount: pushAmount, asset: pushAsset, route: `${req.method} ${req.path}`, ip: req.ip, country, region, detail: `push transfer ${pushHash}, not claimed for the request` });
@@ -8216,7 +8219,7 @@ app.post("/__operator/sanctions-events", express.json({ limit: "16kb" }), async 
   res.set("Cache-Control", "private, no-store");
   const b = req.body || {};
   if (!["blocked-refund", "payout-refused"].includes(b.kind)) return res.status(400).json({ error: 'kind must be "blocked-refund" or "payout-refused"' });
-  const row = await recordSanctionsEvent({ kind: b.kind, address: b.address, network: b.network, amountUsd: b.amountUsd, refundId: b.refundId, route: b.route, rail: b.rail, detail: b.detail, via: "refund-run" }, { limit: false });
+  const row = await recordSanctionsEvent({ kind: b.kind, address: b.address, network: b.network, amountUsd: b.amountUsd, refundId: b.refundId, route: b.route, rail: b.rail, detail: b.detail, via: "refund-run" });
   if (!row) return res.status(503).json({ error: "the sanctions events store did not take the event" });
   res.json({ ok: true, id: row.id, dueBy: row.dueBy });
 });

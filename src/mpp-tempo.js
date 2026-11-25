@@ -52,7 +52,7 @@ import { sharedClaimRequired } from "./replay-topology.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
-import { recordSanctionsEvent } from "./sanctions-events.js";
+import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
 import { relayPayerScreen } from "./payer-screen-rails.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
@@ -1422,7 +1422,8 @@ export function tempoPaymentParties(authorizationHeader, { signedOnly = false } 
   // recovered to (the sender's key, an access key and, for its version 2
   // payload, the account it acts for, a configurable account's owners and the
   // account their approvals name, a fee payer). The sanctions events store
-  // records only these; every other party is screened and never recorded.
+  // records only these; any other party is screened, and counted only in an
+  // hourly aggregate row.
   const addSigned = (a) => { const v = lcAddress(a); if (v) out.add(v); };
   const add = signedOnly ? () => {} : addSigned;
   let credential;
@@ -1522,11 +1523,12 @@ function screenTempoParties(authorizationHeader, phase, extra = []) {
   if (v.reason === "listed") {
     // Recorded only for a listed address a signature proves (or the sender the
     // relay or chain settled on, `extra`); a party the credential merely names
-    // is refused all the same and never recorded.
+    // is refused all the same and counted in the hour's aggregate row only.
     try {
       const signed = [...tempoPaymentParties(authorizationHeader, { signedOnly: true }), ...extra.map(lcAddress).filter(Boolean)];
       const w = signed.length ? screenAddresses(signed) : null;
       if (w && w.ok === false && w.reason === "listed") recordSanctionsEvent({ kind: "screen-hit", address: w.address, rail: "tempo", detail: `Tempo payment party, ${phase}` }).catch(() => {});
+      else recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-party", rail: "tempo" }).catch(() => {});
     } catch { /* never changes the refusal */ }
     return { ok: false, cls: "screen-rejected", error: `screen ${phase}: party ${maskOne(v.address)} is on the OFAC SDN list (${parties.length} parties screened)`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
   }
@@ -1543,11 +1545,13 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
   try { v = await screenFunding(payers); } catch { v = { ok: true }; }
   if (v.ok) return null;
   // Recorded only when the payer it names is one a signature proves (or the
-  // settled sender in `extra`); a stated payer is refused and never recorded.
+  // settled sender in `extra`); a stated payer is refused and counted in the
+  // hour's aggregate row only.
   try {
     const signed = new Set([...tempoPaymentParties(authorizationHeader, { signedOnly: true }), ...extra.map(lcAddress).filter(Boolean)]);
     const payer = lcAddress(v.payer);
     if (payer && signed.has(payer)) recordSanctionsEvent({ kind: "screen-hit", address: v.payer, rail: "tempo", detail: `Tempo payer funded by a listed address${v.funder ? ` ${v.funder}` : ""}, ${phase}` }).catch(() => {});
+    else recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-funded-payer", rail: "tempo" }).catch(() => {});
   } catch { /* never changes the refusal */ }
   const amount = Number.isFinite(v.listedUsd) ? ` $${v.listedUsd.toFixed(6)} in ${v.count} transfer(s), ${(v.share * 100).toFixed(2)}% of inflows read` : "";
   return { ok: false, cls: "screen-rejected", error: `screen ${phase}: funded by a listed address (payer ${maskOne(v.payer)}, funder ${v.funder ? maskOne(v.funder) : "cached verdict"}${amount})`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };

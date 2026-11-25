@@ -27,10 +27,15 @@
 // payment proves its payer: the caller's `verify(req)` recovers the signer
 // (an x402 exact authorization to our own payTo, inside its validity window)
 // and the event names that signer, never an address the request merely
-// states. A payment nothing here can verify (another rail, a forged or
-// expired signature) is counted only. One event per payer and nonce, and at
-// most GEO_EVENTS_PER_CLIENT_DAY per client address a day; past either, a
-// count. A Tempo PUSH credential (payload type "hash") names a transfer the
+// states. The payer is the signer's to choose and a client address is cheap
+// to change, so a proven payment opens its own row only within
+// GEO_EVENTS_PER_CLIENT_DAY new payments per client (an IPv6 address by its
+// /64, an IPv4-mapped address as IPv4) a day and
+// GEO_EVENTS_PER_HOUR in all; past either it is counted in the hour's
+// geo-payment aggregate row for its country or region (a report, no address).
+// The same payment re-sent adds an attempt to its row. A payment nothing here
+// can verify (another rail, a forged or expired signature) is counted in the
+// hour's unproven-refusal aggregate row (no address). Nothing is dropped. A Tempo PUSH credential (payload type "hash") names a transfer the
 // buyer already broadcast: the 451 then neither says nothing was charged nor
 // carries `charged: false`, says the transfer was not claimed for the request,
 // and the event names the transfer's sender as the chain shows it (the
@@ -46,12 +51,16 @@
 import { paymentHeaderOf } from "./payer.js";
 import { provenX402Signer } from "./gateway-cache-scope.js";
 import { NOT_CHARGED } from "./not-charged.js";
+import { limiterKey } from "./rate-limit.js";
 
 export const DEFAULT_SANCTIONED_COUNTRIES = Object.freeze(["CU", "IR", "KP", "SY"]);
 // Countries in the block list by our own choice, not under a sanctions
 // program today: a refusal from one is counted, never recorded as a report.
 export const NON_PROGRAM_COUNTRIES = Object.freeze(new Set(["SY"]));
 export const GEO_EVENTS_PER_CLIENT_DAY = 5;
+/** New proven geo-payment rows in all per hour; past it, the hour's aggregate. */
+export const GEO_EVENTS_PER_HOUR = 100;
+const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 // Ukraine's ISO 3166-2 subdivisions: 43 Crimea, 40 Sevastopol, 14 Donetsk, 09 Luhansk.
 export const SANCTIONED_UA_REGION_CODES = Object.freeze(["43", "40", "14", "09"]);
@@ -155,37 +164,49 @@ export function sanctionedLocationOf(req, { trusted = false, countries = sanctio
   return null;
 }
 
-const counts = { refused: 0, refusedWithPayment: 0, byCountry: {}, lastAt: null, regionHeadersSeen: 0, cdnRequests: 0, eventsRecorded: 0, paymentUnverified: 0, paymentRepeat: 0, clientCapped: 0, nonProgram: 0 };
+const counts = { refused: 0, refusedWithPayment: 0, byCountry: {}, lastAt: null, regionHeadersSeen: 0, cdnRequests: 0, eventsRecorded: 0, paymentUnverified: 0, paymentRepeat: 0, clientCapped: 0, hourCapped: 0, nonProgram: 0 };
 
 /**
- * The geo-payment event gate: resolves the event to record for a refused paid
- * request, or null (counted only). `verify(req)` resolves { payer, nonce } for
- * a payment whose signature proves its payer, else null. Dedupes per payer and
- * nonce, caps per client address per day. Exported for the tests.
+ * The geo-payment event gate: resolves what to record for a refused paid
+ * request, or null (a country blocked by choice: counted only). `verify(req)`
+ * resolves { payer, nonce } for a payment whose signature proves its payer,
+ * else null. A proven payment resolves its event (the same payment re-sent
+ * too: the store adds an attempt to its row); past the per-client day bound
+ * or the hourly bound, or unproven, it resolves `{ aggregate: true, kind,
+ * reason, country, region }` for the hour's aggregate row. Exported for the
+ * tests.
  */
-export function createGeoPaymentGate({ verify, perClientDay = GEO_EVENTS_PER_CLIENT_DAY, now = () => Date.now(), maxKeys = 10_000 } = {}) {
+export function createGeoPaymentGate({ verify, perClientDay = GEO_EVENTS_PER_CLIENT_DAY, perHour = GEO_EVENTS_PER_HOUR, now = () => Date.now(), maxKeys = 10_000 } = {}) {
   const seen = new Map();    // `${payer}|${nonce}` -> at
   const byClient = new Map(); // client -> { day, n }
+  let hour = -1, hourN = 0;
   const trim = (m) => { while (m.size > maxKeys) m.delete(m.keys().next().value); };
+  const aggregate = (kind, reason, country, region) => ({ aggregate: true, kind, reason, country, region });
   return async function gate({ req, country, region }) {
     if (country && NON_PROGRAM_COUNTRIES.has(country)) { counts.nonProgram++; return null; }
     let proof = null;
     try { proof = typeof verify === "function" ? await verify(req) : null; } catch { proof = null; }
-    if (!proof || typeof proof.payer !== "string" || !proof.payer) { counts.paymentUnverified++; return null; }
+    if (!proof || typeof proof.payer !== "string" || !proof.payer) { counts.paymentUnverified++; return aggregate("unproven-refusal", "unverified-payment", country, region); }
     const t = now();
     const key = `${proof.payer.toLowerCase()}|${String(proof.nonce ?? "")}`;
+    const event = { payer: proof.payer, country, region, ...(proof.amount != null ? { amount: String(proof.amount) } : {}), ...(proof.asset ? { asset: String(proof.asset) } : {}) };
     const at = seen.get(key);
-    if (at != null && t - at < DAY_MS) { counts.paymentRepeat++; return null; }
-    const client = String(req?.ip || "?");
+    if (at != null && t - at < DAY_MS) { counts.paymentRepeat++; return event; }
+    // One client: an IPv6 address by its /64, an IPv4-mapped one as IPv4.
+    const client = limiterKey(String(req?.ip || "?"));
     const day = Math.floor(t / DAY_MS);
     const c = byClient.get(client);
     const n = c && c.day === day ? c.n : 0;
-    if (n >= perClientDay) { counts.clientCapped++; return null; }
+    if (n >= perClientDay) { counts.clientCapped++; return aggregate("geo-payment", "client-bound", country, region); }
+    const h = Math.floor(t / HOUR_MS);
+    if (h !== hour) { hour = h; hourN = 0; }
+    if (hourN >= perHour) { counts.hourCapped++; return aggregate("geo-payment", "hour-bound", country, region); }
+    hourN++;
     byClient.delete(client); byClient.set(client, { day, n: n + 1 });
     seen.delete(key); seen.set(key, t);
     trim(seen); trim(byClient);
     counts.eventsRecorded++;
-    return { payer: proof.payer, country, region, ...(proof.amount != null ? { amount: String(proof.amount) } : {}), ...(proof.asset ? { asset: String(proof.asset) } : {}) };
+    return event;
   };
 }
 
@@ -197,11 +218,14 @@ export function sanctionedRegionsView(env = process.env) {
     ukraineRegions: SANCTIONED_UA_REGION_CODES.map((c) => `UA-${c}`),
     refused: counts.refused,
     refusedWithPayment: counts.refusedWithPayment,
-    // Of those: recorded as a reportable event, and counted only (payment not
-    // verified, a repeat of a recorded payment, past the per-client cap, or a
-    // country blocked by choice rather than a program).
+    // Of those: recorded as a row of its own; an attempt added to a row (the
+    // same payment re-sent); counted in an hour's aggregate row (unverified,
+    // past the per-client or the hourly bound); and counted only (a country
+    // blocked by choice rather than a program).
     eventsRecorded: counts.eventsRecorded,
-    countedOnly: { unverified: counts.paymentUnverified, repeat: counts.paymentRepeat, clientCapped: counts.clientCapped, nonProgram: counts.nonProgram },
+    repeats: counts.paymentRepeat,
+    aggregated: { unverified: counts.paymentUnverified, clientBound: counts.clientCapped, hourBound: counts.hourCapped },
+    countedOnly: { nonProgram: counts.nonProgram },
     byCountry: { ...counts.byCountry },
     lastAt: counts.lastAt,
     // "present" once a CDN request carried cf-region-code in this process;
@@ -214,7 +238,7 @@ export function sanctionedRegionsView(env = process.env) {
 /** Tests. */
 export function __resetSanctionedRegionsForTests() {
   counts.refused = 0; counts.refusedWithPayment = 0; counts.byCountry = {}; counts.lastAt = null; counts.regionHeadersSeen = 0; counts.cdnRequests = 0;
-  counts.eventsRecorded = 0; counts.paymentUnverified = 0; counts.paymentRepeat = 0; counts.clientCapped = 0; counts.nonProgram = 0;
+  counts.eventsRecorded = 0; counts.paymentUnverified = 0; counts.paymentRepeat = 0; counts.clientCapped = 0; counts.hourCapped = 0; counts.nonProgram = 0;
 }
 
 /**
@@ -223,7 +247,8 @@ export function __resetSanctionedRegionsForTests() {
  * `trustedOf(req)` says whether the Cloudflare headers are Cloudflare's;
  * `verify(req)` resolves { payer, nonce } for a payment whose signature
  * proves its payer (else null); `record(event)` keeps a refused paid request
- * the gate passed, with its proven payer (best effort, never awaited).
+ * as the gate resolved it: an event with its proven payer, or an aggregate
+ * (`aggregate: true`, kind, reason; best effort, never awaited).
  */
 export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (req) => req.viaCdn === true, verify = null, pushSender = null, record = null, log = console.warn, gate = null, pushGate = null } = {}) {
   if (!sanctionsGeoBlockEnabled(env)) return function sanctionedRegionsOff(_req, _res, next) { next(); };
