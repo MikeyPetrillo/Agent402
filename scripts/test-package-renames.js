@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import { PACKAGE_RENAMES, shimDir, forwardRange, renameNotice } from "./lib/package-renames.js";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
+import { runClaim, trustState, parseTrustList, isSpamRefusal, WORKFLOW, REPO, ENVIRONMENT, CLAIM_RERUN } from "./package-renames.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
@@ -124,6 +125,56 @@ for (const r of PACKAGE_RENAMES) {
   const py = load(readFileSync(join(ROOT, ".github/workflows/publish-langchain-py.yml"), "utf8"));
   const build = JSON.stringify(py.jobs?.build?.steps || []);
   ok(build.includes("adapters/langchain-py") && build.includes("renamed/agent402-langchain-py") && JSON.stringify(py.jobs?.publish?.steps || []).includes("skip-existing"), "the PyPI workflow builds both projects and skips a file PyPI already holds");
+}
+
+// The claim run (scripts/package-renames.js claim --run) against a fake npm: a rerun
+// skips every name that exists and every trusted publisher already listed, and a
+// spam-check 403 stops on the refused name with the rerun command.
+{
+  const NPMS = PACKAGE_RENAMES.filter((r) => r.registry === "npm").slice(0, 3);
+  const ours = { id: "t1", type: "github", file: WORKFLOW, repository: REPO, environment: ENVIRONMENT, permissions: ["createPackage", "createStagedPackage"] };
+  const fake = ({ exists = new Set(), trusted = new Set(), spam = new Set() }) => {
+    const calls = [];
+    const npm = (args) => {
+      calls.push(args.join(" "));
+      const name = args[0] === "view" ? args[1] : args[0] === "trust" ? args[2] : null;
+      if (args[0] === "view") return exists.has(name) ? { status: 0, stdout: "0.0.0\n", stderr: "" } : { status: 1, stdout: "", stderr: "npm error code E404\n" };
+      if (args[0] === "trust" && args[1] === "list") return { status: 0, stdout: trusted.has(name) ? JSON.stringify(ours, null, 2) : "", stderr: "" };
+      if (args[0] === "trust") { trusted.add(name); return { status: 0 }; }
+      if (args[0] === "publish") {
+        const pkg = calls.length && NPMS.find((r) => !exists.has(r.name));
+        if (pkg && spam.has(pkg.name)) return { status: 1, stdout: "", stderr: "npm error code E403\nnpm error 403 403 Forbidden - PUT https://registry.npmjs.org/x - Package name triggered spam detection\n" };
+        if (pkg) exists.add(pkg.name);
+        return { status: 0 };
+      }
+      return { status: 1 };
+    };
+    return { npm, calls };
+  };
+  const quiet = { log: () => {}, err: () => {} };
+  const first = NPMS[0].name;
+  const f1 = fake({ exists: new Set([first]), trusted: new Set([first]) });
+  const r1 = runClaim({ run: true, npm: f1.npm, renames: NPMS, ...quiet });
+  const pubs1 = f1.calls.filter((c) => c.startsWith("publish")).length;
+  const trusts1 = f1.calls.filter((c) => /^trust github/.test(c)).map((c) => c.split(" ")[2]);
+  ok(r1.ok && pubs1 === NPMS.length - 1 && !trusts1.includes(first) && trusts1.length === NPMS.length - 1, `claim --run skips an existing name with its publisher and does the rest (${pubs1} publishes, trust on ${trusts1.join(", ")})`);
+  const f2 = fake({ exists: new Set(NPMS.map((r) => r.name)), trusted: new Set(NPMS.map((r) => r.name)) });
+  const r2 = runClaim({ run: true, npm: f2.npm, renames: NPMS, ...quiet });
+  ok(r2.ok && !f2.calls.some((c) => /^publish|^trust github/.test(c)), "a rerun after a full claim publishes nothing and adds no publisher");
+  const f3 = fake({ exists: new Set([first]) });
+  runClaim({ run: true, npm: f3.npm, renames: NPMS.slice(0, 1), ...quiet });
+  ok(f3.calls.includes(`trust github ${first} --file ${WORKFLOW} --repo ${REPO} --env ${ENVIRONMENT} --allow-publish -y`), "an existing name without its publisher gets the publisher added");
+  const errs = [];
+  const f4 = fake({ exists: new Set([first]), trusted: new Set([first]), spam: new Set([NPMS[1].name]) });
+  const r4 = runClaim({ run: true, npm: f4.npm, renames: NPMS, log: () => {}, err: (m) => errs.push(m) });
+  ok(!r4.ok && r4.stoppedAt === NPMS[1].name && errs.some((m) => m.includes(`"${NPMS[1].name}"`) && /spam detection/.test(m)) && errs.some((m) => m.includes(CLAIM_RERUN))
+    && !f4.calls.some((c) => c.startsWith(`trust github ${NPMS[1].name}`)) && f4.calls.filter((c) => c.startsWith("publish")).length === 1, "a spam-check 403 stops on the refused name, names it and prints the rerun command");
+  const logs = [];
+  runClaim({ run: false, npm: fake({ exists: new Set([first]), trusted: new Set([first]) }).npm, renames: NPMS, log: (m) => logs.push(m), err: () => {} });
+  ok(logs.some((m) => m.startsWith("Names still to create (2):") && NPMS.slice(1).every((r) => m.includes(r.name)) && !m.includes(first)), "the claim prints every name still to create before it publishes");
+  ok(trustState(parseTrustList(`${JSON.stringify(ours, null, 2)}\n${JSON.stringify({ ...ours, id: "t2", file: "other.yml" }, null, 2)}`)).state === "present"
+    && trustState([{ ...ours, environment: "staging" }]).state === "absent" && trustState([{ ...ours, permissions: ["createStagedPackage"] }]).state === "no-publish"
+    && isSpamRefusal("npm error 403 Forbidden - Package name triggered spam detection") && !isSpamRefusal("npm error 403 Forbidden - You do not have permission"), "trust list parsing and the spam-refusal test read the right fields");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
