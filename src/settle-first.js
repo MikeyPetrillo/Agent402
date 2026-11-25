@@ -37,6 +37,8 @@
 // request. A process that registers no reader (one that serves no paywall)
 // has no ambient request, and every settle point there returns at once.
 
+import { refundAnswerStatus } from "./refund-status-word.js";
+
 const STATE = Symbol("a402.settleFirst");
 let ambient = null;
 /** The server: how a settle point finds the armed request of the call it runs in. */
@@ -251,7 +253,7 @@ const timesWord = (n) => (n === 1 ? "once" : n === 2 ? "twice" : `${n} times`);
  * reads as owed).
  */
 export function resendSpentBody({ status, tx, baseUrl = "" } = {}) {
-  const st = status === "blocked" ? "held" : ["owed", "sending", "paid"].includes(status) ? status : "owed";
+  const st = refundAnswerStatus(status);
   const where = st === "paid"
     ? "The payment was refunded to the paying wallet (refund.lookup shows the refund transaction)."
     : st === "held"

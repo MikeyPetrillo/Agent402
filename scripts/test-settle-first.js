@@ -85,7 +85,7 @@ if (ONLY.includes("1")) {
       const { readFileSync } = await import("node:fs");
       const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
       const at = server.indexOf('error: "payment_refunded"');
-      ok(at > 0 && /const held = row\.status === "blocked";/.test(server.slice(at - 400, at)) && /status: held \? "held"/.test(server.slice(at, at + 900)), "a resend of a payment whose refund is held reads held on payment_refunded too");
+      ok(at > 0 && /const held = refundAnswerStatus\(row\.status\) === "held";/.test(server.slice(at - 400, at)) && /status: refundAnswerStatus\(row\.status\)/.test(server.slice(at, at + 900)), "a resend of a payment whose refund is held reads held on payment_refunded too (the shared word, src/refund-status-word.js)");
     }
     const junk = resendSpentBody({ status: "weird", tx, baseUrl: "" });
     await ok(junk.refund.status === "owed" && junk.refundOwed === true, "an unknown refund status reads as owed");

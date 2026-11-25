@@ -207,6 +207,7 @@ t node scripts/test-ledger-retention.js
 t node scripts/test-outbound-destinations.js
 # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
 t node scripts/test-refund-lookup.js
+t node scripts/test-refund-status-word.js
 # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
 t node scripts/test-refund-ledger-limiter.js
 # Operator refund update: 409 only for a state conflict, 503 when the store refuses the write, 400 for missing evidence (boots its own server)

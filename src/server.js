@@ -569,6 +569,7 @@ import { pressPage } from "./press-page.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
 import { refundLookup, lookupKeys } from "./refund-lookup.js";
+import { refundAnswerStatus } from "./refund-status-word.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
 import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
@@ -12858,13 +12859,13 @@ app.use(createIdempotency({
     }
     console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
     // A row held as blocked reads `held`, as the refund lookup names it.
-    const held = row.status === "blocked";
+    const held = refundAnswerStatus(row.status) === "held";
     return { serve: false, status: 402, body: {
       error: "payment_refunded",
       hint: held
         ? "The payment this request carries no longer pays for a request: its first answer was never delivered, and a refund of it is recorded and held for review; it has not been paid. Request the resource again with a fresh payment."
         : "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
-      refund: { status: held ? "held" : ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+      refund: { status: refundAnswerStatus(row.status), lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
     } };
   },
   // The same payment sent again after its settle was cut at the network's

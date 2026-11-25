@@ -24,6 +24,7 @@
 // own status and amount, and leads with the one furthest from repaid. The
 // nonce is never shown and is never a lookup key: the buyer holds the tx.
 import { refundsByTransaction } from "./refund-ledger.js";
+import { publicRefundStatus } from "./refund-status-word.js";
 
 const KEYED_EVIDENCE = /^(0x[0-9a-fA-F]{64})#0x[0-9a-fA-F]{64}$/;
 /** The settlement transaction a ledger row's evidence names: the evidence
@@ -104,7 +105,7 @@ const NOTES = {
 };
 // The ledger's status as the public answer names it: a row held as blocked
 // reads `held` (recorded, under review, not paid), never `none`.
-const publicStatusOf = (s) => (s === "blocked" ? "held" : s);
+const publicStatusOf = publicRefundStatus;
 
 /** The public answer for one row (or null = none). Same key set always.
  *  `found` is true exactly when status is not "none" (so it says no more than
