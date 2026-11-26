@@ -179,5 +179,54 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
   ok(both.replace(/\s+/g, " ").includes(AI) && both.includes(EX), "the error sentence follows POSTHOG_EXCEPTIONS");
 }
 
+// --- the real client's lanes (posthog-node 6) ------------------------------------
+// A child process runs src/posthog.js with the real SDK against a local stub of
+// the capture endpoints: an `$ai_` event goes to the AI lane, every other event
+// to the analytics lane, and both keep person processing off.
+{
+  const http = await import("node:http");
+  const zlib = await import("node:zlib");
+  const { spawn } = await import("node:child_process");
+  const got = [];
+  const srv = http.createServer((r, s) => {
+    const c = [];
+    r.on("data", (d) => c.push(d));
+    r.on("end", () => {
+      let b = Buffer.concat(c);
+      try { if (/gzip/.test(String(r.headers["content-encoding"] || ""))) b = zlib.gunzipSync(b); } catch { /* raw body */ }
+      let body = null; try { body = JSON.parse(b.toString()); } catch { /* not JSON */ }
+      got.push({ path: r.url, body });
+      s.setHeader("content-type", "application/json");
+      s.end(JSON.stringify({ status: 1, results: {} }));
+    });
+  });
+  await new Promise((res) => srv.listen(0, "127.0.0.1", res));
+  const host = `http://127.0.0.1:${srv.address().port}`;
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const child = `
+    const obs = await import("./src/posthog-observability.js");
+    const ph = await import("./src/posthog.js");
+    const r = ph.initPostHog();
+    if (!r.ok) { console.error("init", r.reason); process.exit(2); }
+    ph.capturePostHogWrongMethod({ path: "/api/x", method: "PUT", allow: ["GET"], ua: "t" });
+    obs.captureAiGeneration({ tier: "v1-chat-nano", model: "m/x", promptTokens: 1, completionTokens: 1, latencyMs: 10, servedBy: "openrouter" });
+    await ph.shutdownPostHog();
+  `;
+  const env = { ...process.env, NODE_ENV: "production", POSTHOG_API_KEY: "phc_" + "t".repeat(20), POSTHOG_HOST: host, POSTHOG_AI_EVENTS: "on", POSTHOG_AI_SAMPLE: "1" };
+  delete env.POSTHOG_TEST_CAPTURE; delete env.POSTHOG_FORCE;
+  const code = await new Promise((res) => {
+    const p = spawn(process.execPath, ["--input-type=module", "-e", child], { cwd: root, env, stdio: ["ignore", "ignore", "inherit"] });
+    const t = setTimeout(() => p.kill("SIGKILL"), 30_000);
+    p.on("exit", (c) => { clearTimeout(t); res(c); });
+  });
+  srv.close();
+  const events = (path) => got.filter((g) => g.path === path).flatMap((g) => (g.body && g.body.batch) || []);
+  const analytics = events("/i/v1/analytics/events"), ai = events("/i/v1/ai/events");
+  ok(code === 0, `the real-client child exits 0 (${code})`);
+  ok(analytics.some((e) => e.event === "wrong_method") && !analytics.some((e) => String(e.event).startsWith("$ai_")), `a plain event takes the analytics lane, no $ai_ event does (${got.map((g) => g.path).join(",")})`);
+  ok(ai.length === 1 && ai[0].event === "$ai_generation", "the $ai_generation event takes the AI lane");
+  ok([...analytics, ...ai].every((e) => e.options && e.options.process_person_profile === false), "every event keeps person processing off");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

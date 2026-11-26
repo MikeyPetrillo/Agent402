@@ -29,7 +29,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   @aws-sdk/token-providers@3.1175.0  Apache-2.0
   @aws-sdk/types@3.975.1  Apache-2.0
   @aws-sdk/xml-builder@3.972.43  Apache-2.0
-  @aws/fiat-extension-for-x402@1.0.1  Apache-2.0
+  @aws/fiat-extension-for-x402@1.0.2  Apache-2.0
   @aws/lambda-invoke-store@0.3.0  Apache-2.0
   @borewit/text-codec@0.2.3  MIT
   @exodus/bytes@1.16.0  MIT
@@ -273,7 +273,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   depd@2.0.0  MIT
   destroy@1.2.0  MIT
   dijkstrajs@1.0.3  MIT
-  docx@9.15.4  MIT
+  docx@9.16.0  MIT
   dotenv@16.6.1  BSD-2-Clause
   dunder-proto@1.0.1  MIT
   ee-first@1.1.1  MIT
@@ -422,7 +422,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   postgres-bytea@1.0.1  MIT
   postgres-date@1.0.7  MIT
   postgres-interval@1.2.0  MIT
-  posthog-node@5.74.0  MIT
+  posthog-node@6.0.5  MIT
   pptxgenjs@4.0.1  MIT
   process-nextick-args@2.0.1  MIT
   proxy-addr@2.0.8  MIT
@@ -463,7 +463,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   string-width@4.2.3  MIT
   string_decoder@1.1.1  MIT
   strip-ansi@6.0.1  MIT
-  stripe@23.1.0  MIT
+  stripe@23.2.0  MIT
   strtok3@10.6.3  MIT
   strtok3@10.8.0  MIT
   structured-headers@2.1.0  MIT
