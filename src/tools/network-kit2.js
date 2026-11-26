@@ -798,7 +798,7 @@ export const NETWORK_TOOLS2 = [
     category: "network",
     price: "$0.001",
     description:
-      "Look up the Autonomous System (ASN), its owner name, prefix, country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses a free public DNS-based IP→ASN mapping service; no HTTPS upstream, no auth, no rate-limit headaches. The owner name is a second lookup with its own 3 second limit: when it cannot be read, owner is null and ownerUnavailable is true, and ownerLookup names the query.",
+      "Look up the Autonomous System (ASN), its owner name, prefix, registry country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses a free public DNS-based IP→ASN mapping service; no HTTPS upstream, no auth, no rate-limit headaches. The owner name is a second lookup with its own 3 second limit: when it cannot be read, owner is null and ownerUnavailable is true, and ownerLookup names the query.",
     tags: ["security", "network", "asn"],
     discovery: {
       bodyType: "json",
