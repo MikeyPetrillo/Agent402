@@ -233,13 +233,15 @@ export async function feedPendingRoutes({ reading, prev = null, target, validate
   const ask = ordered.slice(0, Math.max(0, max));
   out.skipped = ordered.length - ask.length;
   const base = String(target).replace(/\/+$/, "");
-  const at = now();
   for (const m of ask) {
     if (deadlineAt > 0 && now() >= deadlineAt) { out.unreadable += ask.length - out.asked; break; }
     out.asked++;
     let r;
     try { r = await validate({ method: m.method, path: m.path }, { base, deadlineAt, ...(validateUrl ? { validateUrl } : {}) }); } catch { r = null; }
     if (!r || r.ok !== true) { out.unreadable++; continue; }
+    // The clock is read when the answer is in: a crawl made while the run was
+    // asking is not in the future.
+    const at = now();
     const t = indexedRecently(r, at);
     if (t !== null) out.pending.set(m.key, at - t);
   }

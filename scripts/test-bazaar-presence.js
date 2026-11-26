@@ -390,11 +390,16 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
   const many = { endpoints: Array.from({ length: VALIDATE_MAX_PER_RUN + 5 }, (_, i) => row(`r${String(i).padStart(2, "0")}`, "$0.010")) };
   const manyPrev = { missing: { "POST /api/r29": "bought" }, unreadable: 0 };
   const asked = [];
-  const capRun = await feedPendingRoutes({ reading: reading([["/api/r00"], ["/api/r00"]], many), prev: manyPrev, target: TARGET, validate: async (e) => { asked.push(e.path); return { ok: true, valid: true, indexed: true, lastCrawledAt: new Date().toISOString() }; } });
+  // A fixed clock and fixed crawl times: the outcome never depends on how fast the run goes.
+  const capRun = await feedPendingRoutes({ reading: reading([["/api/r00"], ["/api/r00"]], many), prev: manyPrev, target: TARGET, now: () => NOW, validate: async (e) => { asked.push(e.path); return { ok: true, valid: true, indexed: true, lastCrawledAt: hoursAgo(1) }; } });
   ok(asked.length === VALIDATE_MAX_PER_RUN && capRun.skipped === many.endpoints.length - 1 - VALIDATE_MAX_PER_RUN && capRun.pending.size === VALIDATE_MAX_PER_RUN, `the validator is asked about at most ${VALIDATE_MAX_PER_RUN} routes per run (${asked.length} asked, ${capRun.skipped} skipped)`);
   ok(asked[0] === "/api/r29" && !asked.includes("/api/r00"), "a route missing on the check before is asked first; a route in the feed is never asked");
   const dCap = decide({ reading: reading([["/api/r00"], ["/api/r00"]], many), prev: null, pendingFeed: capRun.pending, maxRoutes: 100, maxSpendUsd: 100 });
   ok(dCap.newlyMissing.length === many.endpoints.length - 1 - VALIDATE_MAX_PER_RUN, "a route past the cap stays missing");
+  // A crawl CDP made while the run was asking (after the run began, before the answer) is fresh, not in the future.
+  let tick = NOW;
+  const during = await feedPendingRoutes({ reading: reading([without("cheap-a"), without("cheap-a")]), target: TARGET, now: () => tick, validate: async () => { tick += 5_000; return { ok: true, valid: true, indexed: true, lastCrawledAt: new Date(tick - 1_000).toISOString() }; } });
+  ok(during.pending.get("POST /api/cheap-a") === 1_000, `a crawl made while the run was asking is pending, aged from the answer (${during.pending.get("POST /api/cheap-a")} ms)`);
   // A deadline already passed: nothing asked, every absent route stays missing.
   const late = await feedPendingRoutes({ reading: reading([["/api/r00"], ["/api/r00"]], many), target: TARGET, deadlineAt: 1, validate: async () => { throw new Error("must not be called"); } });
   ok(late.asked === 0 && late.pending.size === 0 && late.unreadable === VALIDATE_MAX_PER_RUN, "past the deadline the validator is not asked and nothing is excused");
