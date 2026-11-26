@@ -4380,7 +4380,14 @@ jobs:
           rm -f "$CLAWHUB_CONFIG_PATH"
       - name: Warn when the ClawHub release did not go through
         if: steps.clawhub.outcome == 'failure'
-        run: echo "::warning::The ClawHub release did not go through; npm and the MCP Registry are published. Re-run the ClawHub release by hand."
+        env:
+          REASON: ${{ steps.clawhub.outputs.reason }}
+        run: |
+          if [ "$REASON" = "plugin-id-claimed" ]; then
+            echo "::warning::The ClawHub release did not go through: the plugin id is claimed by a superseded package in this publisher namespace. npm and the MCP Registry are published. Soft-delete or transfer the superseded package on ClawHub, then re-run the publish job."
+          else
+            echo "::warning::The ClawHub release did not go through; npm and the MCP Registry are published. Re-run the ClawHub release by hand."
+          fi
 
   probe:
     needs: markers
