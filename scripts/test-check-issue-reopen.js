@@ -34,13 +34,16 @@ ok(reopenCandidate([row(1, 1, { title: OTHER })], { title: T, now: NOW }) === nu
 ok(reopenCandidate([row(1, 1, { title: `${T} (b)` })], { title: T, now: NOW }) === null, "a title that only starts the same is not taken");
 ok(reopenCandidate([row(1, 1, { author: "stranger" })], { title: T, now: NOW }) === null, "a stranger's issue under the title is not taken");
 ok(reopenCandidate([row(1, 1, { author: "Probe-Bot" })], { title: T, trusted: ["probe-bot"], now: NOW }) === 1, "the trusted account's issue is taken, in any case");
+ok(reopenCandidate([{ ...row(1, 0), closedAt: new Date(NOW + 3600_000).toISOString() }], { title: T, now: NOW }) === null, "a close time in the future (a clock that is off) is not a reopen");
+ok(reopenCandidate([{ ...row(1, 0), closedAt: new Date(NOW + 30_000).toISOString() }], { title: T, now: NOW }) === 1, "a close time a few seconds ahead (clock skew) still is");
 ok(reopenCandidate([row(1, 1, { state: "open" }), { ...row(2, 1), closedAt: null }], { title: T, now: NOW }) === null, "an open row or one with no close time is not a reopen");
 
 // ---- 2. the opener ----------------------------------------------------------------
-const gh = ({ open = [], closed = [], failClosed = false } = {}) => {
+const gh = ({ open = [], closed = [], failClosed = false, failWrite = null } = {}) => {
   const calls = [];
   const run = (args) => {
     calls.push(args);
+    if (failWrite === args[1]) throw new Error("HTTP 403");
     if (args[1] === "list") {
       const state = args[args.indexOf("--state") + 1];
       if (state === "closed" && failClosed) throw new Error("HTTP 502");
@@ -94,6 +97,28 @@ const flag = (a, f) => a[a.indexOf(f) + 1];
   ok(w[0][1] === "edit" && flag(w[0], "--body-file") === "out/body.md" && w[1][1] === "reopen", "a saved-state check reopens with its state file as the body");
 }
 {
+  // An outsider's OPEN issue under the exact title is not the check's: it gets
+  // no comment and no body, and the check's own issue is filed.
+  const g = gh({ open: [{ number: 8, title: T, author: "stranger" }] });
+  const r = file(g);
+  const w = writes(g);
+  ok(r.action === "created" && w.length === 1 && w[0][1] === "create" && !w.some((a) => a.includes("8")), `an outsider's open issue under the title is never touched; a new one is filed (${JSON.stringify(w)})`);
+  const g2 = gh({ open: [{ number: 8, title: T, author: "stranger" }] });
+  file(g2, { bodyFile: "out/body.md" });
+  ok(!writes(g2).some((a) => a[1] === "edit"), "and its body is never replaced with the check's state");
+}
+{
+  // A reopen that fails files a new issue: never silence.
+  for (const verb of ["reopen", "edit"]) {
+    const g = gh({ closed: [row(12, 2)], failWrite: verb });
+    const r = file(g);
+    const w = writes(g);
+    ok(r.action === "created" && w.at(-1)[1] === "create" && OPEN_BODY_RE.test(flag(w.at(-1), "--body")), `a failed ${verb} on the closed issue files a new issue with the fixed text`);
+  }
+  const g = gh({ closed: [row(12, 2)] });
+  ok(file(g).action === "reopened" && !writes(g).some((a) => a[1] === "create"), "a reopen that succeeds files nothing new");
+}
+{
   let threw = false;
   try { fileCheckIssue({ repo: "", title: T, run: () => "[]", log: () => {} }); } catch { threw = true; }
   ok(threw, "no repository: refused before any call");
@@ -102,10 +127,11 @@ const flag = (a, f) => a[a.indexOf(f) + 1];
 // ---- 3. the Worker ------------------------------------------------------------------
 const { syncOutage, syncAlarms, DOWN_TITLE } = await import("../workers/status-probe/src/index.js");
 const realFetch = globalThis.fetch, realLog = console.log;
-const worker = async (closedRows, fn) => {
+const worker = async (closedRows, fn, { patchStatus = 201, patchThrows = false } = {}) => {
   const writesSeen = [];
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
+    if (init.method === "PATCH") { writesSeen.push({ url: u, method: init.method, body: JSON.parse(init.body) }); if (patchThrows) throw new Error("network"); return Response.json({}, { status: patchStatus }); }
     if (/\/issues\?state=closed/.test(u)) return Response.json(closedRows.map((r) => ({ number: r.number, title: r.title, user: { login: r.author }, closed_at: r.closedAt, state: "closed" })));
     if (init.method === "POST" || init.method === "PATCH") { writesSeen.push({ url: u, method: init.method, body: JSON.parse(init.body) }); return Response.json({ number: 1 }, { status: 201 }); }
     return Response.json([]);
@@ -114,7 +140,7 @@ const worker = async (closedRows, fn) => {
   try { return { r: await fn(), writes: writesSeen }; } finally { globalThis.fetch = realFetch; console.log = realLog; }
 };
 const ENV = { GITHUB_ISSUES_TOKEN: "t", GITHUB_ISSUES_LOGIN: "probe-bot" };
-const outage = (rows) => worker(rows, () => { const open = new Map(); open.bodies = new Map(); return syncOutage(ENV, { apiFailed: true, sleep: async () => {}, confirmDelayMs: 0, healthRead: async () => false, openList: open }); });
+const outage = (rows, opts) => worker(rows, () => { const open = new Map(); open.bodies = new Map(); return syncOutage(ENV, { apiFailed: true, sleep: async () => {}, confirmDelayMs: 0, healthRead: async () => false, openList: open }); }, opts);
 const NEUTRAL = /^A scheduled check reported a result that needs review\. Observed by the status probe at \S+Z, confirmed by a second reading\. This issue closes when the check next passes, or by hand after review\.$/;
 {
   const { r, writes: w } = await outage([{ number: 51, title: DOWN_TITLE, author: "probe-bot", closedAt: new Date(Date.now() - 2 * 86400_000).toISOString() }]);
@@ -127,6 +153,10 @@ const NEUTRAL = /^A scheduled check reported a result that needs review\. Observ
 {
   const { writes: w } = await outage([{ number: 52, title: OTHER, author: "probe-bot", closedAt: new Date(Date.now() - 86400_000).toISOString() }, { number: 53, title: DOWN_TITLE, author: "stranger", closedAt: new Date(Date.now() - 86400_000).toISOString() }]);
   ok(w.length === 1 && w[0].method === "POST" && !w.some((x) => /\/(52|53)$/.test(x.url)), "Worker: another title's or a stranger's closed issue is untouched");
+}
+for (const opts of [{ patchStatus: 403 }, { patchThrows: true }]) {
+  const { r, writes: w } = await outage([{ number: 51, title: DOWN_TITLE, author: "probe-bot", closedAt: new Date(Date.now() - 2 * 86400_000).toISOString() }], opts);
+  ok(r.action === "opened" && w.length === 2 && w[0].method === "PATCH" && w[1].method === "POST" && w[1].body.title === DOWN_TITLE && NEUTRAL.test(w[1].body.body), `Worker: a reopen that ${opts.patchThrows ? "throws" : "is refused"} files a new issue instead`);
 }
 {
   const reading = { gateway: { status: "ok", toolFailures: { status: "failing" } }, status: null };

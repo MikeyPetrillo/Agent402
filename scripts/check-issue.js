@@ -12,7 +12,8 @@
 // keeps its issue number. Else a new issue is filed with the fixed opening
 // text. Only an issue the Actions bot or the repository owner filed is taken.
 // The text is scripts/lib/monitor-issue-text.js's; no reading is passed in.
-// It exits non-zero only when no issue could be filed or reopened.
+// A reopen that fails files a new issue instead. It exits non-zero only
+// when no issue could be filed or reopened.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { OPEN_BODY, STILL_BODY, RUN_LINK } from "./lib/monitor-issue-text.js";
@@ -48,10 +49,14 @@ export function fileCheckIssue({ repo, title, bodyFile = "", owner = String(repo
   if (closed) {
     // The body starts over (a state mark a closing run left is dropped): the
     // check's saved state, or the fixed opening text with this run's link.
-    run(["issue", "edit", String(closed), "--repo", repo, ...(bodyFile ? ["--body-file", bodyFile] : ["--body", openText(runUrl)])]);
-    run(["issue", "reopen", String(closed), "--repo", repo, "--comment", stillText(runUrl, now)]);
-    log(`reopened #${closed}`);
-    return { action: "reopened", number: closed };
+    // A reopen that fails files a new issue: a second number is better than
+    // an alarm that never reaches anyone.
+    try {
+      run(["issue", "edit", String(closed), "--repo", repo, ...(bodyFile ? ["--body-file", bodyFile] : ["--body", openText(runUrl)])]);
+      run(["issue", "reopen", String(closed), "--repo", repo, "--comment", stillText(runUrl, now)]);
+      log(`reopened #${closed}`);
+      return { action: "reopened", number: closed };
+    } catch { log(`::warning::check-issue: #${closed} could not be reopened; filing a new one`); }
   }
   const out = run(["issue", "create", "--repo", repo, "--title", title, ...(bodyFile ? ["--body-file", bodyFile] : ["--body", openText(runUrl)])]);
   log(String(out || "").trim() || "filed");

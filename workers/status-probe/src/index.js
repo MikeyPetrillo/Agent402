@@ -1490,7 +1490,8 @@ export async function openIssues(token, env = {}) {
 // closed issue rather than filing a new number. The closed issues are read
 // once per sync, and only when something is about to open; an unreadable
 // list files a new issue, as before. A reopen is one write, as a create is:
-// the body starts over as the fixed opening text (no clearing mark survives).
+// the body starts over as the fixed opening text (no clearing mark survives);
+// a reopen that fails costs one more write, the create that replaces it.
 export async function recentlyClosed(token, env = {}, now = Date.now()) {
   try {
     const self = await issuesLogin(token, env);
@@ -1507,8 +1508,12 @@ export async function recentlyClosed(token, env = {}, now = Date.now()) {
 async function openOrReopen(token, title, now, closedList) {
   const n = closedList ? reopenCandidate(closedList, { title, trusted: closedList.trusted || [] }) : null;
   if (n) {
-    const r = await gh(`/repos/${ISSUES_REPO}/issues/${n}`, token, { method: "PATCH", body: JSON.stringify({ state: "open", body: neutralIssueBody(now) }) });
-    return { ok: r.ok, reopened: n };
+    // A reopen that fails (refused or thrown) files a new issue instead: a
+    // second number is better than an alarm that never reaches anyone.
+    try {
+      const r = await gh(`/repos/${ISSUES_REPO}/issues/${n}`, token, { method: "PATCH", body: JSON.stringify({ state: "open", body: neutralIssueBody(now) }) });
+      if (r.ok) return { ok: true, reopened: n };
+    } catch { /* filed new below */ }
   }
   const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, { method: "POST", body: JSON.stringify({ title, body: neutralIssueBody(now) }) });
   return { ok: r.ok };
