@@ -4,7 +4,7 @@
 // response, imageless -> 502, no key -> 503, chain walk on 502/503/504 only,
 // live-listing repricing guard, margin bound (worst case <= MARGIN x price)
 // for every link, and the video submit -> poll -> download loop (failed ->
-// 502, timeout -> 504, off-host polling URL never followed), and parking:
+// 502, filtered -> 422 content_filtered, timeout -> 504, off-host polling URL never followed), and parking:
 // keyed on the EVM payer, claimed once, released on every terminal error.
 //
 //   node scripts/test-images-fast-kit.js
@@ -321,6 +321,40 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   installVideoFetch({ statuses: ["failed"], failError: { message: "blocked by policy" } });
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", "job failed -> 502 (not charged)");
   ok(e?.statusCode === 502 && String(e.message).includes("blocked by policy"), "…502 carries the short upstream reason");
+}
+// The provider's content filter stopped the clip: the prompt is what has to
+// change, so the answer is a 422 with reason content_filtered (never counted as
+// a tool failure), not a 502. A failure that does not name the filter stays 502.
+{
+  const { toolErrorFields } = await import("../src/tool-error-fields.js");
+  const { refusalReason, REFUSAL_REASONS } = await import("../src/refusal-reason.js");
+  const { toolClassOf, createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  const { noteVerifiedPaidOutcome } = await import("../src/top-buyer-failures.js");
+  const filtered = [
+    ["Video generation completed with no output (content may have been filtered)", "the production reason text"],
+    [{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code on the error object"],
+    [{ message: "Your prompt was flagged by the safety filter", code: "invalid_request" }, "a safety-filter message"],
+    [{ message: "x", type: "content_policy_violation" }, "a content-policy type"],
+  ];
+  for (const [failError, label] of filtered) {
+    installVideoFetch({ statuses: ["failed"], failError });
+    const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "content filter stopped this video", `filtered (${label}) -> 422`);
+    ok(e?.statusCode === 422 && e.contentFiltered === true, `…${label}: 422 marked contentFiltered`);
+    ok(String(e?.message).includes(" Nothing was charged. Rephrase the prompt"), `…${label}: the shared not-charged sentence, then what to change`);
+    const f = toolErrorFields(e);
+    ok(f.reason === "content_filtered" && f.charged === undefined, `…${label}: the answer carries reason content_filtered`);
+    ok(refusalReason(e.message, 422, e) === "content_filtered" && REFUSAL_REASONS.includes("content_filtered"), `…${label}: telemetry class content_filtered`);
+  }
+  ok(toolClassOf(422) === "buyer" && toolClassOf(502) === "fail", "a 422 is a buyer refusal to the tool-failure monitor, a 502 a failure");
+  const word = async (status) => { const m = createToolFailureMonitor(); for (let i = 0; i < 30; i++) m.noteTool("v1-videos", status); return (await m.status()).toolFailures.status; };
+  ok(await word(422) === "ok" && await word(502) !== "ok", "thirty filtered 422s leave toolFailures ok; thirty 502s do not");
+  ok(noteVerifiedPaidOutcome({ payer: "0x" + "ab".repeat(20), slug: "v1-videos", status: 422 }) === false, "a filtered 422 is not kept as a paying buyer's failed answer");
+  for (const failError of [{ message: "blocked by policy" }, "Internal error while rendering", { message: "quota", code: "server_error" }]) {
+    installVideoFetch({ statuses: ["failed"], failError });
+    const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", `a failure that names no filter stays 502 (${JSON.stringify(failError).slice(0, 40)})`);
+    ok(e?.statusCode === 502 && !e.contentFiltered && toolErrorFields(e).reason === undefined, "…502, no content_filtered reason");
+  }
+  ok(!toolErrorFields(Object.assign(new Error("x"), { statusCode: 502, contentFiltered: true })).reason, "content_filtered rides only on a 422");
 }
 // Parking is keyed on the signed EVM payer (payerFromRequest): a request with
 // no such identity never parks or resumes, so two buyers sending the same

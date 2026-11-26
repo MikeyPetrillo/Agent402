@@ -472,6 +472,19 @@ async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A failed video job whose error names the provider's content filter: the
+// error text ("Video generation completed with no output (content may have
+// been filtered)"), or a moderation code on the error object. Bounded
+// patterns only: the text is the upstream's and can quote the prompt.
+const VIDEO_FILTER_CODES = new Set(["content_filter", "content_filtered", "content_policy_violation", "moderation_blocked", "safety_violation", "safety_violations", "responsible_ai_policy_violation"]);
+const VIDEO_FILTER_TEXT_RE = /\bcontent (?:may have been |was |has been )?(?:filtered|moderated)\b|\bcontent[ _-]?(?:filter|moderation)\b|\bcontent[ _-]polic(?:y|ies) violation\b|\bmoderation[ _-]blocked\b|\bsafety (?:filter|system|violation)s?\b|\b(?:blocked|flagged|rejected|refused) by (?:the |our |its )?(?:safety|moderation|content) (?:filter|system|check|policy)\b/i;
+export function videoFailureFiltered(st) {
+  const e = st?.error;
+  const codes = e && typeof e === "object" ? [e.code, e.type] : [];
+  if (codes.some((c) => typeof c === "string" && VIDEO_FILTER_CODES.has(c.toLowerCase()))) return true;
+  const text = typeof e === "string" ? e : (e && typeof e.message === "string" ? e.message : "");
+  return VIDEO_FILTER_TEXT_RE.test(text.slice(0, 2_000));
+}
 const VIDEOS_MAX_POLL_FAILURES = 5;
 const VIDEOS_CONTENT_RETRIES = 2;
 const videoTransientStatus = (s) => s === 429 || s >= 500;
@@ -547,7 +560,14 @@ async function videosHandler(input, req) {
   while (status !== "completed") {
     if (status === "failed") {
       const why = typeof st?.error === "string" ? st.error : (st?.error?.message || "");
-      throw bad(`Video generation failed upstream${why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : ""}.${notChargedHere()}`, 502);
+      const quoted = why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : "";
+      // The provider's content filter stopped the clip: the prompt is what
+      // has to change, so the answer is a 422 the caller can branch on
+      // (reason content_filtered), not a 502 that reads as our failure.
+      if (videoFailureFiltered(st)) {
+        throw Object.assign(bad(`The provider's content filter stopped this video${quoted}.${notChargedHere()} Rephrase the prompt and try again.`, 422), { contentFiltered: true });
+      }
+      throw bad(`Video generation failed upstream${quoted}.${notChargedHere()}`, 502);
     }
     if (Date.now() - started > VIDEOS_MAX_WAIT_MS()) {
       const waited = `Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s.${notChargedHere()}`;
@@ -707,7 +727,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.200",
     description:
-      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402, and a wallet payer whose request timed out can send it again unchanged to collect the same clip.",
+      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402 (a prompt the content filter stops answers 422 content_filtered), and a wallet payer whose request timed out can send it again unchanged to collect the same clip.",
     tags: ["video-generation", "video", "videos", "text-to-video", "generate", "generate-video", "create-video", "clip", "animation", "veo", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

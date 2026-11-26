@@ -63,6 +63,9 @@ export function toolErrorFields(err) {
     // callerLimit): the fixed reason, so the caller and the alarms can tell
     // it from a limit of ours (src/top-buyer-failures.js BUYER_LIMIT_REFUSALS).
     ...(err?.callerLimit === true && Number(err?.statusCode) === 429 ? { reason: "caller_limit" } : {}),
+    // The provider's content filter stopped the output (a 422 whose error
+    // carries contentFiltered, src/tools/llm-images-fast-kit.js).
+    ...(err?.contentFiltered === true && Number(err?.statusCode) === 422 ? { reason: "content_filtered" } : {}),
     // A buyer's own upstream key the upstream refused (src/upstream-key.js).
     ...(err?.upstreamKeyRefused === true && [401, 403].includes(Number(err?.statusCode)) ? { reason: "upstream_key_refused" } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
