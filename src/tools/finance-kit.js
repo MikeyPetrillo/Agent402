@@ -1,11 +1,13 @@
 // Finance tools: US equity end-of-day quote and daily bars, read through the
 // stock-provider seam (src/tools/stock-provider.js). The provider is chosen by
-// STOCK_DATA_PROVIDER and is active only with its own key; with none active
-// these tools are not listed (financeToolsEnabled() is empty) and the routes
-// answer 503 not-offered. Every answer names the source it came from and its
-// coverage (the adapter's provenance fields).
-import { selectedStockAdapter, stockDataEnabled, quote as providerQuote, dailyBars as providerDailyBars } from "./stock-provider.js";
+// STOCK_DATA_PROVIDER and is active only with its own key. An active provider
+// serves stock-history alone (daily bars at least 24 hours old); stock-quote
+// (the newest session) is never listed and its route answers 503 not-offered,
+// as every stock route does with no provider. Every answer names the source it
+// came from, its venues and coverage (the adapter's provenance fields).
+import { selectedStockAdapter, stockToolServed, quote as providerQuote, dailyBars as providerDailyBars } from "./stock-provider.js";
 import { computeIndicators } from "./crypto-signals-kit.js";
+import { markResaleBarred } from "../resale-terms.js";
 
 // The selected adapter's own copy and example fields (the tools are listed
 // only once its key is present too); with "off" they carry no provider text.
@@ -141,7 +143,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      `Daily OHLCV bars for a US equity: the last \`days\` sessions, 1 to 250, default 30. Daily only, no intraday.${sentence(COVERAGE_COPY)}${sentence(DESCRIBE.barsCopy)} A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.`,
+      `Daily OHLCV bars for a US equity: the last \`days\` sessions, 1 to 250, default 30, ending at the latest session whose bar is at least 24 hours old (latestAvailable, delayHours: 24). Daily only, no intraday and no same-day bar.${sentence(COVERAGE_COPY)}${sentence(DESCRIBE.barsCopy)} A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.`,
     tags: ["finance", "stocks", "history", "ohlcv", "technical-analysis"],
     discovery: {
       input: { symbol: "AAPL", days: 30 },
@@ -159,10 +161,11 @@ export const FINANCE_TOOLS = [
           symbol: "AAPL",
           days: 2,
           bars: [
-            { day: "2026-10-12", open: 338.215, high: 342.63, low: 337.6, close: 340.97, venueVolume: 25900599, volume: 25900599 },
-            { day: "2026-10-13", open: 344.665, high: 348.1499, low: 340.74, close: 341.27, venueVolume: 38983839, volume: 38983839 },
+            { day: "2026-11-19", open: 354.42, high: 355.25, low: 346.49, close: 349.68, venueVolume: 2688923, volume: null },
+            { day: "2026-11-20", open: 352.5, high: 354.29, low: 340.57, close: 345.1, venueVolume: 8651885, volume: null },
           ],
-          asOf: "2026-10-13",
+          asOf: "2026-11-20",
+          latestAvailable: "2026-11-20",
           ...EXAMPLE_PROVENANCE,
         },
       },
@@ -195,6 +198,8 @@ export const FINANCE_TOOLS = [
         days: bars.length,
         bars,
         asOf: bars.at(-1)?.day ?? null,
+        // The newest session this read may serve under the 24-hour delay.
+        latestAvailable: read.latestAvailable ?? null,
         ...read.provenance,
         // The session boundary's refresh failed: the bars end at the last
         // confirmed end, which `rangeCheckedAt` dates.
@@ -205,10 +210,16 @@ export const FINANCE_TOOLS = [
   },
 ];
 
-/** The finance tools this boot lists: all of them with an active stock
- *  provider, none without one. */
+// Not sold through a third party's marketplace (/ref, /aws): the dataset is
+// redistributed here under its own 24-hour terms, and those terms are not
+// cleared for resale through a third party (src/resale-terms.js).
+export const STOCK_RESALE_REASON = "daily bars from a market-data dataset redistributed here after 24 hours, whose terms are not cleared for resale through a third party";
+markResaleBarred(FINANCE_TOOLS, ["stock-quote", "stock-history"], STOCK_RESALE_REASON);
+
+/** The finance tools this boot lists: stock-history with an active stock
+ *  provider, none without one; never stock-quote. */
 export function financeToolsEnabled(env = process.env) {
-  return stockDataEnabled(env) ? FINANCE_TOOLS : [];
+  return FINANCE_TOOLS.filter((t) => stockToolServed(t.slug, env));
 }
 
 // Technical indicators over the returned daily bars, through the same pure

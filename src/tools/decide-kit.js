@@ -602,9 +602,10 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
     // insert, so concurrent requests, in this process or in another
     // container, cannot all pass on the same reading.
     const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
-    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}).${notChargedOn(req)}`, 429)
-      : reason === "global" ? bad(`Outside steps are paused for everyone for up to 24 hours.${notChargedOn(req)}`, 429)
-      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}).${notChargedOn(req)}`, 429);
+    // Retry-After is each ceiling's own window, its longest wait.
+    const capRefused = (reason) => reason === "payerHour" ? Object.assign(bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}).${notChargedOn(req)}`, 429), { retryAfter: 3600 })
+      : reason === "global" ? Object.assign(bad(`Outside steps are paused for everyone for up to 24 hours.${notChargedOn(req)}`, 429), { retryAfter: 86400 })
+      : Object.assign(bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}).${notChargedOn(req)}`, 429), { retryAfter: 86400 });
     const refuseEarly = async (plan) => {
       const hasOutside = plan.some((p) => [p.tool, ...(p.fallbacks || [])].some((x) => x && !x.firstParty));
       let outsidePaused = false;
@@ -639,7 +640,7 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
       // still refused there).
       await refuseEarly(saved.plan);
       if (await replanGuard.blocked(replanKey(req))) {
-        throw bad(`This wallet's recent re-plans (${replanGuard.limit} in the last hour) ended without a run that could be charged, so "replan" is paused for up to an hour.${notChargedOn(req)} Send the same body without "replan" to run the saved plan.`, 429);
+        throw Object.assign(bad(`This wallet's recent re-plans (${replanGuard.limit} in the last hour) ended without a run that could be charged, so "replan" is paused for up to an hour.${notChargedOn(req)} Send the same body without "replan" to run the saved plan.`, 429), { retryAfter: 3600 });
       }
       if (creditAssumed > 0 && await ledger.creditAvailableUsd(input.creditToken, d.id, t) + 1e-9 < creditAssumed) {
         throw bad(`The execution credit this price assumed is no longer available (already used or expired).${notChargedOn(req)} Request a fresh quote.`, 409);

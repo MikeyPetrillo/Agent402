@@ -294,7 +294,7 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 const NON_AI_CASES = [
   { slug: "crypto-price", handler: bySlug(CRYPTO_TOOLS, "crypto-price"), input: { coins: "bitcoin" } },
   { slug: "us-macro-series", handler: bySlug(MACRO_TOOLS, "us-macro-series"), input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" } },
-  { slug: "stock-quote", handler: bySlug(FINANCE_TOOLS, "stock-quote"), input: { symbol: "AAPL" } },
+  { slug: "stock-history", handler: bySlug(FINANCE_TOOLS, "stock-history"), input: { symbol: "AAPL", days: 5 } },
 ];
 
 for (const { slug, handler, input } of NON_AI_CASES) {

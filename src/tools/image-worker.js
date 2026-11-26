@@ -14,7 +14,7 @@
 // the containment property is the same as regex-worker's.
 import { parentPort } from "node:worker_threads";
 import { runImageOp } from "./image-ops.js";
-import { loadJimp } from "./lazy-deps.js";
+import { loadJimp, loadZxing, loadJsQR } from "./lazy-deps.js";
 
 // jimp is a lazy import on the main thread (lazy-deps.js); this thread has no
 // listen to protect, so it loads jimp as soon as it starts and the first job
@@ -27,10 +27,15 @@ parentPort.on("message", async (job) => {
       // Barcode decode returns JSON, not an encoded image. Imported here, not at
       // the top, so the resize/convert path never evaluates the barcode kit.
       const { decodeBarcodeBuffer } = await import("./barcode-kit.js");
+      await Promise.all([loadZxing(), loadJsQR()]);
+      // Every module this job runs is loaded: the job's own deadline starts now (image-pool.js).
+      parentPort.postMessage({ id: job.id, started: true });
       const result = await decodeBarcodeBuffer(Buffer.from(job.buffer.buffer, job.buffer.byteOffset, job.buffer.byteLength));
       parentPort.postMessage({ id: job.id, result });
       return;
     }
+    await loadJimp();
+    parentPort.postMessage({ id: job.id, started: true });
     const out = await runImageOp({
       op: job.op,
       // Structured clone delivers a Uint8Array view; Jimp and the byte-level

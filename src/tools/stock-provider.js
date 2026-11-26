@@ -2,9 +2,11 @@
 //
 // STOCK_DATA_PROVIDER names the adapter ("off" by default, or "databento").
 // A provider is ACTIVE only when its name is selected AND its own key is
-// present; with no active provider every stock tool (STOCK_SLUGS), every pack
-// that runs one (src/skills.js) and every surface that names them is absent,
-// and the routes answer 503 not-offered with no payment challenge.
+// present. An active provider serves STOCK_SERVED_SLUGS only (stock-history);
+// every other stock tool (stock-quote), every pack whose stock step is not
+// served (src/skills.js) and every surface that names them is absent, and the
+// routes answer 503 not-offered with no payment challenge. With no active
+// provider that holds for every stock tool.
 //
 // Adding a provider later is one adapter file (the shape below; databento.js
 // is the reference), one registry line here, its key on the server, and
@@ -17,11 +19,15 @@
 //                             examples carry for this provider
 //   quote(symbol, opts)       -> { bars, provenance, cached, fetchedAt,
 //                                  rangeCheckedAt, rangeStale?, stale? }
+//                             (never called through this seam today:
+//                             stockQuoteEnabled() is false)
 //                             bars: ascending { day, open, high, low, close,
 //                             volume, venueVolume }, the last one the newest
 //                             session; opts: { demand, lastGoodOk }
-//   dailyBars(symbol, opts)   -> same shape as quote; opts: { sessions,
-//                             start, end, maxUsd, demand }
+//   dailyBars(symbol, opts)   -> same shape as quote plus latestAvailable
+//                             (the newest session it may serve); opts:
+//                             { sessions, start, end, maxUsd, demand }; no
+//                             bar newer than the provider's delay
 //   start()                   boot-time background work (optional)
 //   status()                  operator counts (optional)
 //
@@ -30,6 +36,12 @@
 
 /** Every catalog tool that reads stock data. */
 export const STOCK_SLUGS = Object.freeze(new Set(["stock-quote", "stock-history"]));
+/** The stock tools an active provider serves: daily bars whose day ended at
+ *  least 24 hours before the request (stock-history). stock-quote answers the
+ *  newest session, which is under 24 hours old, so no provider serves it: it
+ *  stays unlisted and its route answers 503 not-offered whatever the switch
+ *  says. */
+export const STOCK_SERVED_SLUGS = Object.freeze(new Set(["stock-history"]));
 
 const REGISTRY = new Map([
   ["databento", { name: "databento", keyEnv: "DATABENTO_API_KEY", load: () => import("./databento.js").then((m) => m.databentoAdapter) }],
@@ -49,6 +61,15 @@ export function stockDataEnabled(env = process.env) {
   if (!entry) return false;
   return !entry.keyEnv || String(env[entry.keyEnv] || "").trim() !== "";
 }
+
+/** True when `slug` is a stock tool this boot lists: an active provider
+ *  serves it. False for every stock-quote read. */
+export function stockToolServed(slug, env = process.env) {
+  return STOCK_SERVED_SLUGS.has(slug) && stockDataEnabled(env);
+}
+
+/** The newest-session quote (stock-quote, market.quote): never served. */
+export const stockQuoteEnabled = (env = process.env) => stockToolServed("stock-quote", env);
 
 /** The one boot warning for a selection that leaves no provider active: an
  *  unknown name, or a known one whose key is missing. Null when the switch is
@@ -99,7 +120,12 @@ async function requireAdapter() {
   return a;
 }
 
-export async function quote(symbol, opts = {}) { return (await requireAdapter()).quote(symbol, opts); }
+/** The newest-session quote: refused here whatever the provider (no provider
+ *  serves a session under 24 hours old), so nothing reaches an adapter's quote. */
+export async function quote(symbol, opts = {}) {
+  if (!stockQuoteEnabled()) throw stockNotOffered();
+  return (await requireAdapter()).quote(symbol, opts);
+}
 export async function dailyBars(symbol, opts = {}) { return (await requireAdapter()).dailyBars(symbol, opts); }
 
 /** Test hook: register (or replace) an adapter entry; returns an undo. */

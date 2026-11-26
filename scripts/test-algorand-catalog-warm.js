@@ -252,6 +252,25 @@ const realFetch = globalThis.fetch;
   } finally { stop(); Date.now = realNow; console.log = realLog; globalThis.fetch = realFetch; sellers._resetForTest(); }
 }
 
+// --- 4c. the read that starts a build counts as use, even when the clock ticks between them ---
+{
+  const fac = facilitator({ total: 30 });
+  globalThis.fetch = fac.fetchImpl;
+  sellers._resetForTest();
+  const realNow = Date.now;
+  // Every clock read moves 1 ms on, so the read and the build start it causes
+  // can never share a millisecond (a slow host's case).
+  let tick = realNow();
+  Date.now = () => (tick += 1);
+  try {
+    await sellers.algorandCatalogWithin(null);
+    for (const until = realNow() + 5000; realNow() < until && sellers.algorandCatalogBuildInfo().cacheBuildStartedAt === 0;) await new Promise((r) => setTimeout(r, 10));
+    const info = sellers.algorandCatalogBuildInfo();
+    ok(info.cacheBuildStartedAt > 0 && info.lastUseAt === info.cacheBuildStartedAt, `a build started by a read is dated at that read (${info.lastUseAt} vs ${info.cacheBuildStartedAt})`);
+    ok(sellers.scheduledRefreshWanted() === true, "with a clock that moves between the read and the build start, the read still lets the schedule rebuild next time");
+  } finally { Date.now = realNow; globalThis.fetch = realFetch; sellers._resetForTest(); }
+}
+
 // --- the server wiring -----------------------------------------------------------------
 {
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

@@ -24,6 +24,7 @@
 //     so we sign and send immediately - a slow seller is bounded by their own
 //     window, never by ours.
 import { assertNotOwnPayout } from "./own-wallets.js";
+import { assertRouterBuysFrom } from "./router-listed-only.js";
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
@@ -405,6 +406,8 @@ export async function payTempo(url, {
   sellerKey = null,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
+  // Never a seller the router lists and never buys from (src/router-listed-only.js).
+  assertRouterBuysFrom(url);
   const refusalWaitEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
   if (maxAtomic == null) throw bad("payTempo requires maxAtomic (the margin-guard ceiling)", 500);
   if (!tempoBuyerConfigured() && !createCredential) throw bad("Tempo spending wallet not configured (TEMPO_UPSTREAM_BUYER_KEY)", 409);

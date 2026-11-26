@@ -251,7 +251,7 @@ for (const route of Object.keys(CACHEABLE_ROUTES)) {
 }
 ok(true, "no gated tool is in the shared response cache (src/cache.js CACHEABLE_ROUTES)");
 const GATED_MODULES = [
-  "src/tools/extract.js", "src/tools/pdf.js", "src/tools/pdf-kit.js", "src/tools/pdf-summarize-kit.js", "src/tools/render.js", "src/tools/render-static.js",
+  "src/tools/extract.js", "src/tools/pdf.js", "src/tools/pdf-kit.js", "src/tools/pdf-summarize-kit.js", "src/tools/summarize-kit.js", "src/tools/render.js", "src/tools/render-static.js",
   "src/tools/page-change-kit.js", "src/tools/media-kit.js", "src/tools/ocr-kit.js", "src/tools/image-kit.js", "src/tools/stt-kit.js",
   "src/tools/browser-measure-kit.js", "src/tools/crawl-kit.js", "src/tools/enrich-kit.js", "src/tools/robots-gate.js",
 ];

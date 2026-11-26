@@ -28,6 +28,16 @@
 // The type catalogue mirrors mppx/dist/Errors.js (titles + hints verbatim
 // where mppx defines them) so clients that switch on `type` see the same
 // vocabulary from us as from a native mppx server.
+import { markPaymentRefusal } from "./refusal-mark.js";
+
+// The refusal record's reason code for a problem (src/payment-refusals.js):
+// mpp-<kind>, and the problem's own details.reason after a dot when it has one.
+function refusalCodeOf(problem) {
+  const kind = String(problem?.type || "").slice(BASE.length);
+  const why = problem?.details && typeof problem.details.reason === "string" && /^[a-z][a-z0-9_-]{0,30}$/.test(problem.details.reason) ? `.${problem.details.reason}` : "";
+  return kind ? `mpp-${kind}${why}` : null;
+}
+
 export const PROBLEM_CONTENT_TYPE = "application/problem+json; charset=utf-8";
 const BASE = "https://paymentauth.org/problems/";
 const WALLET_HINT = "Use a supported wallet to pay for this resource using one of the supported payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md";
@@ -68,6 +78,7 @@ const PATCHED = Symbol("agent402.mppProblemPatched");
  *  is never touched. */
 export function markMppProblem(req, res, problem) {
   req.mppProblem = problem;
+  markPaymentRefusal(req, refusalCodeOf(problem));
   if (res[PATCHED]) return;
   res[PATCHED] = true;
   const origSend = res.send;
@@ -82,6 +93,7 @@ export function markMppProblem(req, res, problem) {
 
 /** DIRECT path: answer now. */
 export function sendMppProblem(res, problem) {
+  if (res?.req) markPaymentRefusal(res.req, refusalCodeOf(problem));
   res.status(problem.status || 402);
   res.setHeader("Content-Type", PROBLEM_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-store");

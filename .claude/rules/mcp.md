@@ -4,6 +4,7 @@ paths:
   - "mcp/**"
   - "src/front-door.js"
   - "src/answer-share.js"
+  - "src/well-known-search*.js"
 ---
 
 # MCP connector and agent-facing surfaces
@@ -51,7 +52,8 @@ Loaded when a connector or front-door file is read.
   step before them and `package.json` never lists (an optional peer of mppx would ship in prod).
 - **Protocol revisions (SDK v2, `@modelcontextprotocol/server` + `/node`):** `/mcp` serves 2026-07-28 and the 2025 era
   from one `buildServer`. `isLegacyRequest` (the SDK's own classifier, fed `eraProbeOf(req)` and the parsed body) picks
-  the path: a request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` goes to `createMcpHandler(..., { legacy:
+  the path: a request carrying `_meta["io.modelcontextprotocol/protocolVersion"]` (unless it names a 2025-era version the
+  transport serves and no 2026-07-28 header contradicts it: `legacyEnvelopeClaim`, `scripts/test-mcp-protocol-versions.js`) goes to `createMcpHandler(..., { legacy:
   "reject" })` (server/discover, the envelope, `Mcp-Method`/`Mcp-Name` checks, `resultType` and `serverInfo` stamped on
   results); everything else (initialize, 2024-10-07 to 2025-11-25) to a per-request `NodeStreamableHTTPServerTransport`
   with JSON responses, byte for byte the SDK v1 answers. Errors keep v1's "MCP error <code>: " message prefix (the local
@@ -163,3 +165,4 @@ Loaded when a connector or front-door file is read.
   from a fixed alphabet); an image up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (default 1 MB) is also an inline image block,
   so the model loses no sight of it; `AGENT402_MEDIA_INLINE=1` keeps everything inline. A suite that spawns the stdio server sets
   `AGENT402_KEY_STORE=off` and temp `AGENT402_CONFIG_DIR` / `AGENT402_OUTPUT_DIR`, so a developer's stored key is never read.
+- **Site search endpoint (`/.well-known/search`, `src/well-known-search.js`):** GET `?q=<task>[&limit=N]` or QUERY with the task as `text/plain` or `{"q","limit"}`; JSON, or a Markdown list for `Accept: text/markdown`. Everything that decides the answer is `/api/find`'s: server.js hands the module `serveFindQuery` (the one serving path of `/api/find` either verb and this route: the same ranking, answer cache, per-client search limits and miss rule, so a weak match records a wish unless the operator header is on the request). The route calls `operatorView` itself, so its own refusals (a missing task, a body over `SEARCH_BODY_MAX_BYTES`, refused 413 unread from its Content-Length) vary on the operator header too; `scripts/test-operator-routes-refuse.js` credits every route that names a shared serving function. The path and methods live in `src/well-known-search-path.js` (no imports), which the page shell reads for the `agent:search` meta tags; `/privacy` names the route among the searches whose no-match text is kept (`scripts/test-legal-dates.js`).

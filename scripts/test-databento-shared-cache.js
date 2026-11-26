@@ -11,7 +11,7 @@
 // STATE_DATABASE_URL, when set, adds the warmer-lease half. Under CI a
 // missing Redis or database fails the run.
 //
-//   a. every upstream read on the quote and history paths (range lookup,
+//   a. every upstream read on the history path (range lookup,
 //      get_cost, get_range) that stalls past its deadline, headers sent and
 //      the body never finished, answers 503 with "nothing was charged - retry
 //      shortly", never 500; a stalled price check alone still serves;
@@ -21,9 +21,8 @@
 //   c. a Redis that does not answer is a miss within the deadline, and the
 //      local path still serves;
 //   d. (with a database) the warmer runs under a lease: per session one price
-//      audit and one read per warmed symbol across both servers, and the
-//      server that did not run them serves warm and audited with no upstream
-//      call.
+//      audit across both servers, the other adopting it from the shared copy,
+//      and no tick reads upstream while another holder has the lease.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -135,17 +134,13 @@ try {
 
   // ---- a. every stalled read is a 503, never a 500
   up.stall.range = true;
-  let r = await call(A, "/api/stock-quote?symbol=RNG");
+  let r = await call(A, "/api/stock-history?symbol=RNG&days=5");
   ok(r.status === 503 && /dataset range read/.test(errText(r)) && NOT_CHARGED.test(errText(r)), `a. a stalled range lookup body is a 503 naming the step (${r.status}: ${errText(r)?.slice(0, 140)})`);
-  r = await call(A, "/api/stock-history?symbol=RNG&days=5");
-  ok(r.status === 503 && NOT_CHARGED.test(errText(r)), `a. ...on the history path too (${r.status})`);
   up.stall.range = false;
 
   up.stall.data.add("STALLD");
-  r = await call(A, "/api/stock-quote?symbol=STALLD");
-  ok(r.status === 503 && /get range read/.test(errText(r)) && NOT_CHARGED.test(errText(r)), `a. a stalled get_range body on a quote is a 503 naming the step, not a 500 (${r.status}: ${errText(r)?.slice(0, 140)})`);
   r = await call(A, "/api/stock-history?symbol=STALLD&days=30");
-  ok(r.status === 503 && /get range read/.test(errText(r)) && NOT_CHARGED.test(errText(r)), `a. ...and on a history read (${r.status})`);
+  ok(r.status === 503 && /get range read/.test(errText(r)) && NOT_CHARGED.test(errText(r)), `a. a stalled get_range body on a history read is a 503 naming the step, not a 500 (${r.status}: ${errText(r)?.slice(0, 140)})`);
 
   up.stall.cost.add("COSTSLOW");
   r = await call(A, "/api/stock-history?symbol=COSTSLOW&days=30");
@@ -153,25 +148,27 @@ try {
   up.stall.cost.add("BOTHSLOW"); up.stall.data.add("BOTHSLOW");
   r = await call(A, "/api/stock-history?symbol=BOTHSLOW&days=30");
   ok(r.status === 503 && NOT_CHARGED.test(errText(r)), `a. a stalled get_cost then a stalled get_range is a 503 (${r.status})`);
-  r = await call(A, "/api/stock-quote?symbol=BOTHSLOW");
-  ok(r.status === 503 && NOT_CHARGED.test(errText(r)), `a. ...on a quote too, which is priced inline before any audit (${r.status})`);
   ok(!/status=500/.test(A.log) && !/aborted due to timeout"/.test(A.log), "a. no 500 in the server's log for any of them");
 
   // ---- b. one server reads, the other serves from the shared copy
+  // A 5-session read ending at the dataset's end (older than the 24-hour
+  // delay, so it is the bound) starts 20 calendar days before it.
+  const MSFT_KEY = `${PREFIX}bars:DBEQ.BASIC|MSFT|ohlcv-1d|2026-09-19|2026-10-09`;
   const n0 = up.calls.length;
-  const first = await call(A, "/api/stock-quote?symbol=MSFT");
-  ok(first.status === 200 && first.body?.cached === false && first.body?.price === 150, `b. A reads MSFT upstream (cached ${first.body?.cached})`);
+  const first = await call(A, "/api/stock-history?symbol=MSFT&days=5");
+  ok(first.status === 200 && first.body?.bars?.at(-1)?.close === 150 && first.body?.consolidated === false, `b. A reads MSFT upstream (${first.status})`);
   ok(count((c, i) => i >= n0 && c.kind === "data" && c.symbol === "MSFT") === 1, "b. ...with one data read");
-  ok(await until(async () => (await redis.exists(`${PREFIX}bars:EQUS.SUMMARY|MSFT|ohlcv-1d|2026-09-29|2026-10-09`)) === 1, 3000), "b. A wrote the bars to the shared copy under the dataset|symbol|schema|start|end key");
-  const ttl = await redis.ttl(`${PREFIX}bars:EQUS.SUMMARY|MSFT|ohlcv-1d|2026-09-29|2026-10-09`);
+  ok(up.calls.every((c) => c.dataset === "DBEQ.BASIC"), "b. every upstream read names DBEQ.BASIC");
+  ok(await until(async () => (await redis.exists(MSFT_KEY)) === 1, 3000), "b. A wrote the bars to the shared copy under the dataset|symbol|schema|start|end key");
+  const ttl = await redis.ttl(MSFT_KEY);
   ok(ttl > 24 * 3600 && ttl <= 36 * 3600, `b. its TTL outlives a session (${ttl} s)`);
   const n1 = up.calls.length;
-  const second = await call(B, "/api/stock-quote?symbol=MSFT");
-  ok(second.status === 200 && second.body?.cached === true && second.body?.fetchedAt === first.body?.fetchedAt && second.body?.price === first.body?.price && second.body?.asOf === first.body?.asOf,
-    `b. B answers MSFT from the shared copy: cached, same fetchedAt and price (${second.body?.cached}, ${second.body?.fetchedAt})`);
+  const second = await call(B, "/api/stock-history?symbol=MSFT&days=5");
+  ok(second.status === 200 && JSON.stringify(second.body?.bars) === JSON.stringify(first.body?.bars) && second.body?.asOf === first.body?.asOf,
+    `b. B answers MSFT from the shared copy: the same bars (${second.body?.asOf})`);
   ok(up.calls.length === n1, `b. B made ZERO upstream calls for it: boundary, price check and bars all shared (${up.calls.length - n1} calls: ${JSON.stringify(up.calls.slice(n1))})`);
-  const third = await call(B, "/api/stock-quote?symbol=MSFT");
-  ok(third.body?.cached === true && up.calls.length === n1, "b. B's repeat answers from its own memory");
+  const third = await call(B, "/api/stock-history?symbol=MSFT&days=5");
+  ok(third.status === 200 && up.calls.length === n1, "b. B's repeat answers from its own memory");
   const sb = await perf(B);
   ok(sb?.shared?.hits >= 2, `b. B's operator counts show the shared hits (${JSON.stringify(sb?.shared)})`);
 
@@ -185,17 +182,18 @@ try {
 
   // ---- c. a Redis that does not answer is a miss within the deadline
   // A poisoned shared entry (not bars) is ignored, read upstream, overwritten.
-  await redis.set(`${PREFIX}bars:EQUS.SUMMARY|ORCL|ohlcv-1d|2026-09-29|2026-10-09`, JSON.stringify({ bars: [{ day: "x" }], fetchedAt: 1 }), { EX: 600 });
+  await redis.set(`${PREFIX}bars:DBEQ.BASIC|ORCL|ohlcv-1d|2026-09-19|2026-10-09`, JSON.stringify({ bars: [{ day: "x" }], fetchedAt: 1 }), { EX: 600 });
   const n3 = up.calls.length;
-  const orcl = await call(B, "/api/stock-quote?symbol=ORCL");
-  ok(orcl.status === 200 && orcl.body?.price === 150 && count((c, i) => i >= n3 && c.kind === "data" && c.symbol === "ORCL") === 1, "c. a malformed shared entry is a miss: read upstream, served correctly");
+  const orcl = await call(B, "/api/stock-history?symbol=ORCL&days=5");
+  ok(orcl.status === 200 && orcl.body?.bars?.at(-1)?.close === 150 && count((c, i) => i >= n3 && c.kind === "data" && c.symbol === "ORCL") === 1, "c. a malformed shared entry is a miss: read upstream, served correctly");
   if (redisProc) {
     redisProc.kill("SIGSTOP"); // alive, accepts nothing: every command hangs
     const t0 = Date.now();
-    const cold = await call(A, "/api/stock-quote?symbol=NVDA");
+    const n4 = up.calls.length;
+    const cold = await call(A, "/api/stock-history?symbol=NVDA&days=5");
     const ms = Date.now() - t0;
     redisProc.kill("SIGCONT");
-    ok(cold.status === 200 && cold.body?.cached === false, `c. with Redis not answering, a cold quote still serves from upstream (${cold.status})`);
+    ok(cold.status === 200 && count((c, i) => i >= n4 && c.kind === "data" && c.symbol === "NVDA") === 1, `c. with Redis not answering, a cold read still serves from upstream (${cold.status})`);
     ok(ms < 3000, `c. ...bounded by the command deadline, not a hang (${ms} ms)`);
   } else console.log("# c. Redis-stall half needs a Redis this test started (REDIS_URL was given); skipped");
 
@@ -222,40 +220,21 @@ try {
       ok(await until(async () => (await perf(C))?.range?.end === "2026-10-12" && (await perf(D))?.range?.end === "2026-10-12", 30_000, 250), "d. both hold the session boundary after their boot ticks");
       const audits1 = count((c, i) => i >= d0 && c.kind === "cost" && c.symbol === "AAPL" && c.end === "2026-10-12");
       ok(audits1 === 1, `d. one price audit for the session across both servers (${audits1})`);
-      // Demand: X on C, Y on D. A quote on the server that did not audit is
-      // not priced inline: it adopted the shared audit.
-      const q0 = up.calls.length;
-      const x = await call(C, "/api/stock-quote?symbol=XOM");
-      const y = await call(D, "/api/stock-quote?symbol=CVX");
-      // KO is demanded on both, so both warmers want it for the next session.
-      const ko1 = await call(C, "/api/stock-quote?symbol=KO");
-      await sleep(200); // the write-behind lands
-      const ko2 = await call(D, "/api/stock-quote?symbol=KO");
-      ok(x.status === 200 && y.status === 200 && ko1.status === 200 && ko2.status === 200 && ko2.body?.cached === true, `d. a quote on each server serves, and KO read on C is shared with D (${ko2.body?.cached})`);
-      ok(count((c, i) => i >= q0 && c.kind === "cost") === 0, `d. neither quote was priced inline: both servers hold the session's audit (${count((c, i) => i >= q0 && c.kind === "cost")} cost reads)`);
+      // Demand: a history read on each server keeps both warmers awake.
+      const x = await call(C, "/api/stock-history?symbol=XOM&days=5");
+      const y = await call(D, "/api/stock-history?symbol=CVX&days=5");
+      ok(x.status === 200 && y.status === 200, `d. a history read on each server serves (${x.status}, ${y.status})`);
       // A new session lands.
       const e0 = up.calls.length;
       up.end = "2026-10-13";
-      const k = (s) => count((c, i) => i >= e0 && c.kind === "data" && c.symbol === s && c.end === "2026-10-13");
-      ok(await until(async () => k("XOM") >= 1 && k("CVX") >= 1 && k("KO") >= 1 && (await perf(C))?.range?.end === "2026-10-13" && (await perf(D))?.range?.end === "2026-10-13", 30_000, 250), "d. the warmers pick up the new session and pre-read both servers' symbols");
-      await sleep(4000); // more ticks on both: nothing may be read twice
-      ok(k("XOM") === 1 && k("CVX") === 1 && k("KO") === 1, `d. each symbol is read once for the session across both servers, KO included though both warmers want it (XOM ${k("XOM")}, CVX ${k("CVX")}, KO ${k("KO")})`);
+      ok(await until(async () => (await perf(C))?.range?.end === "2026-10-13" && (await perf(D))?.range?.end === "2026-10-13", 30_000, 250), "d. the warmers pick up the new session");
+      await sleep(4000); // more ticks on both: the audit may not run twice
       const audits2 = count((c, i) => i >= e0 && c.kind === "cost" && c.symbol === "AAPL" && c.end === "2026-10-13");
       ok(audits2 === 1, `d. one price audit for the new session across both servers (${audits2})`);
       const ranges = count((c, i) => i >= e0 && c.kind === "range");
       const sc = await perf(C), sd = await perf(D);
-      // Which server's tick reads first is timing: one may do every read and the
-      // other adopt all of it, so the shared copy is judged across both.
-      ok(sc.shared.hits + sd.shared.hits > 0 && (sc.adoptedFromShared + sd.adoptedFromShared) >= 1, `d. ticks adopted the boundary, the audit and KO's pre-read from the shared copy instead of reading upstream (hits ${sc.shared.hits}+${sd.shared.hits}, adopted ${sc.adoptedFromShared}+${sd.adoptedFromShared}, lease skips ${sc.leaseSkips}+${sd.leaseSkips}, range reads ${ranges})`);
-      const w0 = up.calls.length;
-      const xd = await call(D, "/api/stock-quote?symbol=XOM");
-      const yc = await call(C, "/api/stock-quote?symbol=CVX");
-      ok(xd.body?.cached === true && yc.body?.cached === true && xd.body?.asOf === "2026-10-13" && yc.body?.asOf === "2026-10-13", `d. each server serves the other's symbol warm for the new session (${xd.body?.cached}, ${yc.body?.cached})`);
-      // The boundary refresh ticks on its own timer (DATABENTO_RANGE_REFRESH_MS
-      // above) and may land while these quotes run; only a bars or price read
-      // would mean a quote went upstream.
-      const quoteReads = up.calls.slice(w0).filter((c) => c.kind !== "range");
-      ok(quoteReads.length === 0, `d. ...with zero upstream calls (${quoteReads.length}: ${JSON.stringify(quoteReads)})`);
+      ok(sc.shared.hits + sd.shared.hits > 0, `d. ticks adopted the boundary and the audit from the shared copy instead of reading upstream (hits ${sc.shared.hits}+${sd.shared.hits}, lease skips ${sc.leaseSkips}+${sd.leaseSkips}, range reads ${ranges})`);
+      ok(up.calls.every((c) => c.dataset === "DBEQ.BASIC"), "d. every warmer read names DBEQ.BASIC");
       // The lease gates the tick: while a third container holds it, neither
       // server's warmer calls the upstream, even across a new session.
       const third = "third-container";

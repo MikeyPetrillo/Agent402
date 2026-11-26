@@ -23,6 +23,7 @@ import { ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 import { assertRobotsAllow } from "./robots-gate.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { upstreamKeyFor, runWithUpstreamKey, upstreamKeyRefusedError, upstreamKeySentence } from "../upstream-key.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.05 to 1.6 s when measured
@@ -38,13 +39,16 @@ function bad(message, statusCode = 400) {
 // an SSRF surface, but every fetch still rides the guarded dispatcher.
 // 404 passes through as { status: 404 } so handlers can return structured
 // misses instead of errors.
-async function getJson(url, upstream, headers = {}, step = "lookup") {
+async function getJson(url, upstream, headers = {}, step = "lookup", { buyerKey = false } = {}) {
   const ctx = { label: upstream, step, timeoutMs: TIMEOUT_MS, tag: "[enrich]" };
   const res = await upstreamFetch(url, {
     headers: { Accept: "application/json", "User-Agent": "Agent402/1.0 (+https://agent402.tools)", ...headers },
     dispatcher: ssrfDispatcher,
   }, ctx);
   if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
+  // A buyer's own key the upstream refuses (src/upstream-key.js): 401 or 403,
+  // uncharged, never retried with ours. A spent quota stays the 503 below.
+  if (buyerKey && (res.status === 401 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") !== "0"))) throw upstreamKeyRefusedError(res.status, upstream);
   if (res.status === 403) {
     // GitHub reports an exhausted per-IP quota as 403 with a zeroed remaining
     // header — that's capacity, not authorization; surface as retryable 503.
@@ -177,11 +181,58 @@ const GH_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // handler instead.
 const GH_REPO_RE = /^[A-Za-z0-9._-]+$/;
 
-export function ghHeaders() {
+// The github-repo read, with the buyer's token or our optional one.
+async function githubRepoRead(owner, repo, buyerToken) {
+  const base = `https://api.github.com/repos/${owner}/${repo}`;
+  const opts = { buyerKey: !!buyerToken };
+  const { status, data } = await getJson(base, "GitHub", ghHeaders(buyerToken), "lookup", opts);
+  // A private repository a configured token can read answers exactly like
+  // one that does not exist: nothing about it leaves through this tool.
+  if (status === 404 || !data || typeof data !== "object" || data.private === true) {
+    throw bad(`Repository ${owner}/${repo} not found (or private)`, 404);
+  }
+  // Language byte mix — best-effort second call; the core record stands alone.
+  let languages = null;
+  try {
+    const { status: ls, data: langs } = await getJson(`${base}/languages`, "GitHub", ghHeaders(buyerToken), "lookup", opts);
+    if (ls === 200 && langs && typeof langs === "object") {
+      const total = Object.values(langs).reduce((s, n) => s + n, 0) || 1;
+      languages = Object.entries(langs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([language, bytes]) => ({ language, bytes, percent: Math.round((bytes / total) * 1000) / 10 }));
+    }
+  } catch { /* per-IP quota may not stretch to the second call — mix stays null */ }
+  return {
+    fullName: data.full_name ?? `${owner}/${repo}`,
+    description: data.description ?? null,
+    stars: data.stargazers_count ?? 0,
+    forks: data.forks_count ?? 0,
+    watchers: data.subscribers_count ?? data.watchers_count ?? 0,
+    openIssues: data.open_issues_count ?? 0,
+    license: data.license?.spdx_id && data.license.spdx_id !== "NOASSERTION" ? data.license.spdx_id : data.license?.name ?? null,
+    topics: Array.isArray(data.topics) ? data.topics.slice(0, 20) : [],
+    language: data.language ?? null,
+    languages,
+    pushedAt: data.pushed_at ?? null,
+    createdAt: data.created_at ?? null,
+    defaultBranch: data.default_branch ?? null,
+    archived: Boolean(data.archived),
+    fork: Boolean(data.fork),
+    homepage: data.homepage || null,
+    url: data.html_url ?? `https://github.com/${owner}/${repo}`,
+    source: "api.github.com",
+  };
+}
+
+export function ghHeaders(buyerToken = null) {
   const h = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2026-03-10",
   };
+  // A buyer's own token (X-Agent402-Upstream-Key, src/upstream-key.js) is the
+  // only credential its call carries: ours is never sent beside or after it.
+  if (buyerToken) { h.Authorization = `Bearer ${buyerToken}`; return h; }
   // Optional env-gated enhancement: 60 req/hr/IP keyless → 5k/hr with a token.
   // Never required; absence changes nothing but the rate limit.
   if (process.env.GITHUB_TOKEN) h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
@@ -463,7 +514,7 @@ export const ENRICH_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "Enrich a public GitHub repository: stars, forks, watchers, open issues, license, topics, primary language plus the full language byte mix with percentages, created/last-push timestamps, default branch, archived/fork flags, and homepage. Keyless (shared per-IP rate limit; the server optionally uses a GITHUB_TOKEN env var for a higher ceiling). Unknown repos return 404.",
+      "Enrich a public GitHub repository: stars, forks, watchers, open issues, license, topics, primary language plus the full language byte mix with percentages, created/last-push timestamps, default branch, archived/fork flags, and homepage. Keyless (shared per-IP rate limit; the server optionally uses a GITHUB_TOKEN env var for a higher ceiling). Unknown repos return 404." + (upstreamKeySentence("github-repo") ? ` ${upstreamKeySentence("github-repo")}` : ""),
     tags: ["data", "github", "repository", "oss", "enrichment", "dev", "stars"],
     discovery: {
       bodyType: "json",
@@ -491,50 +542,14 @@ export const ENRICH_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, req) => {
       const owner = typeof i.owner === "string" ? i.owner.trim() : "";
       const repo = typeof i.repo === "string" ? i.repo.trim() : "";
       if (!GH_OWNER_RE.test(owner)) throw bad(`"owner" must be a GitHub user/org name (letters, digits, hyphens; max 39 chars)`);
       if (!GH_REPO_RE.test(repo) || repo.length > 128 || repo === "." || repo.includes("..")) throw bad(`"repo" must be a GitHub repository name (letters, digits, . _ -; no ".." segments)`);
-      const base = `https://api.github.com/repos/${owner}/${repo}`;
-      const { status, data } = await getJson(base, "GitHub", ghHeaders());
-      // A private repository a configured token can read answers exactly like
-      // one that does not exist: nothing about it leaves through this tool.
-      if (status === 404 || !data || typeof data !== "object" || data.private === true) {
-        throw bad(`Repository ${owner}/${repo} not found (or private)`, 404);
-      }
-      // Language byte mix — best-effort second call; the core record stands alone.
-      let languages = null;
-      try {
-        const { status: ls, data: langs } = await getJson(`${base}/languages`, "GitHub", ghHeaders());
-        if (ls === 200 && langs && typeof langs === "object") {
-          const total = Object.values(langs).reduce((s, n) => s + n, 0) || 1;
-          languages = Object.entries(langs)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 20)
-            .map(([language, bytes]) => ({ language, bytes, percent: Math.round((bytes / total) * 1000) / 10 }));
-        }
-      } catch { /* per-IP quota may not stretch to the second call — mix stays null */ }
-      return {
-        fullName: data.full_name ?? `${owner}/${repo}`,
-        description: data.description ?? null,
-        stars: data.stargazers_count ?? 0,
-        forks: data.forks_count ?? 0,
-        watchers: data.subscribers_count ?? data.watchers_count ?? 0,
-        openIssues: data.open_issues_count ?? 0,
-        license: data.license?.spdx_id && data.license.spdx_id !== "NOASSERTION" ? data.license.spdx_id : data.license?.name ?? null,
-        topics: Array.isArray(data.topics) ? data.topics.slice(0, 20) : [],
-        language: data.language ?? null,
-        languages,
-        pushedAt: data.pushed_at ?? null,
-        createdAt: data.created_at ?? null,
-        defaultBranch: data.default_branch ?? null,
-        archived: Boolean(data.archived),
-        fork: Boolean(data.fork),
-        homepage: data.homepage || null,
-        url: data.html_url ?? `https://github.com/${owner}/${repo}`,
-        source: "api.github.com",
-      };
+      // The buyer's own token, when its request carried one this route took.
+      const buyerToken = upstreamKeyFor(req, "github-repo");
+      return runWithUpstreamKey(buyerToken ? "github-repo" : null, () => githubRepoRead(owner, repo, buyerToken), req);
     },
   },
 

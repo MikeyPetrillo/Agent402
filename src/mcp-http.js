@@ -37,7 +37,8 @@ class McpError extends ProtocolError {
 // (_meta["io.modelcontextprotocol/protocolVersion"]) is served on the modern
 // path (createMcpHandler, server/discover, no initialize); every other request
 // (initialize and the 2025-era stateless calls after it, 2024-10-07 through
-// 2025-11-25) is served by a per-request Node transport exactly as before.
+// 2025-11-25, including one whose envelope key names such a version) is served
+// by a per-request Node transport exactly as before.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport, toWebRequest } from "@modelcontextprotocol/node";
@@ -58,6 +59,7 @@ import { isIdentityBoundRoute } from "./payments.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
+import { applySynonyms } from "./find-synonyms.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { boundAnswer, withAnswerBound, mcpMaxAnswerBytes } from "./mcp-answer-bound.js";
@@ -74,7 +76,7 @@ import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_URL_HEADER } from "./receipt-signing.js";
-import { stockDataEnabled } from "./tools/stock-provider.js";
+import { stockQuoteEnabled } from "./tools/stock-provider.js";
 
 /** The `_meta` key a paid tools/call result carries the route's signed
  *  receipt under (src/receipt-signing.js): the compact JWS the paid HTTP
@@ -368,6 +370,23 @@ let sharedTaskStore = null;
  *  these headers and reads nothing else, so the request body is never
  *  re-serialized for a 2025-era call. */
 const ERA_HEADERS = ["content-type", "mcp-protocol-version", "mcp-method", "mcp-name"];
+/** True when the body's per-request envelope claim names a 2025-era version
+ *  the 2025 transport serves (SUPPORTED_PROTOCOL_VERSIONS) and no 2026-07-28
+ *  MCP-Protocol-Version header contradicts it. The SDK's classifier sends any
+ *  envelope claim to the modern handler, which serves 2026-07-28 only and
+ *  refuses such a claim as an unsupported version, so these requests are
+ *  routed to the 2025-era transport, the path their version names. A claim
+ *  naming a version neither path serves keeps the modern handler's refusal. */
+export function legacyEnvelopeClaim(req) {
+  const body = req?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const meta = body.params?._meta;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta) || !Object.hasOwn(meta, PROTOCOL_VERSION_META_KEY)) return false;
+  const claim = meta[PROTOCOL_VERSION_META_KEY];
+  if (typeof claim !== "string" || !SUPPORTED_PROTOCOL_VERSIONS.includes(claim)) return false;
+  const header = req.headers?.["mcp-protocol-version"];
+  return typeof header !== "string" || header.trim() < MODERN_PROTOCOL_VERSION;
+}
 export function eraProbeOf(req) {
   const headers = new Headers();
   for (const h of ERA_HEADERS) {
@@ -694,6 +713,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const q = withoutAttributions(String(query || ""));
     const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     applyFrontDoorTerms(terms, q);
+    // The buyer's words the catalog names another way, as /api/find reads
+    // them (src/find-synonyms.js): "readclean" reaches the article extractor.
+    applySynonyms(terms);
     const scored = [];
     for (const { def, free } of tools.values()) {
       const slug = def.slug.toLowerCase();
@@ -791,7 +813,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: plainText(mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() })),
+        description: plainText(mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockQuoteEnabled() })),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {
@@ -2350,7 +2372,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // The protocol era of this request (see the imports): the SDK's own
     // classification, from the parsed body and the standard headers.
     // A request it cannot classify is served as 2025-era traffic.
-    const modern = !(await isLegacyRequest(eraProbeOf(req), req.body ?? undefined).catch(() => true));
+    const modern = !legacyEnvelopeClaim(req) && !(await isLegacyRequest(eraProbeOf(req), req.body ?? undefined).catch(() => true));
     // Only a request that claims 2026-07-28 (the envelope, or a modern
     // MCP-Protocol-Version header) meets the ladder here; a malformed 2025-era
     // body keeps the answers below.

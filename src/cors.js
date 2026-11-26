@@ -26,6 +26,8 @@
 // Because the response never varies by origin (it is always `*`), no `Vary:
 // Origin` is needed.
 
+import { WELL_KNOWN_SEARCH_PATH, SEARCH_ALLOW } from "./well-known-search-path.js";
+
 /** Path prefixes a cross-origin machine client may read. */
 // `/mcp` is deliberately ABSENT: src/mcp-http.js has set its own complete CORS
 // since long before this file existed, including `DELETE` (session
@@ -122,6 +124,9 @@ export const CORS_DEFAULT_ALLOW_HEADERS = [
 ];
 
 export const CORS_METHODS = "GET, HEAD, POST, OPTIONS";
+/** A path that takes a method outside that list names its own on the preflight
+ *  (the site search endpoint takes QUERY, src/well-known-search.js). */
+export const CORS_PATH_METHODS = new Map([[WELL_KNOWN_SEARCH_PATH, SEARCH_ALLOW]]);
 export const CORS_MAX_AGE = "86400";
 
 // RFC 7230 token. A preflight's Access-Control-Request-Headers is
@@ -208,7 +213,7 @@ export function corsMiddleware() {
       return next();
     }
     // A preflight has no Origin-specific answer and never carries a body.
-    res.setHeader("Access-Control-Allow-Methods", CORS_METHODS);
+    res.setHeader("Access-Control-Allow-Methods", CORS_PATH_METHODS.get(String(req.path || "").toLowerCase()) || CORS_METHODS);
     res.setHeader("Access-Control-Allow-Headers", corsAllowHeaders(req.headers["access-control-request-headers"]));
     res.setHeader("Access-Control-Max-Age", CORS_MAX_AGE);
     res.setHeader("Content-Length", "0");

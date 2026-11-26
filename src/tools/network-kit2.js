@@ -59,7 +59,8 @@ function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) 
 // handler (domain-audit-pro's certificate probe included). No key, or the
 // hour's reads spent: crt.sh alone answers.
 export const CERTSPOTTER_HOURLY_MAX = 100;
-// With crt.sh alone, a failure inside this long is asked once more.
+// With crt.sh alone, a failure or an empty list inside this long is asked
+// once more.
 const CRT_RETRY_WITHIN_MS = 3000;
 const HOUR_MS = 3_600_000;
 const certspotterReads = []; // send times (ms) inside the last hour, oldest first
@@ -109,6 +110,15 @@ async function certTransparencyHandler(body) {
     }
   }
 
+  // A CT search answers a JSON list, an empty one when nothing was issued. A
+  // degraded front end can answer 200 with something else (an error object);
+  // read as a list that would be a false "no certificates" sold as an answer,
+  // so it is the same retryable upstream failure as a 5xx.
+  const rowsOf = (rows, label) => {
+    if (Array.isArray(rows)) return rows;
+    throw bad(`${label} answered something other than a list of certificates - try again later`, 502);
+  };
+
   // Map each CT-log source's raw rows to our normalized cert shape (deduped, capped).
   const mapCrtSh = (rows) => {
     const seen = new Set(), certs = [];
@@ -152,12 +162,12 @@ async function certTransparencyHandler(body) {
   const HEDGE_MS = 1500;
 
   const csKey = certspotterKey();
-  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(rowsOf(rows, "crt.sh")) }));
   const crtStarted = Date.now();
   const crtP = crtRead();
   let csP = null;
   const fireCertspotter = () => (csP ??= takeCertspotterRead()
-    ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) }))
+    ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(rowsOf(rows, "certspotter")) }))
     : Promise.reject(Object.assign(bad("the second CT search's hourly reads are spent", 502), { budget: true })));
   // Resolve on the FIRST fulfillment; reject with the first error only once ALL reject.
   const firstSuccess = (ps) => new Promise((resolve, reject) => {
@@ -170,10 +180,15 @@ async function certTransparencyHandler(body) {
   if (!csKey) {
     // crt.sh alone. A fast upstream failure (its front end answers a backend
     // failure in well under a second) is asked once more; then its failure is
-    // the answer's.
+    // the answer's. A fast EMPTY list is asked once more too: a degraded
+    // backend can answer [] for a domain that holds certificates, a false "no
+    // certificates". A second empty list is the answer (a real empty one, as
+    // far as the log can say); an empty list then a failure is the failure's.
     let err = null;
     try { result = await crtP; } catch (e) { err = e; }
-    if (!result && err?.statusCode === 502 && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+    const emptyFirst = result?.total === 0;
+    if ((emptyFirst || (!result && err?.statusCode === 502)) && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+      result = null;
       try { result = await crtRead(); err = null; } catch (e) { err = e; }
     }
     if (!result) {
@@ -198,6 +213,12 @@ async function certTransparencyHandler(body) {
     }
   } finally {
     clearTimeout(hedgeTimer);
+  }
+  // With the key, an empty crt.sh list is checked against the second log
+  // (under its hourly reads): its certificates answer when it holds any, and
+  // otherwise, or when it fails or its reads are spent, the empty list stands.
+  if (csKey && result.source === "crt.sh" && result.total === 0) {
+    try { const cs = await fireCertspotter(); if (cs.certs.length) result = cs; } catch { /* the empty list stands */ }
   }
   const { certs, total, source } = result;
 

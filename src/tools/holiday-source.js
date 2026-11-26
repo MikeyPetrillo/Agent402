@@ -188,7 +188,13 @@ export async function nextHolidays(country) {
 
 // ── v3 compatibility (public-holidays only, until v3's end of life) ──────────
 // The v3 API (same publisher, same terms and sponsorship) answers until
-// 2027-01-31. Until then public-holidays keeps v3's meaning from it: `date` is
+// 2027-01-31. Every other read is v4. This one stays on v3 because v4 has no
+// equivalent: its Holidays rows carry no localName, list each holiday on its
+// calendar date (v3 gave the observed weekday in countries with no rule in
+// OBSERVANCE), and its years are a rolling window narrower than the years v3 serves.
+// v4 has no long-weekend endpoint either; long-weekends is computed here from
+// the v4 year lists, so it never read v3. The self-hosted v4 container serves
+// the same v4 shape, so it would not restore the v3 fields. Until then public-holidays keeps v3's meaning from it: `date` is
 // the date v3 lists (the observed weekday where v3 moved a holiday), `localName`
 // is v3's local name, and a year outside v4's window is answered from v3. From
 // 2027-02-01 `date` is computed with the observance rules below where a country

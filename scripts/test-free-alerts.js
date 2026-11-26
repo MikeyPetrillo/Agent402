@@ -107,7 +107,7 @@ ok(fa.confirm(decodeURIComponent(m[1]), m[2]).ok === false, "a stale confirmatio
 
 // ---- caps + sweep + stats ----
 for (let i = 0; i < MAX_PER_EMAIL; i++) await fa.signup({ email: "cap@example.com", kind: "insider", target: "ABCDEF".slice(0, i + 1) });
-await ok_throws(() => fa.signup({ email: "cap@example.com", kind: "insider", target: "TX" }), 429, `the ${MAX_PER_EMAIL}-per-address cap holds`);
+await ok_throws(() => fa.signup({ email: "cap@example.com", kind: "insider", target: "TX" }), 409, `the ${MAX_PER_EMAIL}-per-address cap holds (409: it lifts only when an alert is removed)`);
 clock += 4 * 24 * 60 * 60_000;
 await fa.tick();
 ok(Object.values(fa._store().alerts).filter((a) => a.email === "cap@example.com").length === 0, "unconfirmed signups are forgotten after their TTL");

@@ -46,7 +46,7 @@ import path from "node:path";
 import { METERED_SLUGS } from "./test-non-metered-examples.js";
 import { bootServer } from "./lib/boot-server.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
-import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
+import { STOCK_SLUGS, stockToolServed } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 import { KALSHI_SLUGS, kalshiToolsEnabled } from "../src/kalshi-switch.js";
 import { upstreamHostsForSlug, directReadFails } from "./lib/upstream-outage.js";
@@ -376,9 +376,10 @@ async function main() {
             counts.skipped++;
             continue;
           }
-          // The stock tools and the packs whose answer is stock data are listed only with
-          // an active stock provider (src/tools/stock-provider.js).
-          if ((STOCK_SLUGS.has(c.slug) || (c.slug.startsWith("skill-") && STOCK_CORE_PACK_SLUGS.has(c.slug.slice(6)))) && !stockDataEnabled()) {
+          // A stock tool is listed only while a provider serves it (stock-history with an
+          // active provider, stock-quote never), and the packs whose answer is a quote
+          // never (src/tools/stock-provider.js).
+          if ((STOCK_SLUGS.has(c.slug) && !stockToolServed(c.slug)) || (c.slug.startsWith("skill-") && STOCK_CORE_PACK_SLUGS.has(c.slug.slice(6)))) {
             results.push({ ...c, kind: "skipped", note: "no stock provider is active on this boot (tool not listed)" });
             counts.skipped++;
             continue;

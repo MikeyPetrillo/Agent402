@@ -1567,7 +1567,8 @@ export const CDP_TOOLS = [
       const token = String(input?.token || "usdc").trim().toLowerCase();
       if (!FAUCET_TOKENS[network].has(token)) throw bad(`"token" must be one of: ${[...FAUCET_TOKENS[network]].join(", ")} on ${network}`);
       const gate = faucetGate(isSolana ? address : address.toLowerCase());
-      if (!gate.ok) throw Object.assign(bad(gate.reason, 429), gate.callerLimit ? { callerLimit: true } : {});
+      // Both faucet caps run over the last 24 hours.
+      if (!gate.ok) throw Object.assign(bad(gate.reason, 429), { retryAfter: 86400 }, gate.callerLimit ? { callerLimit: true } : {});
       let res;
       try {
         res = isSolana

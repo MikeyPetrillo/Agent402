@@ -21,10 +21,10 @@
 // listed only with a key, or listed here. Retiring a route without an entry
 // here fails that test.
 
-import { stockDataEnabled } from "./tools/stock-provider.js";
+import { stockQuoteEnabled } from "./tools/stock-provider.js";
 import { kalshiToolsEnabled } from "./kalshi-switch.js";
 
-const STOCK_ON = stockDataEnabled();
+const STOCK_ON = stockQuoteEnabled();
 const KALSHI_ON = kalshiToolsEnabled();
 
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null; an

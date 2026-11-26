@@ -9,12 +9,28 @@
   if (!cfgEl) return;
   var data;
   try { data = JSON.parse(cfgEl.textContent); } catch (e) { return; }
-  if (!data || !data.key || !data.cfg || typeof data.cfg !== "object") return;
+  if (!data || typeof data.key !== "string" || !data.key || !data.cfg || typeof data.cfg !== "object") return;
   // The library loads from, and reports to, this page's own origin only (the
-  // first-party /e proxy; CSP keeps connect-src and script-src at 'self'). The
-  // island's api_host is never written into a script src: it is replaced by
-  // the page's own origin, so text read from the DOM cannot name the host.
-  data.cfg.api_host = location.origin + "/e";
+  // first-party /e proxy; CSP keeps connect-src and script-src at 'self').
+  // The config handed to the library is built here, never taken whole from
+  // the island: its hosts are fixed values, and from the island only on/off
+  // switches are read (each compared with true, or with false for the two
+  // that turn a feature off), so no text read from the DOM can reach a
+  // script src or a host.
+  var island = data.cfg, perf = island.capture_performance;
+  var cfg = {
+    api_host: location.origin + "/e",
+    ui_host: "https://us.posthog.com",
+    persistence: "memory",
+    autocapture: island.autocapture === true,
+    capture_pageview: island.capture_pageview === true,
+    capture_pageleave: island.capture_pageleave === true,
+    capture_performance: { web_vitals: !!perf && perf.web_vitals === true, network_timing: !!perf && perf.network_timing === true },
+    // Off unless the island says exactly false: a missing or malformed flag
+    // records no session and shows no survey.
+    disable_session_recording: island.disable_session_recording !== false,
+    disable_surveys: island.disable_surveys !== false,
+  };
   // Consent: assets/js/analytics-consent.js decides (window.a402Consent).
   // Nothing below runs (no stub, no library request, nothing kept) until
   // consent is granted: a visitor in the EU, the EEA, the UK or Switzerland is
@@ -65,7 +81,7 @@
       }
     });
   }
-  data.cfg.before_send = function (event) {
+  cfg.before_send = function (event) {
     if (withdrawn) return null;
     if (event) { scrub(event.properties, 0); scrub(event.$set, 0); scrub(event.$set_once, 0); }
     return event;
@@ -74,8 +90,7 @@
   // return (same paths GA skips, src/ledger-chrome.js GA_BEARER_PATH; kept
   // identical by scripts/test-ga-snippet.js). The project's URL blocklist is a
   // second layer; this one ships with the code and cannot drift from it.
-  if (/^\/(r|m|reports\/public|answers|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/.test(location.pathname)) data.cfg.disable_session_recording = true;
-  data.cfg.persistence = "memory";
-  posthog.init(data.key, data.cfg);
+  if (/^\/(r|m|reports\/public|answers|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/.test(location.pathname)) cfg.disable_session_recording = true;
+  posthog.init(data.key, cfg);
   });
 })();

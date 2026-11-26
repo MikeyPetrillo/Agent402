@@ -14,6 +14,7 @@ import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
 import { returningWalletHeaderParams } from "./returning-wallet.js";
+import { upstreamKeyHeaderParams } from "./upstream-key.js";
 import { binaryTypesOf, responseTypesOf, JSON_MIME } from "./tool-media-type.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
@@ -871,7 +872,7 @@ const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
 // The region refusal (src/sanctioned-regions.js), on every paid operation
 // while the block is on: answered before any payment is verified or settled.
-const OPENAPI_451 = Object.freeze({ description: "Unavailable in the caller's region (reason unavailable_in_region), before any payment is verified or settled: charged false on x402; a Tempo push transfer is not claimed." });
+const OPENAPI_451 = Object.freeze({ description: "Unavailable in the caller's region (reason unavailable_in_region), or a paid request whose region could not be read (reason location_unreadable), before any payment is verified or settled: charged false on x402; a Tempo push transfer is not claimed." });
 const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
@@ -1122,6 +1123,7 @@ export function openapiSpec(baseUrl, catalog) {
           : { type: "string", enum: ["respond-async"] },
       }] : []),
       ...returningWalletHeaderParams(tool),
+      ...upstreamKeyHeaderParams(tool),
       ...(isComputePayable(tool) ? [{
         name: "X-Pow-Solution",
         in: "header",

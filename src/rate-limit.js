@@ -158,4 +158,43 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
   return { check, peek, reset, refund, size: () => buckets.size };
 }
 
+/**
+ * True when `rl` (a limiter's check or peek) is limited, after setting the
+ * answer's Retry-After to the limiter's own wait in whole seconds (at least 1;
+ * `fallbackSeconds` when the limiter named none). Every 429 carries the header
+ * (scripts/test-retry-after-429.js):
+ *   if (limitedWithRetryAfter(res, someLimiter.check(ip))) return res.status(429).json(...);
+ */
+export function limitedWithRetryAfter(res, rl, fallbackSeconds = 60) {
+  if (!rl?.limited) return false;
+  const secs = String(retryAfterSecondsOf(rl.retryAfterSeconds, fallbackSeconds));
+  try {
+    if (typeof res?.set === "function") res.set("Retry-After", secs);
+    else res?.setHeader?.("Retry-After", secs);
+  } catch { /* a header already sent never blocks the refusal */ }
+  return true;
+}
+/**
+ * For an answer relaying a thrown refusal: a 429 gets Retry-After from the
+ * error's own `retryAfter` (seconds), else `fallbackSeconds`. Any other status
+ * is left as it is. Returns `res`.
+ */
+export function retryAfterFromError(res, err, fallbackSeconds = 60) {
+  if (Number(err?.statusCode) !== 429) return res;
+  limitedWithRetryAfter(res, { limited: true, retryAfterSeconds: err.retryAfter }, fallbackSeconds);
+  return res;
+}
+/** A tool error's Retry-After: the whole seconds the error names, else, on a
+ *  429 that names none, the limiter fallback (retryAfterFromError), so no
+ *  429 a tool raises goes out without the header. */
+export function toolErrorRetryAfter(res, err, status = err?.statusCode) {
+  if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+  else if (Number(status) === 429) limitedWithRetryAfter(res, { limited: true, retryAfterSeconds: err?.retryAfter });
+  return res;
+}
+/** A Retry-After value in whole seconds, at least 1. */
+export function retryAfterSecondsOf(seconds, fallbackSeconds = 60) {
+  const n = Number(seconds);
+  return Math.max(1, Math.ceil(Number.isFinite(n) && n > 0 ? n : Number(fallbackSeconds) || 60));
+}
 export const LIMITS_LABEL = `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`;

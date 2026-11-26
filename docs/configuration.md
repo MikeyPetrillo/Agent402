@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1147 variables in 114 groups.
+1148 variables in 114 groups.
 
 ## Contents
 
@@ -309,7 +309,6 @@ holds it.
 | `DATABENTO_COST_TIMEOUT_MS` | Databento cost timeout, in milliseconds. | `5000` | `src/tools/databento.js` |
 | `DATABENTO_DATA_TIMEOUT_MS` | Databento data timeout, in milliseconds. | `12000` | `src/tools/databento.js` |
 | `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | not listed | `src/tools/databento.js` |
-| `DATABENTO_PRIMARY_SKIP_MS` | Databento primary skip, in milliseconds. |  | `src/tools/databento.js` |
 | `DATABENTO_QUOTE_STALE_MAX_MS` | Databento quote stale maximum, in milliseconds. | `86400000` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_MAX_AGE_MS` | Databento range maximum age, in milliseconds. | `3600000` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_REFRESH_MS` | Databento range refresh, in milliseconds. | `900000` | `src/tools/databento.js` |
@@ -318,7 +317,6 @@ holds it.
 | `DATABENTO_RANGE_TIMEOUT_MS` | Databento range timeout, in milliseconds. | `6000` | `src/tools/databento.js` |
 | `DATABENTO_SHARED_DEADLINE_MS` | Databento shared deadline, in milliseconds. | `250` | `src/tools/databento.js` |
 | `DATABENTO_SHARED_PREFIX` | Databento shared prefix. | `databento:v1:` | `src/tools/databento.js` |
-| `DATABENTO_SUMMARY` | Databento summary. |  | `src/tools/databento.js` |
 | `DATABENTO_WARM` | Databento warm. |  | `src/tools/databento.js` |
 | `DATABENTO_WARM_IDLE_MS` | Databento warm idle, in milliseconds. | `21600000` | `src/tools/databento.js` |
 | `DATABENTO_WARM_RETRY_MS` | Databento warm retry, in milliseconds. | `30000` | `src/tools/databento.js` |
@@ -680,7 +678,7 @@ holds it.
 | `LEDGER_JOURNAL_REDIS_OP_MS` | Ledger journal redis op, in milliseconds. |  | `src/ledger-journal-redis.js` |
 | `LEDGER_MIRROR_MARGIN_MS` | Ledger mirror margin, in milliseconds. |  | `src/ledger-mirror.js` |
 | `LEDGER_MIRROR_REFRESH_MS` | Ledger mirror refresh, in milliseconds. |  | `src/ledger-mirror.js` |
-| `LEDGER_RETENTION` | The daily money-record retention pass: apply deletes rows past their period; anything else is a dry run. |  | `src/ledger-retention.js`, `src/server.js` |
+| `LEDGER_RETENTION` | The daily money-record retention pass: apply deletes rows past their period, off skips the money records, anything else is a dry run. Refusal records are removed at 90 days whatever it says. |  | `src/ledger-retention.js` |
 | `LEDGER_RETENTION_REFUND_YEARS` | Years a resolved refund row is kept (7 at least). |  | `src/ledger-retention.js` |
 | `LEDGER_RETENTION_SALES_YEARS` | Years a sales ledger row is kept (7 at least). |  | `src/ledger-retention.js` |
 
@@ -847,6 +845,7 @@ holds it.
 | --- | --- | --- | --- |
 | `PAYMENT_GUIDE_402` | First-contact 402 payment guide block; on unless set to off. |  | `src/server.js` |
 | `PAYMENT_NETWORKS` | Comma list of networks offered in each 402; the primary NETWORK is always first. |  | `src/mpp-shim.js`, `src/payments.js` |
+| `PAYMENT_REFUSALS_FILE` | Payment refusal record file path when the server runs without a state database. |  | `src/payment-refusals.js` |
 | `PAYMENT_REQUIRED_BODY` | Payment required body. |  | `src/payment-required-compact.js`, `src/server.js` |
 | `PAYMENT_REQUIRED_COMPACT` | Payment required compact. |  | `src/payment-required-compact.js` |
 | `PAYMENT_SETTLE_FALLBACK` | Payment settle fallback. |  | `src/payments.js` |
@@ -993,7 +992,7 @@ holds it.
 | `REFERRAL_SETUP_URL` | The network's setup document (https), echoed in the 402. |  | `src/referral-gate.js` |
 | `REFERRAL_SHORT_NET_MAX` | Sales on one slug under that floor before new calls on it answer 503; a model-backed tool stops at one (0: never). |  | `src/referral-gate.js` |
 | `REFERRAL_SIGNER_KEY` | Dedicated key that signs referral facilitator requests and holds no funds (a credential, set on the host). |  | `src/referral-gate.js`, `src/router-pool.js` |
-| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js`, `src/returning-wallet.js` |
+| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js`, `src/returning-wallet.js`, `src/upstream-key.js` |
 | `REFERRAL_STORE_COOLDOWN_MS` | A store hold lasts this long (doubling to 10 minutes while failures stay in the window), then a probe write must stand. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WINDOW_MS` | The window of intent-write failures (refused, or late): two in it hold paid calls before the handler. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WRITE_MS` | An intent write to the settlement store that has not answered by then is given up (503, nothing settled). |  | `src/referral-gate.js` |
@@ -1103,6 +1102,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `ROUTER_EXCLUDED_SELLER_HASHES` | Extra sellers the router never buys from, as a comma list of digests (sha256 of the lowercased registrable domain, first 20 hex); a host or any parent domain that hashes to one is excluded, while discovery still lists it. |  | `src/router-listed-only.js` |
 | `ROUTER_QUERY_DEADLINE_MS` | Router query deadline, in milliseconds. | `10000` | `src/router-pool.js` |
 | `ROUTER_QUEUE_MAX` | Router queue maximum. | `256` | `src/router-pool.js` |
 | `ROUTER_WORKERS` | Router worker threads (0 or off keeps queries on the serving thread; unset: 1 while the index crawler runs, else 0; at most 4). |  | `src/router-pool.js` |
@@ -1518,6 +1518,7 @@ holds it.
 | `UPSTREAM_FAIL_MIN_CALLS` | Upstream fail minimum calls. |  | `src/tool-failure-monitor.js` |
 | `UPSTREAM_FAIL_RATE` | Upstream fail rate. |  | `src/tool-failure-monitor.js` |
 | `UPSTREAM_HANDLER_BUDGET_MS` | Upstream handler budget, in milliseconds. |  | `src/upstream-deadline.js` |
+| `UPSTREAM_KEY` | Set to on to let a buyer send their own key for a listed tool's provider in the X-Agent402-Upstream-Key header and pay the own-key price on that call (off by default; while off the header is removed from every request unread and no surface mentions it). |  | `src/upstream-key.js` |
 | `UPSTREAM_UNANSWERED_ALL_HELD_MIN` | Upstream unanswered all held minimum. |  | `src/unanswered-rule.js` |
 | `UPSTREAM_UNANSWERED_MIN` | Upstream unanswered minimum. |  | `src/unanswered-rule.js` |
 | `UPSTREAM_UNANSWERED_MIN_CALLERS` | Upstream unanswered minimum callers. |  | `src/unanswered-rule.js` |
@@ -1720,7 +1721,7 @@ holds it.
 | `SPAN_BLOCKS` | Span blocks. |  | `src/leaderboard.js` |
 | `STATS_ALLOW_EPHEMERAL` | Stats allow ephemeral. |  | `src/router-pool.js`, `src/stats.js` |
 | `STATS_DB_DIR` | Stats database directory. |  | `src/router-pool.js`, `src/stats.js` |
-| `STOCK_DATA_PROVIDER` | Stock data provider behind stock-quote and stock-history (off lists none of them). |  | `src/tools/stock-provider.js` |
+| `STOCK_DATA_PROVIDER` | Stock data provider behind stock-history, daily venue bars at least 24 hours old (off lists none; stock-quote is never listed). |  | `src/tools/stock-provider.js` |
 | `SUBSCRIPTIONS_REPLAY_MS` | Subscriptions replay, in milliseconds. |  | `src/stripe-subscriptions.js` |
 | `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/posthog.js`, `src/subject-wallet.js` and 1 more |
 | `TRANSCRIBE_LONG` | Set to on to list and serve the thirty-minute transcription tier (/api/transcribe-long). |  | `src/tools/stt-kit.js` |

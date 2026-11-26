@@ -1,6 +1,7 @@
 // Privacy policy — a stable URL is required for listing the remote MCP
 // connector in Anthropic's directory, and it should be true: this service
 // has no accounts, so there is genuinely little to say.
+import { PAYMENT_REFUSAL_RETENTION_DAYS } from "./payment-refusals.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { scorecardPublishesTx } from "./scorecard.js";
@@ -24,6 +25,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { returningWalletEnabled, returningWalletDataHandling, WALLET_HINT_HEADER } from "./returning-wallet.js";
+import { upstreamKeyPrivacyItem, withUpstreamKeyDate } from "./upstream-key.js";
 import { lifetimeMs as priceWebhookLifetimeMs } from "./price-webhooks.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
@@ -135,7 +137,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-25.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-26.</p>
 </section>
 
 <section>
@@ -184,7 +186,7 @@ so every claim below is verifiable in code.</p>
     with a signed EVM x402 payment (keyed by that payment's nonce, so a re-sent copy is answered without
     a second settlement; not on identity-bound routes such as memory, on routes with a lasting effect,
     or for streamed calls) are cached for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes;</li>
-    <li>a search on <code>/api/find</code> or the connector's <code>catalog.find</code> that finds no
+    <li>a search on <code>/api/find</code>, <code>/.well-known/search</code> or the connector's <code>catalog.find</code> that finds no
     matching tool, and a request sent to <code>/api/wish</code>, is kept as text on our demand board
     together with a hash of your IP address combined with the day (never the address itself); an entry
     leaves the board after ${WISH_STALE_DAYS} days without a repeat, and each request's text and hash are
@@ -397,7 +399,7 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   id: a digest of it, held in memory for one minute, limits request rates. We keep, for ${AWS_UNANSWERED_KEEP_DAYS} days, each AWS
   payment that bought no answer (the payment id, the tool, the times, the status, the attempts left and the list
   price), so it can be reviewed and adjusted through AWS.</li>
-` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
+` : ""}${upstreamKeyPrivacyItem()}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes),${walletHint ? ` the wallet address a request names in the
@@ -539,7 +541,11 @@ the sale, the period our accounting and tax records must cover. A record of a pa
 screening${geoBlockOn ? ", or refused because it came from a region under U.S. sanctions" : ""} (the address, rail, network, amount, route, time, the IP
 address the request came from, the list entry, the number of attempts within a day${geoBlockOn ? ", and for a refusal by location the sanctioned country or region code" : ""}), and an
 hourly count of refusals made before a payment was verified, or that name an address other than the verified payer${geoBlockOn ? ", and of refusals by location past the per-caller and hourly bounds" : ""} (no address is kept with it${geoBlockOn ? "; a count of refusals by location keeps the country or region code" : ""}), are
-kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
+kept privately for ten years, as US sanctions rules require. A record of each payment we refuse on a paid
+route (the day, the first and last time, the tool, the payment rail and network, the refusal's reason code,
+the HTTP status, the price quoted, how many times it repeated that day, and the paying wallet only when its
+payment verified on that request; no IP address, request body or signature) is kept privately for
+${PAYMENT_REFUSAL_RETENTION_DAYS} days, so we can tell why a payment did not go through after our logs expire. The consent a card checkout records (that you accepted
 the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the
 time and the checkout session id) is kept with the purchase or subscription record for as long as that record is kept. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
 Server events in our analytics tool (PostHog) are kept for one year, and Google Analytics event and user data for 2 months. Aggregate, non-personal counters (total calls served per tool) are kept for the public
@@ -553,7 +559,7 @@ the record within ${backupKeepDays()} days.</p>
 <p>If you are in the European Economic Area, the United Kingdom or Switzerland, the controller of the data described
 on this page is <strong>Cardhavok LLC</strong>, doing business as <strong>Havok Holdings LLC</strong>
 (see <a href="/company">/company</a>). Our legal bases are: the contract you enter by paying, for a paid
-call or a purchase, a receipt and a refund; our legitimate interest in running and protecting the service, for the operational logs,
+call or a purchase, a receipt and a refund; our legitimate interest in running and protecting the service, for the operational logs, the record of refused payments,
 rate limiting, abuse control and, outside the regions above, the page counters; our legal obligations and our
 legitimate interest in not dealing with sanctioned parties, for sanctions screening and the records it keeps;
 and your consent, for the analytics counters and for email alerts,
@@ -565,7 +571,7 @@ receive it in a portable form, to object to processing based on our legitimate i
 consent, and to complain to your supervisory authority (in Switzerland, the Federal Data Protection and
 Information Commissioner, under the Federal Act on Data Protection). To exercise a right, email
 <a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. For data kept
-under a wallet address (memory, receipts, feedback, decisions, a first-call grant), send the request text we
+under a wallet address (memory, receipts, feedback, decisions, a first-call grant, refused payment records), send the request text we
 give you signed by that wallet (an Ethereum signed message, or an Ed25519 signature for a Solana or Stellar
 account), so we know the wallet is yours; we then export or delete that data, except the sales and refund
 ledgers and sanctions records, which the law requires us to keep and whose payments are public on chain
@@ -595,5 +601,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withDirectUpstreamDate(withPublicIndexDate(withCreditsSalesDate(body))) });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withUpstreamKeyDate(withDirectUpstreamDate(withPublicIndexDate(withCreditsSalesDate(body)))) });
 }

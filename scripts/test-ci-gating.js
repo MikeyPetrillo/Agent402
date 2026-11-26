@@ -632,6 +632,30 @@ for (const lane of ["test-sweeps", "test-sweeps2"]) {
   ok(/head -60/.test(run) && /status --status deprecated/.test(run) && /::warning::failed to deprecate/.test(run) && run.indexOf("status --status deprecated") > run.indexOf("mcp-publisher publish"), "the deprecations run after the publish, at most 60 a run, each failure a warning");
 }
 
+// THE REGISTRY STEP'S GITHUB API READS. The publisher's latest tag and its
+// checksums asset name are read from api.github.com; unauthenticated, those
+// reads share the runner pool's rate limit and a 403 failed a main run's
+// publish. Every api.github.com request in the step goes through gh_api, which
+// sends the job's own token from the step env (never echoed), and nothing else
+// (the github.com downloads) carries it. The job reads public releases only, so
+// contents: read is the permission it needs.
+{
+  const st = (jobs.publish?.steps || []).find((x) => /mcp-publisher publish/.test(String(x.run || "")));
+  const run = String(st?.run || "");
+  ok(/^\$\{\{\s*(github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/.test(String(st?.env?.GH_API_TOKEN || "")), "the registry step's env hands the job token to GH_API_TOKEN");
+  const def = /^gh_api\(\) \{ (.*) \}$/m.exec(run)?.[1] || "";
+  ok(/^curl -fsSL /.test(def) && /-H "Authorization: Bearer \$GH_API_TOKEN"/.test(def) && /"\$@";?$/.test(def), "gh_api is a failing curl that sends the token as a Bearer header");
+  const apiLines = run.split("\n").filter((l) => /api\.github\.com/.test(l) && !/^\s*#/.test(l));
+  ok(apiLines.length >= 2, `the step still reads the latest tag and the checksums asset from api.github.com (${apiLines.length} reads)`);
+  for (const l of apiLines) ok(/\bgh_api "https:\/\/api\.github\.com\//.test(l) && !/\bcurl\b/.test(l), `every api.github.com read goes through gh_api: ${l.trim().slice(0, 90)}`);
+  const tokenLines = run.split("\n").filter((l) => /GH_API_TOKEN/.test(l) && !/^\s*#/.test(l));
+  ok(tokenLines.length === 1 && tokenLines[0].includes("gh_api()"), "the token is read only inside gh_api (never echoed, never sent to github.com downloads)");
+  ok(!/(echo|printf)[^\n]*GH_API_TOKEN/.test(run), "the token is never printed");
+  ok(/sha256sum -c -/.test(run) && /refusing to execute/.test(run), "the publisher binary is still verified before it runs");
+  const perms = jobs.publish?.permissions || {};
+  ok(perms.contents === "read", "the publish job's contents: read covers the public release reads");
+}
+
 // THE TREE GATE'S BOUND. Run 44012918430 (2026-11-17): the gate job's checkout
 // could not reach github.com for 133 s, waited 20 s, fetched in 71 s (3 min 46 s
 // in all), and the gate itself then had 73 s of the job's 5 minutes; it was

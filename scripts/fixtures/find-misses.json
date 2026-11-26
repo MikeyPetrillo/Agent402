@@ -438,13 +438,61 @@
       "top": [
         "onchain-sql"
       ]
+    },
+    {
+      "q": "clean up log file, remove junk from text",
+      "top": [
+        "skill-text-hygiene"
+      ]
+    },
+    {
+      "q": "clean up a log file and drop junk lines",
+      "top": [
+        "skill-text-hygiene"
+      ]
+    },
+    {
+      "q": "remove junk lines from a log",
+      "top": [
+        "skill-text-hygiene"
+      ]
+    },
+    {
+      "q": "clean junk out of text",
+      "top": [
+        "skill-text-hygiene"
+      ]
+    },
+    {
+      "q": "verify the signature on a signed receipt",
+      "top": [
+        "receipt-verify"
+      ]
+    },
+    {
+      "q": "verify cryptographic signature on receipt data",
+      "top": [
+        "receipt-verify"
+      ]
+    },
+    {
+      "q": "check receipt signature",
+      "top": [
+        "receipt-verify"
+      ]
+    },
+    {
+      "q": "verify agent402 receipt",
+      "top": [
+        "receipt-verify"
+      ]
     }
   ],
   "gaps": [
     "verify a time zone identifier for validity",
-    "verify the signature on a signed receipt",
     "split adjusted daily share prices for a year",
     "map csv headers onto an import schema",
-    "clean up a log file and drop junk lines"
+    "check a pgp signature on a file",
+    "transpose a midi file up two semitones"
   ]
 }

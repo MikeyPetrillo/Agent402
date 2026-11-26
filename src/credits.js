@@ -576,7 +576,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   /** The tag a client address is counted under (an IPv6 address by its /64). */
   const sourceTag = (ip) => tagOf("src", limiterKey(String(ip || "")));
   const unavailablePurchase = () => Object.assign(new Error("Credits purchases are unavailable right now. Try again later."), { statusCode: 503, buyerSafe: true });
-  const refusedPurchase = () => Object.assign(new Error(PURCHASE_REFUSED), { statusCode: 429, buyerSafe: true, refused: true });
+  // The purchase counts are hourly and daily windows; a client is told to come
+  // back in an hour, when the hourly count has moved.
+  const refusedPurchase = () => Object.assign(new Error(PURCHASE_REFUSED), { statusCode: 429, retryAfter: 3600, buyerSafe: true, refused: true });
   // Counted in the shared store, so every server sees one count. A store that
   // does not answer lets the check pass on this server's own count.
   const HOUR_MS = 60 * 60_000;

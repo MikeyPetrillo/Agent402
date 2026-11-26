@@ -115,19 +115,23 @@ if (!url) {
     await q(`INSERT INTO ${T("sales")} VALUES (1, 'hash', 0.001, 'usdc', 'base', $1, '0xsale', null, null)`, [who]);
     await q(`INSERT INTO ${T("refunds")} VALUES ('e-' || $1, $1)`, [who]);
     await q(`INSERT INTO ${T("records")} VALUES ('first-call-allowance', $1, '{"grantedAt":"2026-11-01T00:00:00Z","slug":"hash","network":"base"}')`, [who]);
+    // A refusal row keeps an EVM payer lowercased (src/payment-refusals.js refusalPayerOf).
+    await q(`INSERT INTO ${T("records")} VALUES ('payment-refusals', '2026-11-20:' || $1, jsonb_build_object('payer', $1::text, 'reason', 'invalid_exact_evm_insufficient_balance', 'count', 2))`, [who.toLowerCase()]);
   }
+  // The day's overflow row names no payer.
+  await q(`INSERT INTO ${T("records")} VALUES ('payment-refusals', '2026-11-20:overflow', '{"payer":null,"count":7}')`);
   await q(`INSERT INTO ${T("memory_grants")} VALUES ($1, $2)`, [O.toLowerCase(), W.toLowerCase()]);
   const count = async (t, where = "") => Number((await q(`SELECT count(*) n FROM ${T(t)} ${where}`)).rows[0].n);
   const run = (action, dry = false) => S.walletSubjectRun({ query: q, schema, wallet: W, action, dry, secret: "test-secret" });
 
   const exp = await run("export");
-  ok(!exp.failed && exp.data.memory_kv.length === 1 && exp.data.issued_receipts.length === 1 && exp.data.sale_feedback[0].reason === "it was slow today" && exp.data.sales.length === 1 && exp.data.refunds.length === 1 && exp.data["first-call-allowance"].length === 1 && exp.data.memory_grants.length === 1,
+  ok(!exp.failed && exp.data.memory_kv.length === 1 && exp.data.issued_receipts.length === 1 && exp.data.sale_feedback[0].reason === "it was slow today" && exp.data.sales.length === 1 && exp.data.refunds.length === 1 && exp.data["first-call-allowance"].length === 1 && exp.data.memory_grants.length === 1 && exp.data["payment-refusals"]?.length === 1 && exp.data["payment-refusals"][0].body.payer === W.toLowerCase(),
     `export returns the wallet's memory, receipts, feedback, grant and ledger rows (${exp.report.map((r) => `${r.store}=${r.count}`).join(" ")})`);
   ok(!JSON.stringify(exp.data).includes(O.toLowerCase().slice(2, 12)) || exp.data.memory_grants.every((g) => g.grantee === W.toLowerCase()), "export holds only rows that name the wallet");
 
   const before = await count("memory_kv");
   const dry = await run("erase", true);
-  ok(!dry.failed && (await count("memory_kv")) === before && (await count("records")) === 2, "a dry run reports and changes nothing");
+  ok(!dry.failed && (await count("memory_kv")) === before && (await count("records")) === 5, "a dry run reports and changes nothing");
 
   const er = await run("erase");
   ok(!er.failed, `erase ran clean (${er.report.map((r) => `${r.store}=${r.count}`).join(" ")})`);
@@ -137,6 +141,8 @@ if (!url) {
   ok((await count("sale_feedback", `WHERE payer = '${W}' AND reason IS NULL AND verdict = 'bad'`)) === 1 && (await count("sale_feedback", "WHERE reason IS NOT NULL")) === 1, "feedback: the reason is removed, the verdict stays; the other wallet's reason stays");
   ok((await count("decide_ledger_decisions", `WHERE payer = '${W}'`)) === 0, "decide: the wallet is removed");
   ok((await count("sales")) === 2 && (await count("refunds")) === 2, "the sales and refund ledgers are kept");
+  ok((await count("records", `WHERE collection = 'payment-refusals' AND body->>'payer' = '${W.toLowerCase()}'`)) === 0 && (await count("records", `WHERE collection = 'payment-refusals'`)) === 2,
+    "refused payment records naming the wallet are deleted; the other wallet's and the overflow row stay");
   const key = S.allowanceRecordKey(W, "test-secret");
   ok((await count("records", `WHERE id = '${W}'`)) === 0 && (await count("records", `WHERE id = '${key}'`)) === 1, "first-call grant: the address is gone, the grant stays under a keyed hash");
   const kept = (await q(`SELECT body FROM ${T("records")} WHERE id = $1`, [key])).rows[0].body;

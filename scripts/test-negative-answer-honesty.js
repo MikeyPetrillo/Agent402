@@ -133,8 +133,17 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
     && notCallersInput({ attribution: "upstream" }, 422) && notCallersInput({ attribution: "upstream-access" }, 422)
     && notCallersInput({ upstreamStatus: 404 }, 422) && !notCallersInput({ attribution: "caller" }, 422) && !notCallersInput({}, 400),
     "the route binder suppresses the input-schema envelope when the failure was attributed upstream: re-reading a schema cannot fix a host that is refusing us");
-  ok(/if \(Number\.isInteger\(err\?\.retryAfter\)\) res\.set\("Retry-After"/.test(server),
-    "...and an upstream that named a Retry-After has it relayed as the header, not only as prose");
+  // The relay moved into one helper every tool-error answer calls
+  // (toolErrorRetryAfter, src/rate-limit.js), so it is read by behavior, and
+  // the binder's call to it is pinned beside the lines above.
+  {
+    const { toolErrorRetryAfter } = await import("../src/rate-limit.js");
+    const sent = (err, status) => { const h = {}; toolErrorRetryAfter({ set(k, v) { h[k.toLowerCase()] = String(v); return this; }, setHeader(k, v) { h[k.toLowerCase()] = String(v); } }, err, status); return h["retry-after"]; };
+    ok(sent({ statusCode: 503, retryAfter: 17, attribution: "upstream" }, 503) === "17" && sent({ statusCode: 502, retryAfter: 4 }, 502) === "4" && sent({ statusCode: 429, retryAfter: 9 }, 429) === "9"
+      && sent({ statusCode: 503 }, 503) === undefined && /^\d+$/.test(sent({ statusCode: 429 }, 429) || "")
+      && /const fromUpstream = notCallersInput\(err, 0\);\s*toolErrorRetryAfter\(res, err, status\);/.test(server) && (server.match(/toolErrorRetryAfter\(res, err, status\)/g) || []).length === 3,
+      "...and an upstream that named a Retry-After has it relayed as the header, not only as prose");
+  }
 
   const dossier = readFileSync(join(ROOT, "src/tools/seller-dossier.js"), "utf8");
   ok(/getIndexReadiness/.test(dossier) && /e\.statusCode = 503/.test(dossier),

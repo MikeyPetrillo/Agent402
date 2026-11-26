@@ -15,7 +15,7 @@
 // (Glama's well-scoped band is 3–15).
 
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
-import { stockDataEnabled } from "./tools/stock-provider.js";
+import { stockQuoteEnabled } from "./tools/stock-provider.js";
 
 /** The US macro series tool's catalog slug (the agencies' series by FRED ID). */
 export const MACRO_SERIES_SLUG = "us-macro-series";
@@ -692,7 +692,7 @@ export function mcpTermsLine(baseUrl) {
  */
 // `mpp`: a paid call can be settled over MPP on this connector (the loopback);
 // `mppOffered`: the MPP switch, which sets the wires the lead sentence names.
-export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, mppOffered = true, receipts = true, demand = true, stock = stockDataEnabled() } = {}) {
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, mppOffered = true, receipts = true, demand = true, stock = stockQuoteEnabled() } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [

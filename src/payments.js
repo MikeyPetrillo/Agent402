@@ -49,6 +49,7 @@ import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettleme
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, proveReturningWallet, returningWalletSettleDecision, noteReturningWalletAccept, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
+import { upstreamKeyOffered, upstreamKeyQuoteOf } from "./upstream-key.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -757,7 +758,22 @@ export function acceptsForItem(item, rails) {
     }
     return req.__paidOnUpto;
   };
-  const priceOf = (caip2, { exactEvm = false, upto = false } = {}) => {
+  // A BUYER'S OWN UPSTREAM KEY (src/upstream-key.js): on a route that takes
+  // one, every accept is priced per request: the own-key price when the
+  // request's key was applied, else whatever the accept would quote without
+  // it. Resolved again on the paid request, so a payment at the own-key price
+  // on a request without the key no longer matches and is answered 402.
+  const ownKey = !quoteFn && upstreamKeyOffered(item);
+  const priceOf = (caip2, opts = {}) => {
+    const base = basePriceOf(caip2, opts);
+    if (!ownKey) return base;
+    return async (ctx) => {
+      const fee = upstreamKeyQuoteOf(ctx?.adapter?.req, item);
+      if (fee) return priceForNetwork(fee, caip2);
+      return typeof base === "function" ? base(ctx) : base;
+    };
+  };
+  const basePriceOf = (caip2, { exactEvm = false, upto = false } = {}) => {
     if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
     if (!quoteFn) return async (ctx) => {
       const listQuote = priceForNetwork(item.price, caip2);

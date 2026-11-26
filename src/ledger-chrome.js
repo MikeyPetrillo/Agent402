@@ -6,6 +6,7 @@ import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
 import { siteOrgLd, siteOrgId, mppOffered } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { brandMarkSvg, FAVICON_VERSION } from "./brand-mark.js";
+import { WELL_KNOWN_SEARCH_PATH, SEARCH_ADVERTISED_METHODS } from "./well-known-search-path.js";
 // The path of the request a page is being rendered for. A page's canonical is
 // its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
 // that depend on the URL being a bearer link read this instead (server.js runs
@@ -1297,6 +1298,11 @@ function minimalHeader() {
 </header>`;
 }
 
+/** The site search endpoint and its methods, for an agent that reads only the
+ *  page it landed on (src/well-known-search.js). Never on an operator page. */
+export function agentSearchMeta(baseUrl) {
+  return `<meta name="agent:search" content="${esc(`${baseUrl || ""}${WELL_KNOWN_SEARCH_PATH}`)}">\n<meta name="agent:search-method" content="${esc(SEARCH_ADVERTISED_METHODS)}">\n`;
+}
 export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered(), article = null, minimal = false }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
@@ -1304,7 +1310,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   const title = metaTitle(rawTitle);
   const description = metaDescription(rawDescription);
   // An operator page is never indexed, whatever its module passed.
-  if (/^(?:https?:\/\/[^/]+)?\/__operator(?:[/?#]|$)/.test(String(canonical || ""))) robots = "noindex, nofollow";
+  const operatorPage = /^(?:https?:\/\/[^/]+)?\/__operator(?:[/?#]|$)/.test(String(canonical || ""));
+  if (operatorPage) robots = "noindex, nofollow";
   // A page that names its own card keeps it; otherwise the SECTION card for the
   // page's path (src/og-cards.js), and the homepage card only when no section
   // claims the path. The version stamp rides on every variant for the same
@@ -1394,7 +1401,7 @@ ${artPublished ? `<meta property="article:published_time" content="${esc(artPubl
 <meta name="twitter:description" content="${esc(description)}">
 <meta name="twitter:image" content="${esc(og)}">
 <meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
-${LEDGER_HEAD}
+${operatorPage ? "" : agentSearchMeta(baseUrl)}${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
 ${analyticsSnippets(baseUrl, canonical)}

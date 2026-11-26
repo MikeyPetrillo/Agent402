@@ -121,7 +121,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
   const link = (id, purpose) => `${baseUrl}/alerts/${purpose}?id=${encodeURIComponent(id)}&k=${sign(id, purpose)}`;
   const enabled = () => Boolean(secret) && typeof sendEmail === "function";
 
-  const bad = (msg, code = 400) => Object.assign(new Error(msg), { statusCode: code, buyerSafe: true });
+  const bad = (msg, code = 400, retryAfter) => Object.assign(new Error(msg), { statusCode: code, buyerSafe: true, ...(retryAfter ? { retryAfter } : {}) });
   // ids come from query strings on public routes: shape-check and own-property
   // lookup only, so "__proto__" / "constructor" can never reach the store.
   const ID_RE = /^al_[A-Za-z0-9_-]{8,16}$/;
@@ -143,7 +143,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
     let canon = raw;
     if (typeof validate === "function") {
       try { canon = String(await validate(raw)); }
-      catch (e) { if (e?.buyerSafe) throw bad(String(e.message).slice(0, 160), e.statusCode || 400); throw bad("We could not validate that target. Check it and try again."); }
+      catch (e) { if (e?.buyerSafe) throw bad(String(e.message).slice(0, 160), e.statusCode || 400, e.retryAfter); throw bad("We could not validate that target. Check it and try again."); }
     }
     // The target is printed in the confirmation subject; a recall target that
     // reads as a host name is refused rather than mailed.
@@ -165,7 +165,7 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
       }
       return { ok: true, status: dup.status, kind, target: canon };
     }
-    if (mine.length >= MAX_PER_EMAIL) throw bad(`That address already has ${MAX_PER_EMAIL} alerts. Unsubscribe from one first, or subscribe to a monitor for unlimited targets.`, 429);
+    if (mine.length >= MAX_PER_EMAIL) throw bad(`That address already has ${MAX_PER_EMAIL} alerts. Unsubscribe from one first, or subscribe to a monitor for unlimited targets.`, 409); // a cap that lifts only when an alert is removed: a conflict, not a rate limit (no Retry-After)
     if (Object.keys(store.alerts).length >= MAX_STORE) throw bad("Alerts are full right now. Please try again later.", 503);
     const id = `al_${randomBytes(9).toString("base64url")}`;
     const rec = { id, email: em, kind, target: canon, product: def.product, source: hdr(source, 80), status: "pending", createdAt: now(), baseline: null, lastCheckAt: null, lastNotifiedAt: null, notified: 0, failures: 0 };

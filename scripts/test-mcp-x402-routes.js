@@ -47,6 +47,7 @@ const twins = await import("../src/mcp-x402-routes.js");
 const { salePathOf } = await import("../src/sale-path.js");
 const { createIdempotency } = await import("../src/idempotency.js");
 const { FLAGSHIP_MCP_NAMES } = await import("../src/mcp-flagship.js");
+const { STOCK_SLUGS, stockToolServed } = await import("../src/tools/stock-provider.js");
 const { lateSettleCandidate, createLateSettleBook } = await import("../src/late-settlements.js");
 const { createAsyncJobs } = await import("../src/async-jobs.js");
 const { x402HTTPResourceServer, x402ResourceServer } = await import("@x402/core/server");
@@ -253,8 +254,9 @@ try {
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "test-key", SOLVADOR_FACILITATOR_URL: FAC,
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", CIRCLE_FACILITATOR_API_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
       REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
-      // stock-quote's twin is listed only with an active stock provider; the
-      // loopback preload keeps any read of it on this host.
+      // An active stock provider: stock-quote's twin still follows the stock
+      // switch (stockToolServed), which serves stock-history alone. The
+      // loopback preload keeps any read on this host.
       STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_WARM: "off",
       STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
@@ -284,8 +286,16 @@ try {
   }
 
   // Every twin: resource /mcp, a valid MCP extension, the HTTP route's accepts.
+  // The twins served are the flagships the stock switch serves on this boot's
+  // env: stock-quote (market.quote) is off whatever the provider says.
+  const BOOT_STOCK_ENV = { STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real" };
+  const expected = twins.MCP_X402_SLUGS.filter((s) => !STOCK_SLUGS.has(s) || stockToolServed(s, BOOT_STOCK_ENV));
   const present = twins.MCP_X402_SLUGS.filter((s) => routeOf[s]);
-  ok(present.length === 6, `all six twins are served on this boot (${present.join(", ")})`);
+  ok(same(present, expected) && !present.includes("stock-quote"), `every twin the switch serves is served on this boot, and no other (${present.join(", ")})`);
+  for (const slug of twins.MCP_X402_SLUGS.filter((s) => !expected.includes(s))) {
+    const r = await fetch(`${B}/__mcp-x402/${slug}?symbol=AAPL`, { headers: MARKER });
+    ok(r.status !== 402 && !r.headers.get("payment-required"), `${slug}: a twin the switch does not serve offers no payment (${r.status})`);
+  }
   for (const slug of present) {
     const e = routeOf[slug];
     const method = String(e.method || "GET").toUpperCase();

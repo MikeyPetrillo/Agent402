@@ -115,6 +115,8 @@ t node scripts/test-email-postal-address.js
 t node scripts/test-email-unsub-headers.js
 # Prepaid credits are not SOLD by default (no held balance), but existing keys still redeem
 t node scripts/test-credits-sales-gate.js
+# Every 429 carries Retry-After: a static scan of src/ plus limiters past their bound on a booted FREE_MODE server
+t node scripts/test-retry-after-429.js
 # Every Stripe client sends the pinned API version, never the SDK default
 t node scripts/test-stripe-api-version.js
 # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
@@ -191,6 +193,8 @@ t node scripts/test-tts-margins.js
 t node scripts/test-dub-kit.js
 # Redact-chat (mask, then the real v1-chat handler on a stubbed upstream): no original leaves, local restore, 400s before any call, the price sum (offline)
 t node scripts/test-redact-chat-kit.js
+# Summarize (a page or a text, then the real v1-chat handler on a stubbed upstream): 400s before any settle, private URLs refused, settle before the model call, the price read from pdf-summarize (offline)
+t node scripts/test-summarize-kit.js
 # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
 t node scripts/test-stellar-confirm.js
 # Stellar one payment, one answer: the signed entry claimed before settle, a re-encoded copy refused, the success-path tx claim, the replay key (offline)
@@ -389,6 +393,8 @@ t node scripts/test-mppx-production-store.js
 t node scripts/test-sanctions-screen.js
 # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-x402-payer-screen.js
+# A refused payment writes one refusal record (the payer only when its payment verified), repeats count on one row, a flood holds the cap, retention prunes, the operator route refuses without the token and filters (file mode, then paid-mode boot vs stub facilitator - offline)
+t node scripts/test-payment-refusals.js
 # Sanctioned regions answer 451 before any payment work (a payment from one is never verified or settled; live control from an allowed country); the sanctions events store keeps each event and reads due until filed (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-sanctioned-regions.js
 # Every rail that carries a payer address screens it (x402 EVM, Gateway, MPP evm, Solana, Stellar, Algorand, Tempo relay); a payer not listed is served; card and credits name no address (offline)

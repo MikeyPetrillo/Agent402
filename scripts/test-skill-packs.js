@@ -14,8 +14,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { SKILL_PACKS, buildPromptMessages, STOCK_TRIMMED_PACK_SLUGS } from "../src/skills.js";
-import { stockDataEnabled } from "../src/tools/stock-provider.js";
+import { SKILL_PACKS, buildPromptMessages, STOCK_TRIMMED_PACK_SLUGS, packServedInFull } from "../src/skills.js";
 import { PACK_STEPS, __test as runnerTest } from "../src/tools/skill-runner.js";
 const { getStepConfig } = runnerTest;
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -47,9 +46,9 @@ try {
   for (const pack of SKILL_PACKS) {
     ok(typeof pack.slug === "string" && /^[a-z0-9-]+$/.test(pack.slug), `${pack.slug}: slug is kebab-case`);
     ok(pack.title && pack.tagline && pack.useCase, `${pack.slug}: title/tagline/useCase present`);
-    // A pack listed without its stock step (no stock provider, src/skills.js
-    // STOCK_TRIMMED_PACK_SLUGS) may run two tools; every other pack runs three or more.
-    const minTools = STOCK_TRIMMED_PACK_SLUGS.has(pack.slug) && !stockDataEnabled() ? 2 : 3;
+    // A pack listed without its stock step (src/skills.js STOCK_TRIMMED_PACK_SLUGS,
+    // not served in full here) may run two tools; every other pack runs three or more.
+    const minTools = STOCK_TRIMMED_PACK_SLUGS.has(pack.slug) && !packServedInFull(pack.slug) ? 2 : 3;
     ok(Array.isArray(pack.toolSlugs) && pack.toolSlugs.length >= minTools, `${pack.slug}: >=${minTools} toolSlugs`);
     ok(Array.isArray(pack.workflow) && pack.workflow.length >= 3, `${pack.slug}: >=3 workflow steps`);
     ok(typeof pack.claudePrompt === "string" && pack.claudePrompt.length > 50, `${pack.slug}: claudePrompt non-trivial`);

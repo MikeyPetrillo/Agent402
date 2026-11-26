@@ -19,7 +19,7 @@
 // real buyers pay for — plus a pure-CPU canary that isolates "the server itself
 // is fine" from "an upstream broke".
 
-import { STOCK_SLUGS, stockDataEnabled } from "./tools/stock-provider.js";
+import { STOCK_SLUGS, stockToolServed } from "./tools/stock-provider.js";
 
 export const SELFCHECK_SLUGS = [
   "hash",                  // pure-CPU canary — proves the server itself is healthy
@@ -98,8 +98,8 @@ export function selfcheckSlugs() {
   const keyed = KEYED_SELFCHECKS
     .filter((k) => (process.env[k.envVar] || "").trim())
     .map((k) => k.slug);
-  // The stock tools only with an active stock provider (they are listed then).
-  const stock = stockDataEnabled() ? [...STOCK_SLUGS] : [];
+  // The stock tools this boot serves (they are listed then).
+  const stock = [...STOCK_SLUGS].filter((slug) => stockToolServed(slug));
   return [...SELFCHECK_SLUGS, ...stock, ...keyed];
 }
 

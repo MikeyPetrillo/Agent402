@@ -78,11 +78,12 @@ for (const e of pricing.endpoints || []) {
   priceBySlug.set(e.slug, e.price);
 }
 const packSlugs = new Set((packs.packs || []).map((p) => p.slug));
-// Whether this server has an active stock data provider (it lists stock-quote
-// then). A pack that runs a stock step only with a provider is priced two
-// ways in the docs: "$a (with a stock data provider: $b)", and the price
-// this server serves must be the one for its own state.
-const stockOn = priceBySlug.has("stock-quote");
+// Whether this server has an active stock data provider (it lists
+// stock-history then; stock-quote is never listed). A pack that runs a stock
+// step only with a provider is priced two ways in the docs: "$a (with a stock
+// data provider: $b)", and the price this server serves must be the one for
+// its own state.
+const stockOn = priceBySlug.has("stock-history");
 const DUAL_PRICE_RE = /\$(\d+\.\d+) \(with a stock data provider: \$(\d+\.\d+)\)/;
 let dualSeen = 0;
 ok(routeByPath.size > 400, `catalog loaded from the server (${routeByPath.size} routes)`);

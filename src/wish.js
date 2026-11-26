@@ -551,11 +551,13 @@ function checkRateLimit(ip) {
   const now = Date.now();
   const key = ip || "?";
   const mine = (ipHits.get(key) || []).filter((t) => now - t < IP_WINDOW_MS);
-  if (mine.length >= IP_MAX) return { limited: true, reason: `rate limit: ${IP_MAX} wishes per hour per IP` };
+  // The wait is until the oldest counted wish leaves its window.
+  const waitFor = (oldest, windowMs) => Math.max(1, Math.ceil((oldest + windowMs - now) / 1000));
+  if (mine.length >= IP_MAX) return { limited: true, reason: `rate limit: ${IP_MAX} wishes per hour per IP`, retryAfterSeconds: waitFor(mine[mine.length - IP_MAX], IP_WINDOW_MS) };
   const globalMine = globalHits.filter((t) => now - t < GLOBAL_WINDOW_MS);
   if (globalMine.length >= GLOBAL_MAX) {
     globalHits = globalMine;
-    return { limited: true, reason: `rate limit: wish intake is busy, try again later` };
+    return { limited: true, reason: `rate limit: wish intake is busy, try again later`, retryAfterSeconds: waitFor(globalMine[globalMine.length - GLOBAL_MAX], GLOBAL_WINDOW_MS) };
   }
   mine.push(now); ipHits.set(key, mine);
   globalMine.push(now); globalHits = globalMine;
@@ -617,6 +619,7 @@ export function recordWish({ need, context, source, ip } = {}) {
     if (rl.limited) {
       const e = new Error(rl.reason);
       e.statusCode = 429;
+      e.retryAfter = rl.retryAfterSeconds;
       throw e;
     }
   } else if (findMissLimited(ip)) {

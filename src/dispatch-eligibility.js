@@ -27,6 +27,7 @@ import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { malformedRoute } from "./seller-text.js";
+import { sellerListedOnly } from "./router-listed-only.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 import { sellerFundingEnabled } from "./leaderboard.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain } from "./evm-buyer-chains.js";
@@ -66,6 +67,7 @@ export const DISPATCH_REASONS = Object.freeze({
   gateway_rail_unsupported: "the seller's accept on this chain is signed under Circle Gateway's EIP-712 domain (extra.name \"GatewayWalletBatched\", extra.verifyingContract the GatewayWallet), not under the token's own, and settles through a batch facilitator - a deliberate, working rail that this router's stock x402 signer cannot produce a credential for; nothing for the seller to fix, and it becomes eligible the day the router speaks the rail",
   payment_method_unsupported: "the seller's accept on this chain asks the buyer to send a transfer and prove it afterwards (extra.paymentMethod such as \"direct-transfer\"), which no stock x402 buyer does - this router signs an authorization for the facilitator to settle - so no buyer of ours can pay the route",
   usdc_domain_mismatch: "the seller's USDC accept on this chain advertises an EIP-712 domain name that is not the token's own (Base USDC signs under \"USD Coin\"; Monad, Celo and Sei USDC under \"USDC\"), so a stock x402 buyer - this router included - signs an authorization the facilitator refuses and nothing settles; the seller has to fix the accept before anyone can pay it",
+  listed_only: "the router lists this seller and does not buy from it; a buyer can pay it directly",
   category_excluded: "routes that sell personal data about individuals are listed but not bought by the router",
   delivery_failing: "twice within the memo window, this router paid this seller on this chain for two different requests and the call did not deliver (a 5xx answer carrying no settle receipt, or an error answer after the seller took the payment), so it is skipped until that memo expires or a call to it succeeds. Settlement history is evidence about the past; this is what happened the last times someone actually paid",
   eligible: "the router will buy from this seller",
@@ -98,7 +100,7 @@ export function unprovenLaneAtLivePayTo({ chain, row, livePayTo, minSettled, min
   });
   return v.chains?.[chain] || { eligible: false, reason: v.reason };
 }
-const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "route_malformed", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
+const REASON_PRECEDENCE = ["listed_only", "category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "route_malformed", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
@@ -254,18 +256,30 @@ export function spendChainsOf(networks = []) {
  *                                     A chain named here is not eligible whatever its settlement history says,
  *                                     because history is about the past and this is about the last real payment.
  *                                     Omit/null = nothing recorded (the ordinary case).
+ * @param {string|null} [o.seller]    the seller's origin, URL or host; one the router lists and never buys from
+ *                                     (src/router-listed-only.js) is listed_only on every chain. Omit/null =
+ *                                     read from routeText's url or seller.
  * @param {object|null} [o.routeText] row-level: the route row itself ({ route, slug, name, description, tags }),
  *                                     read by src/route-category.js; a route in an excluded category is
  *                                     category_excluded on every chain, whatever else is true of it. Omit/null
  *                                     = a seller-level verdict, which no single route's category decides.
  */
-export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, livePayToByChain = null, usdcDomainByChain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), unprovenMaxUsdByChain = evmUnprovenAllowanceByChain(), routeText = null } = {}) {
+export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, livePayToByChain = null, usdcDomainByChain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), unprovenMaxUsdByChain = evmUnprovenAllowanceByChain(), routeText = null, seller = null } = {}) {
   if (local) return { eligible: true, reason: "local_catalog", chains: {} };
   const livePayToBase = livePayTo, usdcDomainBase = usdcDomain;
   const byChain = {};
   const advertised = spendChainsOf(networks);
   const have = advertised.filter((c) => spendChains.includes(c));
   const basis = { settled: Number(settled || 0), ...(payers !== undefined && payers !== null ? { payers: Number(payers) } : {}), minSettled, minPayers };
+  // Who the seller is outranks everything else: a seller the router lists
+  // and never buys from (src/router-listed-only.js) stays listed, and
+  // no chain, history or price makes the router buy from it. Read from the
+  // explicit seller, else the route row's own url or seller.
+  const sellerRef = seller || (routeText && typeof routeText === "object" ? (routeText.url || routeText.seller || routeText.origin) : null);
+  if (sellerRef && sellerListedOnly(sellerRef)) {
+    for (const c of have) byChain[c] = { eligible: false, reason: "listed_only" };
+    return { eligible: false, reason: "listed_only", chains: byChain, basis };
+  }
   // What the route SELLS outranks everything about how it is paid: a route
   // in an excluded category stays listed, and no chain, history or price
   // makes the router buy it.

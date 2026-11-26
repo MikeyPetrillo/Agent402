@@ -64,10 +64,18 @@ const later = NOW + 8 * 365 * 86_400_000; // eight years on: every row above is 
   const out = await R.runLedgerRetention({ now: later, env: {}, log: () => {}, deps: { sales: async () => { throw new Error("store down"); }, refunds: async () => ({ due: 2, removed: 0 }), sanctions: async () => ({ due: 0, removed: 0 }) } });
   ok(out.parts.sales.error === "store down" && out.parts.refunds.due === 2 && out.parts.sanctions.due === 0, "a failing part is reported and the rest still run");
 }
-// ---- wired into the server under a lease, contained, off by switch ----------
+// ---- LEDGER_RETENTION=off skips the money records, never the refusal records ----
+{
+  const calls = [];
+  const deps = { sales: async () => { calls.push("sales"); return { due: 0, removed: 0 }; }, refunds: async () => { calls.push("refunds"); return { due: 0, removed: 0 }; }, sanctions: async () => { calls.push("sanctions"); return { due: 0, removed: 0 }; }, refusals: async (o) => { calls.push(`refusals:${o.apply}`); return { due: 3, removed: 3 }; } };
+  const out = await R.runLedgerRetention({ now: later, env: { LEDGER_RETENTION: "off" }, log: () => {}, deps });
+  ok(calls.join(",") === "refusals:true" && out.parts.refusals.removed === 3, `LEDGER_RETENTION=off: only the refusal records are pruned, and they are deleted (${calls.join(",")})`);
+}
+// ---- wired into the server under a lease, contained, whatever the switch says ----
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/LEDGER_RETENTION \|\| ""\)\.trim\(\)\.toLowerCase\(\) !== "off"\) startLedgerRetention\(\)/.test(src), "the server starts the daily pass unless LEDGER_RETENTION=off");
+  const wired = src.split("\n").filter((l) => /startLedgerRetention\(\)/.test(l) && !/^\s*(\/\/|import)/.test(l));
+  ok(wired.length === 1 && wired[0].trim() === "startLedgerRetention();", `the server starts the daily pass unconditionally (${JSON.stringify(wired)})`);
   const mod = readFileSync(new URL("../src/ledger-retention.js", import.meta.url), "utf8");
   ok(/leased\("ledger-retention"/.test(mod) && /contained\("ledger-retention"/.test(mod), "the pass runs under its lease and inside a contained turn");
 }

@@ -75,7 +75,9 @@ try {
   // The store's race, journal bound and filed-row cases, on the database.
   {
     const { runSanctionsStoreCases } = await import("./lib/sanctions-store-cases.js");
-    await runSanctionsStoreCases({ EV: sanc, sdb, ok, label: "database" });
+    // A second instance of the store module: its own memory and journal handle, the same database (another process).
+    const sanc2 = await import("../src/sanctions-events.js?process=b");
+    await runSanctionsStoreCases({ EV: sanc, EV2: sanc2, sdb, ok, label: "database" });
   }
   // A hard kill on the database: the next process reads every attempt and the count row.
   {

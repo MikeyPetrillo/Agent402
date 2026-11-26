@@ -315,10 +315,14 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
 // A SPENT SOURCE ALLOWANCE IS OURS UNLESS THE SOURCE REFUSES THE RUNNER TOO.
 // A tool that counts its reads of a source a day answers, past its own
 // budget, a fixed sentence without reading the source (us-macro-series' BLS
-// day: src/tools/us-macro-series.js). That budget is this server's, so such
-// an answer is excused only when ALL of these hold, and fails otherwise:
+// day: src/tools/us-macro-series.js). When the source itself refuses the
+// server's read (BLS answering its daily threshold to the server's key as a
+// body whose status is not REQUEST_SUCCEEDED, or not answering), the tool
+// answers a second fixed sentence. Either may be ours (our budget, our key's
+// allowance, a request we built wrong), so such an answer is excused only
+// when ALL of these hold, and fails otherwise:
 //
-//   1. the answer is the source's fixed allowance sentence (anchored);
+//   1. the answer is one of the source's fixed sentences (anchored);
 //   2. the tool's own definition declares the source's host;
 //   3. the runner's own keyless direct GET of the source on that host, right
 //      now, fails (no answer, 429, or 500 and above) or is answered with the
@@ -329,7 +333,9 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
 export const SOURCE_ALLOWANCES = Object.freeze([
   {
     source: "BLS",
-    message: /^The U\.S\. Bureau of Labor Statistics daily query allowance of this server is used up;/,
+    // The server's own budget spent, or BLS refusing or not answering the
+    // server's read (us-macro-series' `busy` sentence for BLS).
+    message: /^The U\.S\. Bureau of Labor Statistics (?:daily query allowance of this server is used up;|API did not answer or refused the read \(the publisher's own limit or outage\);)/,
     host: "api.bls.gov",
     // The keyless v1 read the tool makes without a key (one series, GET).
     url: "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000",
@@ -360,8 +366,90 @@ export async function sourceAllowanceVerdict({ slug, error, read = directReadAns
   if (!a) return null;
   if (!upstreamHostsForSlug(slug, root).has(a.host)) return { verdict: "fail", reason: `${slug} does not declare ${a.host}` };
   const { status, text } = await read(a.url);
-  if (!a.refuses(status, text)) return { verdict: "fail", reason: `${a.source}'s daily allowance of this server is spent, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
+  if (!a.refuses(status, text)) return { verdict: "fail", reason: `${slug} answered ${a.source}'s refusal or spent allowance, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
   let said = "";
   try { said = status === 200 ? `, status ${String(JSON.parse(text)?.status).slice(0, 40)}` : ""; } catch { /* the HTTP status is the evidence */ }
   return { verdict: "upstream", evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
+}
+
+// A HOLLOW EXAMPLE IS OURS UNLESS THE UPSTREAM IS HOLLOW FOR THE RUNNER TOO.
+// A published example that answers 200 with an empty documented array fails
+// a sweep (scripts/sweep-shape.js). For a tool listed here, that answer is
+// excused, and named in the log, only when ALL of these hold:
+//
+//   1. the tool has an entry below (per-tool opt-in: a tool with no entry is
+//      never excused, whatever its upstream answers);
+//   2. the tool's own definition declares the entry's host;
+//   3. the runner's own keyless direct GET of the same request the tool
+//      builds for the example input, right now, is empty or fails (`hollow`).
+//
+// If the upstream answers the runner with rows while the tool answered none,
+// the empty answer is ours and it fails.
+export const HOLLOW_READS = Object.freeze({
+  // The crt.sh query certTransparencyHandler builds (src/tools/network-kit2.js).
+  "cert-transparency": {
+    host: "crt.sh",
+    url: (input) => {
+      const domain = String(input?.domain ?? "").trim().toLowerCase();
+      if (!domain) return null;
+      return `https://crt.sh/?q=${encodeURIComponent("%." + domain)}&output=json${input?.includeExpired === true ? "" : "&exclude=expired"}`;
+    },
+    // crt.sh answers a JSON list; a 404 is its front end's mislabelled backend
+    // failure. Anything but a non-empty list is hollow or failed.
+    hollow: (status, text) => {
+      if (status !== 200) return true;
+      try { const rows = JSON.parse(text); return !Array.isArray(rows) || rows.length === 0; } catch { return true; }
+    },
+  },
+});
+/** The verdict on an example's empty documented arrays: null when the tool
+ *  has no HOLLOW_READS entry (the caller fails it), else
+ *  { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function hollowAnswerVerdict({ slug, input, read = directReadAnswer, root = ROOT, reads = HOLLOW_READS }) {
+  const h = Object.hasOwn(reads, slug) ? reads[slug] : null;
+  if (!h) return null;
+  if (!upstreamHostsForSlug(slug, root).has(h.host)) return { verdict: "fail", reason: `${slug} does not declare ${h.host}` };
+  const url = h.url(input);
+  if (!url) return { verdict: "fail", reason: `no direct read of ${h.host} can be built from the example input` };
+  const { status, text } = await read(url);
+  if (!h.hollow(status, text)) return { verdict: "fail", reason: `${h.host} answers the runner's direct read of the same request with rows (HTTP ${status}) while the tool answered none` };
+  return { verdict: "upstream", evidence: `${h.host} answers the runner's direct read of the same request empty or failed too (HTTP ${status || "none"})` };
+}
+
+// A DECLARED SOURCE'S STATE IS READ, NEVER INFERRED FROM WORDING.
+// A tool whose own definition declares its hosts (`upstreamHosts`), every one
+// of them a source the runner can read for itself below, is graded by that
+// read alone when it fails: excused when the runner's own direct read of a
+// declared host is refused or fails right now, and failed when every one
+// answers. The failure's words never decide either way, so the same source
+// state gets the same verdict in every pack and sweep that reaches the tool.
+// One read of each source a run (the caller's `read` keeps it). A tool that
+// declares no host, or a host with no read here, is not graded by this rule
+// (null): the caller's other rules grade it.
+export const RUNNER_SOURCE_READS = Object.freeze({
+  // The keyless BLS read SOURCE_ALLOWANCES makes, judged the same way.
+  "api.bls.gov": { url: SOURCE_ALLOWANCES[0].url, refuses: SOURCE_ALLOWANCES[0].refuses },
+  // The crt.sh query cert-transparency builds for its published example
+  // (HOLLOW_READS): a 404 (its front end's mislabelled backend failure), a
+  // 5xx, a non-JSON or a non-list answer, or no rows, is refused.
+  "crt.sh": { url: HOLLOW_READS["cert-transparency"].url({ domain: "agent402.tools" }), refuses: HOLLOW_READS["cert-transparency"].hollow },
+});
+/** The verdict on a failed answer of a tool that declares its sources: null
+ *  when the rule does not apply (see above), else
+ *  { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function declaredSourceVerdict({ slug, read = directReadAnswer, root = ROOT, reads = RUNNER_SOURCE_READS }) {
+  if (!declaresUpstreamHosts(slug, root)) return null;
+  const hosts = [...upstreamHostsForSlug(slug, root)];
+  if (!hosts.length || !hosts.every((h) => Object.hasOwn(reads, h))) return null;
+  const seen = [];
+  for (const h of hosts) {
+    const { status, text } = await read(reads[h].url);
+    if (reads[h].refuses(status, text)) {
+      let said = "";
+      try { const j = status === 200 ? JSON.parse(text) : null; said = j && !Array.isArray(j) && j.status ? `, status ${String(j.status).slice(0, 40)}` : (Array.isArray(j) && !j.length ? ", an empty list" : ""); } catch { said = status === 200 ? ", not JSON" : ""; }
+      return { verdict: "upstream", evidence: `${slug} declares ${h}, which refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
+    }
+    seen.push(`${h} HTTP ${status}`);
+  }
+  return { verdict: "fail", reason: `${slug}'s declared source answers the runner's direct read (${seen.join(", ")})` };
 }

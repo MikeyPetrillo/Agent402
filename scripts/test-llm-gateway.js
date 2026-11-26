@@ -1840,13 +1840,14 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // successor on that same tier, the swap named, a dated snapshot following.
   {
     const sched = [
-      ["openai/gpt-5", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/gpt-5-mini", "openai/gpt-5.6-terra", "v1-chat-premium"],
-      ["openai/gpt-5-nano", "openai/gpt-5.6-luna", "v1-chat-nano"], ["openai/gpt-5-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
-      ["openai/o3", "openai/gpt-5.6-sol", "v1-chat-premium"], ["openai/o3-pro", "openai/gpt-5.6-sol-pro", "v1-chat-premium"],
+      ["openai/gpt-5", "openai/gpt-6.1-sol", "v1-chat-premium"], ["openai/gpt-5-mini", "openai/gpt-6.1-terra", "v1-chat-premium"],
+      ["openai/gpt-5-nano", "openai/gpt-6-luna", "v1-chat-nano"], ["openai/gpt-5-pro", "openai/gpt-6.1-sol-pro", "v1-chat-premium"],
+      ["openai/o3", "openai/gpt-6.1-sol", "v1-chat-premium"], ["openai/o3-pro", "openai/gpt-6.1-sol-pro", "v1-chat-premium"],
     ];
     const m1 = [{ role: "user", content: "hi" }];
     for (const [id, use, home] of sched) {
-      ok(RETIRING_MODELS[id]?.until === "2026-12-11" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true && tierAllows(home, use), `${id}: scheduled to retire 2026-12-11, successor ${use} admitted on ${home}`);
+      K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+      ok(RETIRING_MODELS[id]?.until === "2026-12-11" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true && tierAllows(home, use, id), `${id}: scheduled to retire 2026-12-11, successor ${use} admitted on ${home} for a call naming it`);
       K.setRetiringClockForTest(() => Date.parse("2026-12-10T23:59:59Z"));
       const before = validateRequest({ model: id, messages: m1 }, home);
       ok(!retiringModel(id) && tierFor(id) === home && before.model === id && before.__substitutedFrom === undefined, `${id}: the day before, served as itself on ${home}`);
@@ -1880,21 +1881,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
       }
       K.setRetiringClockForTest(null);
     }
-    // gpt-5-nano on base and premium from 2026-12-11: gpt-5.6-luna keeps the
-    // whole tier output cap under the clamp. A caller naming gpt-5.6-luna
-    // itself keeps its nano home and price on either route.
+    // gpt-5-nano on base and premium from 2026-12-11: gpt-6-luna keeps the
+    // whole tier output cap under the clamp, at the route's own price.
     K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
     for (const s of ["v1-chat", "v1-chat-premium"]) {
       const b = validateRequest({ model: "openai/gpt-5-nano", messages: m1, max_tokens: TIERS[s].maxTokens }, s);
-      ok(b.model === "openai/gpt-5.6-luna" && b.max_tokens === TIERS[s].maxTokens, `gpt-5-nano on ${s} from 2026-12-11: gpt-5.6-luna with the full ${TIERS[s].maxTokens}-token cap`);
-      ok(!tierAllows(s, "openai/gpt-5.6-luna") && K.crossTierHome(s, "openai/gpt-5.6-luna") === "v1-chat-nano", `gpt-5.6-luna named on ${s} keeps its nano home`);
+      ok(b.model === "openai/gpt-6-luna" && b.max_tokens === TIERS[s].maxTokens, `gpt-5-nano on ${s} from 2026-12-11: gpt-6-luna with the full ${TIERS[s].maxTokens}-token cap`);
+      ok(K.crossTierHome(s, "openai/gpt-5-nano") === null && K.flatTierQuoteUsd(s, "openai/gpt-5-nano") === TIERS[s].price, `gpt-5-nano on ${s} from 2026-12-11 is quoted at ${s}'s own price`);
     }
     {
       const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
       const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
       const mm = validateMessagesRequest({ model: "openai/gpt-5-nano", max_tokens: 64, messages: m1 }, "v1-chat");
       const rr = validateResponsesRequest({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64 }, "v1-chat-premium");
-      ok(mm.body.model === "openai/gpt-5.6-luna" && rr.body.model === "openai/gpt-5.6-luna", `Messages (base) and Responses (premium): gpt-5-nano from 2026-12-11 served as gpt-5.6-luna on the route's tier (${mm.body.model}, ${rr.body.model})`);
+      ok(mm.body.model === "openai/gpt-6-luna" && rr.body.model === "openai/gpt-6-luna", `Messages (base) and Responses (premium): gpt-5-nano from 2026-12-11 served as gpt-6-luna on the route's tier (${mm.body.model}, ${rr.body.model})`);
     }
     K.setRetiringClockForTest(null);
     // gpt-4o-mini's availability successor is not itself retiring, and serves
@@ -2447,15 +2447,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(K.flexEligible("openai/gpt-5-nano") && K.reasoningProfile("openai/gpt-5-nano")?.id === "openai/gpt-5-nano" && JSON.stringify(K.defaultReasoningFor("openai/gpt-5-nano", "v1-chat-nano")) === '{"effort":"minimal"}', "before 2026-12-11 gpt-5-nano keeps its flex attempt and its effort row");
     ok(!modelsList().data.some((m) => family(m.id)), "/v1/models advertises no gpt-5 or o3 family id");
     K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+    // No home is lost; a tier gained on the day is one that lists the
+    // successor by its own name (gpt-6.1-sol and -terra on pro), so the call
+    // is served there as that tier lists it, at that tier's price.
     for (const [id, tiers] of Object.entries(want)) {
-      const got = homes(id).split(",").filter((t) => !["v1-chat-auto", "v1-chat-grounded"].includes(t)).join(",");
-      ok(got === tiers, `from 2026-12-11 ${id} is still admitted on ${tiers}, served by ${canonicalModel(id)} (got ${got})`);
+      const got = homes(id).split(",").filter((t) => !["v1-chat-auto", "v1-chat-grounded"].includes(t));
+      const lost = tiers.split(",").filter((t) => !got.includes(t));
+      const gained = got.filter((t) => !tiers.split(",").includes(t) && !tierAllows(t, canonicalModel(id)));
+      ok(!lost.length && !gained.length, `from 2026-12-11 ${id} is still admitted on ${tiers}, served by ${canonicalModel(id)} (got ${got.join(",")})`);
     }
-    ok(DEC11.every((id) => !family(canonicalModel(id))), "from 2026-12-11 every one is served by its gpt-5.6 successor");
+    ok(DEC11.every((id) => !family(canonicalModel(id))), "from 2026-12-11 every one is served by its gpt-6 successor");
     ok(!K.flexModelIds().some(family) && !K.reasoningRows().some((r) => family(r.id || r.prefix)), "from 2026-12-11 the asItself flex and effort rows are gone (nothing names the retired id)");
   } finally { K.setRetiringClockForTest(null); }
   // /api/llm-premium (llm-kit.js): the o3 family left the tier list and is
-  // still served there (as itself until 2026-12-11; gpt-5.6-terra after).
+  // still served there (as itself until 2026-12-11; gpt-6.1-sol after).
   const savedKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
   try {

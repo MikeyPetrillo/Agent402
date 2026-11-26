@@ -53,7 +53,7 @@ export const ROBOTS_UNGATED_READS = "an HTTP status or headers, a TLS certificat
  *  on them inherit it, and the packs' own page and file reads pass it too).
  *  scripts/test-robots-gate.js drives each one against a disallowed URL. */
 export const ROBOTS_GATED_SLUGS = Object.freeze([
-  "extract", "meta", "render", "screenshot", "pdf", "pdf-to-markdown", "pdf-summarize",
+  "extract", "meta", "render", "screenshot", "pdf", "pdf-to-markdown", "pdf-summarize", "summarize",
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
   "media-info", "audio-convert", "audio-normalize", "transcribe", "transcribe-pro", "transcribe-long",
   "image-ocr", "image-exif", "image-dominant-color", "image-crop",

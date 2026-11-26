@@ -6,7 +6,8 @@
 // Boots the REAL server with the x402 paywall active, a stub facilitator with
 // injected verify and settle delays, and a stub market-data upstream
 // (scripts/lib/databento-stub-preload.js, which refuses to load without its
-// stub) with an injected data delay. Then buys stock-quote:
+// stub) with an injected data delay. Then buys stock-history (stock-quote is
+// never served: src/tools/stock-provider.js STOCK_SERVED_SLUGS):
 //   a. over x402: the log line and the operator summary carry verify, handler
 //      and settle times that match the injected delays, under rail=x402 and the
 //      Base network;
@@ -200,20 +201,20 @@ try {
   if (!warmed) { try { warmerState = JSON.stringify((await (await perf()).json())?.stockQuoteWarmer?.lastTick ?? null); } catch (e) { warmerState = `perf read failed: ${e?.message}`; } }
   ok(warmed, `the boot-started quote warmer read the session boundary from the stub (${db.range})${warmerState ? `; last tick: ${warmerState}` : ""}`);
 
-  const unpaid = await fetch(`${B}/api/stock-quote?symbol=MSFT`);
-  ok(unpaid.status === 402, `unpaid stock-quote -> 402 (got ${unpaid.status})`);
+  const unpaid = await fetch(`${B}/api/stock-history?symbol=MSFT&days=2`);
+  ok(unpaid.status === 402, `unpaid stock-history -> 402 (got ${unpaid.status})`);
   const accepted = (JSON.parse(Buffer.from(unpaid.headers.get("payment-required"), "base64").toString("utf-8")).accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
-  ok(!!accepted, "stock-quote offers exact on Base");
+  ok(!!accepted, "stock-history offers exact on Base");
 
   // a. x402
   const before = timingLines().length;
-  const r = await fetch(`${B}/api/stock-quote?symbol=MSFT`, { headers: { "payment-signature": credential(accepted, PAYER), "x-forwarded-for": "10.88.0.1" } });
+  const r = await fetch(`${B}/api/stock-history?symbol=MSFT&days=2`, { headers: { "payment-signature": credential(accepted, PAYER), "x-forwarded-for": "10.88.0.1" } });
   const body = await r.json();
-  ok(r.status === 200 && body.price === 150 && body.cached === false, `x402 buy -> 200 with a fresh quote (got ${r.status}, cached ${body.cached})`);
+  ok(r.status === 200 && body.bars?.at(-1)?.close === 150 && db.data === 1, `x402 buy -> 200 with bars read from the upstream (got ${r.status}, close ${body.bars?.at(-1)?.close}, reads ${db.data})`);
   ok(await waitFor(() => timingLines().length > before), "a [paid-timing] line was written for the call");
   const line = timingLines().at(-1);
   console.log(`   ${line}`);
-  ok(line.includes(" stock-quote ") && field(line, "rail") === "x402" && field(line, "net") === "eip155:8453" && field(line, "status") === "200" && field(line, "gone") === "no",
+  ok(line.includes(" stock-history ") && field(line, "rail") === "x402" && field(line, "net") === "eip155:8453" && field(line, "status") === "200" && field(line, "gone") === "no",
     "a. the line names the slug, rail=x402, the Base network, status 200, gone=no");
   ok(near(msOf(line, "verify"), VERIFY_MS), `a. verify time matches the facilitator's injected ${VERIFY_MS} ms (${msOf(line, "verify")})`);
   ok(near(msOf(line, "handler"), DATA_MS), `a. handler time matches the upstream's injected ${DATA_MS} ms (${msOf(line, "handler")})`);
@@ -222,7 +223,7 @@ try {
   ok(!line.toLowerCase().includes(PAYER.toLowerCase()) && !line.includes(TX) && !line.includes(TX.slice(2, 20)) && !line.includes("MSFT"), "d. the line carries no payer, no transaction hash and no input");
 
   // A warm repeat: the handler phase collapses.
-  await fetch(`${B}/api/stock-quote?symbol=MSFT`, { headers: { "payment-signature": credential(accepted, PAYER), "x-forwarded-for": "10.88.0.2" } });
+  await fetch(`${B}/api/stock-history?symbol=MSFT&days=2`, { headers: { "payment-signature": credential(accepted, PAYER), "x-forwarded-for": "10.88.0.2" } });
   ok(await waitFor(() => timingLines().length > before + 1), "a second line for the warm repeat");
   const warmLine = timingLines().at(-1);
   console.log(`   ${warmLine}`);
@@ -233,7 +234,7 @@ try {
   const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
   const mppFetch = Fetch.from({ methods: [evm.charge({ account: privateKeyToAccount(generatePrivateKey()), currencies: [evm.assets.base.USDC], maxAmount: "1.00" })] });
   const n0 = timingLines().length;
-  const m = await mppFetch(`${B}/api/stock-quote?symbol=ORCL`);
+  const m = await mppFetch(`${B}/api/stock-history?symbol=ORCL&days=2`);
   ok(m.status === 200, `MPP evm buy -> 200 (got ${m.status})`);
   ok(await waitFor(() => timingLines().length > n0), "a line for the MPP call");
   const mline = timingLines().at(-1);
@@ -245,7 +246,7 @@ try {
   db.slowDataMs = 1500;
   const settles0 = fac.settle, n1 = timingLines().length, d0 = db.data;
   await new Promise((resolve) => {
-    const rq = httpRequest(`${B}/api/stock-quote?symbol=NVDA`, { headers: { "payment-signature": credential(accepted, "0x00000000000000000000000000000000000abc02"), "x-forwarded-for": "10.88.0.3" } });
+    const rq = httpRequest(`${B}/api/stock-history?symbol=NVDA&days=2`, { headers: { "payment-signature": credential(accepted, "0x00000000000000000000000000000000000abc02"), "x-forwarded-for": "10.88.0.3" } });
     rq.on("error", () => resolve()); rq.on("response", (x) => { x.resume(); resolve(); });
     rq.end();
     waitFor(() => db.data > d0, 5000).then(() => sleep(150)).then(() => { rq.destroy(); resolve(); });
@@ -269,7 +270,7 @@ try {
   // how long the buyer waited and which phase it left in: the figure that
   // names a buyer client's timeout.
   const hg = Object.values(p.paidPhases?.hangups || {});
-  const dep = hg.flatMap((h) => h.recent || []).find((r) => r.slug === "stock-quote");
+  const dep = hg.flatMap((h) => h.recent || []).find((r) => r.slug === "stock-history");
   ok(hg.length >= 1 && hg.reduce((a2, h) => a2 + h.count, 0) === 1, `e. one buyer departure is listed under its network (${JSON.stringify(p.paidPhases?.hangups ? Object.fromEntries(Object.entries(p.paidPhases.hangups).map(([k, v]) => [k, v.count])) : null)})`);
   ok(dep && dep.during === "handler" && dep.waitedMs >= 150 && dep.waitedMs < 1500, `e. it left during the handler, after the time the buyer actually waited (${JSON.stringify(dep)})`);
   ok(hg[0]?.minWaitMs === dep?.waitedMs && hg[0]?.byPhase?.handler === 1, "e. the network's summary carries the shortest wait and a count by phase");

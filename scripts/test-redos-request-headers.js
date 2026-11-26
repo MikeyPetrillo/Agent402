@@ -13,7 +13,7 @@
 // the thread, on the clock a busy host does not inflate
 // (scripts/lib/ours-clock.js). Each call sends one header one shape, filled to
 // the server's header limit, to one unpaid surface: a page, a free API route,
-// a paid route's 402, /api/find, /api/route, /mcp on both protocol eras, an unknown API path (the
+// a paid route's 402, /api/find, /api/route, the site search (GET and QUERY), /mcp on both protocol eras, an unknown API path (the
 // retired-route answer reads the client from its headers) and the model
 // tiers' flat and metered 402. A call whose
 // turn runs past the bound is repeated, and fails if the least of its readings
@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "content-digest", "x-wallet-session", "cf-ipcountry"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "content-digest", "x-wallet-session", "cf-ipcountry", "x-agent402-upstream-key"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -120,12 +120,14 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const TAP_INPUT = `sig2=("@method" "@authority" "@path" "content-digest");created=${Math.floor(Date.now() / 1000)};expires=${Math.floor(Date.now() / 1000) + 60};keyid="${"A".repeat(43)}";alg="ed25519";tag="agent-payer-auth"`;
   const walletSignIn = await import("../src/wallet-sign-in.js");
   const consentRegion = await import("../src/consent-region.js");
+  const sanctionedRegions = await import("../src/sanctioned-regions.js");
   const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
   const sources = await import("../src/funnel-sources.js");
   // Read only for a gated User-Agent (python-httpx/ by default), which the boots below never send.
   const offerGate = await import("../src/mpp-offer-gate.js");
   // Read only with RETURNING_WALLET_PRICE=on (off on the boots below).
   const returningWallet = await import("../src/returning-wallet.js");
+  const upstreamKey = await import("../src/upstream-key.js");
   // Read on a 2025-era POST /mcp; the boots below always send an Accept that names SSE.
   const mcpHttp = await import("../src/mcp-http.js");
   // Read only with MCP_OAUTH=on and credits on sale (off on the boots below).
@@ -166,8 +168,15 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
     "wallet-sign-in sessionHeaderShape (x-wallet-session)": (v) => walletSignIn.sessionHeaderShape(v),
     "returning-wallet walletHintOf (x-agent402-wallet)": (v) => returningWallet.walletHintOf({ headers: { "x-agent402-wallet": v } }),
     "returning-wallet walletProofShape (x-agent402-wallet-proof)": (v) => returningWallet.walletProofShape(v),
+    // Read on every request at intake, and its shape on a route that takes a buyer's key (src/upstream-key.js).
+    "upstream-key takeUpstreamKey (x-agent402-upstream-key)": (v) => { const was = process.env.UPSTREAM_KEY; process.env.UPSTREAM_KEY = "on"; try { return upstreamKey.takeUpstreamKey({ headers: { "x-agent402-upstream-key": v }, rawHeaders: ["X-Agent402-Upstream-Key", v] }); } finally { if (was === undefined) delete process.env.UPSTREAM_KEY; else process.env.UPSTREAM_KEY = was; } },
+    "upstream-key upstreamKeyShapeOk (x-agent402-upstream-key)": (v) => upstreamKey.upstreamKeyShapeOk(upstreamKey.PROVIDERS.github, v),
+    // Read only on a request that carries a buyer's key: the scheme it arrived over.
+    "upstream-key arrivedInClear (x-forwarded-proto, forwarded, cf-visitor, x-forwarded-for)": (v) => upstreamKey.arrivedInClear({ headers: { "x-forwarded-proto": v, forwarded: v, "cf-visitor": v, "x-forwarded-for": v }, socket: { remoteAddress: "127.0.0.1" }, ip: "127.0.0.1" }, { hops: 1 }),
     "mcp-http lenientMcpAccept (accept)": (v) => mcpHttp.lenientMcpAccept(v),
     "consent-region consentRegionRoute (cf-ipcountry)": (v) => consentRegion.consentRegionRoute({ get: () => v }, { set() { return this; }, json() { return this; } }),
+    // Read only on the trusted CDN path (CDN_PROXY on), which the boots below run without.
+    "sanctioned-regions sanctionedLocationOf (cf-ipcountry, cf-region-code, cf-region)": (v) => sanctionedRegions.sanctionedLocationOf({ headers: { "cf-ipcountry": v, "cf-region-code": v, "cf-region": v } }, { trusted: true }),
   };
   for (const [name, fn] of Object.entries(traffic)) {
     // Every exported reader of the traffic classifier that takes one string.
@@ -243,6 +252,8 @@ const SURFACES = [
   { name: "paid 402", method: "POST", path: "/api/extract", body: { url: "https://example.com" }, expect: [402] },
   { name: "find", method: "GET", path: "/api/find?q=hash%20a%20string", expect: [200] },
   { name: "route", method: "GET", path: "/api/route?q=hash%20a%20string", expect: [200] },
+  { name: "site search", method: "GET", path: "/.well-known/search?q=hash%20a%20string", expect: [200] },
+  { name: "site search QUERY", method: "QUERY", path: "/.well-known/search", body: { q: "hash a string" }, expect: [200] },
   { name: "mcp", method: "POST", path: "/mcp", headers: { accept: "application/json, text/event-stream" }, body: { jsonrpc: "2.0", id: 1, method: "tools/list" }, expect: [200] },
   // 2026-07-28 (the per-request envelope, no initialize): the SDK's ladder
   // reads MCP-Protocol-Version, Mcp-Method and Mcp-Name before it serves the call.

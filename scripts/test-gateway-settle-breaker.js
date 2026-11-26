@@ -595,6 +595,13 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     err = null;
     try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W, network: BASE })); } catch (e) { err = e; }
     ok(err?.statusCode === 429 && /refused the payment itself/.test(err.message) && b.gatewaySettleBreakerBlocked(b.gatewaySettleBreakerCountKey(fakeReq({ from: W, network: BASE }))).blocklisted === false, "control: balance verdicts alone keep the verdict words");
+    // The refused request carries the refusal record's reason code (src/refusal-mark.js); a served one carries none.
+    const { paymentRefusalMarkOf } = await import("../src/refusal-mark.js");
+    const refusedReq = fakeReq({ from: W, network: BASE });
+    try { await b.gatewaySettleBreakerCheck(refusedReq); } catch { /* refused */ }
+    const servedReq = fakeReq({ from: "0x" + "3c".repeat(20), network: BASE });
+    await b.gatewaySettleBreakerCheck(servedReq);
+    ok(paymentRefusalMarkOf(refusedReq) === "settle-breaker-wallet" && paymentRefusalMarkOf(servedReq) === null, `a breaker refusal is marked for the refusal record, a served call is not (${paymentRefusalMarkOf(refusedReq)}, ${paymentRefusalMarkOf(servedReq)})`);
   }
   // The unknown count keeps the share rule: a wallet settling most of its
   // calls is not refused for nine unknown failures beside them.

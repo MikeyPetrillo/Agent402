@@ -46,7 +46,7 @@ ok(/"Asia\/Nicosia"/.test(consentJs) && /"Indian\/Reunion"/.test(consentJs), "co
   // Session replay skips exactly the paths GA skips.
   const ph = readFileSync(new URL("../assets/js/posthog-loader.js", import.meta.url), "utf8");
   const ga = readFileSync(new URL("../src/ledger-chrome.js", import.meta.url), "utf8").match(/GA_BEARER_PATH = (\/.*\/);/)[1];
-  ok(ph.includes(ga + ".test(location.pathname)) data.cfg.disable_session_recording = true"), "posthog loader: no session replay on the bearer paths (same regex as GA_BEARER_PATH)");
+  ok(ph.includes(ga + ".test(location.pathname)) cfg.disable_session_recording = true"), "posthog loader: no session replay on the bearer paths (same regex as GA_BEARER_PATH)");
 }
 ok(/googletagmanager\.com\/gtag\/js\?id=/.test(loader), "loader: loads Google's tag for the configured id");
 

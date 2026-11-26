@@ -400,7 +400,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       // NEVER relay the validator's message verbatim: an EDGAR/upstream helper
       // puts a slice of the upstream BODY into it, and this route is
       // unauthenticated. Only a message we minted ourselves (buyerSafe) passes.
-      catch (err) { const e = new Error(err?.buyerSafe ? String(err.message).slice(0, 200) : `We could not validate ${p.inputLabel}. Check it and try again.`); e.statusCode = err?.statusCode && err.statusCode < 500 ? err.statusCode : 400; throw e; }
+      catch (err) { const e = new Error(err?.buyerSafe ? String(err.message).slice(0, 200) : `We could not validate ${p.inputLabel}. Check it and try again.`); e.statusCode = err?.statusCode && err.statusCode < 500 ? err.statusCode : 400; if (err?.retryAfter) e.retryAfter = err.retryAfter; throw e; }
     }
     // Consent (src/checkout-consent.js): the Terms checkbox, and a separate,
     // required automatic-renewal consent naming the monthly price and the

@@ -50,6 +50,7 @@ export const REFUSAL_REASONS = Object.freeze([
   "routing_paused",       // a spend ceiling paused routing for now
   "routing_budget_spent", // resolution used the request's time budget
   "judged_no_match",      // candidates matched the words; the judgment found none does the task
+  "listed_only",      // routes matched; every one is from a seller the router lists and never buys from
   // In-flight coverage refusals (src/inflight-cover.js): a 429 before the run
   // starts, because the wallet's balance was not shown to cover its paid
   // calls in flight plus this one. The class is the error's own
@@ -121,6 +122,9 @@ const RULES = [
   // Routing first: these are specific sentences from route-execute, and the
   // generic rules below would otherwise claim them (an "above this endpoint's
   // $X underlying cap" message matches the over_cap rule).
+  // Matched routes from sellers the router lists and never buys from
+  // (src/router-listed-only.js): supply exists and is listed.
+  [/\bare listed only: the router does not buy from them\b|\bThe router lists that outside seller and does not buy from it\b/i, "listed_only"],
   [/\bno external (x402|MPP|x402 or MPP) seller (matched|is eligible)\b.*\ball of them are below\b/i, "no_seller_eligible"],
   [/\bbelow (our|the) settlement (gate|floor)\b/i, "no_seller_eligible"],
   // Judgment-step refusals (src/tool-judge.js).

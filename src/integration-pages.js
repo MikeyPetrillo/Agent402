@@ -14,7 +14,7 @@ import { repoUrl } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { connectorWires } from "./connector-pay.js";
-import { stockDataEnabled } from "./tools/stock-provider.js";
+import { stockQuoteEnabled } from "./tools/stock-provider.js";
 import { firstFit } from "./seo-meta.js";
 import { AWS_MARK_NOTICE } from "./mark-notices.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
@@ -530,7 +530,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
-      "Flagship tools under dotted names: `pdf.markdown`, `macro.series`, `weather.current`, `browser.render`, " + (stockDataEnabled() ? "`market.quote`, " : "") + "`audio.transcribe`, `memory.read`, `memory.write`.",
+      "Flagship tools under dotted names: `pdf.markdown`, `macro.series`, `weather.current`, `browser.render`, " + (stockQuoteEnabled() ? "`market.quote`, " : "") + "`audio.transcribe`, `memory.read`, `memory.write`.",
       "`catalog.search` / `catalog.find` + `catalog.call` for the rest of the catalog, keeping the context window small.",
       "`payment.info` and `server.describe` for orientation and spend caps; `sellers.list` for the live seller leaderboards, listed when a wallet or credits key is set.",
       "Skill packs as MCP prompts (`prompts/list`, `prompts/get`).",

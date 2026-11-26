@@ -4231,8 +4231,15 @@ jobs:
           # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
           MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
           MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
+          # api.github.com reads (the latest tag, the release's asset names) go
+          # out under the job's own token: an unauthenticated read shares the
+          # runner pool's rate limit and is refused 403 when it is spent. The
+          # job's contents: read covers a public release. Only api.github.com
+          # gets the header; the github.com downloads stay plain.
+          GH_API_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh_api() { curl -fsSL -H "Authorization: Bearer $GH_API_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
           # The registry verifies ownership by matching mcp/package.json's
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
@@ -4280,9 +4287,9 @@ jobs:
             # than guessing, then verify with sha256sum.
             tag_path="${MCP_PUBLISHER_VERSION:-}"
             if [ -z "$tag_path" ]; then
-              tag_path=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+              tag_path=$(gh_api "https://api.github.com/repos/modelcontextprotocol/registry/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
             fi
-            checksums_name=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/tags/$tag_path" \
+            checksums_name=$(gh_api "https://api.github.com/repos/modelcontextprotocol/registry/releases/tags/$tag_path" \
               | grep -oP '"name":\s*"\K[^"]*_checksums\.txt(?=")' | head -1)
             if [ -n "$checksums_name" ]; then
               curl -fsSL -o "$checksums_name" "https://github.com/modelcontextprotocol/registry/releases/download/$tag_path/$checksums_name" 2>/dev/null || true

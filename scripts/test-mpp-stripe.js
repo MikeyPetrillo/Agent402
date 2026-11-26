@@ -117,6 +117,31 @@ for (const seam of [true, false]) {
   else ok(res.status === 304 && text === "", `gate A2 control: without the seam the same request is an empty 304 (status ${res.status})`);
   s.close();
 }
+// A3) a card credential with a buyer's upstream key (src/upstream-key.js),
+// through the real gate's own marks (set before the handler): refused 400 by
+// the key gate, the handler never runs with the key and the card is never
+// charged. The same credential without the header is the control.
+{
+  process.env.UPSTREAM_KEY = "on"; // the feature's switch (off by default)
+  const uk = await import("../src/upstream-key.js");
+  const def = { slug: "github-repo", price: "$0.50" };
+  uk.configureUpstreamKeys({ catalog: { a: def, b: { slug: "hash", price: "$0.001" } } });
+  const KEY = "ghp_" + "k".repeat(36);
+  let settles = 0, handled = 0, sawKey = null, applied = null;
+  const app = express();
+  app.use(uk.upstreamKeyIntake());
+  app.use(createStripeGate({ ...GATE, validate: async () => ({ ok: true, validation: {} }),
+    settle: async () => { settles++; return { ok: true, receipt: { method: "stripe", status: "success", reference: "pi_test_uk", timestamp: new Date().toISOString() } }; } }));
+  app.use(uk.upstreamKeyGate(() => def));
+  app.post("/paid", (req, res) => { handled++; sawKey = uk.upstreamKeyFor(req, "github-repo"); applied = uk.upstreamKeyApplies(req, def); res.status(200).json({ result: "ok" }); });
+  const { s, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor({ spt: "spt_test_uk1" }), "X-Agent402-Upstream-Key": KEY } });
+  const body = await res.json();
+  ok(res.status === 400 && body.reason === "upstream_key_rail_unsupported" && body.charged === false && handled === 0 && settles === 0 && !res.headers.get("payment-receipt"), `gate A3: a card credential with an upstream key is refused 400, nothing run, card never charged (status ${res.status}, handled ${handled}, settles ${settles})`);
+  const control = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor({ spt: "spt_test_uk2" }) } });
+  ok(control.status === 200 && handled === 1 && settles === 1 && sawKey === null && applied === false, `gate A3 control: the same credential without the header is served at the list price and charged once (status ${control.status}, settles ${settles})`);
+  s.close();
+}
 // B) handler fails -> card NEVER charged.
 {
   let settleCalled = false;

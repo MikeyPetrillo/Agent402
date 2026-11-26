@@ -44,7 +44,14 @@ syncBuiltinESMExports();
 
 const db = await import("../src/tools/databento.js");
 const { FINANCE_TOOLS } = await import("../src/tools/finance-kit.js");
-const quote = FINANCE_TOOLS.find((t) => t.slug === "stock-quote").handler;
+// stock-quote's route is never served (src/tools/stock-provider.js), but the
+// adapter's quote path is what the warmer audits and pre-reads, so it is driven
+// here directly, the way the kit's handler called it.
+const quote = async (i, ctx) => {
+  const r = await db.databentoAdapter.quote(String(i.symbol).toUpperCase(), { demand: !ctx?.selfcheck, lastGoodOk: !ctx?.selfcheck });
+  const last = r.bars.at(-1), prev = r.bars.at(-2) || null;
+  return { ...r, price: last.close, previousClose: prev ? prev.close : null, asOf: last.day };
+};
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };

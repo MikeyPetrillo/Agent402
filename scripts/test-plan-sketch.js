@@ -132,7 +132,15 @@ const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8")
 const findFn = server.slice(server.indexOf("const computeFind = async"), server.indexOf("const findCachePath"));
 ok(/const plan = planSketchFor\(q\);[\s\S]{0,80}result\.plan = plan/.test(findFn), "/api/find attaches the sketch");
 ok(!/\breq\?\.ip\b/.test(findFn) && /computeFind = async \(q, k, meter = null, ip = null, \{ quiet = false \} = \{\}\)/.test(findFn), "the /api/find miss path reads the IP it is handed, not an out-of-scope req");
-ok((server.match(/computeFind\(q, k, meter, req\.ip, \{ quiet \}\)/g) || []).length === 2, "both /api/find routes hand computeFind the caller IP");
+// One serving path now answers /api/find (either verb) and /.well-known/search:
+// it hands computeFind the caller IP once, and every find route goes through it.
+// scripts/test-well-known-search.js reads the same by behavior (a miss on each
+// surface credits its caller on the demand board).
+{
+  const serve = server.slice(server.indexOf("const serveFindQuery ="), server.indexOf("app.get(\"/api/find\""));
+  ok((server.match(/computeFind\(q, k, meter, req\.ip, \{ quiet \}\)/g) || []).length === 1 && /computeFind\(q, k, meter, req\.ip, \{ quiet \}\)/.test(serve), "the shared find serving path hands computeFind the caller IP");
+  ok(/app\.get\("\/api\/find", \(req, res\) => \{[\s\S]{0,700}?return serveFindQuery\(req, res,/.test(server) && /app\.post\("\/api\/find", \(req, res\) => serveFindQuery\(req, res,/.test(server) && /wellKnownSearchHandler\(\{ serveFind: serveFindQuery,/.test(server) && (server.match(/\bcomputeFind\(/g) || []).length === 1, "both /api/find routes and /.well-known/search go through it, and nothing else calls computeFind");
+}
 ok(/const plan = q \? planSketchFor\(q\) : null;\s*if \(plan\) out\.plan = plan;/.test(server), "/api/route attaches the sketch");
 ok(/buildPlanSketch\(taskStr,/.test(mcp) && /\.\.\.\(plan \? \{ plan \} : \{\}\)/.test(mcp), "the connector's catalog.find attaches the sketch");
 ok(!/multiStep/.test(server), "the fixed multiStep pointer is gone (decide is named inside a sketch instead)");

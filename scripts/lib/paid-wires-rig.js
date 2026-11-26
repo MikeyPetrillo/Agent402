@@ -156,6 +156,9 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     // the Tempo relay
     if (path.startsWith("/relay")) {
       if (/validate$/.test(path)) { st.verifies++; return reply(200, { success: true }); }
+      // A push credential names a transfer already on chain: the relay confirms it.
+      st.relayBodies = (st.relayBodies || []).concat([{ path, type: j?.payload?.type || null }]);
+      if (j?.payload?.type === "hash") return reply(200, { success: true, receipt: { method: "tempo", status: "success", reference: j.payload.hash, timestamp: new Date().toISOString() } });
       const sig = j?.payload?.signature;
       const p = payments.get(sig);
       if (!p) return reply(200, { success: false, error: { code: "invalid_payment", message: "unknown payment" } });
@@ -281,9 +284,11 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // ---- offers, per route ----
   const offers = new Map();
   const offerOf = async (route) => {
-    const k = `${route.method} ${route.path} ${JSON.stringify(route.body ?? null)}`;
+    // `route.headers` (optional): request headers that are part of the call
+    // itself (they change the offer), sent with the 402 read and the payment.
+    const k = `${route.method} ${route.path} ${JSON.stringify(route.body ?? null)} ${JSON.stringify(route.headers ?? null)}`;
     if (offers.has(k)) return offers.get(k);
-    const r = await fetch(`${url}${route.path}`, { method: route.method, headers: { "content-type": "application/json" }, ...(route.method === "POST" ? { body: JSON.stringify(route.body ?? {}) } : {}) });
+    const r = await fetch(`${url}${route.path}`, { method: route.method, headers: { "content-type": "application/json", ...(route.headers || {}) }, ...(route.method === "POST" ? { body: JSON.stringify(route.body ?? {}) } : {}) });
     await r.arrayBuffer();
     const h = r.headers.get("payment-required");
     const www = r.headers.get("www-authenticate");
@@ -400,7 +405,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   }
   /** One request with given payment headers. */
   async function send(route, headers = {}, { signal } = {}) {
-    const r = await fetch(`${url}${route.path}`, { method: route.method, signal, headers: { "content-type": "application/json", ...headers }, ...(route.method === "POST" ? { body: JSON.stringify(route.body ?? {}) } : {}) });
+    const r = await fetch(`${url}${route.path}`, { method: route.method, signal, headers: { "content-type": "application/json", ...(route.headers || {}), ...headers }, ...(route.method === "POST" ? { body: JSON.stringify(route.body ?? {}) } : {}) });
     const text = await r.text();
     let json = null; try { json = JSON.parse(text); } catch { /* not JSON */ }
     return { status: r.status, json, text, headers: r.headers };

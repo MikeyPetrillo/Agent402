@@ -18,10 +18,16 @@ import { bootServer } from "./lib/boot-server.js";
 import { MCP_X402_SLUGS, MCP_X402_PREFIX } from "../src/mcp-x402-routes.js";
 import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 import { paymentRequiredOfResult } from "../src/mcp-x402.js";
+import { STOCK_SLUGS, stockToolServed } from "../src/tools/stock-provider.js";
 
-/** The six MCP tool declarations as a paid boot of the real server serves
- *  them (src/payments.js builds them from mcpX402PaymentSpecs(catalog) and
- *  each twin's offer carries its own): { route, toolName, extensions }. */
+const BOOT_STOCK_ENV = { STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real" };
+/** The dotted names the boot serves: every twin the stock switch serves on its env. */
+const EXPECTED_MCP = MCP_X402_SLUGS.filter((s) => !STOCK_SLUGS.has(s) || stockToolServed(s, BOOT_STOCK_ENV)).map((s) => FLAGSHIP_MCP_NAMES[s]);
+
+/** The MCP tool declarations a paid boot of the real server serves
+ *  (src/payments.js builds them from mcpX402PaymentSpecs(catalog) and each
+ *  twin's offer carries its own): { route, toolName, extensions }, for every
+ *  twin whose call answers an offer. */
 async function liveMcpSpecs() {
   const facilitator = createServer((req, res) => {
     req.resume();
@@ -44,9 +50,10 @@ async function liveMcpSpecs() {
         STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
         TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", MPP_SECRET_KEY: "",
         FREE_MODE: "", TRUST_PROXY_HOPS: "1", BAZAAR_ROUTE_CHECK: "off",
-        // market.quote's twin is listed only with an active stock provider; the
-        // loopback preload keeps any read of it on this host.
-        STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_WARM: "off",
+        // An active stock provider: market.quote still follows the stock switch
+        // (stockToolServed, stock-history only). The loopback preload keeps
+        // any read on this host.
+        ...BOOT_STOCK_ENV, DATABENTO_WARM: "off",
         WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
         FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
         CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
@@ -59,6 +66,7 @@ async function liveMcpSpecs() {
     for (const slug of MCP_X402_SLUGS) {
       const toolName = FLAGSHIP_MCP_NAMES[slug];
       const offer = paymentRequiredOfResult(await client.callTool({ name: toolName, arguments: {} }));
+      if (!offer) continue;
       out.push({ route: `GET ${MCP_X402_PREFIX}${slug}`, toolName, extensions: offer?.extensions || null });
     }
     return out;
@@ -111,13 +119,15 @@ try {
   {
     const specs = await liveMcpSpecs();
     const routes = Object.fromEntries(specs.map((sp) => [sp.route, { accepts, description: sp.toolName, extensions: sp.extensions }]));
-    ok(specs.length === 6 && specs.every((sp) => sp.extensions?.bazaar?.info?.input?.type === "mcp"), `the catalog yields the six MCP tool declarations (${specs.map((sp) => sp.toolName).join(", ")})`);
+    const N = EXPECTED_MCP.length;
+    ok(N >= 5 && !EXPECTED_MCP.includes("market.quote"), `the switch serves ${N} MCP tool declarations, market.quote not among them (${EXPECTED_MCP.join(", ")})`);
+    ok(JSON.stringify(specs.map((sp) => sp.toolName)) === JSON.stringify(EXPECTED_MCP) && specs.every((sp) => sp.extensions?.bazaar?.info?.input?.type === "mcp"), `the catalog yields exactly those MCP tool declarations (${specs.map((sp) => sp.toolName).join(", ")})`);
     const r = await checkBazaarRoutesInSlices(routes);
-    ok(r.routes === 6 && warnings.length === 0, `the sliced check passes every MCP tool declaration without a warning (${warnings.length}: ${warnings[0]?.slice(0, 140) || "none"})`);
+    ok(r.routes === N && warnings.length === 0, `the sliced check passes every MCP tool declaration without a warning (${warnings.length}: ${warnings[0]?.slice(0, 140) || "none"})`);
     // Control: the vendor's route check alone reports each of them, which is what the boot logged.
     warnings.length = 0;
     validateBazaarRouteExtensions(routes);
-    ok(warnings.length === 6 && warnings.every((w) => /must NOT have additional properties/.test(w)), `control: the vendor's route check alone warns on all six (${warnings.length})`);
+    ok(warnings.length === N && warnings.every((w) => /must NOT have additional properties/.test(w)), `control: the vendor's route check alone warns on all ${N} (${warnings.length})`);
     // Control: an MCP declaration that IS invalid still warns.
     warnings.length = 0;
     const [first] = specs;

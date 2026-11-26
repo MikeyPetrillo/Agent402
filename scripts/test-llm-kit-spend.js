@@ -113,9 +113,10 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(retiredSuccessor("o3-mini", Date.now()) === "gpt-5.6-terra" && retiredSuccessor("o4-mini", Date.now()) === "gpt-5.6-terra", "o3-mini and o4-mini, both retired, are served by gpt-5.6-terra");
   ok(retiredSuccessor("o4-mini-2025-04-16", Date.now()) === "gpt-5.6-terra", "a dated o4-mini snapshot follows its family");
   ok(retiredSuccessor("gpt-4o-2024-08-06", on) === "gpt-6.1-sol" && retiredSuccessor("gpt-4o-mini-2024-07-18", on) === "gpt-6-luna" && retiredSuccessor("gpt-5.6-terra", on) === null, "dated snapshots follow their family; other ids are untouched");
-  // o3 and o3-pro shut down 2026-12-11: served as themselves until then, then by the tier default.
+  // o3 and o3-pro shut down 2026-12-11: served as themselves until then, then
+  // by gpt-6.1-sol, the replacement OpenAI's deprecations page names.
   const o3Before = Date.parse("2026-12-10T23:59:59Z"), o3On = Date.parse("2026-12-11T00:00:00Z");
-  ok(["o3", "o3-pro", "o3-2025-04-16"].every((k) => retiredSuccessor(k, o3Before) === null && retiredSuccessor(k, o3On) === "gpt-5.6-terra"), "o3, o3-pro and a dated o3 snapshot are served as themselves until 2026-12-11, then by gpt-5.6-terra");
+  ok(["o3", "o3-pro", "o3-2025-04-16"].every((k) => retiredSuccessor(k, o3Before) === null && retiredSuccessor(k, o3On) === "gpt-6.1-sol"), "o3, o3-pro and a dated o3 snapshot are served as themselves until 2026-12-11, then by gpt-6.1-sol");
 
   // llm-premium still admits the o3 family by name (the description, schema and
   // wiki say so): the admission is date-independent, and a call today reaches
@@ -128,6 +129,23 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   for (const k of o3Ids) {
     const r = await premium.handler({ model: k, messages: m });
     ok(r.choices[0].message.content === "hi" && sent.at(-1).model === (retiredSuccessor(k) || k), `llm-premium serves ${k} (no 400)`);
+  }
+  // From 2026-12-11 llm-premium serves each o3 id by gpt-6.1-sol, which its
+  // own list does not name; the successor alone is still refused there, and
+  // llm (which admits neither) still refuses the retired o3 id.
+  {
+    const realNow = Date.now;
+    Date.now = () => o3On;
+    try {
+      for (const k of o3Ids) {
+        const r = await premium.handler({ model: k, messages: m });
+        ok(r.choices[0].message.content === "hi" && sent.at(-1).model === "gpt-6.1-sol", `from 2026-12-11 llm-premium serves ${k} as gpt-6.1-sol (sent ${sent.at(-1).model})`);
+      }
+      await assert.rejects(premium.handler({ model: "gpt-6.1-sol", messages: m }), (e) => e.statusCode === 400 && /not allowed/.test(e.message));
+      const basic = LLM_TOOLS.find((t) => t.slug === "llm");
+      await assert.rejects(basic.handler({ model: "o3", messages: m }), (e) => e.statusCode === 400 && /not allowed/.test(e.message));
+      n += 2;
+    } finally { Date.now = realNow; }
   }
   for (const k of ["o3x", "o33", "gpt-9-nonsense", "o3pro"]) {
     ok(!tierAdmits(k, "llm-premium"), `control: ${k} is not admitted`);

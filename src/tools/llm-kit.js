@@ -36,7 +36,7 @@ const TIERS = {
   // o3-mini and o4-mini are still accepted by name: OpenAI retired both, and
   // RETIRING serves them as gpt-5.6-terra, so an agent with an older id is answered.
   // The o3 family left this list ahead of its 2026-12-11 shutdown; RETIRING's
-  // keepOn keeps it admitted here (as itself until then, gpt-5.6-terra after).
+  // keepOn keeps it admitted here (as itself until then, gpt-6.1-sol after).
   "llm-premium": { defaultModel: "gpt-5.6-terra", prefixes: ["gpt-5.6-terra", "o3-mini", "o4-mini"], maxInputChars: 32_000, maxTokens: 2048 },
 };
 
@@ -85,12 +85,14 @@ export const RETIRING = Object.freeze({
   "gpt-4.1": { until: "2027-01-14", use: "gpt-6.1-sol" },
   "o3-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
   "o4-mini": { until: "2026-10-27", use: "gpt-5.6-terra" },
-  // o3 and o3-pro shut down 2026-12-11 (notice of 2026-06-11). The notice
-  // names gpt-5.6-sol; this tier admits gpt-5.6-terra, its default, so a call
-  // naming either id is served by it from that day. keepOn: the tier whose
-  // list named the o3 family, which still admits every id of it by name.
-  "o3": { until: "2026-12-11", use: "gpt-5.6-terra", keepOn: "llm-premium" },
-  "o3-pro": { until: "2026-12-11", use: "gpt-5.6-terra" },
+  // o3 and o3-pro shut down 2026-12-11 (notice of 2026-06-11). OpenAI's
+  // deprecations page names gpt-6.1-sol for both (pro mode for o3-pro), so a
+  // call naming either is served by it from that day, on the tier that
+  // admitted the retired id (validateInput), priced by its own openai row.
+  // keepOn: the tier whose list named the o3 family, which still admits
+  // every id of it by name.
+  "o3": { until: "2026-12-11", use: "gpt-6.1-sol", keepOn: "llm-premium" },
+  "o3-pro": { until: "2026-12-11", use: "gpt-6.1-sol" },
 });
 /** The successor serving `model` at `now`, or null while it is still served as itself. */
 export function retiredSuccessor(model, now = Date.now()) {
@@ -195,7 +197,9 @@ function validateInput(input, tierSlug) {
   const requested = (typeof input.model === "string" && input.model.trim()) || TIERS[tierSlug]?.defaultModel || "gpt-6-luna";
   const successor = retiredSuccessor(requested);
   const model = successor || requested;
-  if (!tierAdmits(model, tierSlug)) {
+  // A retired id this tier admits is served here by its successor, which the
+  // tier's own list need not name (o3 on llm-premium is served by gpt-6.1-sol).
+  if (!tierAdmits(model, tierSlug) && !(successor && tierAdmits(requested, tierSlug))) {
     throw bad(`Model "${model}" is not allowed in the ${tierSlug} tier. Allowed prefixes: ${admittedFamilies(tierSlug).join(", ")}`);
   }
 
@@ -436,14 +440,18 @@ export const LLM_TOOLS = [
     category: "ai",
     price: "$0.500",
     description:
-      "LLM inference proxy (Premium tier) - gpt-5.6-terra reasoning model (the older o3, o3-pro, o3-mini and o4-mini ids are still accepted; each is served by gpt-5.6-terra once OpenAI retires it). Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 32k chars, output at 2048 tokens.",
+      "LLM inference proxy (Premium tier) - gpt-5.6-terra reasoning model (the older o3 and o3-pro ids are still accepted and are served by gpt-6.1-sol once OpenAI retires them; o3-mini and o4-mini are served by gpt-5.6-terra). Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 32k chars, output at 2048 tokens.",
     tags: [...SHARED_TAGS, "gpt-5.6-terra", "reasoning", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
+      // The listing keeps its whole description (the retired ids it still
+      // serves, vision, structured output and the caps); the sample answer is
+      // the part that points to /openapi.json when the two do not both fit.
+      descriptionFirst: true,
       input: { model: "gpt-5.6-terra", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
-          model: { type: "string", description: "Model ID: gpt-5.6-terra (the default). The older o3, o3-pro, o3-mini and o4-mini ids are still accepted; each is served by gpt-5.6-terra once OpenAI retires it." },
+          model: { type: "string", description: "Model ID: gpt-5.6-terra (the default). The older o3 and o3-pro ids are still accepted and are served by gpt-6.1-sol once OpenAI retires them; o3-mini and o4-mini are served by gpt-5.6-terra." },
           messages: { type: "array", description: "Array of {role, content} objects. content can be a string or array of {type:'text',text} and {type:'image_url',image_url:{url,detail}} blocks" },
           max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 2048)" },
           response_format: { type: "object", description: 'Optional: {type:"json_object"} or {type:"json_schema",json_schema:{name,schema}}' },

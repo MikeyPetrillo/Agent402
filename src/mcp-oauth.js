@@ -55,7 +55,7 @@ import { shared, createMemoryLimits } from "./shared-limits.js";
 import { envPositive } from "./env-num.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsSalesEnabled, creditsSalesSwitch, creditsBalanceMaxCents, mcpOAuthSwitch, mcpOAuthGuards, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
-import { limiterKey, wideNetworkKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey, retryAfterSecondsOf } from "./rate-limit.js";
 import { sellablePacks } from "./credits.js";
 import { normEmail, validEmail, sameOriginWrite, readCookie, ACCOUNT_PATH, ACCOUNT_COOKIE } from "./credits-account.js";
 import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-page.js";
@@ -707,8 +707,10 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       if (!r || !(r.exp > now()) || !sameBytes(r.cookie, digest(cookie))) return null;
       return { r, client: { name: r.clientName || "An app" }, cookie, ip: clientIp(req) };
     }
-    async function render(res, rid, p, { message = "", error = "", status = 200, lockedOut = null } = {}) {
+    // A 429 page carries Retry-After: the refusal's own wait, else the window it counts in.
+    async function render(res, rid, p, { message = "", error = "", status = 200, lockedOut = null, retryAfter = null } = {}) {
       const { r, client, cookie } = p;
+      if (status === 429) res.set("Retry-After", String(retryAfterSecondsOf(retryAfter, cfg.windowMs() / 1000)));
       const step = r.email ? "choose" : r.otp && r.otp.exp > now() ? "code" : "email";
       // A locked address's code form is shown disabled, with a new code offered.
       const isLocked = step === "code" && (lockedOut ?? await locked(p.ip).catch(() => false));
@@ -789,7 +791,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         if (!again) return expired(res);
         if (sent === "limited" || !again.r.otp) {
           const lockedOut = sent === "limited" && await locked(ip).catch(() => false);
-          return render(res, rid, again, { error: lockedOut ? LOCKED_TEXT : BUSY_TEXT, status: 429, lockedOut });
+          return render(res, rid, again, { error: lockedOut ? LOCKED_TEXT : BUSY_TEXT, status: 429, lockedOut, retryAfter: (lockedOut ? cfg.lockoutMs() : cfg.windowMs()) / 1000 });
         }
         return render(res, rid, again);
       }
@@ -799,7 +801,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         if (!otp || !(otp.exp > now())) return render(res, rid, p, { error: "That code has expired. Ask for a new one.", status: 400 });
         // Counted first, compared after: an attempt past either bound is refused uncompared.
         const turn = await takeAttempt(ip, rid, otp.h);
-        if (turn === "locked") return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true });
+        if (turn === "locked") return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true, retryAfter: cfg.lockoutMs() / 1000 });
         if (turn === "spent") {
           await requests.change((b) => { const x = ownRow(b.reqs, rid); if (!x?.otp || x.otp.h !== otp.h) return SKIP_UPDATE; x.lastEmail = x.otp.email; delete x.otp; return true; }).catch(() => {});
           const again = await pending(req, rid);
@@ -829,12 +831,12 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         // through the same checkout the balance page starts: the purchase
         // checks, card authentication and limits in credits.createCheckout.
         if (!r.email) return render(res, rid, p, { error: "Sign in with your email first.", status: 400 });
-        if (await over("buy", netKey(ip), cfg.sendsPerIp())) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429 });
+        if (await over("buy", netKey(ip), cfg.sendsPerIp())) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429, retryAfter: cfg.windowMs() / 1000 });
         try {
           const co = await credits.createCheckout(String(req.body?.pack || ""), { email: r.email, ip, returnTo: { success: `${baseUrl}${OAUTH_CONSENT_PATH}/bought?rid=${rid}&session={CHECKOUT_SESSION_ID}`, cancel: `${baseUrl}${OAUTH_CONSENT_PATH}?rid=${rid}` } });
           return noStore(res).redirect(303, co.url);
         } catch (e) {
-          if (e?.buyerSafe) return render(res, rid, p, { error: String(e.message).slice(0, 200), status: e.statusCode === 429 ? 429 : 400 });
+          if (e?.buyerSafe) return render(res, rid, p, { error: String(e.message).slice(0, 200), status: e.statusCode === 429 ? 429 : 400, retryAfter: e.retryAfter });
           log(`[mcp-oauth] checkout failed: ${String(e?.message || e).slice(0, 120)}`);
           return render(res, rid, p, { error: "Could not start checkout. Try again in a moment.", status: 503 });
         }

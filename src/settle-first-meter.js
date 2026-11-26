@@ -254,12 +254,37 @@ export function settleFirstBudgetMode({ now = Date.now(), env = process.env } = 
   return refresh(now).then(() => decide(now, env), () => decide(now, env));
 }
 
-/** The operator view (never public: it carries figures). */
+// Is the shared view due a read (never read, the last read or write did not
+// answer, or the last read is REFRESH_MS old)?
+const viewStale = (now, env) => settleFirstSwitch(env) === "auto" && sharedLimitsEnabled() && (!view.readAt || view.unread || now - view.readAt >= REFRESH_MS);
+
+/**
+ * The status view's own read of the meter: when the shared view is due one,
+ * the same bounded read a decision makes (one at a time, shared with every
+ * caller meanwhile, at most every REFRESH_MS), waited on for at most
+ * `waitMs`. Resolves true when the view holds a reading. Never throws.
+ */
+export async function settleFirstMeterRead({ now = Date.now(), env = process.env, waitMs = 1_000 } = {}) {
+  if (!viewStale(now, env)) return !!view.readAt || !sharedLimitsEnabled();
+  let timer = null;
+  try {
+    await Promise.race([refresh(now).catch(() => false), new Promise((r) => { timer = setTimeout(r, waitMs); timer.unref?.(); })]);
+  } catch { /* the view says what it holds */ } finally { if (timer) clearTimeout(timer); }
+  return !!view.readAt && !view.unread;
+}
+
+/** The operator view (never public: it carries figures). A shared meter this
+ *  process has not read yet, and whose read has not failed, reads
+ *  budgetMode "not-read" (why "not-read-yet"), never "on": a decision reads
+ *  it before it answers. Asking starts that read when one is due (bounded,
+ *  shared, at most every REFRESH_MS), so a later view holds the reading. */
 export function settleFirstMeterStatus({ now = Date.now(), env = process.env } = {}) {
+  if (viewStale(now, env)) { try { void refresh(now).catch(() => {}); } catch { /* the view says what it holds */ } }
+  const notRead = settleFirstSwitch(env) === "auto" && sharedLimitsEnabled() && !view.readAt && !view.unread;
   const v = verdict(now, env);
   const f = figures(now);
   return {
-    switch: settleFirstSwitch(env), budgetMode: v.on ? "on" : "off", why: v.why,
+    switch: settleFirstSwitch(env), budgetMode: notRead ? "not-read" : v.on ? "on" : "off", why: notRead ? "not-read-yet" : v.why,
     unsettledUsd24h: f.costMicro / 1e6, atRiskUsd: f.riskMicro / 1e6, budgetUsd: settleFirstBudgetUsd(env),
     shared: sharedLimitsEnabled(), lastReadAgoMs: view.readAt ? now - view.readAt : null, flips,
   };

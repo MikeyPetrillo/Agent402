@@ -251,7 +251,7 @@ const buyer = await import("../src/x402-buyer.js");
   const { enrichLiveQuotes } = await import("../src/x402-index.js");
   const m = metered();
   globalThis.fetch = async () => new Response(m.stream, { status: 402, headers: { "payment-required": challengeHdr } });
-  const rows = [{ seller: "example.com", route: "/huge", method: "POST", slug: "huge", price: null, networks: [] }];
+  const rows = [{ seller: "example.com", route: "/huge", method: "POST", slug: "huge", price: null, networks: [], paid: true }];
   await enrichLiveQuotes(rows, "https://example.com", { ignoreBudget: true });
   ok(rows[0].price === 0.001, `the crawler still learns the header quote beside a huge body (price ${rows[0].price})`);
   ok(bounded(m.pulled(), 64_000), `the crawler: pulled ${m.pulled()} bytes of 24 MB from the seller route (cap 64 KB)`);
@@ -259,7 +259,7 @@ const buyer = await import("../src/x402-buyer.js");
   // still yields its quote.
   const inBody = JSON.stringify({ x402Version: 2, accepts: [{ ...accept, amount: "2000" }] });
   globalThis.fetch = async () => new Response(withBom(inBody), { status: 402, headers: { "content-type": "application/json" } });
-  const rows2 = [{ seller: "example.com", route: "/bom", method: "POST", slug: "bom", price: null, networks: [] }];
+  const rows2 = [{ seller: "example.com", route: "/bom", method: "POST", slug: "bom", price: null, networks: [], paid: true }];
   await enrichLiveQuotes(rows2, "https://example.com", { ignoreBudget: true });
   ok(rows2[0].price === 0.002, `the crawler learns a body quote that opens with a byte-order mark (price ${rows2[0].price})`);
 }

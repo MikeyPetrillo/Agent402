@@ -347,7 +347,7 @@ export const TIERS = {
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
       // gpt-5-nano shuts down 2026-12-11: no longer listed here; RETIRING_MODELS keeps
-      // it admitted on this tier (keepOn) and serves gpt-5.6-luna from that day.
+      // it admitted on this tier (keepOn) and serves gpt-6-luna from that day.
       // gpt-5.6-luna: frontier-lab model in the nano class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
       // gpt-6-luna (live 2026-09-24, 1M context): the nano default. The prefix
@@ -561,7 +561,7 @@ export const TIERS = {
       // gpt-5 (and -mini, -nano, -pro), o3 and o3-pro shut down 2026-12-11:
       // their family prefixes left this list, and RETIRING_MODELS' keepOn keeps
       // both families admitted here (as themselves until that day, then served
-      // by the gpt-5.6 successors listed below).
+      // by the gpt-6 successors OpenAI names, through tierAllows' `requested`).
       "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
@@ -924,6 +924,12 @@ export const RETIRING_MODELS = Object.freeze({
   // day, then by the family's current model. Anthropic's dated id
   // (claude-sonnet-4-5-20250929, a stock SDK default) resolves to this entry.
   "anthropic/claude-sonnet-4.5": { until: "2026-11-30", use: "anthropic/claude-sonnet-5.5", asItselfUntil: true },
+  // Claude Opus 4.5 retires 2027-01-22 (Anthropic's model deprecations page,
+  // notice of 2026-11-23, replacement claude-opus-5-5). The premium and
+  // metered tiers admit it through the claude-opus family prefix; SCHEDULED:
+  // served as itself until that day, then by the premium default, whose own
+  // row is no dearer. The dated id (claude-opus-4-5-20251101) resolves here.
+  "anthropic/claude-opus-4.5": { until: "2027-01-22", use: "anthropic/claude-opus-5.5", asItselfUntil: true },
   // Qwen 3.5 9B (OpenRouter expiration_date 2026-10-21). The base tier admits
   // the qwen/ family; its successor is the family's current flash model,
   // priced below it and inside the tier's max_price.
@@ -943,8 +949,9 @@ export const RETIRING_MODELS = Object.freeze({
   "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true, keepOn: ["v1-chat", "v1-chat-pro", "v1-chat-metered"] },
   // OpenAI shuts down GPT-5, GPT-5 mini, GPT-5 nano, GPT-5 pro, o3 and o3-pro on
   // 2026-12-11 (OpenAI's deprecations page, notice of 2026-06-11). SCHEDULED
-  // like the entries above; each successor is the replacement that notice
-  // names (pro mode for the -pro ids is the -pro listing). A call naming one
+  // like the entries above; each successor is the replacement that page
+  // names (gpt-6.1-sol, gpt-6.1-terra, gpt-6-luna; pro mode for the -pro ids
+  // is the -pro listing), each priced by its own row. A call naming one
   // stays on every tier that admitted it (tierAllows' `requested`), served by
   // the successor there, so gpt-5-nano on base or premium is not moved to
   // nano; pinned in test-llm-gateway. The tier lists no longer name these
@@ -952,12 +959,12 @@ export const RETIRING_MODELS = Object.freeze({
   // id, and every id of its family, admitted on the tiers that listed it.
   // `asItself` holds the flex and reasoning-effort rows that apply while an
   // id is still served as itself (flexEligible, reasoningProfile).
-  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
-  "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-5.6-terra", asItselfUntil: true },
-  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true, keepOn: ["v1-chat-nano", "v1-chat", "v1-chat-premium", "v1-chat-metered"], asItself: { flex: true, efforts: ["minimal", "low", "medium", "high"] } },
-  "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
-  "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
-  "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
+  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-6.1-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
+  "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-6.1-terra", asItselfUntil: true },
+  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-6-luna", asItselfUntil: true, keepOn: ["v1-chat-nano", "v1-chat", "v1-chat-premium", "v1-chat-metered"], asItself: { flex: true, efforts: ["minimal", "low", "medium", "high"] } },
+  "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-6.1-sol-pro", asItselfUntil: true },
+  "openai/o3": { until: "2026-12-11", use: "openai/gpt-6.1-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
+  "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-6.1-sol-pro", asItselfUntil: true },
   // Shut down 2026-07-23 (OpenAI's deprecations page, notice of 2026-04-22,
   // replacement gpt-5.6-sol) and gone from the upstream catalog; the premium
   // tier's openai/gpt-5 family prefix still admitted them by name.
@@ -1210,8 +1217,8 @@ function prefixesAdmit(tier, id) {
  *  when the wire has it: a retired id (RETIRING_MODELS, its date passed) stays
  *  on every tier whose prefixes admitted it, served there by its successor
  *  under that tier's caps, price and clamp. Without this a base call naming
- *  gpt-5-nano would move to nano on 2026-12-11 (gpt-5.6-luna's only flat
- *  home), with nano's smaller input and output caps. A caller naming the
+ *  gpt-5-nano would have moved to nano on 2026-12-11 (gpt-5.6-luna, its
+ *  first successor, had no other flat home), with nano's smaller caps. A caller naming the
  *  successor itself keeps the successor's own home tier and price.
  *  A tier always serves its own default ids (defaultModel, defaultModelCompat)
  *  at its own price and caps: to a call that named no model (defaultModelFor)

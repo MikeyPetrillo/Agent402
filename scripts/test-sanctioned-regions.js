@@ -16,7 +16,7 @@
 // blocked country; the refused payment is on the operator view and the
 // status word reads due until it is marked filed.
 import "./lib/offline-stores.js";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,14 @@ const req = (h, path = "/api/x") => ({ headers: h, path, method: "GET", header: 
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR" }), { trusted: true })?.country === "IR", "Iran is blocked when the header is trusted");
 for (const c of ["CU", "KP", "SY"]) ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": c }), { trusted: true })?.country === c, `${c} is blocked`);
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR" }), { trusted: false }) === null, "an untrusted CF-IPCountry is never read");
+// A header far longer than any location value is unreadable without being split.
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "US" + " ".repeat(100) }), { trusted: true })?.unreadable === true, "an over-long CF-IPCountry is unreadable");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "US, US" }), { trusted: true }) === null, "an identical duplicate within the bound still reads as that value");
+// A blank location header is no location sent, never unreadable: a paying buyer is not refused for it.
+for (const blank of ["", "  "]) {
+  ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": blank }), { trusted: true }) === null, `a blank CF-IPCountry (${JSON.stringify(blank)}) reads as no location, not unreadable`);
+  ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": blank }), { trusted: true }) === null, `UA with a blank region code (${JSON.stringify(blank)}) is served`);
+}
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "US" }), { trusted: true }) === null, "an allowed country passes");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "XX" }), { trusted: true }) === null && geo.sanctionedLocationOf(req({ "cf-ipcountry": "T1" }), { trusted: true }) === null, "unknown (XX) and Tor (T1) are not blocked");
 for (const code of ["43", "40", "14", "09", "UA-43"]) ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": code }), { trusted: true }) !== null, `Ukraine region ${code} is blocked`);
@@ -54,6 +62,22 @@ ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": "<scri
 for (const code of ["23", "THR", "IR-07", "ZZ9"]) ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": code }), { trusted: true })?.region === null, `a country refusal keeps no subdivision (${code})`);
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Moscow" }), { trusted: true }) === null, "the rest of Russia is not blocked here (not a comprehensive program)");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "CU" }), { trusted: true, countries: geo.sanctionedCountries({ SANCTIONS_GEO_COUNTRIES: "IR" }) }) === null, "SANCTIONS_GEO_COUNTRIES replaces the country set");
+// A location header Cloudflare set holds one value; a repeat (Node joins it
+// with ", "), an array or a malformed value proves no location.
+for (const h of [{ "cf-ipcountry": "IR, US" }, { "cf-ipcountry": "US, IR" }, { "cf-ipcountry": ["IR", "US"] }, { "cf-ipcountry": "IRN" }, { "cf-ipcountry": "U S" }, { "cf-ipcountry": "UA", "cf-region-code": "30, 43" }, { "cf-ipcountry": "UA", "cf-region-code": ["43", "30"] }, { "cf-ipcountry": "UA", "cf-region": ["Kyiv", 7] }]) {
+  ok(geo.sanctionedLocationOf(req(h), { trusted: true })?.unreadable === true, `a joined, repeated or malformed location header is unreadable (${JSON.stringify(h)})`);
+  ok(geo.sanctionedLocationOf(req(h), { trusted: false }) === null, `an untrusted joined header is never read (${JSON.stringify(h)})`);
+}
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR, IR" }), { trusted: true })?.country === "IR" && geo.sanctionedLocationOf(req({ "cf-ipcountry": ["ir", "IR"] }), { trusted: true })?.country === "IR", "copies of one blocked value read as that value");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "US, US" }), { trusted: true }) === null, "copies of one allowed value read as that value");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": "43, 43" }), { trusted: true })?.region === "UA-43", "copies of one blocked region code read as that code");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region": ["Kyiv", "Crimea"] }), { trusted: true })?.region === "UA-43", "repeated region names are scanned together");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "US", "cf-region-code": "TX, CA" }), { trusted: true }) === null && geo.sanctionedLocationOf(req({ "cf-ipcountry": "DE", "cf-region-code": "<b>" }), { trusted: true }) === null, "a subdivision header outside the countries it can decide changes nothing");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR, US", "cf-region-code": "43" }), { trusted: true })?.unreadable === true, "a joined country is unreadable whatever the region says");
+// Live control: the single values Cloudflare sends read as today.
+for (const [h, want] of [[{ "cf-ipcountry": "US" }, null], [{ "cf-ipcountry": "GB", "cf-region-code": "ENG", "cf-region": "England" }, null], [{ "cf-ipcountry": "UA", "cf-region-code": "30", "cf-region": "Kyiv City" }, null], [{ "cf-ipcountry": "XX" }, null], [{ "cf-ipcountry": "T1" }, null], [{}, null]]) {
+  ok(geo.sanctionedLocationOf(req(h), { trusted: true }) === want, `a single clean Cloudflare value is served as before (${JSON.stringify(h)})`);
+}
 
 // ---- unit: the middleware
 const run = (mw, r) => new Promise((resolve) => {
@@ -89,6 +113,39 @@ const run = (mw, r) => new Promise((resolve) => {
   const v = geo.sanctionedRegionsView({});
   ok(v.refused >= 2 && v.refusedWithPayment === 1 && v.aggregated.unverified === 1 && v.eventsRecorded === 0 && v.byCountry.KP >= 1 && v.regionHeaders === "absent", "the operator view counts refusals, the unverified payment as counted only, and says region headers are absent");
   ok(!/sanction|IR|KP|UA-/.test(logged.join(" ").replace(/\[sanctions-geo\]/g, "")), `the refusal log line names no location (${logged[0] || "none"})`);
+  // An unreadable location: a paid request is refused, an unpaid one served,
+  // and a request off the CDN path is never read.
+  {
+    const before = geo.sanctionedRegionsView({});
+    const paid = await run(mw, { ...req({ "cf-ipcountry": "IR, US", "payment-signature": "e30=" }), viaCdn: true });
+    ok(paid.status === 451 && paid.body.reason === "location_unreadable" && paid.body.charged === false && paid.body.error.includes(NOT_CHARGED) && paid.headers["cache-control"] === "no-store", `a paid request with a joined CF-IPCountry is refused 451 location_unreadable, charged false (${JSON.stringify(paid.body)})`);
+    ok(!/sanction|ofac|treasury/i.test(JSON.stringify(paid.body)), "the unreadable-location 451 body is neutral");
+    const arr = await run(mw, { ...req({ "cf-ipcountry": ["US", "IR"], "payment-signature": "e30=" }), viaCdn: true });
+    ok(arr.status === 451 && arr.body.reason === "location_unreadable", "a paid request with a repeated CF-IPCountry array is refused");
+    const tempo = await run(mw, { ...req({ "cf-ipcountry": "UA", "cf-region-code": "43, 30", authorization: "Payment abc" }), viaCdn: true });
+    ok(tempo.status === 451 && tempo.body.reason === "location_unreadable", "a paid MPP request with a joined region code in Ukraine is refused");
+    // The scheme as the gates read it: any case, any whitespace after it.
+    let schemeRefused = 0;
+    for (const auth of ["payment abc", "PAYMENT abc", "pAyMeNt abc", "Payment\tabc", "payment   abc"]) {
+      const r = await run(mw, { ...req({ "cf-ipcountry": "IR, US", authorization: auth }), viaCdn: true });
+      if (r.status === 451 && r.body.reason === "location_unreadable") schemeRefused++;
+      else ok(false, `an unreadable location refuses a paid request whose scheme is written ${JSON.stringify(auth)} (${r.status})`);
+    }
+    ok(schemeRefused === 5, "an unreadable location refuses a paid MPP request whatever the scheme's case or spacing");
+    ok((await run(mw, { ...req({ "cf-ipcountry": "IR, US", authorization: "Paymentx abc" }), viaCdn: true })).status === "next" && (await run(mw, { ...req({ "cf-ipcountry": "IR, US", authorization: "Payment" }), viaCdn: true })).status === "next", "control: `Paymentx abc` and a bare `Payment` are not a payment");
+    ok(geo.isPaymentScheme("payment x") && geo.isPaymentScheme("Payment\tx") && !geo.isPaymentScheme("Paymentx y") && !geo.isPaymentScheme(undefined) && !geo.isPaymentScheme("Bearer payment x"), "isPaymentScheme: the scheme word in any case, then whitespace");
+    const credits = await run(mw, { ...req({ "cf-ipcountry": "IR, US", authorization: `Bearer a402_${"q".repeat(40)}` }), viaCdn: true });
+    ok(credits.status === 451 && credits.body.reason === "location_unreadable", "a prepaid credits call with a joined CF-IPCountry is refused like any paid request");
+    ok((await run(mw, { ...req({ "cf-ipcountry": "IR, US" }), viaCdn: true })).status === "next", "an unpaid request with a joined CF-IPCountry is served");
+    ok((await run(mw, { ...req({ "cf-ipcountry": "IR, US", "payment-signature": "e30=" }), viaCdn: false })).status === "next", "a paid request off the CDN path with a joined CF-IPCountry is served (never read)");
+    ok((await run(mw, { ...req({ "cf-ipcountry": "US", "cf-region-code": "TX", "payment-signature": "e30=" }), viaCdn: true })).status === "next", "a paid request with one clean Cloudflare value is served (live control)");
+    ok((await run(mw, { ...req({ "cf-ipcountry": "IR, IR" }), viaCdn: true })).body?.reason === "unavailable_in_region", "copies of one blocked country are refused as that country");
+    const after = geo.sanctionedRegionsView({});
+    ok(after.unreadableLocation.refused - before.unreadableLocation.refused === 9 && after.unreadableLocation.served - before.unreadableLocation.served === 3, `the operator view counts unreadable locations, refused and served (${JSON.stringify(after.unreadableLocation)})`);
+    ok(after.refused - before.refused === 1 && after.refusedWithPayment === before.refusedWithPayment, "an unreadable location is not counted as a region refusal");
+    await new Promise((r) => setTimeout(r, 20));
+    recorded.length = 0;
+  }
 }
 
 // ---- a Tempo push credential: the money moved before the request arrived
@@ -112,6 +169,23 @@ const run = (mw, r) => new Promise((resolve) => {
   await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: push(H2) }), viaCdn: true });
   await new Promise((r) => setTimeout(r, 20));
   ok(recorded.length === 3 && recorded[2].aggregate === true && recorded[2].kind === "unproven-refusal" && !recorded[2].payer, "a push transfer whose sender the chain does not show is an aggregate count, with no address");
+  // The scheme in another case or spacing is the same credential: refused as
+  // a push, never told nothing was charged, and recorded.
+  {
+    const n0 = recorded.length;
+    const variants = [push(H1).replace(/^Payment /, "payment "), push(H1).replace(/^Payment /, "PAYMENT\t"), push(H1).replace(/^Payment /, "pAyment   ")];
+    ok(variants.every((v) => !v.startsWith("Payment ")) && variants.every((v) => geo.pushCredentialHashOf({ headers: { authorization: v } }) === H1), "a push credential's hash is read whatever the scheme's case or spacing");
+    for (const v of variants) {
+      const r = await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: v }), viaCdn: true });
+      ok(r.status === 451 && r.body.transferClaimed === false && r.body.charged === undefined && !r.body.error.includes(NOT_CHARGED), `a push credential written ${JSON.stringify(v.slice(0, 10))} is answered as a push transfer`);
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    ok(recorded.length === n0 + 3 && recorded.slice(n0).every((e) => e.payer === senders[H1] && e.pushHash === H1), `and each is recorded with its sender (${recorded.length - n0} of 3)`);
+    const ctl = await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: push(H1).replace(/^Payment /, "Paymentx ") }), viaCdn: true });
+    await new Promise((r) => setTimeout(r, 20));
+    ok(ctl.status === 451 && ctl.body.charged === false && recorded.length === n0 + 3, "control: `Paymentx <credential>` is not a payment: refused as unpaid, nothing recorded");
+    recorded.length = n0;
+  }
   const sy = await run(mw, { ...req({ "cf-ipcountry": "SY", authorization: push(`0x${"ef".repeat(32)}`) }), viaCdn: true });
   await new Promise((r) => setTimeout(r, 20));
   ok(sy.status === 451 && sy.body.transferClaimed === false && recorded.length === 3, "a push transfer from a country blocked by choice (SY) is refused the same way and never recorded as a report");
@@ -449,6 +523,17 @@ try {
   ok((await fetch(`${B}/health`, { headers: cdn("KP") })).status === 200, "/health answers from North Korea");
   ok((await fetch(`${B}/terms`, { headers: cdn("KP") })).status === 200, "/terms answers from North Korea");
   ok((await fetch(`${B}/api/pricing`, { headers: cdn("KP") })).status === 451, "a free route is blocked too");
+  // Two CF-IPCountry lines on the wire (the server joins them): a paid
+  // request is refused before verification, an unpaid page is served.
+  const wire = (path, headers, body) => new Promise((resolve, reject) => {
+    const u = new URL(path, B);
+    const r = httpRequest({ hostname: u.hostname, port: u.port, path: u.pathname, method: body ? "POST" : "GET", headers }, (res) => { let d = ""; res.on("data", (c) => { d += c; }); res.on("end", () => resolve({ status: res.statusCode, body: d })); });
+    r.on("error", reject); if (body) r.write(body); r.end();
+  });
+  const dupBefore = verifies;
+  const dup = await wire("/api/hash", { "Content-Type": "application/json", "PAYMENT-SIGNATURE": payment, ...cdn(null), "CF-IPCountry": ["US", "IR"] }, JSON.stringify({ text: "hi" }));
+  ok(dup.status === 451 && JSON.parse(dup.body).reason === "location_unreadable" && verifies === dupBefore, `a paid request with two CF-IPCountry lines is refused 451 before verification (got ${dup.status})`);
+  ok((await wire("/api/pricing", { ...cdn(null), "CF-IPCountry": ["US", "IR"] })).status === 200, "an unpaid request with two CF-IPCountry lines is served");
 
   await new Promise((r) => setTimeout(r, 100));
   const status = await (await fetch(`${B}/api/gateway-status`)).json();

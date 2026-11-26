@@ -8,103 +8,73 @@
 // access itself, so the remaining question is redistribution scope rather
 // than whether we may read the data at all.
 //
-// TWO DATASETS, one answer shape.
+// ONE DATASET: DBEQ.BASIC, bars at least 24 hours old.
 //
-// EQUS.SUMMARY (primary) is the consolidated end-of-day summary that Nasdaq
-// disseminates on its NLS+ feed: one ohlcv-1d bar per symbol per session,
-// across all US exchanges and ATSs, volume included (the 20:15 ET summary,
-// so post-market volume is in it). Prices are unadjusted. Its history starts
-// 2024-07-01, which covers every window these tools serve.
-//
-// DBEQ.BASIC (fallback) is a three-venue consolidation (NYSE Texas, NYSE
-// National, IEX), not the consolidated tape. MIAX Pearl left the dataset on
-// 2024-04-01. Prices track the wider market closely; VOLUME DOES NOT,
-// because it counts only those venues. A read falls back to it only when the
-// primary answers with an error or no rows (a dataset-level failure). A
-// transport failure (timeout, refused connection) is the same host for both,
-// so it does not double the wait by retrying the other dataset.
-//
-// Every answer names the dataset it came from and its coverage, so a
-// three-venue figure never reads as a total. DATABENTO_SUMMARY=off pins the
-// fallback.
+// Every read here is Databento's DBEQ.BASIC, a set of U.S. exchange venues
+// (IEX, NYSE Texas, formerly NYSE Chicago, and NYSE National, as Databento
+// lists its publishers), not the consolidated tape. Every answer is held to two rules:
+//   * no bar whose day ended less than DELAY_HOURS (24) before the request is
+//     served: a read's end is clamped to latestAvailableSession() below;
+//   * every answer carries VENUE_NOTICE and consolidated: false, so a venue
+//     figure never reads as a market total (volume is null; venueVolume
+//     counts those venues only, and a close can differ from the official
+//     consolidated close).
+// No other dataset is read. The consolidated end-of-day summary dataset is a
+// different license and is not read here at all, by any setting.
+// The hosted service runs with STOCK_DATA_PROVIDER unset.
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, isUpstreamFailure } from "../upstream-deadline.js";
 import { getSharedRedisClient } from "../shared-limit.js";
 import { withLoopTimeout } from "../loop-deadline.js";
 import { leased } from "../state-db.js";
+import { EXCHANGES, daySchedule } from "./exchange-calendars.js";
 
 const HOST = "https://hist.databento.com/v0";
-export const PRIMARY_DATASET = "EQUS.SUMMARY";
-export const FALLBACK_DATASET = "DBEQ.BASIC";
-export const VENUES = "NYSE Texas (formerly NYSE Chicago), NYSE National, IEX";
-/** What each dataset covers, as the tools report it. */
+export const DATASET = "DBEQ.BASIC";
+export const VENUES = "IEX, NYSE Texas (formerly NYSE Chicago), NYSE National";
+/** The fixed notice every answer carries. */
+export const VENUE_NOTICE = `Daily bars from Databento DBEQ.BASIC: the venues IEX, NYSE Texas (formerly NYSE Chicago) and NYSE National only, each bar at least 24 hours old. Not consolidated: volumes and prices are those venues' only, and closes can differ from the official consolidated close. Prices are unadjusted for splits and dividends. Information only, not investment advice.`;
+/** What the dataset covers, as the tools report it. */
 export const COVERAGE = Object.freeze({
-  [PRIMARY_DATASET]: Object.freeze({
-    dataset: PRIMARY_DATASET, coverage: "consolidated", consolidated: true,
-    venues: "All US exchanges and ATSs (consolidated end-of-day summary)",
-  }),
-  [FALLBACK_DATASET]: Object.freeze({
-    dataset: FALLBACK_DATASET, coverage: "three-venue", consolidated: false, venues: VENUES,
-  }),
+  [DATASET]: Object.freeze({ dataset: DATASET, coverage: "venue-partial", consolidated: false, venues: VENUES }),
 });
-const summaryOn = () => String(process.env.DATABENTO_SUMMARY || "").trim().toLowerCase() !== "off";
-// A primary that refuses our credentials (HTTP 401 or 403) refuses the next
-// read too: that refusal is remembered for DATABENTO_PRIMARY_SKIP_MS (default
-// 1 h), and reads go straight to the fallback meanwhile instead of spending a
-// refused read on every call. A 400 may be our own malformed request rather
-// than the dataset's state, so one 400 is not remembered: the skip starts only
-// once 400s on two different symbols (the range read counts as its own) land
-// inside one skip window. A timeout, a 5xx or a date-range 422 is not
-// remembered.
-const PRIMARY_SKIP_STATUSES = new Set([401, 403]);
-const primarySkipMs = () => { const n = Number(process.env.DATABENTO_PRIMARY_SKIP_MS); return Number.isFinite(n) && n > 0 ? n : 3600_000; };
-let primaryRefusedAt = 0;
-let primarySkips = 0;
-// symbol -> when the primary last answered 400 for it (inside the skip window).
-const primaryBadRequests = new Map();
-export function notePrimaryRefusal(dataset, err, symbol = null) {
-  if (dataset !== PRIMARY_DATASET) return;
-  const status = err?.upstreamStatus;
-  if (status === 400) {
-    const now = Date.now();
-    for (const [k, at] of primaryBadRequests) if (now - at >= primarySkipMs()) primaryBadRequests.delete(k);
-    const key = symbol ? String(symbol).toUpperCase() : "(range)";
-    primaryBadRequests.delete(key);
-    primaryBadRequests.set(key, now);
-    while (primaryBadRequests.size > 16) primaryBadRequests.delete(primaryBadRequests.keys().next().value);
-    if (primaryBadRequests.size < 2) {
-      console.warn(`[databento] ${PRIMARY_DATASET} answered HTTP 400 for one read (possibly our request); still reading it first`);
-      return;
-    }
-  } else if (!PRIMARY_SKIP_STATUSES.has(status)) return;
-  if (!primaryRefusedAt || Date.now() - primaryRefusedAt >= primarySkipMs()) {
-    const why = status === 400 ? `HTTP 400 on ${primaryBadRequests.size} different reads` : `HTTP ${status}`;
-    console.warn(`[databento] ${PRIMARY_DATASET} refused reads (${why}); reading ${FALLBACK_DATASET} directly for ${Math.round(primarySkipMs() / 60_000)} min`);
-  }
-  primaryRefusedAt = Date.now();
+/** The datasets a read tries, in order: DBEQ.BASIC alone. */
+export const datasetOrder = () => [DATASET];
+
+// ---------------------------------------------------------- the 24 h delay
+//
+// An ohlcv-1d bar covers its UTC day, extended hours included, so its newest
+// print can be as late as the end of that UTC day (which is after the 4:00
+// p.m. ET close). A bar is served only once DELAY_HOURS have passed since the
+// end of its day: day D is eligible at `now` when D + 1 day (00:00 UTC) is at
+// or before now - 24 h. latestAvailableSession walks back from there over
+// weekends and NYSE holidays (src/tools/exchange-calendars.js; outside that
+// calendar's years, weekdays only), so the answer can name the session.
+export const DELAY_HOURS = 24;
+const DAY_MS = 864e5;
+const isoDay = (t) => new Date(t).toISOString().slice(0, 10);
+const nextIso = (iso, n = 1) => isoDay(Date.parse(iso + "T00:00:00Z") + n * DAY_MS);
+function tradingDay(iso) {
+  const d = daySchedule(EXCHANGES.NYSE, iso);
+  if (d.covered) return d.tradingDay === true;
+  const wd = new Date(iso + "T00:00:00Z").getUTCDay();
+  return wd !== 0 && wd !== 6;
 }
-/** True when the primary's failure is the dataset's own answer that it could
- *  not serve the read (an error status other than a plain 4xx refusal of the
- *  request, no rows, a range it does not hold, an unreadable answer); false
- *  for a 400-class refusal that may be our own request. */
-export function primaryProvenUnavailable(err) {
-  const s = Number(err?.upstreamStatus);
-  if (!err?.datasetError) return false;
-  if (Number.isFinite(s) && s >= 400 && s < 500) return s === 401 || s === 403;
-  return true;
+/** The newest session (YYYY-MM-DD) whose daily bar is at least DELAY_HOURS
+ *  old at `now`. */
+export function latestAvailableSession(now = Date.now()) {
+  // Day D's bar ends at D + 1 (00:00 UTC); eligible when that is <= now - 24 h.
+  let day = isoDay(now - DELAY_HOURS * 3600_000 - DAY_MS);
+  for (let i = 0; i < 15 && !tradingDay(day); i++) day = nextIso(day, -1);
+  return day;
 }
-const primarySkipped = () => primaryRefusedAt > 0 && Date.now() - primaryRefusedAt < primarySkipMs();
-/** Operator view of the remembered refusal. */
-export function primarySkipStatus() {
-  return { skipping: primarySkipped(), since: primaryRefusedAt ? new Date(primaryRefusedAt).toISOString() : null, skippedReads: primarySkips };
+/** The exclusive end a read may ask for at `now`: the day after the latest
+ *  available session, never past `datasetEnd` (itself exclusive). */
+export function delayedEnd(datasetEnd, now = Date.now()) {
+  const cap = nextIso(latestAvailableSession(now));
+  return datasetEnd && datasetEnd < cap ? datasetEnd : cap;
 }
-export function __resetPrimarySkip() { primaryRefusedAt = 0; primarySkips = 0; primaryBadRequests.clear(); }
-/** The datasets a read tries, in order. */
-export const datasetOrder = () => {
-  if (!summaryOn()) return [FALLBACK_DATASET];
-  if (primarySkipped()) return [FALLBACK_DATASET];
-  return [PRIMARY_DATASET, FALLBACK_DATASET];
-};
+
 // Databento prices are fixed-point integers scaled by 1e9.
 const PX = 1e-9;
 // A query is priced by uncompressed bytes. Nothing we issue should cost more
@@ -312,18 +282,11 @@ async function readRangeOf(dataset) {
 function readRange() {
   if (!rangeInflight) {
     rangeInflight = (async () => {
-      const order = datasetOrder();
-      for (const [i, dataset] of order.entries()) {
-        try {
-          const end = await readRangeOf(dataset);
-          rangeState = { end, at: Date.now(), dataset };
-          sharedSet("range", rangeState, SHARED_RANGE_TTL_S);
-          return end;
-        } catch (e) {
-          notePrimaryRefusal(dataset, e, null);
-          if (!e.datasetError || i === order.length - 1) throw e;
-        }
-      }
+      const dataset = DATASET;
+      const end = await readRangeOf(dataset);
+      rangeState = { end, at: Date.now(), dataset };
+      sharedSet("range", rangeState, SHARED_RANGE_TTL_S);
+      return end;
     })().finally(() => { rangeInflight = null; });
   }
   return rangeInflight;
@@ -448,30 +411,24 @@ export async function dailyBars(opts) { return (await dailyBarsRead(opts)).bars;
 const barsKey = (p) => `${p.dataset}|${p.symbols}|${p.schema}|${p.start}|${p.end}`;
 
 /** Bars plus where they came from: { bars, cached, fetchedAt, dataset }.
- *  Tries the primary dataset, then the fallback on a dataset-level failure
- *  (see the header). A refusal of our own (the price bound), an unknown
- *  symbol and a transport failure are answered as they are. */
-export async function dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk = false }) {
-  const order = datasetOrder();
-  if (summaryOn() && order[0] !== PRIMARY_DATASET) primarySkips++;
-  // Set when the primary answered, for this read, that it could not serve it
-  // (primaryProvenUnavailable): only then may the answer say so.
-  let primaryUnavailable = false;
-  for (const [i, dataset] of order.entries()) {
-    try {
-      const r = await dailyBarsOf(dataset, { symbol, start, end, maxUsd });
-      return primaryUnavailable && dataset !== PRIMARY_DATASET ? { ...r, primaryUnavailable: true } : r;
+ *  One dataset (DATASET); `end` is exclusive and is clamped to the 24-hour
+ *  delay (delayedEnd), and a bar past the latest available session is never
+ *  returned. A refusal of our own (the price bound), an unknown symbol and a
+ *  transport failure are answered as they are. */
+export async function dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk = false, now = Date.now() }) {
+  const dataset = DATASET;
+  const latest = latestAvailableSession(now);
+  const e = delayedEnd(end, now);
+  const s = start && start < e ? start : nextIso(e, -1);
+  const held = (r) => ({ ...r, bars: r.bars.filter((b) => b.day <= latest) });
+  try {
+    return held(await dailyBarsOf(dataset, { symbol, start: s, end: e, maxUsd }));
+  } catch (err) {
+    if (lastGoodOk && !err.datasetError && isUpstreamFailure(err)) {
+      const copy = lastGoodQuoteBars({ symbol, start: s, end: e });
+      if (copy) return held(copy);
     }
-    catch (e) {
-      notePrimaryRefusal(dataset, e, symbol);
-      if (dataset === PRIMARY_DATASET) primaryUnavailable = primaryProvenUnavailable(e);
-      if (lastGoodOk && !e.datasetError && isUpstreamFailure(e)) {
-        const copy = lastGoodQuoteBars({ symbol, start, end });
-        if (copy) return copy;
-      }
-      if (!e.datasetError || i === order.length - 1) throw e;
-      console.warn(`[databento] ${dataset} read failed (${e.statusCode}); answering from ${order[i + 1]}`);
-    }
+    throw err;
   }
 }
 
@@ -693,6 +650,8 @@ export async function warmTick() {
   // Primed only once the boot read landed, so a failed boot read is retried
   // (recordedTick) even with no demand yet.
   warm.primed = true;
+  // Every read ends at the delayed end, so the audit and the pre-reads do too.
+  end = delayedEnd(end);
   // The quote shape is priced once per session, including the boot read, so
   // no quote goes unpriced past the first tick after a deploy.
   await auditQuotePrice(end);
@@ -776,7 +735,6 @@ export function quoteWarmerStatus() {
     shared: sharedCacheCounts(),
     quotePriceCheck: quotePriceInline ? "inline" : "per-session",
     quotePriceAuditOk: quotePriceAudit.ok,
-    primarySkip: primarySkipStatus(),
     lastTick: warm.lastResult ? { skipped: warm.lastResult.skipped || null, error: warm.lastResult.error || null, prefetched: warm.lastResult.prefetched ?? null } : null,
   };
 }
@@ -792,11 +750,9 @@ export function __resetDatabentoState() {
   quotePriceInline = false; quotePriceAudit = { end: null, at: 0, ok: null, dataset: null };
   Object.assign(warm, { lastTickAt: 0, lastWarmedEnd: null, day: null, calls: 0, ceilingHitDay: null, prefetched: 0, adopted: 0, leaseSkips: 0, primed: false });
   for (const k of Object.keys(sharedCounts)) sharedCounts[k] = 0;
-  __resetPrimarySkip();
 }
 
-/** DBEQ.BASIC returns ONE BAR PER VENUE (EQUS.SUMMARY returns one bar per
- *  session, which this passes through unchanged). A quote consolidates them: the day's
+/** DBEQ.BASIC returns ONE BAR PER VENUE. The answer folds them: the day's
  *  high/low are the extremes across venues, volume is their sum (and is
  *  therefore venue-partial), and open/close come from the venue that traded
  *  the most that session - a thin venue's print is not the day's close. */
@@ -825,24 +781,22 @@ const round = (n) => Number(n.toFixed(4));
 // The stock-provider adapter (src/tools/stock-provider.js): what the stock
 // tools read through STOCK_DATA_PROVIDER=databento. Each answer names the
 // dataset it came from and its coverage.
-const SUMMARY_NOTE = "Official consolidated end-of-day bars across all US exchanges and ATSs; volume is the consolidated total and includes post-market trading. Prices are unadjusted for splits and dividends.";
-// The fallback note says the consolidated dataset was unavailable only when
-// that dataset answered so for this read (read.primaryUnavailable); a read
-// that went to the fallback for any other reason says only where it came from.
-const FALLBACK_NOTE = "Daily bars from a three-venue consolidation (the consolidated dataset was unavailable for this read); venueVolume counts those venues only, not the consolidated tape, and volume is null.";
-const FALLBACK_NOTE_PLAIN = "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape, and volume is null.";
-export function provenanceOf(dataset, read = null) {
+/** Where an answer came from, as every answer carries it: the dataset, its
+ *  venues, consolidated: false, the delay and the fixed notice. */
+export function provenanceOf(dataset = DATASET) {
   const c = COVERAGE[dataset];
-  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : read?.primaryUnavailable ? FALLBACK_NOTE : FALLBACK_NOTE_PLAIN };
+  return { dataset: c.dataset, coverage: c.coverage, consolidated: c.consolidated, venues: c.venues, source: "databento.com " + c.dataset, delayHours: DELAY_HOURS, notice: VENUE_NOTICE };
 }
-const COVERAGE_COPY = "Built from the official consolidated end-of-day summary across all US exchanges and ATSs, so price, range and volume are market totals. If that dataset is unavailable for a read, the answer comes from a consolidation of three U.S. exchange venues instead and says so: coverage reads three-venue, venueVolume counts those venues only and volume is null.";
-const BARS_COPY = "On that fallback each bar's high and low are the extremes across the three venues and open and close come from the venue that traded the most that session.";
+const COVERAGE_COPY = `Built from the U.S. exchange venues ${VENUES} only, not the consolidated tape: volume is null, venueVolume counts those venues only, and a close can differ from the official consolidated close. Every bar is at least ${DELAY_HOURS} hours old: a day's bar is served once ${DELAY_HOURS} hours have passed since the end of that day (UTC), so the newest bar is the latest session that old (latestAvailable), never today's or yesterday's still-fresh session. Each answer carries consolidated: false, its venues and that notice.`;
+const BARS_COPY = "Each bar's high and low are the extremes across those venues, and open and close come from the venue that traded the most that session.";
 
 async function readFor(symbol, { start, end, maxUsd, lastGoodOk = false }, range) {
-  const read = await dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk });
+  const now = Date.now();
+  const read = await dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk, now });
   return {
     bars: read.bars,
-    provenance: provenanceOf(read.dataset, read),
+    latestAvailable: latestAvailableSession(now),
+    provenance: provenanceOf(read.dataset),
     cached: read.cached,
     fetchedAt: read.fetchedAt,
     rangeCheckedAt: range.checkedAt,
@@ -853,12 +807,13 @@ async function readFor(symbol, { start, end, maxUsd, lastGoodOk = false }, range
 
 export const databentoAdapter = Object.freeze({
   name: "databento",
-  describe: Object.freeze({ coverageCopy: COVERAGE_COPY, barsCopy: BARS_COPY, exampleProvenance: Object.freeze(provenanceOf(PRIMARY_DATASET)) }),
-  // A quote reads a fixed QUOTE_LOOKBACK_DAYS window ending at the dataset's
-  // last session; `demand: false` (the self-check) is not a buyer's demand.
+  describe: Object.freeze({ coverageCopy: COVERAGE_COPY, barsCopy: BARS_COPY, exampleProvenance: Object.freeze(provenanceOf(DATASET)) }),
+  // A quote reads a fixed QUOTE_LOOKBACK_DAYS window ending at the delayed
+  // end (the stock-provider seam never serves one: src/tools/stock-provider.js);
+  // `demand: false` (the self-check) is not a buyer's demand.
   async quote(symbol, { demand = true, lastGoodOk = false } = {}) {
     const range = await availableEndInfo({ demand });
-    const r = await readFor(symbol, { ...quoteWindow(range.end), lastGoodOk }, range);
+    const r = await readFor(symbol, { ...quoteWindow(delayedEnd(range.end)), lastGoodOk }, range);
     if (demand) noteQuoteSymbol(symbol);
     return r;
   },
@@ -867,7 +822,8 @@ export const databentoAdapter = Object.freeze({
   // covers the US market holidays plus the partial week either side.
   async dailyBars(symbol, { sessions = 30, start, end, maxUsd, demand = true } = {}) {
     const range = await availableEndInfo({ demand });
-    const e = end || range.end;
+    // Never past the dataset's own end, and never inside the 24-hour delay.
+    const e = delayedEnd(end && end < range.end ? end : range.end);
     const s = start || new Date(new Date(e) - (Math.ceil(sessions * 1.45) + 12) * 864e5).toISOString().slice(0, 10);
     return readFor(symbol, { start: s, end: e, maxUsd }, range);
   },

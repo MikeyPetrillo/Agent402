@@ -15,7 +15,7 @@ Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `
 |---|---|---|---|---|
 | `POST /api/llm` | $0.01 | `gpt-6-luna` (default), `gpt-4o-mini` | 16k chars | 4,096 tokens |
 | `POST /api/llm-pro` | $0.10 | `gpt-6-luna` (default), `gpt-6.1-sol`, `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
-| `POST /api/llm-premium` | $0.50 | `gpt-5.6-terra` (default; the older `o3` ids are still accepted) | 32k chars | 2,048 tokens |
+| `POST /api/llm-premium` | $0.50 | `gpt-5.6-terra` (default; the older `o3` ids are still accepted, served by `gpt-6.1-sol` from 2026-12-11) | 32k chars | 2,048 tokens |
 
 OpenAI shuts down GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini on 2027-01-14. Each is served as itself until then; from that day a call naming one is served by its successor (`gpt-6-luna` for the mini ids, `gpt-6.1-sol` for the others), and the answer names the swap in `agent402_model_substituted`.
 
@@ -38,7 +38,7 @@ Every tier accepts the same OpenAI-shaped JSON body. `model` is optional: with n
 
 | Field | Required | Notes |
 |---|---|---|
-| `model` | no | Defaults to `gpt-6-luna` on `/api/llm` and `/api/llm-pro`, and to `gpt-5.6-terra` on `/api/llm-premium`. Must match the tier's allowlist by prefix (`gpt-6-luna` / `gpt-4o-mini` for `/api/llm`; `gpt-6-luna` / `gpt-6.1-sol` / `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `gpt-5.6-terra` for `/api/llm-premium`, which still accepts `o3` and `o3-pro` (served as themselves until OpenAI retires them on 2026-12-11, then by `gpt-5.6-terra`) and serves the retired `o3-mini` and `o4-mini` ids with `gpt-5.6-terra`) |
+| `model` | no | Defaults to `gpt-6-luna` on `/api/llm` and `/api/llm-pro`, and to `gpt-5.6-terra` on `/api/llm-premium`. Must match the tier's allowlist by prefix (`gpt-6-luna` / `gpt-4o-mini` for `/api/llm`; `gpt-6-luna` / `gpt-6.1-sol` / `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `gpt-5.6-terra` for `/api/llm-premium`, which still accepts `o3` and `o3-pro` (served as themselves until OpenAI retires them on 2026-12-11, then by `gpt-6.1-sol`, the replacement OpenAI names) and serves the retired `o3-mini` and `o4-mini` ids with `gpt-5.6-terra`) |
 | `messages` | yes | Array of `{role, content}` objects; max 50 messages |
 | `max_tokens` | no | Default 1,024; silently clamped to the tier's output cap |
 | `temperature` | no | 0--2; controls randomness. The gpt-4o and gpt-4.1 families only: a call naming no model is served `gpt-6-luna` without it, and the answer names it in `agent402_params_not_sent` |

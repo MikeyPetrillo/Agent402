@@ -35,6 +35,8 @@ t node scripts/test-inflight-admission.js
 t node scripts/test-settle-first.js
 # Settle first on the catalog routes with an upstream cost (search and answer, image generation, speech, transcription, judgment): the settle call before the upstream call, a buyer's mistake and a reached daily ceiling refused before any settle, a failure after it owed in its class and run free on the same payment, the switch off unchanged, and those routes feeding the same budget meter and per-wallet count (boots paid servers against stub upstreams - offline)
 t node scripts/test-settle-first-routes.js
+# The refusal record for the gates that answer on their own: a Tempo credential, a credits key and an x402 settle refusal, one count each; a clean paid call records nothing (paid-wires rig)
+t node scripts/test-payment-refusals-gates.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
 # OUSD on the Tempo MPP rail: the name resolves in every reader, USDC.e stays the first challenge, an OUSD pull credential verifies and settles, and it is refused where TEMPO_CURRENCY does not list it (boots a paid server - offline)
@@ -59,9 +61,15 @@ t node scripts/test-challenge-life.js
 t node scripts/test-golden-trajectories.js
 # The returning-wallet price end to end: discounted quote and settle for the hinted wallet, another wallet refused at list with the facilitator never asked (boots paid servers, stub facilitator)
 t node scripts/test-returning-wallet-paid.js
+# A buyer's own upstream key: the 402 quotes the own-key price only with the header, a cheap payment without it is refused unasked, the upstream gets the buyer's key and never ours, a refused key is 401 uncharged, and the key is in no log, answer, event or store (boots a paid server, stub facilitator and upstream)
+t node scripts/test-upstream-key.js
+# A buyer's own upstream key on the rails whose books read no signed amount (Solana, Stellar, Algorand): the sale is booked, and a charge the buyer left before is owed, at the own-key price, never the list price (boots a paid server on stub chains)
+t node scripts/test-upstream-key-rails.js
 # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
 t node scripts/test-mcp-sec.js
 # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio
 t node scripts/test-mcp-protocol-input-bound.js
+# MCP wire: every listed protocol version is served by header, _meta claim or envelope, with the same payment asks; a made-up version gets the documented refusals (boots a free server)
+t node scripts/test-mcp-protocol-versions.js
 # Prepared Railway IaC file carries the facilitator and worker service settings as a named partial with unmanaged variables
 t node scripts/test-railway-iac.js

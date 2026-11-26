@@ -10,13 +10,71 @@
 //      publisher as its own figure;
 //   5. BLS reads are cached by decade and held under a daily budget below
 //      the API's own limit; a window wider than three decades is refused;
-//   6. FEDFUNDS is the calendar-day average of the daily rate, whole months.
+//   6. FEDFUNDS is the calendar-day average of the daily rate, whole months;
+//   7. the money stock (H.6) is read from the release's own XML file, never
+//      from the Data Download Program link the Board retires on 2027-03-31.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
 import { MACRO_TOOLS } from "../src/tools/macro-kit.js";
 import { SUPPORTED_IDS, SERIES, BLS_VOUCH, monthlyCalendarAverage, transform, aggregate, blsDailyBudget, _resetUsMacroForTest } from "../src/tools/us-macro-series.js";
 import { ATTRIBUTIONS, US_AGENCIES_ATTRIBUTION } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
+import zlib from "node:zlib";
+
+// A zip of the members given ({ name, text, stored, claimSize }), as the
+// Board serves the H.6 XML file; the reader takes sizes from the central directory.
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (const b of buf) { crc ^= b; for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1; }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function buildZip(members) {
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const m of members) {
+    const name = Buffer.from(m.name), raw = Buffer.from(m.text), method = m.stored ? 0 : 8;
+    const data = m.stored ? raw : zlib.deflateRawSync(raw);
+    const loc = Buffer.alloc(30);
+    loc.writeUInt32LE(0x04034b50, 0); loc.writeUInt16LE(20, 4); loc.writeUInt16LE(method, 8); loc.writeUInt32LE(crc32(raw), 14);
+    loc.writeUInt32LE(data.length, 18); loc.writeUInt32LE(raw.length, 22); loc.writeUInt16LE(name.length, 26);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0); cen.writeUInt16LE(20, 4); cen.writeUInt16LE(20, 6); cen.writeUInt16LE(method, 10); cen.writeUInt32LE(crc32(raw), 16);
+    cen.writeUInt32LE(data.length, 20); cen.writeUInt32LE(m.claimSize ?? raw.length, 24); cen.writeUInt16LE(name.length, 28); cen.writeUInt32LE(offset, 42);
+    locals.push(Buffer.concat([loc, name, data])); centrals.push(Buffer.concat([cen, name]));
+    offset += locals.at(-1).length;
+  }
+  const cd = Buffer.concat(centrals), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(members.length, 8); end.writeUInt16LE(members.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, end]);
+}
+// The H.6 data file's shape: data sets of series, each observation's fields
+// as attributes, a monthly period dated the month's last day.
+const h6Series = (name, adj, obs, freq = "129") => [
+  `    <kf:Series ADJUSTED="${adj}" CURRENCY="USD" FREQ="${freq}" SERIES_NAME="${name}" UNIT="Currency" UNIT_MULT="1e+09">`,
+  `      <frb:Annotations><common:Annotation><common:AnnotationType>Short Description</common:AnnotationType><common:AnnotationText>${name}; a &lt;note&gt;</common:AnnotationText></common:Annotation></frb:Annotations>`,
+  ...obs.map(([d, v]) => `      <frb:Obs OBS_STATUS="A" OBS_VALUE="${v}" TIME_PERIOD="${d}" />`),
+  "    </kf:Series>",
+].join("\n");
+const H6_XML = [
+  '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+  '<message:MessageGroup xmlns:message="http://www.SDMX.org/resources/SDMXML/schemas/v1_0/message" xmlns:frb="http://www.federalreserve.gov/structure/compact/common">',
+  "  <message:Header><message:ID>H6</message:ID></message:Header>",
+  '  <frb:DataSet id="H6_M1" xmlns:kf="http://www.federalreserve.gov/structure/compact/H6_H6_M1">',
+  h6Series("M1.WM", "SA", [["2026-09-07", 99999.9], ["2026-09-14", 99999.9]], "17"),
+  // A monthly series no supported ID reads: parsed only when asked for every one.
+  h6Series("MCU.M", "SA", [["2026-08-31", 2345.6], ["2026-09-30", 2350.1]]),
+  h6Series("M1.M", "SA", [["2026-08-31", 19967.3], ["2026-09-30", 20061.2], ["2026-10-31", "NA"]]),
+  h6Series("M1_N.M", "NSA", [["2026-08-31", 19932.1], ["2026-09-30", 20009.7]]),
+  "  </frb:DataSet>",
+  '  <frb:DataSet id="H6_M2" xmlns:kf="http://www.federalreserve.gov/structure/compact/H6_H6_M2">',
+  h6Series("M1.M", "SA", [["2026-08-31", 1], ["2026-09-30", 2]]),
+  h6Series("M2.M", "SA", [["2026-08-31", 23300.9], ["2026-09-30", 23413.9], ["2026-10-31", ""]]),
+  h6Series("M2_N.M", "NSA", [["2026-08-31", 23242.5], ["2026-09-30", 23339.6]]),
+  "  </frb:DataSet>",
+  "</message:MessageGroup>",
+].join("\n");
+let h6Zip = () => buildZip([{ name: "H6_H6_M1.xsd", text: "<xs:schema/>", stored: true }, { name: "H6_data.xml", text: H6_XML }]);
+const ddpH6Asks = [];
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -119,18 +177,12 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.hostname === "www.federalreserve.gov" && u.searchParams.get("rel") === "H15") {
     return new Response(['"Series Description","Prime","3-month bill","10-year"', '"Time Period","RIFSPBLP_N.M","RIFSGFSM03_N.M","RIFLGFCY10_N.M"', "2026-09,6.87,3.94,4.99", "2026-10,7.00,4.05,5.13"].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
   }
-  if (u.hostname === "www.federalreserve.gov") {
-    return new Response([
-      '"Series Description","M1; Not seasonally adjusted","M2; Not seasonally adjusted","M1; Seasonally adjusted","M2; Seasonally adjusted"',
-      '"Unit:","Currency","Currency","Currency","Currency"',
-      '"Multiplier:","1e+09","1e+09","1e+09","1e+09"',
-      '"Currency:","USD","USD","USD","USD"',
-      '"Unique Identifier:","H6/H6_M1/M1_N.M","H6/H6_M2/M2_N.M","H6/H6_M1/M1.M","H6/H6_M2/M2.M"',
-      '"Time Period","M1_N.M","M2_N.M","M1.M","M2.M"',
-      "2026-08,19932.1,23242.5,19967.3,23300.9",
-      "2026-09,20009.7,23339.6,20061.2,23413.9",
-      "2026-10,,,,",
-    ].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  if (u.hostname === "www.federalreserve.gov" && /\/datadownload\//i.test(u.pathname) && /^H\.?6$/i.test(u.searchParams.get("rel") || "")) {
+    ddpH6Asks.push(String(u));
+    return new Response("retired", { status: 404 });
+  }
+  if (u.hostname === "www.federalreserve.gov" && u.pathname === "/releases/h6/data/FRB_h6_xml.zip") {
+    return new Response(h6Zip(), { status: 200, headers: { "content-type": "application/x-zip-compressed" } });
   }
   if (u.hostname === "apps.bea.gov" && u.pathname.endsWith("NipaDataM.txt")) {
     return new Response([
@@ -223,6 +275,37 @@ try {
   ok(m2.count === 2 && m2.observations[1].date === "2026-09-01" && m2.observations[1].value === 23413.9 && /Board of Governors of the Federal Reserve System/.test(m2.source) && /H\.6/.test(m2.sourceSeries) && /not affiliated with the Federal Reserve/.test(m2.credit) && /federalreserve\.gov\/disclaimer/.test(m2.terms), `M2SL is H.6 M2, seasonally adjusted, billions, credited to the Board (${JSON.stringify(m2.observations)})`);
   const m1n = await run({ seriesId: "M1NS", startDate: "2026-01-01" });
   ok(m1n.observations[0].value === 19932.1, "M1NS is the not seasonally adjusted column");
+  const m1s = await run({ seriesId: "M1SL", startDate: "2026-01-01" });
+  ok(m1s.count === 2 && m1s.observations[0].date === "2026-08-01" && m1s.observations[1].value === 20061.2, `M1SL is read once from the release file (its first listing), a month dated the 1st, an NA month skipped (${JSON.stringify(m1s.observations)})`);
+  {
+    const held = (await import("../src/tools/us-macro-series.js"))._cachedValueForTest("frb:h6");
+    ok(held && JSON.stringify(Object.keys(held).sort()) === JSON.stringify(["M1.M", "M1_N.M", "M2.M", "M2_N.M"]), `the held H.6 file keeps only the four series the IDs read (${held ? Object.keys(held).join(",") : "none"})`);
+  }
+  ok(hosts.some((h) => h === "www.federalreserve.gov") && ddpH6Asks.length === 0, `the money stock is read from the release's XML file, never the Data Download Program (${ddpH6Asks.length} program reads)`);
+  {
+    const M = await import("../src/tools/us-macro-series.js");
+    ok(M.H6_XML_URL === "https://www.federalreserve.gov/releases/h6/data/FRB_h6_xml.zip" && !M.FED_DDP_PACKAGE_READS.includes("H6") && !("H6_PACKAGE_URL" in M), `H.6 reads the release page's XML file and is off the package list (${M.FED_DDP_PACKAGE_READS.join(", ")})`);
+    const parsed = M.parseH6Xml(H6_XML);
+    ok(JSON.stringify(Object.keys(parsed)) === JSON.stringify(["M1.M", "M1_N.M", "M2.M", "M2_N.M"]) && parsed["M1.M"][0].value === 19967.3, `only the monthly series the IDs read are parsed, each once (${Object.keys(parsed).join(",")})`);
+    const every = M.parseH6Xml(H6_XML, undefined, { only: null });
+    ok(JSON.stringify(Object.keys(every)) === JSON.stringify(["MCU.M", "M1.M", "M1_N.M", "M2.M", "M2_N.M"]) && every["M1.M"][0].value === parsed["M1.M"][0].value && JSON.stringify(every["M2.M"]) === JSON.stringify(parsed["M2.M"]), `asked for every monthly series, the unread one is there too and the read ones are the same (${Object.keys(every).join(",")})`);
+    ok(JSON.stringify([...M.H6_READ_COLS].sort()) === JSON.stringify(["M1.M", "M1_N.M", "M2.M", "M2_N.M"]), `the read set is the SERIES entries' own columns (${M.H6_READ_COLS.join(",")})`);
+    const ask = async (zip) => { _resetUsMacroForTest(); const held = h6Zip; h6Zip = () => zip; try { return await caught(run({ seriesId: "M2SL" })); } finally { h6Zip = held; } };
+    const noMember = await ask(buildZip([{ name: "H6_struct.xml", text: "<x/>" }]));
+    ok(noMember?.statusCode === 503, `a zip without the data file answers 503 (${noMember?.statusCode})`);
+    const tooBig = await ask(buildZip([{ name: "H6_data.xml", text: H6_XML, claimSize: M.H6_XML_MAX_BYTES + 1 }]));
+    ok(tooBig?.statusCode === 503, `a data file its directory lists over the inflate bound answers 503 (${tooBig?.statusCode})`);
+    const bomb = await caught(M.zipMemberText(buildZip([{ name: "H6_data.xml", text: "x".repeat(4096), claimSize: 10 }]), "H6_data.xml", 1024));
+    ok(bomb?.statusCode === 503, `a member that inflates past the bound whatever its directory says answers 503 (${bomb?.statusCode})`);
+    const notZip = await ask(Buffer.from('"Time Period","M2.M"\n2026-09,1\n'));
+    ok(notZip?.statusCode === 503, `an answer that is not a zip answers 503 (${notZip?.statusCode})`);
+    const stored = await ask(buildZip([{ name: "H6_data.xml", text: H6_XML, stored: true }]));
+    ok(stored === null, `a stored (uncompressed) data file is read too (${stored?.message || "read"})`);
+    const empty = await ask(buildZip([{ name: "H6_data.xml", text: "<message:MessageGroup/>" }]));
+    ok(empty?.statusCode === 503, `a data file with no monthly series answers 503 (${empty?.statusCode})`);
+    ok(ddpH6Asks.length === 0, "no H.6 read reached the Data Download Program");
+    _resetUsMacroForTest();
+  }
   // GDP (BEA NIPA)
   const gdp = await run({ seriesId: "GDPC1", startDate: "2025-01-01" });
   ok(gdp.count === 3 && gdp.observations[0].date === "2025-01-01" && gdp.observations[2].date === "2025-07-01" && gdp.observations[0].value === 23548.21 && /Bureau of Economic Analysis/.test(gdp.source) && /A191RX/.test(gdp.sourceSeries) && /not endorsed or certified by BEA/.test(gdp.credit) && /bea\.gov/.test(gdp.terms), `GDPC1 is BEA's real GDP in billions of chained dollars, quarterly (${JSON.stringify(gdp.observations[0])})`);
@@ -279,6 +362,10 @@ try {
     ok(typed.length >= 2, `the typed series counts are found (${typed.map((t) => t.at).join(", ")})`);
     const wrong = typed.filter((t) => t.n !== SUPPORTED_IDS.length);
     ok(wrong.length === 0, `every typed series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
+    // No module builds the H.6 Data Download Program link the Board retires.
+    const walk = (d) => readdirSync(root + d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(`${d}/${e.name}`) : /\.(m?js)$/.test(e.name) ? [`${d}/${e.name}`] : []);
+    const ddpH6 = walk("src").filter((f) => /datadownload\/[^"'`\s]*rel=H\.?6\b/i.test(readFileSync(root + f, "utf8")));
+    ok(ddpH6.length === 0, `no module builds the retired H.6 Data Download Program link (${ddpH6.join(", ") || "none"})`);
   }
 
   // 3: not served

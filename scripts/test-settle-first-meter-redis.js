@@ -39,6 +39,26 @@ const T0 = Date.now();
 ok(sharedLimitsMode() === "redis", `the shared store is Redis (${sharedLimitsMode()})`);
 ok(A !== B, "two separate module instances (two containers)");
 
+// Right after boot, before any request decided: the operator view never reads
+// "on" for a meter it has not read. Asking starts the bounded read, and once
+// it answers the view holds the reading.
+{
+  const G = await import("../src/settle-first-meter.js?container=g");
+  const first = G.settleFirstMeterStatus({ now: Date.now() });
+  ok(first.budgetMode === "not-read" && first.why === "not-read-yet" && first.lastReadAgoMs === null, `a meter not read yet reads not-read in the operator view, never on (${first.budgetMode}, ${first.why})`);
+  let later = first;
+  for (let i = 0; i < 50 && later.lastReadAgoMs === null; i++) { await sleep(20); later = G.settleFirstMeterStatus({ now: Date.now() }); }
+  ok(later.budgetMode === "off" && later.why === "under-budget" && later.lastReadAgoMs !== null, `asking for the view started the read: it now holds a reading (${later.budgetMode}, ${later.why})`);
+  const H = await import("../src/settle-first-meter.js?container=h");
+  const read = await H.settleFirstMeterRead({ now: Date.now() });
+  const h = H.settleFirstMeterStatus({ now: Date.now() });
+  ok(read === true && h.budgetMode === "off" && h.lastReadAgoMs !== null, `the status view's own read (settleFirstMeterRead) leaves a reading behind (${h.budgetMode}, ${h.why})`);
+  // The operator path: /api/gateway-status's full settle-failures view reads the meter first.
+  const BR = await import("../src/gateway-settle-breaker.js");
+  const full = await quietly(() => BR.gatewaySettleFailuresStatus({ full: true }));
+  ok(full?.settleFirst?.meter?.budgetMode === "off" && full.settleFirst.meter.lastReadAgoMs !== null, `the operator view of the settle failures reads the meter before it answers (${JSON.stringify(full?.settleFirst?.meter && { budgetMode: full.settleFirst.meter.budgetMode, why: full.settleFirst.meter.why })})`);
+}
+
 // Both start: each reads the shared figures before deciding.
 const a0 = await quietly(() => A.settleFirstBudgetMode({ now: T0 }));
 const b0 = await quietly(() => B.settleFirstBudgetMode({ now: T0 }));
@@ -85,12 +105,14 @@ ok(!aLater.on && !cLater.on, `24 hours on, the cost has rolled out of the window
     const m = await import(${JSON.stringify(new URL("../src/settle-first-meter.js", import.meta.url).href)});
     console.log = () => {};
     const v = await m.settleFirstBudgetMode({ now: Date.now() });
-    process.stdout.write(JSON.stringify(v));
+    const st = m.settleFirstMeterStatus({ now: Date.now() });
+    process.stdout.write(JSON.stringify({ ...v, status: { budgetMode: st.budgetMode, why: st.why } }));
     process.exit(0);
   `], { env: { ...process.env, REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS_PREFIX: `${process.env.SHARED_LIMITS_PREFIX}-dead` }, encoding: "utf8", timeout: 30_000 });
   let v = null;
   try { v = childJson(child.stdout || ""); } catch { v = null; }
   ok(v?.on === true && v.why === "meter-unread", `a Redis that does not answer: the meter cannot be read and the mode reads on (${JSON.stringify(v)})`);
+  ok(v?.status?.budgetMode === "on" && v.status.why === "meter-unread", `after a read that did not answer, the operator view says so: on, meter-unread (${JSON.stringify(v?.status)})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

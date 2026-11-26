@@ -15,7 +15,7 @@
 //
 //   node scripts/test-find-ranking.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
+import { STOCK_SLUGS, stockToolServed } from "../src/tools/stock-provider.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -43,6 +43,13 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
 // whether the ranker is doing the right thing.
 const TOP1 = [
   ["extract article from URL",     "extract"],
+  // A page or a text goes to summarize; a PDF still goes to pdf-summarize.
+  ["summarize a news article about renewable energy", "summarize"],
+  ["summarize a web page url",      "summarize"],
+  ["summarize text",                "summarize"],
+  ["summarize this pdf report",     "pdf-summarize"],
+  ["summarize this pdf",            "pdf-summarize"],
+  ["pdf summary",                   "pdf-summarize"],
   ["make a qr code",                "qr"],
   // Named chain-read primitives (2026-07-29): before these existed, "block
   // number" ranked number-format and "event logs" ranked kalshi-event - the
@@ -175,7 +182,7 @@ try {
   ok((pricing.endpoints || []).length > 400, `live catalog has >400 endpoints (got ${(pricing.endpoints || []).length})`);
 
   // A stock tool is listed only with an active stock provider (this boot's env).
-  for (const [q, expected] of TOP1.filter(([, slug]) => stockDataEnabled() || !STOCK_SLUGS.has(slug))) {
+  for (const [q, expected] of TOP1.filter(([, slug]) => stockToolServed(slug) || !STOCK_SLUGS.has(slug))) {
     const found = await slugs(q, 3);
     ok(found[0] === expected, `top-1 for "${q}" is ${expected} (got ${found.join(",") || "none"})`);
   }

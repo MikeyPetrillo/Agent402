@@ -40,7 +40,10 @@ globalThis.fetch = async function paidWiresFetch(input, init) {
   if (openaiStub && u.hostname === "api.openai.com") return realFetch(`${openaiStub}${u.pathname}${u.search}`, init);
   if (upStub && upHosts.has(u.hostname.toLowerCase())) {
     const to = `${upStub}/up/${u.hostname.toLowerCase()}${u.pathname}${u.search}`;
-    return input instanceof Request ? realFetch(new Request(to, input), init) : realFetch(to, init);
+    // The SSRF guard's dispatcher pins the named host's public address; the
+    // stub listens on loopback, so it is dropped for these hosts only.
+    const { dispatcher: _guarded, ...rest } = init || {};
+    return input instanceof Request ? realFetch(new Request(to, input), rest) : realFetch(to, rest);
   }
   if (process.env.STRIPE_TOKEN_STUB === "on" && u.hostname === "api.stripe.com" && u.pathname.startsWith("/v1/shared_payment/granted_tokens/")) {
     return new Response(JSON.stringify({ id: u.pathname.split("/").pop(), usage_limits: { currency: "usd", max_amount: 1000000, expires_at: Math.floor(Date.now() / 1000) + 3600 }, usage_details: { amount_captured: { value: 0 } } }), { status: 200, headers: { "content-type": "application/json" } });

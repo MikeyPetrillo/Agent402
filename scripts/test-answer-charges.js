@@ -209,6 +209,7 @@ const COMPOSERS = {
   "src/tools/route-execute.js": { n: 1, ownsCharge: /delete result\.__meterUpstreamUsd/ },                 // resale price over the underlying list price
   "src/tools/redact-chat-kit.js": { n: 2, fixedSum: "/api/redact plus the v1-chat tier" },
   "src/tools/pdf-summarize-kit.js": { n: 1, fixedSum: "the PDF read plus the v1-chat tier" },
+  "src/tools/summarize-kit.js": { n: 2, fixedSum: "pdf-summarize's list price: the page read plus the v1-chat tier" },
   "src/tools/dub-kit.js": { n: 1, fixedSum: "the translate tier plus the speech tier's quote (speech reports a figure only under METERED_MEDIA)" },
   "src/tools/skill-runner.js": { n: 1, fixedSum: "a pack's generated price over its steps (scripts/pack-prices.js)" },
 };

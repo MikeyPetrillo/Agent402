@@ -38,6 +38,7 @@ export const METERED_SLUGS = new Set([
   "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses", "v1-chat-metered-responses",
   // Calls the v1-chat gateway handler in-process — same OpenRouter key dependency.
   "pdf-summarize",
+  "summarize", // summarize-kit.js: the same in-process v1-chat call, on a page or a text
   // research-deep composites — fan out to grounded search + rerank + synthesis
   // over OpenRouter (503 without OPENROUTER_API_KEY), same key dependency.
   "research", "research-pro", "research-max",

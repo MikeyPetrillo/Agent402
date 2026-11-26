@@ -29,18 +29,19 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const slugs = FINANCE_TOOLS.map((t) => t.slug).sort();
   ok(JSON.stringify(slugs) === JSON.stringify(["stock-history", "stock-quote"]),
     `finance-kit serves only the licensed tools (got ${slugs.join(", ")})`);
-  ok(FINANCE_TOOLS.every((t) => /consolidated end-of-day summary across all US exchanges and ATSs/.test(t.description) &&
-      /three U\.S\. exchange venues/.test(t.description) && /venueVolume counts those venues only and volume is null/.test(t.description) &&
+  ok(FINANCE_TOOLS.every((t) => /IEX, NYSE Texas \(formerly NYSE Chicago\), NYSE National only, not the consolidated tape/.test(t.description) &&
+      /volume is null, venueVolume counts those venues only/.test(t.description) && /at least 24 hours old/.test(t.description) &&
       !/Databento|DBEQ|EQUS/.test(t.description)),
-    "each description names the consolidated scope, the three-venue fallback and its partial volume, not the vendor");
+    "each description names the venues, that it is not consolidated, its partial volume and the 24-hour delay, not the vendor");
   ok(FINANCE_TOOLS.every((t) => {
     const ex = t.discovery.output.example;
-    return ex.dataset === "EQUS.SUMMARY" && ex.coverage === "consolidated" && /all US exchanges and ATSs/i.test(ex.venues);
-  }), "every published example names the consolidated dataset and its coverage");
+    return ex.dataset === "DBEQ.BASIC" && ex.consolidated === false && ex.delayHours === 24 && /IEX/.test(ex.venues) && /Not consolidated/.test(ex.notice);
+  }), "every published example names the venue dataset, consolidated: false, the delay and the notice");
+  ok(!/EQUS/.test(JSON.stringify(FINANCE_TOOLS)), "no surface of this kit names the consolidated summary dataset");
   ok(!/yahoo/i.test(JSON.stringify(FINANCE_TOOLS)), "no surface of this kit still names the unlicensed provider");
   ok(FINANCE_TOOLS.every((t) => {
     const keys = Object.keys(t.discovery.output.example);
-    return ["source", "venues", "note", "dataset", "coverage"].every((k) => keys.includes(k));
+    return ["source", "venues", "notice", "dataset", "coverage", "consolidated"].every((k) => keys.includes(k));
   }), "every published example carries the source, the venues and the caveat");
 }
 
@@ -133,23 +134,22 @@ if (!databentoEnabled()) {
   if (assertFail > 0) { console.error("finance-kit: FAILED"); process.exit(1); }
   console.log("finance-kit: OK");
 } else {
-  await live("stock-quote", { symbol: "AAPL" },
-    (r) => r.symbol === "AAPL" && r.currency === "USD" && typeof r.price === "number" && r.price > 0 &&
-      typeof r.venueVolume === "number" && typeof r.note === "string" && /venue|consolidated/i.test(r.note) &&
-      (r.coverage === "consolidated" ? r.volume === r.venueVolume : r.volume === null),
-    "stock-quote AAPL");
+  // stock-quote is never served, key or not (the newest session is under 24 hours old).
+  try { await h("stock-quote")({ symbol: "AAPL" }); ok(false, "stock-quote refuses with a key"); }
+  catch (e) { ok(e.statusCode === 503 && e.notOffered === true, `stock-quote 503s not-offered with a key (got ${e.statusCode})`); }
 
   // An unknown ticker is the caller's input, so it must be a 4xx naming the
   // cause, never an upstream 502 that reads as our outage.
-  try { await h("stock-quote")({ symbol: "ZZZZQQ" }); ok(false, "stock-quote 4xxs an unknown symbol"); }
-  catch (e) { ok(e.statusCode >= 400 && e.statusCode < 500, `stock-quote 4xxs an unknown symbol (got ${e.statusCode})`); }
+  try { await h("stock-history")({ symbol: "ZZZZQQ", days: 5 }); ok(false, "stock-history 4xxs an unknown symbol"); }
+  catch (e) { ok(e.statusCode >= 400 && e.statusCode < 500, `stock-history 4xxs an unknown symbol (got ${e.statusCode})`); }
 
   // Asks for exactly 30 SESSIONS. Calendar slack has to cover weekends and
   // holidays or a 30-session ask quietly returns 29 - which is what it did
   // before the slack was scaled.
   await live("stock-history", { symbol: "AAPL", days: 30 },
     (r) => r.symbol === "AAPL" && Array.isArray(r.bars) && r.bars.length === 30 && r.days === 30 &&
-      r.bars.every((b) => typeof b.close === "number" && /^\d{4}-\d{2}-\d{2}$/.test(b.day)),
+      r.bars.every((b) => typeof b.close === "number" && /^\d{4}-\d{2}-\d{2}$/.test(b.day) && b.volume === null && b.day <= r.latestAvailable) &&
+      r.consolidated === false && r.delayHours === 24 && /Not consolidated/.test(r.notice),
     "stock-history AAPL 30d");
 
   // The advertised maximum must be one a buyer can actually spend. The

@@ -51,6 +51,10 @@
     // eat the URL out of the parentheses and leave the label stranded.
     l = l.replace(/\[([^\]<>]+)\]\((https?:\/\/[^\s)<>"']+)\)/g, function (m, label, url) { return linkOk(url) ? '<a href="' + url + '" target="_blank" rel="noopener">' + label + '</a>' : label + ' (' + url + ')'; });
     l = l.replace(/(^|[\s(])(https?:\/\/[^\s)<>"']+)/g, function (m, pre, url) { return linkOk(url) ? pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>' : pre + url; });
+    // A backslash-escaped character (third-party text made inert, as
+    // src/token-claims.js markdownText writes it) reads as itself, after the
+    // rules above have passed over it; the text is entity-escaped already.
+    l = l.replace(/\\(&(?:amp|lt|gt);|[\\`*_\[\]#|~])/g, "$1");
     return l;
   }
 

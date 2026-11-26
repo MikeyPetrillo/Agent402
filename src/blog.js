@@ -253,7 +253,7 @@ export const BLOG_POSTS = [
   <li><strong>Data processing:</strong> JSON (format, validate, query, diff, merge, flatten), CSV, XML and YAML conversion and validation</li>
   <li><strong>Web tools:</strong> rendering, extraction, link listing, sitemap parsing, screenshots</li>
   <li><strong>Search:</strong> web search, news, images, suggestions, and cited answers (the answer tool is model-backed)</li>
-  <li><strong>Finance:</strong> ${stockDataEnabled() ? "stock quotes and history, " : ""}SEC filings, XBRL company facts, insider trades</li>
+  <li><strong>Finance:</strong> ${stockDataEnabled() ? "daily stock history (venue bars, at least 24 hours old), " : ""}SEC filings, XBRL company facts, insider trades</li>
   <li><strong>Crypto &amp; DeFi:</strong> token prices, TVL, wallet balances, ENS resolution, gas prices</li>
   <li><strong>Government data:</strong> FRED economic series, Treasury rates and the yield curve, CPI and unemployment</li>
   <li><strong>PDF processing:</strong> PDF to markdown, text extraction, page extraction, metadata</li>

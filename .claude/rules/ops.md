@@ -39,6 +39,7 @@ paths:
   - ".github/workflows/**"
   - "workers/**"
   - "src/ledger-retention.js"
+  - "src/payment-refusals.js"
 ---
 
 # State, scheduled loops, monitoring and operations
@@ -699,4 +700,5 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `/__operator/gateway-pending.json` and resolve what is held.
 
 ## Ledger retention
-- `LEDGER_RETENTION`: unset is a daily leased dry run (counts only), `apply` deletes, `off` stops the pass. `LEDGER_RETENTION_SALES_YEARS` and `LEDGER_RETENTION_REFUND_YEARS` (default 7, never under 7). Only resolved refunds (paid, void) are pruned; an owed, sending or blocked row stays at any age (`scripts/test-ledger-retention-pg.js` on real Postgres). Sanctions events follow `SANCTIONS_EVENTS_RETENTION_YEARS` (payments.md).
+- `LEDGER_RETENTION`: unset is a daily leased dry run (counts only), `apply` deletes, `off` skips the money records (the 90-day refusal-record prune still runs). `LEDGER_RETENTION_SALES_YEARS` and `LEDGER_RETENTION_REFUND_YEARS` (default 7, never under 7). Only resolved refunds (paid, void) are pruned; an owed, sending or blocked row stays at any age (`scripts/test-ledger-retention-pg.js` on real Postgres). Sanctions events follow `SANCTIONS_EVENTS_RETENTION_YEARS` (payments.md).
+- **Payment refusal record** (`src/payment-refusals.js`, read on `/__operator/refusals.json` with `payer`, `slug`, `reason`, `since`, `limit`): each refused paid attempt (a credential answered 402 by any gate, or a 4xx a gate marked with `markPaymentRefusal`, `src/refusal-mark.js`; the hook is registered before every payment gate, one record per request), one row per UTC day and payer, reason, slug, route class, rail, network and status with a count; the payer only from `verifiedPayerOf`, never the unverified header; at most 2,000 new rows a process a day, the rest in the day's overflow row; written behind (records table, or `PAYMENT_REFUSALS_FILE`); the retention pass always deletes rows past 90 days, the period /privacy prints (`scripts/test-payment-refusals.js`, `scripts/test-payment-refusals-gates.js`, `scripts/test-payment-refusals-pg.js`).
