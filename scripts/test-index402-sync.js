@@ -24,7 +24,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   ok(wf.includes(`::warning title=${UNAVAILABLE_TITLE}::`), "the sync step marks an unavailable run with the title the streak reads");
   const page = wf.slice(wf.indexOf("Page on failure"));
   const four = page.slice(page.indexOf('if [ "$CODE" = "4" ]'));
-  ok(/node scripts\/index402-outage-streak\.js/.test(four) && /INDEX402_UNAVAILABLE_PAGE_RUNS:-3/.test(four) && /gh issue create[^\n]*\$AVAIL_TITLE/.test(four.slice(0, four.indexOf("exit 0\n          fi"))), "exit 4 pages one issue once the streak reaches INDEX402_UNAVAILABLE_PAGE_RUNS (default 3)");
+  ok(/node scripts\/index402-outage-streak\.js/.test(four) && /INDEX402_UNAVAILABLE_PAGE_RUNS:-3/.test(four) && /node scripts\/check-issue\.js --title "\$AVAIL_TITLE"/.test(four.slice(0, four.indexOf("exit 0\n          fi"))), "exit 4 pages one issue once the streak reaches INDEX402_UNAVAILABLE_PAGE_RUNS (default 3)");
   ok(/AVAIL_TITLE="Scheduled check needs review: index-availability"/.test(page) && /"\$CODE" = "0" \] \|\| \[ "\$CODE" = "3" \]; \} && \[ -n "\$AVAIL_OPEN" \]/.test(page), "the availability issue uses the neutral title and closes on a run that reached the index");
   ok(/actions: read/.test(wf) && /checks: read/.test(wf), "the workflow may read its earlier runs and their annotations");
 }
@@ -307,7 +307,7 @@ function runSync(port, env = {}) {
   const body = [];
   for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) body.push(lines[i].slice(indent));
   const script = body.join("\n");
-  ok(at > 0 && script.includes("gh issue create") && script.length > 500, "the page step's script is read from the workflow");
+  ok(at > 0 && script.includes("node scripts/check-issue.js --title") && script.length > 500, "the page step's script is read from the workflow");
   const FAIL = "Scheduled check needs review: index-price-sync", BACK = "Scheduled check needs review: index-price-writeback", AVAIL = "Scheduled check needs review: index-availability";
   const dir = mkdtempSync(join(tmpdir(), "idx-page-"));
   // The stub answers list and view from STATE and appends every write to LOG.
