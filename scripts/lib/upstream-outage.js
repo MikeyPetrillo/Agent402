@@ -415,3 +415,41 @@ export async function hollowAnswerVerdict({ slug, input, read = directReadAnswer
   if (!h.hollow(status, text)) return { verdict: "fail", reason: `${h.host} answers the runner's direct read of the same request with rows (HTTP ${status}) while the tool answered none` };
   return { verdict: "upstream", evidence: `${h.host} answers the runner's direct read of the same request empty or failed too (HTTP ${status || "none"})` };
 }
+
+// A DECLARED SOURCE'S STATE IS READ, NEVER INFERRED FROM WORDING.
+// A tool whose own definition declares its hosts (`upstreamHosts`), every one
+// of them a source the runner can read for itself below, is graded by that
+// read alone when it fails: excused when the runner's own direct read of a
+// declared host is refused or fails right now, and failed when every one
+// answers. The failure's words never decide either way, so the same source
+// state gets the same verdict in every pack and sweep that reaches the tool.
+// One read of each source a run (the caller's `read` keeps it). A tool that
+// declares no host, or a host with no read here, is not graded by this rule
+// (null): the caller's other rules grade it.
+export const RUNNER_SOURCE_READS = Object.freeze({
+  // The keyless BLS read SOURCE_ALLOWANCES makes, judged the same way.
+  "api.bls.gov": { url: SOURCE_ALLOWANCES[0].url, refuses: SOURCE_ALLOWANCES[0].refuses },
+  // The crt.sh query cert-transparency builds for its published example
+  // (HOLLOW_READS): a 404 (its front end's mislabelled backend failure), a
+  // 5xx, a non-JSON or a non-list answer, or no rows, is refused.
+  "crt.sh": { url: HOLLOW_READS["cert-transparency"].url({ domain: "agent402.tools" }), refuses: HOLLOW_READS["cert-transparency"].hollow },
+});
+/** The verdict on a failed answer of a tool that declares its sources: null
+ *  when the rule does not apply (see above), else
+ *  { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function declaredSourceVerdict({ slug, read = directReadAnswer, root = ROOT, reads = RUNNER_SOURCE_READS }) {
+  if (!declaresUpstreamHosts(slug, root)) return null;
+  const hosts = [...upstreamHostsForSlug(slug, root)];
+  if (!hosts.length || !hosts.every((h) => Object.hasOwn(reads, h))) return null;
+  const seen = [];
+  for (const h of hosts) {
+    const { status, text } = await read(reads[h].url);
+    if (reads[h].refuses(status, text)) {
+      let said = "";
+      try { const j = status === 200 ? JSON.parse(text) : null; said = j && !Array.isArray(j) && j.status ? `, status ${String(j.status).slice(0, 40)}` : (Array.isArray(j) && !j.length ? ", an empty list" : ""); } catch { said = status === 200 ? ", not JSON" : ""; }
+      return { verdict: "upstream", evidence: `${slug} declares ${h}, which refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
+    }
+    seen.push(`${h} HTTP ${status}`);
+  }
+  return { verdict: "fail", reason: `${slug}'s declared source answers the runner's direct read (${seen.join(", ")})` };
+}

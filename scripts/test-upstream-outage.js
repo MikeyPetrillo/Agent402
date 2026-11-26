@@ -15,7 +15,7 @@ import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
   bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts, legRefusalStatus,
-  hollowAnswerVerdict, HOLLOW_READS,
+  hollowAnswerVerdict, HOLLOW_READS, declaredSourceVerdict, RUNNER_SOURCE_READS,
 } from "./lib/upstream-outage.js";
 import { createPackGrader } from "./lib/pack-sweep-grade.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
@@ -306,7 +306,8 @@ try {
   {
     const packRoot = join(work, "pack-tree");
     mkdirSync(join(packRoot, "src", "tools"), { recursive: true });
-    writeFileSync(join(packRoot, "src", "tools", "bls-stub-kit.js"), `export const T = [{ route: "GET /api/bls-a", slug: "bls-a", upstreamHosts: ["api.bls.gov"], handler: () => read() }, { route: "GET /api/bls-b", slug: "bls-b", upstreamHosts: ["api.bls.gov"], handler: () => read() }];\n`);
+    writeFileSync(join(packRoot, "src", "tools", "bls-stub-kit.js"), `export const T = [{ route: "GET /api/bls-a", slug: "bls-a", upstreamHosts: ["api.bls.gov"], handler: () => read() }, { route: "GET /api/bls-b", slug: "bls-b", upstreamHosts: ["api.bls.gov"], handler: () => read() }, { route: "POST /api/ct-stub", slug: "ct-stub", upstreamHosts: ["crt.sh"], handler: () => read() }, { route: "GET /api/other-src", slug: "other-src", upstreamHosts: ["other.example"], handler: () => read() }];\n`);
+    writeFileSync(join(packRoot, "src", "tools", "kit-ct-stub.js"), `const BASE = "https://crt.sh/";\nexport const T = [{ route: "GET /api/kit-ct", slug: "kit-ct", handler: () => read(BASE) }];\n`);
     writeFileSync(join(packRoot, "src", "tools", "bare-stub-kit.js"), `export const T = [{ route: "GET /api/bare", slug: "bare-tool", handler: () => compute() }, { route: "GET /api/calc", slug: "calc-tool", handler: () => compute() }];\n`);
     const REFUSED = "The U.S. Bureau of Labor Statistics API did not answer or refused the read (the publisher's own limit or outage); retry shortly. Nothing was charged.";
     const SPENT = "The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow.";
@@ -323,7 +324,7 @@ try {
     let r = await run(blsRefuses, 200, partial);
     ok(!r.failed && r.reported === 1 && r.lines.some((l) => /^report - stub-pack: 1 step\(s\) blocked by a key\/upstream, not ours: bls-a$/.test(l)),
       `(pack) a step whose source refuses the runner's direct read too is reported blocked and named, the pack not failed (${r.lines.join(" | ")})`);
-    ok(r.logged.some((l) => /^report - bls-a: spent allowance excused: api\.bls\.gov refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)$/.test(l)), "(pack) the excuse names its evidence");
+    ok(r.logged.some((l) => /^report - bls-a: source refused excused: bls-a declares api\.bls\.gov, which refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)$/.test(l)), `(pack) the excuse names its evidence (${r.logged.join(" | ")})`);
     const allBlocked = { summary: "0/2 steps succeeded", steps: [{ slug: "bls-a", ok: false, error: REFUSED }, { slug: "bls-b", ok: false, error: SPENT }] };
     r = await run(blsRefuses, 200, allBlocked);
     ok(!r.failed && r.lines.some((l) => l === "report - stub-pack: blocked by upstream, not ours (every step: bls-a, bls-b)"),
@@ -342,12 +343,62 @@ try {
     r = await run(blsRefuses, 200, bare);
     ok(r.failed && r.logged.some((l) => /bare-tool: spent allowance not excused: bare-tool does not declare api\.bls\.gov/.test(l)),
       `(pack, control) a step whose tool declares no host fails even when the source refuses the runner (${r.lines.join(" | ")})`);
-    const mixed = { summary: "0/2 steps succeeded", steps: [{ slug: "bls-a", ok: false, error: REFUSED }, { slug: "bls-b", ok: false, error: "bls-b: our own parse error" }] };
+    const mixed = { summary: "1/3 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bls-a", ok: false, error: REFUSED }, { slug: "other-src", ok: false, error: "other-src: our own parse error" }] };
     r = await run(blsRefuses, 200, mixed);
-    ok(!r.failed && r.lines.some((l) => /downstream of an upstream\/key failure/.test(l)), "(pack) the existing rule stands: a step downstream of a blocked step is reported, not failed");
+    ok(!r.failed && r.lines.some((l) => /downstream of an upstream\/key failure/.test(l)), `(pack) the existing rule stands: a step downstream of a blocked step is reported, not failed (${r.lines.join(" | ")})`);
+
+    // A declared source's read decides, never the step's words: crt.sh
+    // answering the server its mislabelled 404 (security-audit) and a 502
+    // (fraud-signals) get one verdict, the runner's read of crt.sh.
+    const rows = JSON.stringify([{ name_value: "a.agent402.tools" }]);
+    const byHost = (crt, bls = blsAnswers) => async (url) => (isHost(url, "crt.sh") ? crt() : bls());
+    const crtRefuses = async () => ({ status: 404, text: "<html>404</html>" });
+    const crtAnswers = async () => ({ status: 200, text: rows });
+    const wording = { test: (m) => /HTTP 5\d\d/.test(m) };
+    const audit = { summary: "1/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "ct-stub", ok: false, error: "crt.sh returned HTTP 404" }] };
+    const fraud = { summary: "1/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "ct-stub", ok: false, error: "crt.sh returned HTTP 502" }] };
+    const twoPacks = async (read) => {
+      const g = createPackGrader({ read, root: packRoot, log: () => {} });
+      const out = [];
+      for (const [name, json] of [["security-audit", audit], ["fraud-signals", fraud]]) {
+        await g.judge(json, ["calc-tool", "ct-stub"]);
+        out.push(g.grade({ slug: name, status: 200, json, toolSlugs: ["calc-tool", "ct-stub"], notOurs: wording }));
+      }
+      return out;
+    };
+    let reads = 0;
+    const counted = (fn) => async (url) => { reads++; return fn(url); };
+    let [a, b] = await twoPacks(counted(byHost(crtRefuses)));
+    ok(!a.failed && a.lines.some((l) => /^report - security-audit: 1 step\(s\) blocked by a key\/upstream, not ours: ct-stub$/.test(l)),
+      `(pack) crt.sh's 404 to the tool while crt.sh refuses the runner's read is blocked and named (${a.lines.join(" | ")})`);
+    ok(!b.failed && reads === 1, `(pack) two packs sharing the step get the same verdict from one read of the host (${b.lines.join(" | ")}; ${reads} read)`);
+    [a, b] = await twoPacks(byHost(crtAnswers));
+    ok(a.failed && b.failed, `(pack) with crt.sh answering the runner, both packs' crt.sh step FAILS whatever its words (${a.lines[0]} | ${b.lines[0]})`);
+    reads = 0;
+    r = await run(counted(blsRefuses), 200, allBlocked);
+    ok(!r.failed && reads === 1, `(pack) two tools on one host are judged from one direct read of it a run (${reads} reads)`);
+    const bareCt = { summary: "1/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bare-tool", ok: false, error: "crt.sh returned HTTP 502" }] };
+    const g2 = createPackGrader({ read: byHost(crtRefuses), root: packRoot, log: () => {} });
+    await g2.judge(bareCt, ["calc-tool", "bare-tool"]);
+    r = g2.grade({ slug: "stub-pack", status: 200, json: bareCt, toolSlugs: ["calc-tool", "bare-tool"], notOurs: wording });
+    ok(r.failed, `(pack, control) a step whose tool declares no host FAILS though its words read upstream and crt.sh refuses the runner (${r.lines[0]})`);
+    const ctNoStep = { error: `No step in the "security-audit" pack succeeded, so there is nothing to return. ct-stub: crt.sh returned HTTP 404; calc-tool: nothing to read` };
+    const g3 = createPackGrader({ read: byHost(crtAnswers), root: packRoot, log: () => {} });
+    await g3.judge(ctNoStep, ["ct-stub", "calc-tool"]);
+    r = g3.grade({ slug: "security-audit", status: 502, json: ctNoStep, toolSlugs: ["ct-stub", "calc-tool"], notOurs: { test: () => true } });
+    ok(r.failed, `(pack) a no-step answer whose first step's source answers the runner FAILS though its words read upstream (${r.lines[0]})`);
     const fine = { summary: "2/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bls-a", ok: true }] };
     r = await run(blsAnswers, 200, fine);
     ok(!r.failed && r.lines.join() === "ok - stub-pack: 2/2 steps succeeded", "(pack) a working pack passes");
+    // The rule's reach: only a tool whose own definition declares hosts, each one read here.
+    const refusedAll = async () => ({ status: 404, text: "" });
+    ok((await declaredSourceVerdict({ slug: "cert-transparency", read: refusedAll }))?.verdict === "upstream", "(source) cert-transparency (declares crt.sh) is graded by the runner's read of crt.sh");
+    ok(RUNNER_SOURCE_READS["crt.sh"].url === HOLLOW_READS["cert-transparency"].url({ domain: "agent402.tools" }), "(source) the crt.sh read is the hollow-read query for the published example");
+    for (const slug of ["us-macro-series", "asn-info", "treasury-yield-curve", "stats-summary"]) {
+      ok((await declaredSourceVerdict({ slug, read: refusedAll })) === null, `(source) ${slug} (several sources, a kit's hosts only, or none) is not graded by this rule`);
+    }
+    ok((await declaredSourceVerdict({ slug: "kit-ct", read: refusedAll, root: packRoot })) === null && (await declaredSourceVerdict({ slug: "ct-stub", read: refusedAll, root: packRoot }))?.verdict === "upstream",
+      "(source) a host only its kit names is not a declaration: the rule reads the tool's own upstreamHosts");
     const packSweep = readFileSync(join(ROOT, "scripts/test-pack-examples.js"), "utf8");
     ok(packSweep.includes("createPackGrader(") && packSweep.includes("grader.judge(") && packSweep.includes("grader.grade("), "(pack) the skill-pack sweep grades every pack through the shared grader");
   }

@@ -294,7 +294,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict, sourceAllowanceVerdict, directReadAnswer } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict, sourceAllowanceVerdict, declaredSourceVerdict, directReadAnswer } from "./lib/upstream-outage.js";
 import { CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 
@@ -422,10 +422,6 @@ function isTransientMalformedPriceFeed(status, body, threw) {
  * names crt.sh AND the status it returned, which a permanently retired endpoint
  * cannot produce (that shape is a bare 502). Soft-skip LOUDLY after the retry.
  */
-function isCertTransparencyUpstreamFlake(slug, status, body, threw) {
-  return slug === "cert-transparency" && status === 502 && /crt\.sh returned HTTP \d{3}/i.test(errText(body, threw));
-}
-
 /** Client AbortSignal / connect flake (status 0). Server 502/504 stay hard fails. */
 function isClientTimeoutFlake(status, body, threw) {
   return status === 0 && /timeout|aborted|AbortError|ETIMEDOUT|UND_ERR_CONNECT|ECONNRESET|fetch failed/i.test(errText(body, threw));
@@ -583,20 +579,23 @@ export async function hollowGrade(t, hollow, read) {
   return { fail: `${head} (its own published input produces nothing)${v ? ` [not excused: ${v.reason}]` : ""}` };
 }
 
-// A SOURCE THAT REFUSED THE SERVER, OR AN ALLOWANCE THIS SERVER SPENT
-// (us-macro-series' BLS sentences, the BLS-backed macro tools): graded by the
-// shared rule the skill-pack sweep uses (sourceAllowanceVerdict,
-// scripts/lib/upstream-outage.js). Excused, and named, only when the tool
-// declares the source's host and the runner's own direct read of that host is
-// refused too; when the source answers the runner, or the tool declares no
-// such host, it fails. Resolves null for any other answer. One direct read of
-// each source URL a run, kept for every tool.
+// A DECLARED SOURCE'S REFUSAL, A SOURCE THAT REFUSED THE SERVER, OR AN
+// ALLOWANCE THIS SERVER SPENT: graded by the shared rules the skill-pack sweep
+// uses (scripts/lib/upstream-outage.js). A tool whose own definition declares
+// sources the runner reads for itself (crt.sh for cert-transparency, BLS for
+// the BLS-only macro tools: declaredSourceVerdict) is graded by that read
+// alone, whatever its answer's words: excused, and named, when the runner's
+// read is refused too, failed when it answers. Otherwise a BLS sentence of a
+// tool that declares api.bls.gov (sourceAllowanceVerdict) is read the same
+// way. Resolves null for any other answer. One direct read of each source URL
+// a run, kept for every tool.
 const sourceReads = new Map();
 const sourceReadOnce = (url) => { if (!sourceReads.has(url)) sourceReads.set(url, directReadAnswer(url)); return sourceReads.get(url); };
 export async function sourceRefusalGrade(t, r, read = sourceReadOnce, root) {
-  const v = await sourceAllowanceVerdict({ slug: t.slug, error: r.body?.error, read, ...(root ? { root } : {}) });
+  const opts = { read, ...(root ? { root } : {}) };
+  const v = (await declaredSourceVerdict({ slug: t.slug, ...opts })) || (await sourceAllowanceVerdict({ slug: t.slug, error: r.body?.error, ...opts }));
   if (!v) return null;
-  if (v.verdict === "upstream") return { skip: `${t.slug}: its source refused the server or this server's allowance is spent, and ${v.evidence} (upstream, not our defect)` };
+  if (v.verdict === "upstream") return { skip: `${t.slug}: answered ${r.status} "${errText(r.body, r.threw).slice(0, 80)}", and ${v.evidence} (upstream, not our defect)` };
   return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 160)} [not excused: ${v.reason}]` };
 }
 
@@ -1017,14 +1016,25 @@ export async function runVerdictStubControls() {
     const blsAnswers = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_SUCCEEDED", Results: {} }) });
     const cpi = { slug: "cpi-yoy", method: "get", path: "/api/cpi-yoy" };
     let g = await sourceRefusalGrade(cpi, { status: 503, body: { error: REFUSED } }, blsRefuses);
-    ok(/^cpi-yoy: .*api\.bls\.gov refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)/.test(g?.skip || ""), `control (stub): BLS refusing the server is excused and named when BLS refuses the runner's direct read too (${g?.skip || g?.fail})`);
+    ok(/^cpi-yoy: answered 503 .*api\.bls\.gov,? (?:which )?refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)/.test(g?.skip || ""), `control (stub): BLS refusing the server is excused and named when BLS refuses the runner's direct read too (${g?.skip || g?.fail})`);
     g = await sourceRefusalGrade(cpi, { status: 503, body: { error: SPENT } }, blsRefuses);
     ok(Boolean(g?.skip), "control (stub): this server's spent BLS allowance is excused when BLS refuses the runner too");
     g = await sourceRefusalGrade(cpi, { status: 503, body: { error: REFUSED } }, blsAnswers);
     ok(/not excused: .*answers the runner's direct read/.test(g?.fail || ""), `control (stub): BLS refusing the server FAILS when BLS answers the runner (${g?.fail || g?.skip})`);
     g = await sourceRefusalGrade({ slug: "stats-summary", method: "post", path: "/api/stats-summary" }, { status: 503, body: { error: REFUSED } }, blsRefuses);
     ok(/not excused: stats-summary does not declare api\.bls\.gov/.test(g?.fail || ""), "control (stub): the same answer from a tool that declares no BLS host FAILS");
-    ok((await sourceRefusalGrade(cpi, { status: 503, body: { error: "Internal error" } }, blsRefuses)) === null, "control (stub): another answer is not read by the source rule");
+    ok(Boolean((await sourceRefusalGrade(cpi, { status: 500, body: { error: "Internal error" } }, blsRefuses))?.skip), "control (stub): a BLS-only tool is graded by the runner's read of BLS whatever its words");
+    ok((await sourceRefusalGrade({ slug: "us-macro-series", method: "get", path: "/api/us-macro-series" }, { status: 500, body: { error: "Internal error" } }, blsRefuses)) === null, "control (stub): another answer of a several-source tool is not read by the source rules");
+    // crt.sh: its mislabelled 404 and a 502 get one verdict, the runner's read of crt.sh.
+    const ct = { slug: "cert-transparency", method: "post", path: "/api/cert-transparency" };
+    const crtRefuses = async () => ({ status: 404, text: "<html>404</html>" });
+    const crtAnswers = async () => ({ status: 200, text: JSON.stringify([{ name_value: "a.agent402.tools" }]) });
+    g = await sourceRefusalGrade(ct, { status: 502, body: { error: "crt.sh returned HTTP 404" } }, crtRefuses);
+    ok(/declares crt\.sh, which refuses the runner's direct read too \(HTTP 404\)/.test(g?.skip || ""), `control (stub): cert-transparency's crt.sh 404 is excused and named when crt.sh refuses the runner too (${g?.skip || g?.fail})`);
+    for (const error of ["crt.sh returned HTTP 404", "crt.sh returned HTTP 502"]) {
+      g = await sourceRefusalGrade(ct, { status: 502, body: { error } }, crtAnswers);
+      ok(Boolean(g?.fail), `control (stub): "${error}" FAILS while crt.sh answers the runner`);
+    }
     const src = (await import("node:fs")).readFileSync(fileURLToPath(import.meta.url), "utf8");
     // Each needle is joined here, so this control never finds its own text.
     const graded = src.indexOf(["const source = await", "sourceRefusalGrade(t, r);"].join(" ")), skip = src.indexOf(["if", "(isRateLimited(r.status, r.body, r.threw)) {"].join(" "));
@@ -1194,7 +1204,6 @@ async function main() {
   let skippedRateLimit = 0;
   let skippedMediaSource = 0;
   let skippedPriceFeed = 0;
-  let skippedCertTransparency = 0;
   let skippedClientTimeout = 0;
   let skippedRunnerUnreachable = 0;
   let skippedFredMaintenance = 0;
@@ -1348,12 +1357,6 @@ async function main() {
       return;
     }
 
-    if (isCertTransparencyUpstreamFlake(t.slug, r.status, r.body, r.threw)) {
-      skippedCertTransparency++;
-      console.log(`\nskip - ${t.slug}: crt.sh (free public CT mirror) is returning 5xx after retry (${errText(r.body, r.threw).slice(0, 80)})`);
-      return;
-    }
-
     if (isClientTimeoutFlake(r.status, r.body, r.threw)) {
       skippedClientTimeout++;
       console.log(`\nskip - ${t.slug}: client timeout after retry (${errText(r.body, r.threw).slice(0, 100)})`);
@@ -1409,9 +1412,6 @@ async function main() {
   if (skippedMediaSource) {
     console.log(`skip - ${skippedMediaSource} media tool(s) soft-skipped after upstream media-source flake (handlers covered by test-media.js)`);
   }
-  if (skippedCertTransparency) {
-    console.log(`skip - ${skippedCertTransparency} cert-transparency call(s) soft-skipped: crt.sh outage`);
-  }
   if (skippedPriceFeed) {
     console.log(`skip - ${skippedPriceFeed} price-feed tool(s) soft-skipped after malformed-JSON upstream flake`);
   }
@@ -1431,7 +1431,7 @@ async function main() {
     for (const line of upstreamRefusals) console.log(`  upstream refusal - ${line}`);
   }
 
-  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable + skippedFredMaintenance + upstreamRefusals.length;
+  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedRunnerUnreachable + skippedFredMaintenance + upstreamRefusals.length;
   // A sampled-out tool was never called: it is not counted as asserted.
   const asserted = work.length - softSkipped - skippedCoingecko;
   ok(liveFails.length === 0,
