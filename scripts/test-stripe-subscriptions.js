@@ -95,6 +95,25 @@ ok(code === 401, "SECURITY: the webhook refuses (401) when no signing secret is 
 process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
 code = 0; try { await subs.handleWebhook(Buffer.from("{}"), "badsig"); } catch (e) { code = e.statusCode; }
 ok(code === 400, "SECURITY: a bad signature is rejected (400)");
+// The refusal says nothing about the signing secret, whatever the library's
+// own message holds: the real library is driven with a forged header whose
+// "secret=" part makes it describe the configured secret.
+{
+  const { default: Stripe } = await import("stripe");
+  const real = new Stripe("sk_test_offline_only");
+  const SECRET = "whsec_" + "Zq7".repeat(10) + "ab9Z";
+  process.env.STRIPE_WEBHOOK_SECRET = SECRET;
+  const subsReal = createStripeSubscriptions({ stripe: { ...stripe, webhooks: real.webhooks }, baseUrl: "https://agent402.tools", storePath: STORE + ".real" });
+  const forged = `t=${Math.floor(Date.now() / 1000)},v1=${"0".repeat(64)},secret=whsec_****`;
+  let msg = "";
+  try { await subsReal.handleWebhook(Buffer.from("{}"), forged); } catch (e) { msg = String(e.message); }
+  let libMsg = "";
+  try { real.webhooks.constructEvent(Buffer.from("{}"), forged, SECRET); } catch (e) { libMsg = String(e.message); }
+  ok(msg === "Webhook signature verification failed", `SECURITY: a refused signature answers a fixed message (${msg})`);
+  ok(!msg.includes("ab9Z") && !/\d+ characters long|ends in/.test(msg), "SECURITY: the refusal carries no length or ending of the signing secret");
+  ok(libMsg.length > 0, "control: the library itself refused the forged header");
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+}
 
 // webhook lifecycle: subscription.updated then .deleted
 // The period end rides on the subscription item (the pinned API's shape).

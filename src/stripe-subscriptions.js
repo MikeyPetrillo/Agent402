@@ -532,7 +532,10 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!secret) { bump("unconfigured", { lastRejectAt: now, lastRejectReason: "unconfigured" }); const e = new Error("Webhook not configured (STRIPE_WEBHOOK_SECRET unset)"); e.statusCode = 401; throw e; }
     let event;
     try { event = stripe.webhooks.constructEvent(rawBody, signature, secret); }
-    catch (err) { bump("rejected", { lastRejectAt: now, lastRejectReason: "bad-signature" }); const e = new Error(`Webhook signature verification failed: ${err.message}`); e.statusCode = 400; throw e; }
+    // A fixed answer: the library's own message can describe the signing
+    // secret (its length and last characters), and this answer goes to
+    // whoever sent the request.
+    catch { bump("rejected", { lastRejectAt: now, lastRejectReason: "bad-signature" }); const e = new Error("Webhook signature verification failed"); e.statusCode = 400; throw e; }
     const type = String(event.type || "unknown").slice(0, 64);
     if (Object.hasOwn(tally.byType, type) || Object.keys(tally.byType).length < MAX_TYPES) { tally.byType[type] = (tally.byType[type] || 0) + 1; if (TPG) delta.byType[type] = (delta.byType[type] || 0) + 1; }
     bump("verified", { lastAt: now, lastType: type });
