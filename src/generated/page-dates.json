@@ -15,7 +15,7 @@
     "src/credits-page.js": "2026-11-23",
     "src/decide-page.js": "2026-11-24",
     "src/glossary.js": "2026-11-24",
-    "src/guides.js": "2026-11-25",
+    "src/guides.js": "2026-11-26",
     "src/how-to-pay.js": "2026-11-24",
     "src/human-reports-page.js": "2026-11-24",
     "src/index-tools-page.js": "2026-11-23",
@@ -69,7 +69,7 @@
     "src/tools/bundle-kit.js": "2026-11-24",
     "src/tools/calendar-kit.js": "2026-11-09",
     "src/tools/captcha-kit.js": "2026-10-14",
-    "src/tools/cdp-kit.js": "2026-11-25",
+    "src/tools/cdp-kit.js": "2026-11-26",
     "src/tools/chain-kit.js": "2026-11-24",
     "src/tools/chain-rpc-kit.js": "2026-11-23",
     "src/tools/child-env.js": "2026-11-10",
@@ -89,7 +89,7 @@
     "src/tools/data-kit.js": "2026-11-26",
     "src/tools/databento.js": "2026-11-26",
     "src/tools/date-time-kit.js": "2026-11-09",
-    "src/tools/decide-kit.js": "2026-11-25",
+    "src/tools/decide-kit.js": "2026-11-26",
     "src/tools/demand-kit.js": "2026-10-07",
     "src/tools/derivatives-kit.js": "2026-11-23",
     "src/tools/dex-kit.js": "2026-11-24",
@@ -120,7 +120,7 @@
     "src/tools/fund-report-kit.js": "2026-11-24",
     "src/tools/gov-kit.js": "2026-11-24",
     "src/tools/hidden-content.js": "2026-10-19",
-    "src/tools/holiday-source.js": "2026-11-25",
+    "src/tools/holiday-source.js": "2026-11-26",
     "src/tools/holidays-kit.js": "2026-11-24",
     "src/tools/html-kit.js": "2026-11-21",
     "src/tools/html-parse-ops.js": "2026-10-19",
@@ -133,9 +133,9 @@
     "src/tools/image-headers.js": "2026-11-12",
     "src/tools/image-kit.js": "2026-11-23",
     "src/tools/image-ops.js": "2026-11-19",
-    "src/tools/image-pool.js": "2026-11-25",
+    "src/tools/image-pool.js": "2026-11-26",
     "src/tools/image-size.js": "2026-11-23",
-    "src/tools/image-worker.js": "2026-11-25",
+    "src/tools/image-worker.js": "2026-11-26",
     "src/tools/insider-flow-kit.js": "2026-11-24",
     "src/tools/ipo-report-kit.js": "2026-11-21",
     "src/tools/judge-kit.js": "2026-11-24",
@@ -145,7 +145,7 @@
     "src/tools/lending-rates-kit.js": "2026-11-24",
     "src/tools/linkedin-article-kit.js": "2026-11-24",
     "src/tools/llm-context-kit.js": "2026-11-21",
-    "src/tools/llm-gateway-kit.js": "2026-11-25",
+    "src/tools/llm-gateway-kit.js": "2026-11-26",
     "src/tools/llm-gemini-kit.js": "2026-11-24",
     "src/tools/llm-images-fast-kit.js": "2026-11-24",
     "src/tools/llm-kit.js": "2026-11-26",
@@ -217,7 +217,7 @@
     "src/tools/summarize-kit.js": "2026-11-26",
     "src/tools/text-analysis-kit.js": "2026-11-09",
     "src/tools/ticker-pack-kit.js": "2026-11-24",
-    "src/tools/token-brief-kit.js": "2026-11-25",
+    "src/tools/token-brief-kit.js": "2026-11-26",
     "src/tools/token-facts.js": "2026-11-24",
     "src/tools/token-risk-kit.js": "2026-11-25",
     "src/tools/token-safety-kit.js": "2026-11-24",
@@ -273,7 +273,7 @@
     "wiki/Image-Gen.md": "2026-11-12",
     "wiki/Ink.md": "2026-11-06",
     "wiki/LLM-Gateway.md": "2026-11-26",
-    "wiki/LLM-Proxy.md": "2026-11-25",
+    "wiki/LLM-Proxy.md": "2026-11-26",
     "wiki/MCP-Connector.md": "2026-11-24",
     "wiki/Memory-and-Coordination.md": "2026-10-11",
     "wiki/Operations.md": "2026-11-24",
@@ -349,7 +349,7 @@
     },
     "/guides/buying-at-volume": {
       "published": "2026-11-07",
-      "modified": "2026-11-25"
+      "modified": "2026-11-26"
     },
     "/guides/coinbase-business-get-paid-by-agents": {
       "published": "2026-08-26",
@@ -397,7 +397,7 @@
     },
     "/guides/x402-in-5-minutes": {
       "published": "2026-06-13",
-      "modified": "2026-11-25"
+      "modified": "2026-11-26"
     },
     "/guides/x402-payments-toolkit": {
       "published": "2026-06-14",

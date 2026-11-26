@@ -287,8 +287,9 @@ export function setAlgorandCrawlSources({ crawledResources, countInbound, crawlR
  *  build goes on and fills the cache for the next call. With no `maxWaitMs`
  *  a cold call waits for the build, as algorandCatalog() always did. */
 export async function algorandCatalogWithin(maxWaitMs = null, { background = false } = {}) {
-  if (!background) lastUseAt = Date.now();
-  startBuildIfStale({ background });
+  const usedAt = background ? null : Date.now();
+  if (usedAt !== null) lastUseAt = usedAt;
+  startBuildIfStale({ background, usedAt });
   if (!cache.at && inFlight) {
     if (maxWaitMs == null) await inFlight;
     else {
@@ -334,11 +335,14 @@ export async function algorandCatalog() {
   return (await algorandCatalogWithin(null)).resources;
 }
 
-function startBuildIfStale({ background = false } = {}) {
+function startBuildIfStale({ background = false, usedAt = null } = {}) {
   const stale = Date.now() - cache.at > TTL_MS;
   if (stale && !inFlight) {
     let crawlWasReady = true;
-    const startedAt = Date.now();
+    // A build a read starts is dated at that read, so the read counts as use of
+    // the catalog it brings back (IDLE above) whatever the clock did between the
+    // two lines: the schedule's next check then rebuilds it like any read one.
+    const startedAt = usedAt ?? Date.now();
     inFlight = build({ background })
       .then(async (resources) => {
         // Our own index, folded in and then proven from the chain. Wrapped so a
