@@ -493,6 +493,8 @@
     "split adjusted daily share prices for a year",
     "map csv headers onto an import schema",
     "check a pgp signature on a file",
-    "transpose a midi file up two semitones"
+    "transpose a midi file up two semitones",
+    "ip geolocation for an address",
+    "geolocate an ip address"
   ]
 }
