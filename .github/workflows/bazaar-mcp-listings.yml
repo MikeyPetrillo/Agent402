@@ -152,7 +152,7 @@ jobs:
           OPEN_ISSUE="$OPEN" OPEN_ISSUE_BODY_FILE=open-issue.md OUT_DIR=out node scripts/mcp-listings-issue.js
           ACTION=$(cat out/action)
           case "$ACTION" in
-            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            open) node scripts/check-issue.js --title "$TITLE" --body-file out/body.md ;;
             update) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md ;;
             close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Every listing this issue named was bought at $(date -u +%FT%TZ)." ;;
             *) echo "Nothing to open, update or close." ;;

@@ -177,7 +177,7 @@ jobs:
           OPEN: ${{ steps.check.outputs.open }}
         run: |
           case "$ACTION" in
-            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            open) node scripts/check-issue.js --title "$TITLE" --body-file out/body.md ;;
             update) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md ;;
             close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "A readable check found no route of ours missing twice in a row. Run: $RUN_URL" ;;
           esac
@@ -188,6 +188,6 @@ jobs:
           MCP_OPEN: ${{ steps.check.outputs.mcp_open }}
         run: |
           case "$MCP_ACTION" in
-            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$MCP_TITLE" --body-file out/mcp-body.md ;;
+            open) node scripts/check-issue.js --title "$MCP_TITLE" --body-file out/mcp-body.md ;;
             close) gh issue close "$MCP_OPEN" --repo "$GITHUB_REPOSITORY" --comment "A readable check found no MCP tool listing of ours missing twice in a row. Run: $RUN_URL" ;;
           esac
