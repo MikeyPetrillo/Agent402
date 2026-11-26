@@ -294,7 +294,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict, sourceAllowanceVerdict, directReadAnswer } from "./lib/upstream-outage.js";
 import { CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 
@@ -581,6 +581,23 @@ export async function hollowGrade(t, hollow, read) {
   const v = await hollowAnswerVerdict({ slug: t.slug, input: exampleInputOf(t.method, t.op), ...(read ? { read } : {}) });
   if (v?.verdict === "upstream") return { skip: `${t.slug}: ${head.slice(head.indexOf("documented"))}, and ${v.evidence} (upstream, not our defect)` };
   return { fail: `${head} (its own published input produces nothing)${v ? ` [not excused: ${v.reason}]` : ""}` };
+}
+
+// A SOURCE THAT REFUSED THE SERVER, OR AN ALLOWANCE THIS SERVER SPENT
+// (us-macro-series' BLS sentences, the BLS-backed macro tools): graded by the
+// shared rule the skill-pack sweep uses (sourceAllowanceVerdict,
+// scripts/lib/upstream-outage.js). Excused, and named, only when the tool
+// declares the source's host and the runner's own direct read of that host is
+// refused too; when the source answers the runner, or the tool declares no
+// such host, it fails. Resolves null for any other answer. One direct read of
+// each source URL a run, kept for every tool.
+const sourceReads = new Map();
+const sourceReadOnce = (url) => { if (!sourceReads.has(url)) sourceReads.set(url, directReadAnswer(url)); return sourceReads.get(url); };
+export async function sourceRefusalGrade(t, r, read = sourceReadOnce, root) {
+  const v = await sourceAllowanceVerdict({ slug: t.slug, error: r.body?.error, read, ...(root ? { root } : {}) });
+  if (!v) return null;
+  if (v.verdict === "upstream") return { skip: `${t.slug}: its source refused the server or this server's allowance is spent, and ${v.evidence} (upstream, not our defect)` };
+  return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 160)} [not excused: ${v.reason}]` };
 }
 
 async function callExample(path, method, op, slug) {
@@ -991,6 +1008,28 @@ export function coingeckoFamilyKeys(spec, pricing) {
  *  one that refuses, and a stub "tool" that answers each failure shape. */
 export async function runVerdictStubControls() {
   const { createServer } = await import("node:http");
+  // A BLS-backed tool's refusal (sourceRefusalGrade): a stub BLS read that
+  // refuses, one that answers, and a tool that declares no BLS host.
+  {
+    const REFUSED = "The U.S. Bureau of Labor Statistics API did not answer or refused the read (the publisher's own limit or outage); retry shortly.";
+    const SPENT = "The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow.";
+    const blsRefuses = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_NOT_PROCESSED", message: ["daily threshold"] }) });
+    const blsAnswers = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_SUCCEEDED", Results: {} }) });
+    const cpi = { slug: "cpi-yoy", method: "get", path: "/api/cpi-yoy" };
+    let g = await sourceRefusalGrade(cpi, { status: 503, body: { error: REFUSED } }, blsRefuses);
+    ok(/^cpi-yoy: .*api\.bls\.gov refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)/.test(g?.skip || ""), `control (stub): BLS refusing the server is excused and named when BLS refuses the runner's direct read too (${g?.skip || g?.fail})`);
+    g = await sourceRefusalGrade(cpi, { status: 503, body: { error: SPENT } }, blsRefuses);
+    ok(Boolean(g?.skip), "control (stub): this server's spent BLS allowance is excused when BLS refuses the runner too");
+    g = await sourceRefusalGrade(cpi, { status: 503, body: { error: REFUSED } }, blsAnswers);
+    ok(/not excused: .*answers the runner's direct read/.test(g?.fail || ""), `control (stub): BLS refusing the server FAILS when BLS answers the runner (${g?.fail || g?.skip})`);
+    g = await sourceRefusalGrade({ slug: "stats-summary", method: "post", path: "/api/stats-summary" }, { status: 503, body: { error: REFUSED } }, blsRefuses);
+    ok(/not excused: stats-summary does not declare api\.bls\.gov/.test(g?.fail || ""), "control (stub): the same answer from a tool that declares no BLS host FAILS");
+    ok((await sourceRefusalGrade(cpi, { status: 503, body: { error: "Internal error" } }, blsRefuses)) === null, "control (stub): another answer is not read by the source rule");
+    const src = (await import("node:fs")).readFileSync(fileURLToPath(import.meta.url), "utf8");
+    // Each needle is joined here, so this control never finds its own text.
+    const graded = src.indexOf(["const source = await", "sourceRefusalGrade(t, r);"].join(" ")), skip = src.indexOf(["if", "(isRateLimited(r.status, r.body, r.threw)) {"].join(" "));
+    ok(graded > 0 && skip > graded, "the strict sweep reads a source's refusal against the runner before its rate-limit skip");
+  }
   const listen = (handler) => new Promise((resolve) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => resolve(srv)); });
   const upstreamUp = await listen((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); });
   const upstreamDown = await listen((req, res) => { res.writeHead(503); res.end("busy"); });
@@ -1248,6 +1287,18 @@ async function main() {
     }
     if (bundle?.fail) {
       liveFails.push(bundle.fail);
+      return;
+    }
+    // A source's refusal of the server (or this server's spent allowance of
+    // it): read against the runner, before the rate-limit skip below.
+    const source = await sourceRefusalGrade(t, r);
+    if (source?.skip) {
+      skippedRunnerUnreachable++;
+      console.log(`\nskip - ${source.skip}`);
+      return;
+    }
+    if (source?.fail) {
+      liveFails.push(source.fail);
       return;
     }
 
