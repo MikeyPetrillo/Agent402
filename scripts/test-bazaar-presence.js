@@ -17,7 +17,9 @@ import { load } from "js-yaml";
 import {
   decide, run, issueBody, logLines, catalogRows, missingFromEveryPass, presenceExemption, issueListedKeys, ISSUE_TITLE,
   DEFAULT_MAX_ROUTES, DEFAULT_MAX_SPEND_USD, UNREADABLE_PAGE_AFTER, PAGE_TIMEOUT_MS, DEFAULT_READ_DEADLINE_MS,
+  feedPendingRoutes, indexedRecently, VALIDATE_MAX_PER_RUN, FEED_PENDING_CRAWL_DAYS,
 } from "./bazaar-presence.js";
+import { validateOne } from "./bazaar-validate.js";
 import { aboveCeilingRoutes } from "./lib/keepalive-plan.js";
 
 let pass = 0, fail = 0;
@@ -230,10 +232,12 @@ const fetchFor = ({ pricing = PRICING, walks, failRegistry = false, failPricing 
   };
 };
 const dir = mkdtempSync(join(tmpdir(), "bazaar-presence-"));
-const runOnce = async (name, fetchJson, extraEnv = {}) => {
+// The default validator stub: every read fails, so a route the feed lacks stays missing.
+const unreadableValidator = async () => ({ ok: false, error: "stub" });
+const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableValidator) => {
   const lines = [];
   const env = { TARGET_URL: TARGET, STATE_FILE: join(dir, `${name}.json`), OUT_DIR: join(dir, name), GITHUB_OUTPUT: join(dir, `${name}.out`), ...extraEnv };
-  const code = await run({ env, log: (m) => lines.push(String(m)), fetchJson });
+  const code = await run({ env, log: (m) => lines.push(String(m)), fetchJson, validate });
   const out = existsSync(env.GITHUB_OUTPUT) ? readFileSync(env.GITHUB_OUTPUT, "utf8") : "";
   const body = existsSync(join(env.OUT_DIR, "body.md")) ? readFileSync(join(env.OUT_DIR, "body.md"), "utf8") : "";
   return { code, lines, out, body, env };
@@ -282,6 +286,78 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   ok(!logLines(decide({ reading: reading([without("cheap-a"), without("cheap-a")]), prev: null })).some((l) => /0\.0\d/.test(l)), "no log line carries a price");
 }
 
+// --- the feed lags CDP's index: the validator is asked before a route is missing ---
+{
+  const NOW = Date.parse("2026-11-26T22:00:00Z");
+  const recent = "2026-11-26T21:26:00.012Z";
+  // A validator stub over the real request and parsing (validateOne with an injected fetch).
+  const cdp = (byPath) => {
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      const { resource, method } = JSON.parse(init.body);
+      const path = new URL(resource).pathname;
+      calls.push({ url, path, method });
+      const v = byPath[path] ?? "unreadable";
+      if (v === "unreadable") return new Response("upstream busy", { status: 503 });
+      if (v === "invalid") return Response.json({ valid: false, preflight: [{ check: "returns402", passed: false }], index: { active: false } });
+      if (v === "not-indexed") return Response.json({ valid: true, preflight: [], index: { active: false } });
+      return Response.json({ valid: true, preflight: [], index: { active: true, lastCrawledAt: v } });
+    };
+    const validate = (endpoint, opts) => validateOne(endpoint, { ...opts, fetchImpl });
+    return { validate, calls };
+  };
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: recent }, NOW) !== null, "indexedRecently: indexed and crawled minutes ago counts");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: new Date(NOW - (FEED_PENDING_CRAWL_DAYS + 1) * 86_400_000).toISOString() }, NOW) === null, "indexedRecently: a crawl older than the window does not count");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: null }, NOW) === null && indexedRecently({ ok: true, indexed: false, lastCrawledAt: recent }, NOW) === null && indexedRecently({ ok: false }, NOW) === null, "indexedRecently: no crawl date, not indexed, or a failed read never counts");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: "2026-12-26T00:00:00Z" }, NOW) === null, "indexedRecently: a crawl date in the future does not count");
+
+  const walks = [pagesOf(without("cheap-a", "cheap-b", "at-ceiling")), pagesOf(without("cheap-a", "cheap-b", "at-ceiling"))];
+  const v = cdp({ "/api/cheap-a": recent, "/api/cheap-b": "not-indexed", "/api/at-ceiling": "unreadable" });
+  const realNow = Date.now;
+  Date.now = () => NOW;
+  let f1, f2;
+  try {
+    f1 = await runOnce("feed", fetchFor({ walks }), {}, v.validate);
+    // The next check: the same feed, the same validator answers.
+    f2 = await runOnce("feed", fetchFor({ walks }), { OPEN_ISSUE: "" }, v.validate);
+  } finally { Date.now = realNow; }
+  ok(/^slugs=cheap-b,at-ceiling$/m.test(f1.out), `absent and validator-indexed is not bought; not-indexed and unreadable are bought as before (${f1.out.match(/^slugs=.*$/m)?.[0]})`);
+  ok(!Object.hasOwn(JSON.parse(readFileSync(f1.env.STATE_FILE, "utf8")).missing, "POST /api/cheap-a"), "an indexed route is not remembered as missing");
+  ok(f1.lines.some((l) => l === "  indexed by CDP, not yet in the public feed: POST /api/cheap-a (crawled 2026-11-26T21:26Z)"), "the indexed route is named in the log");
+  ok(!f1.lines.some((l) => /^  missing POST \/api\/cheap-a/.test(l)) && f1.lines.some((l) => /^  missing POST \/api\/cheap-b/.test(l)) && f1.lines.some((l) => /^  missing POST \/api\/at-ceiling/.test(l)), "the log names the real misses as missing, never the indexed route");
+  ok(v.calls.every((c) => c.url === "https://api.cdp.coinbase.com/platform/v2/x402/validate" && c.method === "POST") && v.calls.length === 6 && new Set(v.calls.map((c) => c.path)).size === 3, `only the routes the feed lacks are asked (${v.calls.length} calls)`);
+  ok(/^action=open$/m.test(f2.out) && f2.body.includes("/api/cheap-b") && f2.body.includes("/api/at-ceiling") && !f2.body.includes("/api/cheap-a"), "two checks in a row page on the real misses only, never on the indexed route");
+  ok(/^slugs=$/m.test(f2.out.split("\n").slice(-5).join("\n")), "a real miss is bought once per absence, not again on the next check");
+  ok(![...f1.lines, ...f2.lines, ...f2.body.split("\n")].some((l) => /\b[45]\d\d\b|upstream busy|\$\s?\d/.test(l)), "no log line carries the validator's status, its message or a dollar figure");
+
+  // The route bought on the check before, indexed now (the case the feed lag made): not paged.
+  writeFileSync(join(dir, "lag.json"), JSON.stringify({ v: 1, missing: { "POST /api/cheap-a": "bought" }, unreadable: 0 }));
+  Date.now = () => NOW;
+  let lag;
+  try { lag = await runOnce("lag", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), { OPEN_ISSUE: "12" }, cdp({ "/api/cheap-a": recent }).validate); } finally { Date.now = realNow; }
+  ok(/^action=close$/m.test(lag.out) && /^slugs=$/m.test(lag.out), "a route bought before and indexed now is not a repeat miss: no page, no buy, the issue closes");
+
+  // An unreadable validator leaves every route missing as today.
+  const un = await runOnce("vun", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), {}, cdp({}).validate);
+  ok(/^slugs=cheap-a$/m.test(un.out), "a validator that cannot be read never excuses a route: it is bought as before");
+  const thrown = await runOnce("vthrow", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), {}, async () => { throw new Error("boom"); });
+  ok(/^slugs=cheap-a$/m.test(thrown.out), "a validator call that throws counts as unreadable: the route stays missing");
+
+  // The per-run cap: only VALIDATE_MAX_PER_RUN routes are asked, the ones missing before first.
+  const many = { endpoints: Array.from({ length: VALIDATE_MAX_PER_RUN + 5 }, (_, i) => row(`r${String(i).padStart(2, "0")}`, "$0.010")) };
+  const manyPrev = { missing: { "POST /api/r29": "bought" }, unreadable: 0 };
+  const asked = [];
+  const capRun = await feedPendingRoutes({ reading: reading([["/api/r00"], ["/api/r00"]], many), prev: manyPrev, target: TARGET, validate: async (e) => { asked.push(e.path); return { ok: true, valid: true, indexed: true, lastCrawledAt: new Date().toISOString() }; } });
+  ok(asked.length === VALIDATE_MAX_PER_RUN && capRun.skipped === many.endpoints.length - 1 - VALIDATE_MAX_PER_RUN && capRun.pending.size === VALIDATE_MAX_PER_RUN, `the validator is asked about at most ${VALIDATE_MAX_PER_RUN} routes per run (${asked.length} asked, ${capRun.skipped} skipped)`);
+  ok(asked[0] === "/api/r29" && !asked.includes("/api/r00"), "a route missing on the check before is asked first; a route in the feed is never asked");
+  const dCap = decide({ reading: reading([["/api/r00"], ["/api/r00"]], many), prev: null, pendingFeed: capRun.pending, maxRoutes: 100, maxSpendUsd: 100 });
+  ok(dCap.newlyMissing.length === many.endpoints.length - 1 - VALIDATE_MAX_PER_RUN, "a route past the cap stays missing");
+  // A deadline already passed: nothing asked, every absent route stays missing.
+  const late = await feedPendingRoutes({ reading: reading([["/api/r00"], ["/api/r00"]], many), target: TARGET, deadlineAt: 1, validate: async () => { throw new Error("must not be called"); } });
+  ok(late.asked === 0 && late.pending.size === 0 && late.unreadable === VALIDATE_MAX_PER_RUN, "past the deadline the validator is not asked and nothing is excused");
+  ok((await feedPendingRoutes({ reading: null, target: TARGET, validate: async () => { throw new Error("no"); } })).asked === 0, "an unreadable listing asks the validator nothing");
+}
+
 // --- the CLI end to end against a loopback stub --------------------------------
 {
   let walk = -1;
@@ -300,7 +376,7 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   const port = srv.address().port;
   const out = join(dir, "cli.out");
   const child = spawn(process.execPath, [fileURLToPath(new URL("bazaar-presence.js", import.meta.url))], {
-    env: { ...process.env, TARGET_URL: `http://127.0.0.1:${port}`, BAZAAR_REGISTRY_URL: `http://127.0.0.1:${port}/discovery`, STATE_FILE: join(dir, "cli.json"), OUT_DIR: join(dir, "cli"), GITHUB_OUTPUT: out },
+    env: { ...process.env, TARGET_URL: `http://127.0.0.1:${port}`, BAZAAR_REGISTRY_URL: `http://127.0.0.1:${port}/discovery`, BAZAAR_VALIDATE_URL: `http://127.0.0.1:${port}/validate`, STATE_FILE: join(dir, "cli.json"), OUT_DIR: join(dir, "cli"), GITHUB_OUTPUT: out },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";

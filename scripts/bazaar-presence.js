@@ -65,6 +65,24 @@
 //                         row, so never missing and never paged; the state
 //                         drops it from the seen set, and the log names one
 //                         still in the feed as retired, expected to age out.
+//   feed lag              The public feed lags CDP's own index: a route
+//                         bought minutes ago can be indexed and still absent
+//                         from the feed for over an hour. So before a route
+//                         counts as missing, the check asks CDP's validator
+//                         about it (scripts/bazaar-validate.js validateOne).
+//                         One the validator reports indexed (index.active)
+//                         with a crawl inside the last FEED_PENDING_CRAWL_DAYS
+//                         days is pending the feed: not missing, not bought,
+//                         not paged, and named in the log. A route reported
+//                         invalid or not indexed, a read that fails, a crawl
+//                         date that is absent or older, and every route past
+//                         VALIDATE_MAX_PER_RUN stay missing as before. Only
+//                         routes the feed lacks are asked, one at a time, the
+//                         ones missing on the check before first, inside the
+//                         reading's deadline and VALIDATE_PHASE_MAX_MS. The MCP
+//                         tool listings are not asked: the validator probes
+//                         an HTTP route for its 402, and a listing's offer
+//                         rides a tool result.
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
@@ -96,6 +114,7 @@ import { walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import {
   exemptKind, aboveCeilingRoutes, usdMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
 } from "./lib/keepalive-plan.js";
+import { validateOne } from "./bazaar-validate.js";
 import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf, RETIRED_MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 
 export const DEFAULT_MAX_ROUTES = 10;
@@ -111,6 +130,14 @@ const RETIRED_MCP_KEYS = new Set(RETIRED_MCP_LISTING_TOOLS.map((t) => `MCP ${mcp
 // set above both (scripts/test-bazaar-presence.js reads them).
 export const PAGE_TIMEOUT_MS = 30_000;
 export const DEFAULT_READ_DEADLINE_MS = 20 * 60_000;
+
+// The validator step (see "feed lag" above).
+export const VALIDATE_MAX_PER_RUN = 25;
+export const VALIDATE_PHASE_MAX_MS = 4 * 60_000;
+export const FEED_PENDING_CRAWL_DAYS = 30;
+const DAY_MS = 86_400_000;
+// A crawl date past now by more than this is not a reading we trust.
+const CRAWL_SKEW_MS = 60 * 60_000;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 // A path printed into the public issue: our own catalog's shape only.
@@ -181,16 +208,54 @@ export function missingFromEveryPass(catalog, passes) {
   return catalog.filter((c) => !seen.has(c.path));
 }
 
+/** Pure: the crawl time (ms) when a validator answer reports the route in
+ *  CDP's index with a crawl inside the last FEED_PENDING_CRAWL_DAYS days, else
+ *  null. A read that failed, a route not indexed, and a crawl date that is
+ *  absent, unparseable, older or in the future never count. */
+export function indexedRecently(r, now = Date.now()) {
+  if (!r || r.ok !== true || r.indexed !== true || typeof r.lastCrawledAt !== "string") return null;
+  const t = Date.parse(r.lastCrawledAt);
+  if (!Number.isFinite(t) || t > now + CRAWL_SKEW_MS || now - t > FEED_PENDING_CRAWL_DAYS * DAY_MS) return null;
+  return t;
+}
+
+/** Asks the validator about the catalog routes every pass of the feed lacks
+ *  (the ones missing on the check before first), one at a time, at most
+ *  `max`, until `deadlineAt`. Returns { pending: Map(key -> crawl ms), asked,
+ *  unreadable, skipped }. `validate` is validateOne's shape. */
+export async function feedPendingRoutes({ reading, prev = null, target, validate = validateOne, validateUrl, deadlineAt = 0, max = VALIDATE_MAX_PER_RUN, now = () => Date.now() }) {
+  const out = { pending: new Map(), asked: 0, unreadable: 0, skipped: 0 };
+  if (!reading) return out;
+  const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
+  const absent = missingFromEveryPass(catalogRows(reading.pricing), reading.passes);
+  const ordered = [...absent.filter((m) => Object.hasOwn(prevMissing, m.key)), ...absent.filter((m) => !Object.hasOwn(prevMissing, m.key))];
+  const ask = ordered.slice(0, Math.max(0, max));
+  out.skipped = ordered.length - ask.length;
+  const base = String(target).replace(/\/+$/, "");
+  for (const m of ask) {
+    if (deadlineAt > 0 && now() >= deadlineAt) { out.unreadable += ask.length - out.asked; break; }
+    out.asked++;
+    let r;
+    try { r = await validate({ method: m.method, path: m.path }, { base, deadlineAt, ...(validateUrl ? { validateUrl } : {}) }); } catch { r = null; }
+    if (!r || r.ok !== true) { out.unreadable++; continue; }
+    const t = indexedRecently(r, now());
+    if (t !== null) out.pending.set(m.key, t);
+  }
+  return out;
+}
+
 /** Pure: the decision for one check. `reading` is null when the listing or the
  *  catalog could not be read, else { pricing, passes }. `prev` is the state the
  *  last check left ({ missing: { "METHOD path": note }, unreadable }), or null
  *  when none was saved. `issueListed` is the set of keys the open issue lists,
- *  or null when its body could not be read. `hold` buys nothing. The MCP tool
+ *  or null when its body could not be read. `pendingFeed` maps the keys of
+ *  routes CDP's validator reports indexed recently (feedPendingRoutes) to
+ *  their crawl time: absent from the feed, they are not missing. `hold` buys nothing. The MCP tool
  *  listings are decided apart (`mcpMissing`, `mcpRepeat`, `mcpAction` for
  *  their own issue, `mcpOpenIssue` whether it is open); `mcpKeepalive` (the
  *  scheduled MCP pass is on) changes only what the log says, never whether a
  *  listing counts. */
-export function decide({ reading, prev, openIssue = false, issueListed = new Set(), mcpOpenIssue = false, hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
+export function decide({ reading, prev, pendingFeed = new Map(), openIssue = false, issueListed = new Set(), mcpOpenIssue = false, hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
@@ -200,7 +265,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
-      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpRetiredListed: [], mcpAction: "none", mcpKeepalive,
+      readable: false, buy: [], refused: null, repeat: [], pendingFeed: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpRetiredListed: [], mcpAction: "none", mcpKeepalive,
       state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen, mcpMissing: prevMcpMissing },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
@@ -211,7 +276,11 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   // State lost with an issue open: what the issue lists was missing before.
   const inherited = lost && openIssue && issueListed instanceof Set ? issueListed : new Set();
   const wasMissing = (m) => Object.hasOwn(prevMissing, m.key) || inherited.has(m.key);
-  const missing = missingFromEveryPass(catalog, reading.passes);
+  const pending = pendingFeed instanceof Map ? pendingFeed : new Map();
+  const absentRoutes = missingFromEveryPass(catalog, reading.passes);
+  // Indexed by CDP, not yet in the public feed: never missing, bought or paged.
+  const pendingRoutes = absentRoutes.filter((m) => pending.has(m.key)).map((m) => ({ ...m, crawledAt: pending.get(m.key) }));
+  const missing = absentRoutes.filter((m) => !pending.has(m.key));
   // The MCP tool listings, apart from the routes. One counts as missing only
   // once it has been listed: seen by a check before, or missing before (the
   // state names it). An older state kept them in `missing` beside the routes;
@@ -262,7 +331,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
   // Never close on lost state while a route is missing: the issue may be about it.
   const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
-  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, mcpMissing, mcpRepeat, mcpRetiredListed, mcpAction, mcpKeepalive, state, action, cause: repeat.length ? "missing" : null };
+  return { readable: true, buy, refused, held: heldBuy, repeat, pendingFeed: pendingRoutes, exempt, newlyMissing, notYetListed, mcpMissing, mcpRepeat, mcpRetiredListed, mcpAction, mcpKeepalive, state, action, cause: repeat.length ? "missing" : null };
 }
 
 const NOTE = {
@@ -325,6 +394,15 @@ export function logLines(d) {
     out.push(`  missing ${m.method} ${m.path}${ex ? ` (not bought: ${ex.why})` : (d.held || []).includes(m) ? " (held: a keep-alive pass is running or queued, or the open issue could not be read)" : ""}`);
   }
   for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
+  const pend = d.pendingFeed || [];
+  if (pend.length) {
+    out.push(`Routes absent from the feed that CDP's validator reports indexed (crawled within ${FEED_PENDING_CRAWL_DAYS} days): ${pend.length}; not missing, not bought, not paged.`);
+    for (const m of pend) {
+      if (!PATH_RE.test(m.path)) continue;
+      const at = Number.isFinite(m.crawledAt) ? ` (crawled ${new Date(m.crawledAt).toISOString().slice(0, 16)}Z)` : "";
+      out.push(`  indexed by CDP, not yet in the public feed: ${m.method} ${m.path}${at}`);
+    }
+  }
   const mcpMissing = d.mcpMissing || [];
   if (mcpMissing.length) {
     out.push(`MCP tool listings missing from every pass: ${mcpMissing.length} (missing on the check before too ${(d.mcpRepeat || []).length}); never bought here, ${d.mcpKeepalive ? "the scheduled MCP listings pass is on" : "and the scheduled MCP listings pass is off (BAZAAR_MCP_KEEPALIVE), so nothing re-buys them"}.`);
@@ -396,7 +474,7 @@ function readState(file) {
 
 /** One check; returns the exit code. Every dependency is injectable so
  *  scripts/test-bazaar-presence.js runs it offline. */
-export async function run({ env = process.env, log = console.log, fetchJson = getJson } = {}) {
+export async function run({ env = process.env, log = console.log, fetchJson = getJson, validate = validateOne } = {}) {
   const target = env.TARGET_URL || "https://agent402.tools";
   try { new URL(target); } catch { log("bazaar-presence: TARGET_URL is not a URL"); return 2; }
   const maxRoutes = env.MAX_ROUTES === undefined || env.MAX_ROUTES === "" ? DEFAULT_MAX_ROUTES : Number(env.MAX_ROUTES);
@@ -413,9 +491,15 @@ export async function run({ env = process.env, log = console.log, fetchJson = ge
   if (!prev) log(openIssue ? "No saved state: the open issue's routes count as missing before." : "No saved state: this reads as a first check.");
   const hold = env.HOLD_BUY === "1";
   if (hold) log("A keep-alive pass is running or queued: this check buys nothing.");
+  const readStart = Date.now();
   const reading = await readListing({ target, registryUrl: env.BAZAAR_REGISTRY_URL || BAZAAR_REGISTRY_URL, fetchJson, log, deadlineMs });
+  // The validator step shares the reading's deadline and has its own cap.
+  const deadlineAt = Math.min(readStart + deadlineMs, Date.now() + VALIDATE_PHASE_MAX_MS);
+  const asked = await feedPendingRoutes({ reading, prev, target, validate, validateUrl: env.BAZAAR_VALIDATE_URL || undefined, deadlineAt });
+  if (asked.asked || asked.skipped) log(`Asked CDP's validator about ${asked.asked} route(s) the feed lacks: ${asked.pending.size} indexed, ${asked.unreadable} not read (counted missing)${asked.skipped ? `; ${asked.skipped} not asked (per-run cap ${VALIDATE_MAX_PER_RUN}, counted missing)` : ""}.`);
+  const pendingFeed = asked.pending;
   const mcpKeepalive = String(env.BAZAAR_MCP_KEEPALIVE || "").trim() === "on";
-  const d = decide({ reading, prev, openIssue, issueListed, mcpOpenIssue, hold, mcpKeepalive, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
+  const d = decide({ reading, prev, pendingFeed, openIssue, issueListed, mcpOpenIssue, hold, mcpKeepalive, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
   for (const l of logLines(d)) log(l);
   log(`Issue: ${d.action}.`);
   log(`MCP listing issue: ${d.mcpAction}.`);
