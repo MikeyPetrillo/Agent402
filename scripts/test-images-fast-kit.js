@@ -338,7 +338,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   ];
   for (const [failError, label] of filtered) {
     installVideoFetch({ statuses: ["failed"], failError });
-    const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "content filter stopped this video", `filtered (${label}) -> 422`);
+    const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "says its content filter may have stopped it", `filtered (${label}) -> 422`);
     ok(e?.statusCode === 422 && e.contentFiltered === true, `…${label}: 422 marked contentFiltered`);
     ok(String(e?.message).includes(" Nothing was charged. Rephrase the prompt"), `…${label}: the shared not-charged sentence, then what to change`);
     const f = toolErrorFields(e);
@@ -349,7 +349,11 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   const word = async (status) => { const m = createToolFailureMonitor(); for (let i = 0; i < 30; i++) m.noteTool("v1-videos", status); return (await m.status()).toolFailures.status; };
   ok(await word(422) === "ok" && await word(502) !== "ok", "thirty filtered 422s leave toolFailures ok; thirty 502s do not");
   ok(noteVerifiedPaidOutcome({ payer: "0x" + "ab".repeat(20), slug: "v1-videos", status: 422 }) === false, "a filtered 422 is not kept as a paying buyer's failed answer");
-  for (const failError of [{ message: "blocked by policy" }, "Internal error while rendering", { message: "quota", code: "server_error" }]) {
+  // Outage wording that names the filter service is not a filtered output:
+  // it stays a 502, so the buyer is never told to rephrase a working prompt.
+  for (const failError of [{ message: "blocked by policy" }, "Internal error while rendering", { message: "quota", code: "server_error" },
+    "Content moderation service is temporarily unavailable", "Safety system timed out, please retry", { message: "Internal error in content filter" }, { message: "upstream content-filter returned 500", code: "content_filter" },
+    "Content moderation service degraded", "Safety system overloaded"]) {
     installVideoFetch({ statuses: ["failed"], failError });
     const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", `a failure that names no filter stays 502 (${JSON.stringify(failError).slice(0, 40)})`);
     ok(e?.statusCode === 502 && !e.contentFiltered && toolErrorFields(e).reason === undefined, "…502, no content_filtered reason");
