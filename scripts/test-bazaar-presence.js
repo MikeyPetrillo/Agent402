@@ -299,6 +299,7 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
       calls.push({ url, path, method });
       const v = byPath[path] ?? "unreadable";
       if (v === "unreadable") return new Response("upstream busy", { status: 503 });
+      if (v && typeof v === "object") return Response.json({ valid: v.valid, preflight: v.valid ? [] : [{ check: "returns402", passed: false }], index: { active: true, lastCrawledAt: v.crawl } });
       if (v === "invalid") return Response.json({ valid: false, preflight: [{ check: "returns402", passed: false }], index: { active: false } });
       if (v === "not-indexed") return Response.json({ valid: true, preflight: [], index: { active: false } });
       return Response.json({ valid: true, preflight: [], index: { active: true, lastCrawledAt: v } });
@@ -306,13 +307,14 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
     const validate = (endpoint, opts) => validateOne(endpoint, { ...opts, fetchImpl });
     return { validate, calls };
   };
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: recent }, NOW) !== null, "indexedRecently: indexed and crawled minutes ago counts");
+  ok(indexedRecently({ ok: true, valid: true, indexed: true, lastCrawledAt: recent }, NOW) !== null, "indexedRecently: indexed and crawled minutes ago counts");
   const hoursAgo = (h) => new Date(NOW - h * 3_600_000).toISOString();
   ok(FEED_LAG_GRACE_MS === 6 * 3_600_000, "the feed's lag grace is six hours");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: hoursAgo(2) }, NOW) !== null, "indexedRecently: a crawl 2 h ago is inside the grace");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: hoursAgo(7) }, NOW) === null, "indexedRecently: a crawl 7 h ago is outside the grace");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: null }, NOW) === null && indexedRecently({ ok: true, indexed: false, lastCrawledAt: recent }, NOW) === null && indexedRecently({ ok: false }, NOW) === null, "indexedRecently: no crawl date, not indexed, or a failed read never counts");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: new Date(NOW + 60_000).toISOString() }, NOW) === null, "indexedRecently: a crawl date in the future does not count");
+  ok(indexedRecently({ ok: true, valid: true, indexed: true, lastCrawledAt: hoursAgo(2) }, NOW) !== null, "indexedRecently: a crawl 2 h ago is inside the grace");
+  ok(indexedRecently({ ok: true, valid: true, indexed: true, lastCrawledAt: hoursAgo(7) }, NOW) === null, "indexedRecently: a crawl 7 h ago is outside the grace");
+  ok(indexedRecently({ ok: true, valid: false, indexed: true, lastCrawledAt: hoursAgo(1) }, NOW) === null, "indexedRecently: an invalid route never counts, however fresh its crawl");
+  ok(indexedRecently({ ok: true, valid: true, indexed: true, lastCrawledAt: null }, NOW) === null && indexedRecently({ ok: true, indexed: false, lastCrawledAt: recent }, NOW) === null && indexedRecently({ ok: false }, NOW) === null, "indexedRecently: no crawl date, not indexed, or a failed read never counts");
+  ok(indexedRecently({ ok: true, valid: true, indexed: true, lastCrawledAt: new Date(NOW + 60_000).toISOString() }, NOW) === null, "indexedRecently: a crawl date in the future does not count");
 
   const walks = [pagesOf(without("cheap-a", "cheap-b", "at-ceiling")), pagesOf(without("cheap-a", "cheap-b", "at-ceiling"))];
   const v = cdp({ "/api/cheap-a": recent, "/api/cheap-b": "not-indexed", "/api/at-ceiling": "unreadable" });
@@ -341,6 +343,35 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
   ok(g.lines.includes("  indexed by CDP 120 min ago, not yet in the public feed: POST /api/cheap-b") && !g.lines.some((l) => /indexed by CDP .*(cheap-a|at-ceiling)/.test(l)), "only the crawl inside the grace is logged as pending the feed");
   const gState = JSON.parse(readFileSync(g.env.STATE_FILE, "utf8")).missing;
   ok(gState["POST /api/cheap-a"] === "bought" && gState["POST /api/at-ceiling"] === "bought" && !Object.hasOwn(gState, "POST /api/cheap-b"), "the state remembers the real misses as bought, the pending route not at all");
+
+  // An INVALID route the validator still shows indexed with a fresh crawl: missing and bought.
+  Date.now = () => NOW;
+  let inv;
+  try { inv = await runOnce("invalid", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), {}, cdp({ "/api/cheap-a": { valid: false, crawl: hoursAgo(1) } }).validate); } finally { Date.now = realNow; }
+  ok(/^slugs=cheap-a$/m.test(inv.out) && !inv.lines.some((l) => /indexed by CDP/.test(l)), "a route the validator calls invalid is missing and bought even when indexed with a fresh crawl");
+
+  // The grace also counts from the first check that found the route absent.
+  const absentFor = async (name, sinceHours, prevMissing = {}) => {
+    writeFileSync(join(dir, `${name}.json`), JSON.stringify({ v: 1, missing: prevMissing, unreadable: 0, absentSince: { "POST /api/cheap-a": hoursAgo(sinceHours) } }));
+    Date.now = () => NOW;
+    try { return await runOnce(name, fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), { OPEN_ISSUE: "" }, cdp({ "/api/cheap-a": hoursAgo(0.5) }).validate); } finally { Date.now = realNow; }
+  };
+  const long = await absentFor("since7", 7);
+  ok(/^slugs=cheap-a$/m.test(long.out) && !long.lines.some((l) => /indexed by CDP/.test(l)), "first absent 7 h ago with a fresh crawl: missing and bought (a re-crawled route is not pending forever)");
+  ok(JSON.parse(readFileSync(long.env.STATE_FILE, "utf8")).absentSince["POST /api/cheap-a"] === hoursAgo(7), "the first-absent time is kept, not reset, while the route stays absent");
+  const longRepeat = await absentFor("since7r", 7, { "POST /api/cheap-a": "bought" });
+  ok(/^action=open$/m.test(longRepeat.out) && longRepeat.body.includes("/api/cheap-a"), "first absent 7 h ago and missing on the check before: paged as a repeat miss");
+  const short = await absentFor("since1", 1);
+  ok(/^slugs=$/m.test(short.out) && short.lines.includes("  indexed by CDP 30 min ago, not yet in the public feed: POST /api/cheap-a"), "first absent 1 h ago with a fresh crawl: pending the feed, not bought");
+  // A first absence is recorded at the check's time; a route back in the feed is dropped.
+  const firstSeen = JSON.parse(readFileSync(f1.env.STATE_FILE, "utf8")).absentSince || {};
+  ok(firstSeen["POST /api/cheap-a"] === new Date(NOW).toISOString() && Object.keys(firstSeen).length === 3, "a route first found absent is recorded at that check's time");
+  const back = decide({ reading: reading([ALL_PATHS, ALL_PATHS]), prev: { missing: {}, unreadable: 0, absentSince: { "POST /api/cheap-a": hoursAgo(1) } }, now: NOW });
+  ok(Object.keys(back.state.absentSince).length === 0, "a route back in the feed leaves the first-absent record");
+  const future = decide({ reading: reading([without("cheap-a"), without("cheap-a")]), prev: { missing: {}, unreadable: 0, absentSince: { "POST /api/cheap-a": new Date(NOW + 86_400_000).toISOString() } }, now: NOW, pendingFeed: new Map([["POST /api/cheap-a", 60_000]]) });
+  ok(future.state.absentSince["POST /api/cheap-a"] === new Date(NOW).toISOString(), "a first-absent time in the future is not kept");
+  const unr = decide({ reading: null, prev: { missing: {}, unreadable: 0, absentSince: { "POST /api/cheap-a": hoursAgo(3) } }, now: NOW });
+  ok((unr.state.absentSince || {})["POST /api/cheap-a"] === hoursAgo(3), "an unreadable check keeps the first-absent record");
 
   // The route bought on the check before, indexed now (the case the feed lag made): not paged.
   writeFileSync(join(dir, "lag.json"), JSON.stringify({ v: 1, missing: { "POST /api/cheap-a": "bought" }, unreadable: 0 }));

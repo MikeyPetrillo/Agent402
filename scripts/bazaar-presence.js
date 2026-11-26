@@ -71,8 +71,11 @@
 //                         counts as missing, the check asks CDP's validator
 //                         about it (scripts/bazaar-validate.js validateOne).
 //                         One the validator reports indexed (index.active)
-//                         with a crawl at most FEED_LAG_GRACE_MS before the
-//                         check is pending the feed: not missing, not bought,
+//                         and valid, with a crawl at most FEED_LAG_GRACE_MS
+//                         before the check, on a check at most
+//                         FEED_LAG_GRACE_MS after the first check that found
+//                         it absent (the state's absentSince), is pending the
+//                         feed: not missing, not bought,
 //                         not paged, and named in the log. A route reported
 //                         invalid or not indexed, a read that fails, a crawl
 //                         date that is absent, older or in the future, and every route past
@@ -207,11 +210,11 @@ export function missingFromEveryPass(catalog, passes) {
 }
 
 /** Pure: the crawl time (ms) when a validator answer reports the route in
- *  CDP's index with a crawl at most FEED_LAG_GRACE_MS before `now`, else
+ *  CDP's index, valid, with a crawl at most FEED_LAG_GRACE_MS before `now`, else
  *  null. A read that failed, a route not indexed, and a crawl date that is
  *  absent, unparseable, older or in the future never count. */
 export function indexedRecently(r, now = Date.now()) {
-  if (!r || r.ok !== true || r.indexed !== true || typeof r.lastCrawledAt !== "string") return null;
+  if (!r || r.ok !== true || r.valid !== true || r.indexed !== true || typeof r.lastCrawledAt !== "string") return null;
   const t = Date.parse(r.lastCrawledAt);
   if (!Number.isFinite(t) || t > now || now - t > FEED_LAG_GRACE_MS) return null;
   return t;
@@ -254,18 +257,24 @@ export async function feedPendingRoutes({ reading, prev = null, target, validate
  *  their own issue, `mcpOpenIssue` whether it is open); `mcpKeepalive` (the
  *  scheduled MCP pass is on) changes only what the log says, never whether a
  *  listing counts. */
-export function decide({ reading, prev, pendingFeed = new Map(), openIssue = false, issueListed = new Set(), mcpOpenIssue = false, hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
+export function decide({ reading, prev, now = Date.now(), pendingFeed = new Map(), openIssue = false, issueListed = new Set(), mcpOpenIssue = false, hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
   const prevSeen = Array.isArray(prev?.mcpSeen) ? prev.mcpSeen.filter((t) => typeof t === "string" && !RETIRED_MCP_LISTING_TOOLS.includes(t)) : [];
+  // When each route was first found absent from the feed (ms); a time in the
+  // future or unreadable is not kept.
+  const prevSince = {};
+  if (prev?.absentSince && typeof prev.absentSince === "object") {
+    for (const [k, v] of Object.entries(prev.absentSince)) { const t = Date.parse(v); if (typeof v === "string" && Number.isFinite(t) && t <= now) prevSince[k] = v; }
+  }
   const prevMcpMissing = Array.isArray(prev?.mcpMissing) ? prev.mcpMissing.filter((k) => typeof k === "string" && !RETIRED_MCP_KEYS.has(k)) : [];
   if (!reading) {
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
       readable: false, buy: [], refused: null, repeat: [], pendingFeed: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpRetiredListed: [], mcpAction: "none", mcpKeepalive,
-      state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen, mcpMissing: prevMcpMissing },
+      state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen, mcpMissing: prevMcpMissing, absentSince: prevSince },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
   }
@@ -278,8 +287,15 @@ export function decide({ reading, prev, pendingFeed = new Map(), openIssue = fal
   const pending = pendingFeed instanceof Map ? pendingFeed : new Map();
   const absentRoutes = missingFromEveryPass(catalog, reading.passes);
   // Indexed by CDP, not yet in the public feed: never missing, bought or paged.
-  const pendingRoutes = absentRoutes.filter((m) => pending.has(m.key)).map((m) => ({ ...m, crawledAgoMs: pending.get(m.key) }));
-  const missing = absentRoutes.filter((m) => !pending.has(m.key));
+  // The grace counts from the first check that found the route absent too, so
+  // a route CDP keeps re-crawling is not pending the feed forever. One with no
+  // recorded time (first absent now, or an older state) starts its clock now.
+  const nowIso = new Date(now).toISOString();
+  const absentSince = {};
+  for (const m of absentRoutes) absentSince[m.key] = prevSince[m.key] || nowIso;
+  const inGrace = (m) => pending.has(m.key) && now - Date.parse(absentSince[m.key]) <= FEED_LAG_GRACE_MS;
+  const pendingRoutes = absentRoutes.filter(inGrace).map((m) => ({ ...m, crawledAgoMs: pending.get(m.key) }));
+  const missing = absentRoutes.filter((m) => !inGrace(m));
   // The MCP tool listings, apart from the routes. One counts as missing only
   // once it has been listed: seen by a check before, or missing before (the
   // state names it). An older state kept them in `missing` beside the routes;
@@ -322,7 +338,7 @@ export function decide({ reading, prev, pendingFeed = new Map(), openIssue = fal
     else if (!spend.ok) refused = spend.reason;
     if (refused) buy = [];
   }
-  const state = { missing: {}, unreadable: 0, mcpSeen: [...seen].sort(), mcpMissing: mcpMissing.map((m) => m.key).sort() };
+  const state = { missing: {}, unreadable: 0, mcpSeen: [...seen].sort(), mcpMissing: mcpMissing.map((m) => m.key).sort(), absentSince };
   for (const m of repeat) state.missing[m.key] = Object.hasOwn(prevMissing, m.key) ? prevMissing[m.key] : "listed";
   for (const m of exempt) state.missing[m.key] = m.why;
   // A held route is not remembered: the next check sees it as new and may buy it.

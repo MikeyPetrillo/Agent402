@@ -304,9 +304,10 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   full passes at least) and buys each route missing from every pass once per absence through
   `refresh-bazaar.js` MODE=missing with an explicit slug list (`REQUIRE_SLUGS=1`); exempt kinds
   and routes above the ceiling are never bought there. A route the feed lacks that CDP's validator
-  reports indexed with a crawl at most 6 hours before the check (`FEED_LAG_GRACE_MS`: the feed lags
-  a fresh crawl) is not missing, bought or paged, and the log names it; an older or future crawl, or
-  a failed or capped validator read, leaves it missing. The repo variable
+  reports valid and indexed, with a crawl at most 6 hours before the check and the route first found
+  absent at most 6 hours before it (`FEED_LAG_GRACE_MS`: the feed lags a fresh crawl), is not
+  missing, bought or paged, and the log names it; an invalid route, an older or future crawl, a
+  longer absence, or a failed or capped validator read leaves it missing. The repo variable
   `BAZAAR_PRESENCE_MAX_USD` caps one run's buy (default 2; more than 10 routes also refuses).
   One issue opens on a route missing two checks in a row, or three unreadable checks in a row.
 - `bazaar-mcp-listings.yml` buys the hosted connector's MCP tool listings (the fixed-price
