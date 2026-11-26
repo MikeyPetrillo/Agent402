@@ -17,7 +17,7 @@ import { load } from "js-yaml";
 import {
   decide, run, issueBody, logLines, catalogRows, missingFromEveryPass, presenceExemption, issueListedKeys, ISSUE_TITLE,
   DEFAULT_MAX_ROUTES, DEFAULT_MAX_SPEND_USD, UNREADABLE_PAGE_AFTER, PAGE_TIMEOUT_MS, DEFAULT_READ_DEADLINE_MS,
-  feedPendingRoutes, indexedRecently, VALIDATE_MAX_PER_RUN, FEED_PENDING_CRAWL_DAYS,
+  feedPendingRoutes, indexedRecently, VALIDATE_MAX_PER_RUN, FEED_LAG_GRACE_MS,
 } from "./bazaar-presence.js";
 import { validateOne } from "./bazaar-validate.js";
 import { aboveCeilingRoutes } from "./lib/keepalive-plan.js";
@@ -307,9 +307,12 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
     return { validate, calls };
   };
   ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: recent }, NOW) !== null, "indexedRecently: indexed and crawled minutes ago counts");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: new Date(NOW - (FEED_PENDING_CRAWL_DAYS + 1) * 86_400_000).toISOString() }, NOW) === null, "indexedRecently: a crawl older than the window does not count");
+  const hoursAgo = (h) => new Date(NOW - h * 3_600_000).toISOString();
+  ok(FEED_LAG_GRACE_MS === 6 * 3_600_000, "the feed's lag grace is six hours");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: hoursAgo(2) }, NOW) !== null, "indexedRecently: a crawl 2 h ago is inside the grace");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: hoursAgo(7) }, NOW) === null, "indexedRecently: a crawl 7 h ago is outside the grace");
   ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: null }, NOW) === null && indexedRecently({ ok: true, indexed: false, lastCrawledAt: recent }, NOW) === null && indexedRecently({ ok: false }, NOW) === null, "indexedRecently: no crawl date, not indexed, or a failed read never counts");
-  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: "2026-12-26T00:00:00Z" }, NOW) === null, "indexedRecently: a crawl date in the future does not count");
+  ok(indexedRecently({ ok: true, indexed: true, lastCrawledAt: new Date(NOW + 60_000).toISOString() }, NOW) === null, "indexedRecently: a crawl date in the future does not count");
 
   const walks = [pagesOf(without("cheap-a", "cheap-b", "at-ceiling")), pagesOf(without("cheap-a", "cheap-b", "at-ceiling"))];
   const v = cdp({ "/api/cheap-a": recent, "/api/cheap-b": "not-indexed", "/api/at-ceiling": "unreadable" });
@@ -323,12 +326,21 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
   } finally { Date.now = realNow; }
   ok(/^slugs=cheap-b,at-ceiling$/m.test(f1.out), `absent and validator-indexed is not bought; not-indexed and unreadable are bought as before (${f1.out.match(/^slugs=.*$/m)?.[0]})`);
   ok(!Object.hasOwn(JSON.parse(readFileSync(f1.env.STATE_FILE, "utf8")).missing, "POST /api/cheap-a"), "an indexed route is not remembered as missing");
-  ok(f1.lines.some((l) => l === "  indexed by CDP, not yet in the public feed: POST /api/cheap-a (crawled 2026-11-26T21:26Z)"), "the indexed route is named in the log");
+  ok(f1.lines.some((l) => l === "  indexed by CDP 34 min ago, not yet in the public feed: POST /api/cheap-a"), "the indexed route is named in the log with its crawl's age");
   ok(!f1.lines.some((l) => /^  missing POST \/api\/cheap-a/.test(l)) && f1.lines.some((l) => /^  missing POST \/api\/cheap-b/.test(l)) && f1.lines.some((l) => /^  missing POST \/api\/at-ceiling/.test(l)), "the log names the real misses as missing, never the indexed route");
   ok(v.calls.every((c) => c.url === "https://api.cdp.coinbase.com/platform/v2/x402/validate" && c.method === "POST") && v.calls.length === 6 && new Set(v.calls.map((c) => c.path)).size === 3, `only the routes the feed lacks are asked (${v.calls.length} calls)`);
   ok(/^action=open$/m.test(f2.out) && f2.body.includes("/api/cheap-b") && f2.body.includes("/api/at-ceiling") && !f2.body.includes("/api/cheap-a"), "two checks in a row page on the real misses only, never on the indexed route");
   ok(/^slugs=$/m.test(f2.out.split("\n").slice(-5).join("\n")), "a real miss is bought once per absence, not again on the next check");
   ok(![...f1.lines, ...f2.lines, ...f2.body.split("\n")].some((l) => /\b[45]\d\d\b|upstream busy|\$\s?\d/.test(l)), "no log line carries the validator's status, its message or a dollar figure");
+
+  // The grace end to end: 2 h ago pending, 7 h ago and a future crawl missing and bought.
+  Date.now = () => NOW;
+  let g;
+  try { g = await runOnce("grace", fetchFor({ walks }), {}, cdp({ "/api/cheap-a": hoursAgo(7), "/api/cheap-b": hoursAgo(2), "/api/at-ceiling": new Date(NOW + 30 * 60_000).toISOString() }).validate); } finally { Date.now = realNow; }
+  ok(/^slugs=cheap-a,at-ceiling$/m.test(g.out), `a crawl 7 h ago or in the future is missing and bought; 2 h ago is pending (${g.out.match(/^slugs=.*$/m)?.[0]})`);
+  ok(g.lines.includes("  indexed by CDP 120 min ago, not yet in the public feed: POST /api/cheap-b") && !g.lines.some((l) => /indexed by CDP .*(cheap-a|at-ceiling)/.test(l)), "only the crawl inside the grace is logged as pending the feed");
+  const gState = JSON.parse(readFileSync(g.env.STATE_FILE, "utf8")).missing;
+  ok(gState["POST /api/cheap-a"] === "bought" && gState["POST /api/at-ceiling"] === "bought" && !Object.hasOwn(gState, "POST /api/cheap-b"), "the state remembers the real misses as bought, the pending route not at all");
 
   // The route bought on the check before, indexed now (the case the feed lag made): not paged.
   writeFileSync(join(dir, "lag.json"), JSON.stringify({ v: 1, missing: { "POST /api/cheap-a": "bought" }, unreadable: 0 }));

@@ -71,11 +71,11 @@
 //                         counts as missing, the check asks CDP's validator
 //                         about it (scripts/bazaar-validate.js validateOne).
 //                         One the validator reports indexed (index.active)
-//                         with a crawl inside the last FEED_PENDING_CRAWL_DAYS
-//                         days is pending the feed: not missing, not bought,
+//                         with a crawl at most FEED_LAG_GRACE_MS before the
+//                         check is pending the feed: not missing, not bought,
 //                         not paged, and named in the log. A route reported
 //                         invalid or not indexed, a read that fails, a crawl
-//                         date that is absent or older, and every route past
+//                         date that is absent, older or in the future, and every route past
 //                         VALIDATE_MAX_PER_RUN stay missing as before. Only
 //                         routes the feed lacks are asked, one at a time, the
 //                         ones missing on the check before first, inside the
@@ -134,10 +134,8 @@ export const DEFAULT_READ_DEADLINE_MS = 20 * 60_000;
 // The validator step (see "feed lag" above).
 export const VALIDATE_MAX_PER_RUN = 25;
 export const VALIDATE_PHASE_MAX_MS = 4 * 60_000;
-export const FEED_PENDING_CRAWL_DAYS = 30;
-const DAY_MS = 86_400_000;
-// A crawl date past now by more than this is not a reading we trust.
-const CRAWL_SKEW_MS = 60 * 60_000;
+// The feed buyers read trails a fresh crawl by hours, never longer: past this, indexed-but-unlisted is a real miss.
+export const FEED_LAG_GRACE_MS = 6 * 60 * 60_000;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 // A path printed into the public issue: our own catalog's shape only.
@@ -209,19 +207,19 @@ export function missingFromEveryPass(catalog, passes) {
 }
 
 /** Pure: the crawl time (ms) when a validator answer reports the route in
- *  CDP's index with a crawl inside the last FEED_PENDING_CRAWL_DAYS days, else
+ *  CDP's index with a crawl at most FEED_LAG_GRACE_MS before `now`, else
  *  null. A read that failed, a route not indexed, and a crawl date that is
  *  absent, unparseable, older or in the future never count. */
 export function indexedRecently(r, now = Date.now()) {
   if (!r || r.ok !== true || r.indexed !== true || typeof r.lastCrawledAt !== "string") return null;
   const t = Date.parse(r.lastCrawledAt);
-  if (!Number.isFinite(t) || t > now + CRAWL_SKEW_MS || now - t > FEED_PENDING_CRAWL_DAYS * DAY_MS) return null;
+  if (!Number.isFinite(t) || t > now || now - t > FEED_LAG_GRACE_MS) return null;
   return t;
 }
 
 /** Asks the validator about the catalog routes every pass of the feed lacks
  *  (the ones missing on the check before first), one at a time, at most
- *  `max`, until `deadlineAt`. Returns { pending: Map(key -> crawl ms), asked,
+ *  `max`, until `deadlineAt`. Returns { pending: Map(key -> ms since the crawl), asked,
  *  unreadable, skipped }. `validate` is validateOne's shape. */
 export async function feedPendingRoutes({ reading, prev = null, target, validate = validateOne, validateUrl, deadlineAt = 0, max = VALIDATE_MAX_PER_RUN, now = () => Date.now() }) {
   const out = { pending: new Map(), asked: 0, unreadable: 0, skipped: 0 };
@@ -232,14 +230,15 @@ export async function feedPendingRoutes({ reading, prev = null, target, validate
   const ask = ordered.slice(0, Math.max(0, max));
   out.skipped = ordered.length - ask.length;
   const base = String(target).replace(/\/+$/, "");
+  const at = now();
   for (const m of ask) {
     if (deadlineAt > 0 && now() >= deadlineAt) { out.unreadable += ask.length - out.asked; break; }
     out.asked++;
     let r;
     try { r = await validate({ method: m.method, path: m.path }, { base, deadlineAt, ...(validateUrl ? { validateUrl } : {}) }); } catch { r = null; }
     if (!r || r.ok !== true) { out.unreadable++; continue; }
-    const t = indexedRecently(r, now());
-    if (t !== null) out.pending.set(m.key, t);
+    const t = indexedRecently(r, at);
+    if (t !== null) out.pending.set(m.key, at - t);
   }
   return out;
 }
@@ -250,7 +249,7 @@ export async function feedPendingRoutes({ reading, prev = null, target, validate
  *  when none was saved. `issueListed` is the set of keys the open issue lists,
  *  or null when its body could not be read. `pendingFeed` maps the keys of
  *  routes CDP's validator reports indexed recently (feedPendingRoutes) to
- *  their crawl time: absent from the feed, they are not missing. `hold` buys nothing. The MCP tool
+ *  how long ago they were crawled: absent from the feed, they are not missing. `hold` buys nothing. The MCP tool
  *  listings are decided apart (`mcpMissing`, `mcpRepeat`, `mcpAction` for
  *  their own issue, `mcpOpenIssue` whether it is open); `mcpKeepalive` (the
  *  scheduled MCP pass is on) changes only what the log says, never whether a
@@ -279,7 +278,7 @@ export function decide({ reading, prev, pendingFeed = new Map(), openIssue = fal
   const pending = pendingFeed instanceof Map ? pendingFeed : new Map();
   const absentRoutes = missingFromEveryPass(catalog, reading.passes);
   // Indexed by CDP, not yet in the public feed: never missing, bought or paged.
-  const pendingRoutes = absentRoutes.filter((m) => pending.has(m.key)).map((m) => ({ ...m, crawledAt: pending.get(m.key) }));
+  const pendingRoutes = absentRoutes.filter((m) => pending.has(m.key)).map((m) => ({ ...m, crawledAgoMs: pending.get(m.key) }));
   const missing = absentRoutes.filter((m) => !pending.has(m.key));
   // The MCP tool listings, apart from the routes. One counts as missing only
   // once it has been listed: seen by a check before, or missing before (the
@@ -396,11 +395,11 @@ export function logLines(d) {
   for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
   const pend = d.pendingFeed || [];
   if (pend.length) {
-    out.push(`Routes absent from the feed that CDP's validator reports indexed (crawled within ${FEED_PENDING_CRAWL_DAYS} days): ${pend.length}; not missing, not bought, not paged.`);
+    out.push(`Routes absent from the feed that CDP's validator reports indexed within the feed's lag grace (${Math.round(FEED_LAG_GRACE_MS / 3_600_000)} h): ${pend.length}; not missing, not bought, not paged.`);
     for (const m of pend) {
       if (!PATH_RE.test(m.path)) continue;
-      const at = Number.isFinite(m.crawledAt) ? ` (crawled ${new Date(m.crawledAt).toISOString().slice(0, 16)}Z)` : "";
-      out.push(`  indexed by CDP, not yet in the public feed: ${m.method} ${m.path}${at}`);
+      const ago = Number.isFinite(m.crawledAgoMs) ? Math.round(m.crawledAgoMs / 60_000) : "?";
+      out.push(`  indexed by CDP ${ago} min ago, not yet in the public feed: ${m.method} ${m.path}`);
     }
   }
   const mcpMissing = d.mcpMissing || [];
