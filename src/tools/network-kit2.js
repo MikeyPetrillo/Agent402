@@ -510,34 +510,81 @@ function reverseIpv4(ip) {
 }
 
 // Team Cymru's zone is answered fine by the big public resolvers even when a
-// host's own resolver returns SERVFAIL or times out on it (seen on CI runners).
-// A resolver failure (not an authoritative "no such name") is retried once
-// through public resolvers; ENOTFOUND and ENODATA are answers and pass through.
+// host's own resolver returns SERVFAIL or never answers it (seen on CI runners).
+// The host resolver is asked first; the public resolvers are asked too when it
+// fails with a resolver failure or has not answered within CYMRU_HEDGE_MS, and
+// the first answer wins (the other lookup is canceled). ENOTFOUND and ENODATA
+// are answers from either side and pass through.
 const CYMRU_FALLBACK_SERVERS = Object.freeze(["8.8.8.8", "9.9.9.9", "1.1.1.1"]);
 const RESOLVER_FAILURE = new Set(["ESERVFAIL", "ETIMEOUT", "ETIMEDOUT", "ECONNREFUSED", "EREFUSED", "ECONNRESET", "ECANCELLED"]);
-function publicResolveTxt(name) {
-  const r = new dnsPromises.Resolver({ timeout: 3000, tries: 1 });
-  r.setServers([...CYMRU_FALLBACK_SERVERS]);
-  return r.resolveTxt(name).finally(() => { try { r.cancel(); } catch { /* ignore */ } });
+// One resolver per lookup, so a lookup that lost (or ran out of time) is
+// canceled on its own, never another call's. The host resolver keeps the
+// system's own settings and timeouts; the public one asks each server once.
+function resolverTxt(name, signal, servers) {
+  const r = servers ? new dnsPromises.Resolver({ timeout: 3000, tries: 1 }) : new dnsPromises.Resolver();
+  if (servers) r.setServers([...servers]);
+  const cancel = () => { try { r.cancel(); } catch { /* ignore */ } };
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener("abort", cancel, { once: true });
+  return r.resolveTxt(name).finally(() => { signal?.removeEventListener("abort", cancel); cancel(); });
 }
+const hostResolveTxt = (name, signal) => resolverTxt(name, signal, null);
+const publicResolveTxt = (name, signal) => resolverTxt(name, signal, CYMRU_FALLBACK_SERVERS);
 // The lookups the handler makes; a test swaps them to prove the handler goes
-// through cymruTxt with the public fallback (setCymruLookups).
+// through cymruTxt with the public fallback (setCymruLookups). Each is called
+// as (name, signal) and the signal aborts when the lookup is no longer wanted.
 // The owner lookup (the AS's name) is the second query and only adds a name
 // to an answer that already holds the origin record: it gets a deadline of
-// its own, the host resolver and the public fallback together, so a resolver
-// that never answers cannot hold the call.
+// its own, inside which the host resolver and the public fallback both run
+// (the fallback from CYMRU_HEDGE_MS on), so a resolver that never answers
+// cannot hold the call or keep the fallback from answering.
 export const ASN_OWNER_LOOKUP_MS = 3_000;
-const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: (n) => dnsPromises.resolveTxt(n), fallback: publicResolveTxt, ownerMs: ASN_OWNER_LOOKUP_MS });
+export const CYMRU_HEDGE_MS = 1_000;
+const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: hostResolveTxt, fallback: publicResolveTxt, ownerMs: ASN_OWNER_LOOKUP_MS, hedgeMs: CYMRU_HEDGE_MS });
 let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
 export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }
 export const CYMRU_FALLBACK = CYMRU_FALLBACK_SERVERS;
-export async function cymruTxt(name, { primary = cymruLookups.primary, fallback = cymruLookups.fallback } = {}) {
-  try {
-    return await primary(name);
-  } catch (err) {
-    if (!RESOLVER_FAILURE.has(err?.code)) throw err;
-    return await fallback(name);
-  }
+/** A TXT lookup in the Cymru zone: the host resolver, hedged by the public
+ *  resolvers (see above). Resolves with the first answer; rejects with the
+ *  first authoritative "no such name", or, when both sides fail, with the
+ *  fallback's error. `signal` cancels both lookups. */
+export function cymruTxt(name, { primary = cymruLookups.primary, fallback = cymruLookups.fallback, hedgeMs = cymruLookups.hedgeMs, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const legs = [];
+    let done = false, hedge = null, primaryFailed = false, fallbackErr = null;
+    const finish = (fn, v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(hedge);
+      signal?.removeEventListener("abort", onAbort);
+      for (const c of legs) c.abort();
+      fn(v);
+    };
+    const onAbort = () => finish(reject, Object.assign(new Error(`queryTxt ECANCELLED ${name}`), { code: "ECANCELLED" }));
+    const run = (lookup, onFail) => {
+      const c = new AbortController();
+      legs.push(c);
+      Promise.resolve().then(() => lookup(name, c.signal)).then((r) => finish(resolve, r), (e) => { if (!done) onFail(e); });
+    };
+    const startFallback = () => {
+      clearTimeout(hedge);
+      if (done || legs.length > 1) return;
+      run(fallback, (e) => {
+        fallbackErr = e;
+        // A resolver failure here waits for the host resolver, unless it failed too.
+        if (!RESOLVER_FAILURE.has(e?.code) || primaryFailed) finish(reject, e);
+      });
+    };
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    run(primary, (e) => {
+      if (!RESOLVER_FAILURE.has(e?.code)) return finish(reject, e);
+      primaryFailed = true;
+      if (fallbackErr) return finish(reject, fallbackErr);
+      startFallback();
+    });
+    if (Number.isFinite(hedgeMs) && hedgeMs >= 0) hedge = setTimeout(startFallback, hedgeMs);
+  });
 }
 
 async function asnInfoHandler(body) {
@@ -576,11 +623,13 @@ async function asnInfoHandler(body) {
   // of time says so (`ownerUnavailable`), so a null owner is never read as
   // "this AS has no name".
   let owner = null, ownerUnavailable = false;
+  const ownerName = asn ? `${asn}.asn.cymru.com` : null;
   if (asn) {
     let timer;
+    const stop = new AbortController();
     const late = new Promise((resolve) => { timer = setTimeout(resolve, cymruLookups.ownerMs, null); });
     try {
-      const lookup = cymruTxt(`${asn}.asn.cymru.com`);
+      const lookup = cymruTxt(ownerName, { signal: stop.signal });
       lookup.catch(() => {}); // a rejection after the deadline is already answered
       const records = await Promise.race([lookup, late]);
       if (records === null) ownerUnavailable = true;
@@ -592,14 +641,15 @@ async function asnInfoHandler(body) {
       }
     } catch (err) {
       if (err?.code !== "ENOTFOUND" && err?.code !== "ENODATA") ownerUnavailable = true;
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); stop.abort(); }
   }
 
   return {
     ip,
     asn,
     owner,
-    ...(ownerUnavailable ? { ownerUnavailable: true } : {}),
+    // The query that could not be read, so a reader can ask it again.
+    ...(ownerUnavailable ? { ownerUnavailable: true, ownerLookup: { type: "TXT", name: ownerName } } : {}),
     prefix: prefix || null,
     country: country || null,
     registry: registry || null,
