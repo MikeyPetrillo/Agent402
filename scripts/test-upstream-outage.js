@@ -17,6 +17,7 @@ import {
   bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts, legRefusalStatus,
   hollowAnswerVerdict, HOLLOW_READS,
 } from "./lib/upstream-outage.js";
+import { createPackGrader } from "./lib/pack-sweep-grade.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { isHost } from "./lib/url-host.js";
@@ -296,6 +297,59 @@ try {
     v = await hollowAnswerVerdict({ slug: "stub-tool", input, read: reads(200, "[]"), reads: { "stub-tool": entry }, root: kitRoot });
     ok(v?.verdict === "fail" && /does not declare crt\.sh/.test(v.reason), "(hollow) an entry for a tool that does not declare its host excuses nothing");
     ok(Object.keys(HOLLOW_READS).join() === "cert-transparency", "(hollow) only cert-transparency holds a hollow-read entry");
+  }
+
+  // ---- skill-pack sweep: a step whose source refuses the server is graded by
+  // the same rule (sourceAllowanceVerdict): excused, and named, only when the
+  // step's tool declares the source's host and the source refuses the
+  // runner's direct read too (scripts/lib/pack-sweep-grade.js)
+  {
+    const packRoot = join(work, "pack-tree");
+    mkdirSync(join(packRoot, "src", "tools"), { recursive: true });
+    writeFileSync(join(packRoot, "src", "tools", "bls-stub-kit.js"), `export const T = [{ route: "GET /api/bls-a", slug: "bls-a", upstreamHosts: ["api.bls.gov"], handler: () => read() }, { route: "GET /api/bls-b", slug: "bls-b", upstreamHosts: ["api.bls.gov"], handler: () => read() }];\n`);
+    writeFileSync(join(packRoot, "src", "tools", "bare-stub-kit.js"), `export const T = [{ route: "GET /api/bare", slug: "bare-tool", handler: () => compute() }, { route: "GET /api/calc", slug: "calc-tool", handler: () => compute() }];\n`);
+    const REFUSED = "The U.S. Bureau of Labor Statistics API did not answer or refused the read (the publisher's own limit or outage); retry shortly. Nothing was charged.";
+    const SPENT = "The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow.";
+    const blsRefuses = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_NOT_PROCESSED", message: ["daily threshold"] }) });
+    const blsAnswers = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_SUCCEEDED", Results: {} }) });
+    const notOurs = { test: () => false };
+    const run = async (read, status, json, toolSlugs = ["bls-a", "bls-b", "bare-tool", "calc-tool"]) => {
+      const logged = [];
+      const g = createPackGrader({ read, root: packRoot, log: (l) => logged.push(l) });
+      await g.judge(json, toolSlugs);
+      return { ...g.grade({ slug: "stub-pack", status, json, toolSlugs, notOurs }), logged };
+    };
+    const partial = { summary: "1/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bls-a", ok: false, error: REFUSED }] };
+    let r = await run(blsRefuses, 200, partial);
+    ok(!r.failed && r.reported === 1 && r.lines.some((l) => /^report - stub-pack: 1 step\(s\) blocked by a key\/upstream, not ours: bls-a$/.test(l)),
+      `(pack) a step whose source refuses the runner's direct read too is reported blocked and named, the pack not failed (${r.lines.join(" | ")})`);
+    ok(r.logged.some((l) => /^report - bls-a: spent allowance excused: api\.bls\.gov refuses the runner's direct read too \(HTTP 200, status REQUEST_NOT_PROCESSED\)$/.test(l)), "(pack) the excuse names its evidence");
+    const allBlocked = { summary: "0/2 steps succeeded", steps: [{ slug: "bls-a", ok: false, error: REFUSED }, { slug: "bls-b", ok: false, error: SPENT }] };
+    r = await run(blsRefuses, 200, allBlocked);
+    ok(!r.failed && r.lines.some((l) => l === "report - stub-pack: blocked by upstream, not ours (every step: bls-a, bls-b)"),
+      `(pack) a pack whose every step is so blocked is reported blocked by upstream and named, not failed (${r.lines.join(" | ")})`);
+    const noStep = { error: `No step in the "stub-pack" pack succeeded, so there is nothing to return. Nothing was charged. bls-a: ${REFUSED}; calc-tool: need 6 observations` };
+    r = await run(blsRefuses, 502, noStep);
+    ok(!r.failed && r.lines.length === 1 && /^report - stub-pack: blocked by upstream, not ours \(no step ran; bls-a: /.test(r.lines[0]),
+      `(pack) a 502 no-step answer whose first step is so blocked is reported blocked by upstream (${r.lines.join(" | ")})`);
+    r = await run(blsAnswers, 200, partial);
+    ok(r.failed && r.lines.some((l) => /^FAIL - stub-pack: 1 step\(s\) fail/.test(l)), `(pack) the same step failing while the runner's direct read succeeds fails (${r.lines.join(" | ")})`);
+    r = await run(blsAnswers, 200, allBlocked);
+    ok(r.failed, "(pack) a pack whose every step fails while the runner's direct read succeeds fails");
+    r = await run(blsAnswers, 502, noStep);
+    ok(r.failed && /^FAIL - stub-pack: HTTP 502/.test(r.lines[0]), "(pack) a no-step answer fails while the runner's direct read succeeds");
+    const bare = { summary: "1/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bare-tool", ok: false, error: REFUSED }] };
+    r = await run(blsRefuses, 200, bare);
+    ok(r.failed && r.logged.some((l) => /bare-tool: spent allowance not excused: bare-tool does not declare api\.bls\.gov/.test(l)),
+      `(pack, control) a step whose tool declares no host fails even when the source refuses the runner (${r.lines.join(" | ")})`);
+    const mixed = { summary: "0/2 steps succeeded", steps: [{ slug: "bls-a", ok: false, error: REFUSED }, { slug: "bls-b", ok: false, error: "bls-b: our own parse error" }] };
+    r = await run(blsRefuses, 200, mixed);
+    ok(!r.failed && r.lines.some((l) => /downstream of an upstream\/key failure/.test(l)), "(pack) the existing rule stands: a step downstream of a blocked step is reported, not failed");
+    const fine = { summary: "2/2 steps succeeded", steps: [{ slug: "calc-tool", ok: true }, { slug: "bls-a", ok: true }] };
+    r = await run(blsAnswers, 200, fine);
+    ok(!r.failed && r.lines.join() === "ok - stub-pack: 2/2 steps succeeded", "(pack) a working pack passes");
+    const packSweep = readFileSync(join(ROOT, "scripts/test-pack-examples.js"), "utf8");
+    ok(packSweep.includes("createPackGrader(") && packSweep.includes("grader.judge(") && packSweep.includes("grader.grade("), "(pack) the skill-pack sweep grades every pack through the shared grader");
   }
 
   // ---- wiring: the strict sweep grades a bundle's failure by the bundle rule

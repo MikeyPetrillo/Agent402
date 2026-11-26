@@ -315,10 +315,14 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
 // A SPENT SOURCE ALLOWANCE IS OURS UNLESS THE SOURCE REFUSES THE RUNNER TOO.
 // A tool that counts its reads of a source a day answers, past its own
 // budget, a fixed sentence without reading the source (us-macro-series' BLS
-// day: src/tools/us-macro-series.js). That budget is this server's, so such
-// an answer is excused only when ALL of these hold, and fails otherwise:
+// day: src/tools/us-macro-series.js). When the source itself refuses the
+// server's read (BLS answering its daily threshold to the server's key as a
+// body whose status is not REQUEST_SUCCEEDED, or not answering), the tool
+// answers a second fixed sentence. Either may be ours (our budget, our key's
+// allowance, a request we built wrong), so such an answer is excused only
+// when ALL of these hold, and fails otherwise:
 //
-//   1. the answer is the source's fixed allowance sentence (anchored);
+//   1. the answer is one of the source's fixed sentences (anchored);
 //   2. the tool's own definition declares the source's host;
 //   3. the runner's own keyless direct GET of the source on that host, right
 //      now, fails (no answer, 429, or 500 and above) or is answered with the
@@ -329,7 +333,9 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
 export const SOURCE_ALLOWANCES = Object.freeze([
   {
     source: "BLS",
-    message: /^The U\.S\. Bureau of Labor Statistics daily query allowance of this server is used up;/,
+    // The server's own budget spent, or BLS refusing or not answering the
+    // server's read (us-macro-series' `busy` sentence for BLS).
+    message: /^The U\.S\. Bureau of Labor Statistics (?:daily query allowance of this server is used up;|API did not answer or refused the read \(the publisher's own limit or outage\);)/,
     host: "api.bls.gov",
     // The keyless v1 read the tool makes without a key (one series, GET).
     url: "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000",
@@ -360,7 +366,7 @@ export async function sourceAllowanceVerdict({ slug, error, read = directReadAns
   if (!a) return null;
   if (!upstreamHostsForSlug(slug, root).has(a.host)) return { verdict: "fail", reason: `${slug} does not declare ${a.host}` };
   const { status, text } = await read(a.url);
-  if (!a.refuses(status, text)) return { verdict: "fail", reason: `${a.source}'s daily allowance of this server is spent, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
+  if (!a.refuses(status, text)) return { verdict: "fail", reason: `${slug} answered ${a.source}'s refusal or spent allowance, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
   let said = "";
   try { said = status === 200 ? `, status ${String(JSON.parse(text)?.status).slice(0, 40)}` : ""; } catch { /* the HTTP status is the evidence */ }
   return { verdict: "upstream", evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
