@@ -1505,18 +1505,22 @@ export async function recentlyClosed(token, env = {}, now = Date.now()) {
     return list;
   } catch { return null; }
 }
+// The issue a bad check would reopen, or null (a reopen can cost two writes).
+const reopenTarget = (title, closedList) => (closedList ? reopenCandidate(closedList, { title, trusted: closedList.trusted || [] }) : null);
+// Returns { ok, reopened?, writes }: writes is the subrequests it made (a
+// failed reopen is two, the PATCH and the POST that replaces it).
 async function openOrReopen(token, title, now, closedList) {
-  const n = closedList ? reopenCandidate(closedList, { title, trusted: closedList.trusted || [] }) : null;
+  const n = reopenTarget(title, closedList);
   if (n) {
     // A reopen that fails (refused or thrown) files a new issue instead: a
     // second number is better than an alarm that never reaches anyone.
     try {
       const r = await gh(`/repos/${ISSUES_REPO}/issues/${n}`, token, { method: "PATCH", body: JSON.stringify({ state: "open", body: neutralIssueBody(now) }) });
-      if (r.ok) return { ok: true, reopened: n };
+      if (r.ok) return { ok: true, reopened: n, writes: 1 };
     } catch { /* filed new below */ }
   }
   const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, { method: "POST", body: JSON.stringify({ title, body: neutralIssueBody(now) }) });
-  return { ok: r.ok };
+  return { ok: r.ok, writes: n ? 2 : 1 };
 }
 
 /**
@@ -1608,13 +1612,22 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
   const closedList = !toOpen.length ? null : open.closedList !== undefined ? open.closedList : await recentlyClosed(token, env);
   if (toOpen.length) maxWrites = Math.max(1, maxWrites - 1);
   const writes = [...toOpen, ...toClose, ...toReset];
-  const deferred = writes.slice(maxWrites).map((a) => a.title);
+  // Spent as the writes are made: a reopen starts only with room for the
+  // create that replaces it if it fails, and a failed one is charged both.
+  // From the first write that does not fit, the rest wait (opens stay first).
+  const deferred = [];
   const reopened = [];
-  for (const a of writes.slice(0, maxWrites)) {
+  let spent = 0;
+  for (const a of writes) {
     const v = verdicts[a.title];
     const existing = open.get(a.title);
-    if (v === "bad" && !existing) {
+    const isOpen = v === "bad" && !existing;
+    const need = isOpen && reopenTarget(a.title, closedList) ? 2 : 1;
+    if (deferred.length || spent + need > maxWrites) { deferred.push(a.title); continue; }
+    if (!isOpen) spent++;
+    if (isOpen) {
       const r = await openOrReopen(token, a.title, now, closedList);
+      spent += r.writes;
       if (r.ok) opened.push(a.title);
       if (r.ok && r.reopened) reopened.push(a.title);
       // The reading's detail goes to this Worker's own log, never the public issue.
