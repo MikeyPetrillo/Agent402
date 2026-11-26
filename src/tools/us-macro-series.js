@@ -31,15 +31,16 @@
 //     most PUBLISHER_WAIT_MS for a file not held; the read runs on and fills
 //     the cache (an earlier year is kept 30 days).
 //   - Board of Governors of the Federal Reserve System, H.6 Money Stock
-//     Measures (www.federalreserve.gov Data Download Program, the monthly
-//     package): M1SL, M2SL, M1NS, M2NS. "Unless otherwise indicated,
+//     Measures (the release's own XML file on www.federalreserve.gov, its
+//     monthly series): M1SL, M2SL, M1NS, M2NS. "Unless otherwise indicated,
 //     information on Board's website is in the public domain and may be
 //     copied and distributed without permission. Please cite to the Board as
 //     the source of the information" (https://www.federalreserve.gov/disclaimer.htm);
 //     nothing here implies membership in or endorsement by the Federal
-//     Reserve. The Board retires the preformatted packages on 2027-03-31 (the
-//     program on 2027-07-01): FED_DDP_PACKAGE_READS below (H.6, H.10 and
-//     H.15) move to each release's own files before then.
+//     Reserve. The Board retires the Data Download Program's preformatted
+//     packages on 2027-03-31 (the program on 2027-07-01) and names the XML
+//     file on each release's page as the file that stays: H.6 is read from
+//     it; FED_DDP_PACKAGE_READS below (H.10 and H.15) move before then.
 //   - U.S. Bureau of Economic Analysis, National Income and Product Accounts
 //     (apps.bea.gov flat file of quarterly NIPA series, keyless): GDP
 //     (A191RC) and GDPC1 (A191RX), millions in the file, billions here as
@@ -68,6 +69,11 @@
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { CAP_NAMES } from "../upstream-cap-refusals.js";
 import { notChargedHere } from "../not-charged.js";
+import zlib from "node:zlib";
+import { promisify } from "node:util";
+import { parseCentralDirectory } from "./edgar-13f-datasets.js";
+
+const inflateRawAsync = promisify(zlib.inflateRaw);
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -252,6 +258,8 @@ function takeBlsQuery() {
   blsDay.used++;
   return true;
 }
+/** Test seam: the value cached under `key`, or null. */
+export function _cachedValueForTest(key) { return cache.get(key)?.value ?? null; }
 /** Test seam: forget every cached read and the day's BLS count. */
 export function _resetUsMacroForTest() { cache.clear(); inflight.clear(); blsDay.day = ""; blsDay.used = 0; }
 
@@ -479,7 +487,7 @@ async function treasuryYields(s, fromYear, toYear) {
 }
 
 // ---- Federal Reserve Board H.6 -----------------------------------------------------
-// The monthly package (M1, M2 and other release data), every column of it.
+// The release's own XML file (an SDMX zip on the H.6 page), its monthly series.
 /** The Board's Data Download Program retires its preformatted packages on
  *  this date (the program itself on 2027-07-01). Every package read here
  *  (FED_DDP_PACKAGE_READS) moves to the release's own files before it;
@@ -487,13 +495,18 @@ async function treasuryYields(s, fromYear, toYear) {
  *  package read remains. */
 export const FED_DDP_PACKAGES_RETIRE_ON = "2027-03-31";
 export const FED_DDP_MOVE_BY = "2027-03-01";
-export const H6_PACKAGE_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H6&series=798e2796917702a5f8423426ba7e6b42&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn&type=package";
+/** The XML file the Board keeps on the H.6 release page past the program's
+ *  retirement (https://www.federalreserve.gov/data/ddp-retirement-frequently-asked-questions.htm). */
+export const H6_XML_URL = "https://www.federalreserve.gov/releases/h6/data/FRB_h6_xml.zip";
+export const H6_XML_MEMBER = "H6_data.xml";
+/** The zip is read under H6_ZIP_MAX_BYTES and its data member inflated under
+ *  H6_XML_MAX_BYTES (the member is several times the zip). */
+export const H6_ZIP_MAX_BYTES = 4 * 1024 * 1024;
+export const H6_XML_MAX_BYTES = 64 * 1024 * 1024;
 /** A Data Download Program package -> { "<column>": [{ date, value }], ... },
  *  by the header row; monthly periods (YYYY-MM) are dated the 1st, daily
  *  ones (YYYY-MM-DD) as they are. Cells such as ND (no data) are skipped. */
-export function parseFrbCsv(text, what = "The Federal Reserve Board file") { return parseH6Csv(text, what); }
-/** The package -> { "M2.M": [{ date, value }], ... } (billions), by the header row. */
-export function parseH6Csv(text, what = "The Federal Reserve Board H.6 file") {
+export function parseFrbCsv(text, what = "The Federal Reserve Board file") {
   const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim());
   const at = lines.findIndex((l) => /^"?Time Period"?,/.test(l));
   if (at < 0) throw busy(what);
@@ -508,18 +521,71 @@ export function parseH6Csv(text, what = "The Federal Reserve Board H.6 file") {
   }
   return out;
 }
+const xmlAttr = (attrs, name) => { const m = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs); return m ? m[1] : null; };
+/** The H.6 columns a SERIES entry reads (M1 and M2, adjusted and not): the
+ *  only ones parsed and cached, so the held file is four series, not the
+ *  release's whole monthly table. */
+export const H6_READ_COLS = Object.freeze([...new Set(Object.values(SERIES).filter((x) => x.source === "frb").map((x) => x.col))]);
+/** The release's SDMX data file -> { "M2.M": [{ date, value }], ... }: each
+ *  monthly series (SERIES_NAME ending ".M", the columns the monthly package
+ *  carried) named in `only` (default H6_READ_COLS; null reads every monthly
+ *  one), each month dated the 1st (the file dates it the month's last
+ *  day). A series the file lists twice (M1 sits in both the M1 and M2 data
+ *  sets) is read once. Other series are stepped over unread. */
+export function parseH6Xml(text, what = "The Federal Reserve Board H.6 file", { only = H6_READ_COLS } = {}) {
+  const want = only == null ? null : new Set(only);
+  const xml = String(text || "");
+  const out = {};
+  const open = /<([A-Za-z_][\w.-]*):Series\s([^>]*)>/g;
+  let m;
+  while ((m = open.exec(xml))) {
+    const close = `</${m[1]}:Series>`;
+    const end = xml.indexOf(close, open.lastIndex);
+    if (end < 0) break;
+    const name = xmlAttr(m[2], "SERIES_NAME");
+    if (name && /\.M$/.test(name) && !(name in out) && (!want || want.has(name))) {
+      const rows = [];
+      const obs = /<[A-Za-z_][\w.-]*:Obs\s([^>]*?)\/?>/g;
+      obs.lastIndex = open.lastIndex;
+      let o;
+      while ((o = obs.exec(xml)) && o.index < end) {
+        const period = xmlAttr(o[1], "TIME_PERIOD") || "";
+        const raw = xmlAttr(o[1], "OBS_VALUE");
+        const pm = /^(\d{4})-(0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?$/.exec(period);
+        if (!pm || raw == null || raw.trim() === "") continue;
+        const v = Number(raw);
+        if (Number.isFinite(v)) rows.push({ date: `${pm[1]}-${pm[2]}-01`, value: v });
+      }
+      out[name] = rows;
+    }
+    open.lastIndex = end + close.length;
+  }
+  if (!Object.values(out).some((r) => r.length)) throw busy(what);
+  return out;
+}
+/** The zip's bytes -> the named member's text, inflated under `maxBytes`. */
+export async function zipMemberText(buf, member, maxBytes = H6_XML_MAX_BYTES, what = "The Federal Reserve Board H.6 file") {
+  let entry;
+  try { entry = parseCentralDirectory(buf, buf.length).entries.find((e) => e.name === member); } catch { throw busy(what); }
+  if (!entry || entry.size > maxBytes || entry.offset + 30 > buf.length || buf.readUInt32LE(entry.offset) !== 0x04034b50) throw busy(what);
+  const start = entry.offset + 30 + buf.readUInt16LE(entry.offset + 26) + buf.readUInt16LE(entry.offset + 28);
+  const data = buf.subarray(start, start + entry.compressedSize);
+  if (entry.method === 0) return data.toString("utf8");
+  if (entry.method !== 8) throw busy(what);
+  try { return (await inflateRawAsync(data, { maxOutputLength: maxBytes })).toString("utf8"); } catch { throw busy(what); }
+}
 function h6Package() {
   const k = "frb:h6";
   const hit = cached(k);
   if (hit) return Promise.resolve(hit);
   return once(k, async () => {
-    let html;
+    let buffer;
     try {
-      ({ html } = await retryTransient(() => safeFetch(H6_PACKAGE_URL, { timeoutMs: 20_000, maxBytes: 4 * 1024 * 1024, ownUpstream: true })));
+      ({ buffer } = await retryTransient(() => safeFetch(H6_XML_URL, { binary: true, timeoutMs: 20_000, maxBytes: H6_ZIP_MAX_BYTES, ownUpstream: true })));
     } catch {
       throw busy("The Federal Reserve Board H.6 file");
     }
-    return keep(k, parseH6Csv(html), 6 * HOUR);
+    return keep(k, parseH6Xml(await zipMemberText(buffer, H6_XML_MEMBER)), 6 * HOUR);
   });
 }
 
@@ -532,8 +598,8 @@ const H10_PACKAGES = Object.freeze({ rates: "60f32914ab61dfab590e0e470153e3ae", 
 export const H15_MONTHLY_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H15&series=d7e27b7b09a3a7feae95b9c61781fcd8&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn&type=package";
 export const h10FirstYear = (nowYear = new Date().getUTCFullYear()) => nowYear - H10_YEARS;
 export const h10Url = (pkg, nowYear = new Date().getUTCFullYear()) => `https://www.federalreserve.gov/datadownload/Output.aspx?rel=H10&series=${H10_PACKAGES[pkg]}&lastobs=&from=01/01/${h10FirstYear(nowYear)}&to=12/31/${nowYear}&filetype=csv&label=include&layout=seriescolumn&type=package`;
-/** The package reads that the 2027-03-31 retirement ends: H.6, H.10, H.15. */
-export const FED_DDP_PACKAGE_READS = Object.freeze(["H6", "H10", "H15"].filter((rel) => [H6_PACKAGE_URL, H15_MONTHLY_URL, h10Url(Object.keys(H10_PACKAGES)[0])].some((u) => u.includes(`rel=${rel}&`) && u.includes("type=package"))));
+/** The package reads that the 2027-03-31 retirement ends: H.10, H.15 (H.6 reads its release file). */
+export const FED_DDP_PACKAGE_READS = Object.freeze(["H6", "H10", "H15"].filter((rel) => [H15_MONTHLY_URL, h10Url(Object.keys(H10_PACKAGES)[0])].some((u) => u.includes(`rel=${rel}&`) && u.includes("type=package"))));
 function frbPackage(k, url, what, ttl) {
   const hit = cached(k);
   if (hit) return Promise.resolve(hit);

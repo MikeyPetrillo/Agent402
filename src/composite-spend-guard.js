@@ -233,6 +233,13 @@ export function compositeGuardBlocked(payer) {
   if (!SHARED || !payer) return local;
   return local ? Promise.resolve(true) : sharedBlocked(payer, Date.now());
 }
+/** Whole seconds until a blocked payer's block lifts: this server's own
+ *  record, else the block's full length (a block another server recorded). */
+export function compositeGuardRetryAfterSeconds(payer, now = Date.now()) {
+  const until = payer ? blockedUntil.get(payer) : 0;
+  const ms = until && until > now ? until - now : BLOCK_MS;
+  return Math.max(1, Math.ceil(ms / 1000));
+}
 function localBlocked(payer) {
   if (!payer) return false;
   const until = blockedUntil.get(payer);

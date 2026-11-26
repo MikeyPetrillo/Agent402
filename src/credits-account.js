@@ -35,7 +35,7 @@ import { SKIP_UPDATE } from "./json-document.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsGuards } from "./credits-guards.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
-import { limiterKey, wideNetworkKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey, retryAfterSecondsOf, retryAfterFromError } from "./rate-limit.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
@@ -235,7 +235,8 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
   /** Ask for a sign-in link. Answers { status, message } at once; the lookup and the send run after. */
   function requestSignIn(rawEmail, ip) {
     if (!secret) return { status: 503, message: "Signing in is not available on this server." };
-    if (ipLimiter?.check(String(ip || "?")).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    const ipRl = ipLimiter?.check(String(ip || "?"));
+    if (ipRl?.limited) return { status: 429, retryAfter: retryAfterSecondsOf(ipRl.retryAfterSeconds), message: "Too many requests. Please try again in a few minutes." };
     const email = normEmail(rawEmail);
     if (!validEmail(email)) return { status: 400, message: "Enter your email address." };
     // Counted per mailbox (src/mailbox-key.js, so "+tag" and dotted spellings
@@ -250,11 +251,13 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     const net = limiterKey(String(ip || "?"));
     const pair = `${mb}|${net}`;
     const t = Date.now();
-    if (emailLimiter?.check(`e:${pair}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    const emailRl = emailLimiter?.check(`e:${pair}`);
+    if (emailRl?.limited) return { status: 429, retryAfter: retryAfterSecondsOf(emailRl.retryAfterSeconds), message: "Too many requests. Please try again in a few minutes." };
     if (mailboxLimiter) {
-      const full = mailboxLimiter.peek ? mailboxLimiter.peek(`m:${mb}`).limited : false;
-      if (full) {
-        if (askedBefore(pair, t) || !coldLimiter || coldLimiter.check(`c:${mb}`).limited) { noteAsked(pair, t); return { status: 429, message: "Too many requests. Please try again in a few minutes." }; }
+      // The mailbox's own window decides when it has room again.
+      const fullRl = mailboxLimiter.peek ? mailboxLimiter.peek(`m:${mb}`) : null;
+      if (fullRl?.limited) {
+        if (askedBefore(pair, t) || !coldLimiter || coldLimiter.check(`c:${mb}`).limited) { noteAsked(pair, t); return { status: 429, retryAfter: retryAfterSecondsOf(fullRl?.retryAfterSeconds), message: "Too many requests. Please try again in a few minutes." }; }
       } else mailboxLimiter.check(`m:${mb}`);
     }
     noteAsked(pair, t);
@@ -434,6 +437,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     noStore(res);
     if (refuseCross(req, res)) return;
     const r = account.requestSignIn(req.body?.email, clientIp(req));
+    if (r.status === 429) res.set("Retry-After", String(retryAfterSecondsOf(r.retryAfter)));
     res.status(r.status).json(r.status === 200 ? { ok: true, message: r.message } : { error: r.message });
   });
   app.get(`${ACCOUNT_PATH}/verify`, (req, res, next) => {
@@ -492,7 +496,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     if (limited(req, res)) return;
     try { res.json({ url: (await credits.createTopupCheckout(keyIdOf(req.body?.key), email, req.body?.pack, { ip: clientIp(req) })).url }); }
     catch (e) {
-      if (e?.buyerSafe) return res.status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.roomUsd != null ? { roomUsd: e.roomUsd, capUsd: e.capUsd } : {}) });
+      if (e?.buyerSafe) return retryAfterFromError(res, e).status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.roomUsd != null ? { roomUsd: e.roomUsd, capUsd: e.capUsd } : {}) });
       log(`[credits-account] top-up checkout failed: ${String(e?.message || e).slice(0, 160)}`);
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
@@ -507,7 +511,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     if (limited(req, res)) return;
     try { res.json({ url: (await credits.createCheckout(req.body?.pack, { email, ip: clientIp(req) })).url }); }
     catch (e) {
-      if (e?.buyerSafe) return res.status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.validPacks ? { validPacks: e.validPacks } : {}) });
+      if (e?.buyerSafe) return retryAfterFromError(res, e).status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.validPacks ? { validPacks: e.validPacks } : {}) });
       log(`[credits-account] checkout failed: ${String(e?.message || e).slice(0, 160)}`);
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }

@@ -13,9 +13,10 @@ const STOCK = stockDataEnabled();
 export const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
-    // The stock legs only while a stock provider is active (src/tools/stock-provider.js).
-    story: `An analyst's agent walks 50 tickers, pulling filings${STOCK ? ", reported financials, the latest close and price history" : " and reported financials"} for each, and leaves 50 structured summaries ready for review in the morning.`,
-    calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ...(STOCK ? [["stock-quote", 50], ["stock-history", 50]] : [])],
+    // The stock leg only while a stock provider is active (src/tools/stock-provider.js);
+    // it serves daily history alone, never the newest session.
+    story: `An analyst's agent walks 50 tickers, pulling filings${STOCK ? ", reported financials and daily price history" : " and reported financials"} for each, and leaves 50 structured summaries ready for review in the morning.`,
+    calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ...(STOCK ? [["stock-history", 50]] : [])],
     per: "for 50 companies",
   },
   {

@@ -81,6 +81,22 @@ try {
     ok(["payment-required", "www-authenticate", "x-cache"].every((n) => ex.includes(n)) && h("access-control-allow-origin") === "*", `${path}: CORS still exposes PAYMENT-REQUIRED, WWW-Authenticate and X-Cache`);
   }
 
+  // The site search endpoint (src/well-known-search.js): JSON, Markdown, a
+  // QUERY with a body and its refusals carry the always-on set and stay
+  // readable cross-origin.
+  for (const [label, path, init] of [
+    ["GET", "/.well-known/search?q=hash%20a%20string", {}],
+    ["Markdown", "/.well-known/search?q=hash%20a%20string", { headers: { accept: "text/markdown" } }],
+    ["QUERY", "/.well-known/search", { method: "QUERY", headers: { "content-type": "text/plain" }, body: "hash a string" }],
+    ["405", "/.well-known/search", { method: "PUT", headers: J, body: "{}" }],
+    ["413", "/.well-known/search", { method: "QUERY", headers: { "content-type": "text/plain" }, body: "a".repeat(5000) }],
+  ]) {
+    const { r } = await get(path, init);
+    const h = (n) => r.headers.get(n);
+    ok([200, 405, 413].includes(r.status) && missingAlways(h).length === 0, `/.well-known/search ${label}: always-on headers (${r.status}, ${missingAlways(h).join(", ") || "all"})`);
+    ok(h("access-control-allow-origin") === "*" && exposed(r).includes("x-cache"), `/.well-known/search ${label}: readable cross-origin`);
+  }
+
   // The unpaid 402: challenge header and body intact, never stored, lean header set.
   for (const [path, body] of [["/api/extract", { url: "https://example.com" }], ["/api/hash", { text: "a" }]]) {
     const { r, text } = await get(path, { method: "POST", headers: J, body: JSON.stringify(body) });

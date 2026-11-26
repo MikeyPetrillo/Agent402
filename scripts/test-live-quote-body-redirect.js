@@ -18,7 +18,8 @@ const ORIGIN = "https://example.com";
 const accept = { scheme: "exact", network: "eip155:8453", payTo: "0x9fb365E4E9385E2a39FeBAd70368267e6f571d9A", amount: "2000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
 const header = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [accept] })).toString("base64");
 const quote402 = () => new Response("{}", { status: 402, headers: { "payment-required": header } });
-const row = (route, method, contract) => ({ seller: "example.com", route, method, slug: route.slice(1), price: null, networks: [], ...(contract ? { requestContract: ["declared", contract] } : {}) });
+// paid: true, the seller's paid annotation: an unpaid POST goes only to a route its seller marks paid.
+const row = (route, method, contract) => ({ seller: "example.com", route, method, slug: route.slice(1), price: null, networks: [], paid: true, ...(contract ? { requestContract: ["declared", contract] } : {}) });
 const seen = [];
 const orig = globalThis.fetch;
 const origLog = console.log; console.log = () => {};

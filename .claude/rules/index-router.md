@@ -136,6 +136,17 @@ Loaded when an index, discovery, router or buyer file is read.
   (`readThisWeekAboveRouterCaps`) is read weekly at most whatever else makes it due, except on a
   re-registration; the paywall probe asks the cheapest paid GET route
   (`scripts/test-quote-weekly.js`).
+  The unpaid quote probe never runs a seller's free route: a row the seller's own documents
+  mark free (`sellerDeclaresFree`: `paid:false` or a zero price, not our own live-200 reading)
+  is never probed; a POST goes only where the seller marks the route's POST paid
+  (`sellerMarksPaid`: price, chains, paid annotation, registry row, or a listing in its x402
+  manifest, passed as `x402Listed`), with one body at most (after a non-402 answer to a POST, no
+  further body); a route that answered the request itself and never with a 402
+  (`routeAnsweredItself`: a 2xx, or a 4xx other than 402, a 429 included, to the row's own verb) is held on the row
+  (`quoteRefusedUntil`, 3 days doubling to 14, carried across rebuilds, persisted with the row;
+  a re-registration lifts it); a 5xx, a redirect, a timeout or a failed connection starts no
+  hold, so the next crawl asks again (`scripts/test-quote-probe-free-routes.js`).
+- **Sellers the router lists and never buys from (`src/router-listed-only.js`):** a seller on the list keeps its rows in discovery and reads `listed_only` on every chain (first in `REASON_PRECEDENCE`, `src/dispatch-eligibility.js`; the seller's own page says there is nothing to fix on the listing); only route-and-execute, which buys and hands the answer on, refuses it. The list names no one: each entry is a digest of a lowercased registrable domain (the one `scripts/gen-third-party-hashes.js` writes), a host matches by itself or any parent of two labels or more, and `ROUTER_EXCLUDED_SELLER_HASHES` (a comma list of digests) adds entries at runtime (`scripts/test-router-listed-only.js`). Every public surface (the legend, the refusal bodies, `/sell`, the changelog) says only that the router lists the seller and does not buy from it, and that a buyer can pay it directly: no surface gives a reason, and the same suite fails one that does.
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
   every paywall probe off, re-checks included). The verdict is kept apart from crawl health: it reports

@@ -269,7 +269,7 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.001",
     description:
-      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): observed date and calendar date, local and English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
+      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): observed and calendar date, local name (to 2027-01-31) and English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
     tags: ["holidays", "public-holidays", "calendar", "country", "time"],
     discovery: {
       input: { country: "US", year: 2026 },

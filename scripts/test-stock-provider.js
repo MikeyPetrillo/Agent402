@@ -44,20 +44,21 @@ function checkContract(a, label) {
   ok(typeof a?.quote === "function" && typeof a?.dailyBars === "function", `${label}: has quote() and dailyBars()`);
   const d = a?.describe || {};
   ok(typeof d.coverageCopy === "string" && d.exampleProvenance && typeof d.exampleProvenance === "object", `${label}: describes its coverage and example provenance`);
-  for (const k of ["dataset", "coverage", "venues", "source", "note"]) ok(typeof d.exampleProvenance?.[k] === "string", `${label}: example provenance carries ${k}`);
+  for (const k of ["dataset", "coverage", "venues", "source", "notice"]) ok(typeof d.exampleProvenance?.[k] === "string", `${label}: example provenance carries ${k}`);
+  ok(typeof d.exampleProvenance?.consolidated === "boolean", `${label}: example provenance says whether it is consolidated`);
   ok(!/—/.test(JSON.stringify(d)), `${label}: copy has no em dash`);
 }
 checkContract(databentoAdapter, "databento adapter");
 
 // A stub provider registered the way a new adapter would be.
 const bar = (day, close) => ({ day, open: close - 1, high: close + 1, low: close - 2, close, volume: 1000, venueVolume: 1000 });
-const stubProvenance = { dataset: "STUB.EOD", coverage: "consolidated", venues: "All US exchanges (stub)", source: "stub.invalid STUB.EOD", note: "Stub end-of-day bars." };
+const stubProvenance = { dataset: "STUB.EOD", coverage: "venue-partial", consolidated: false, venues: "Stub venues", source: "stub.invalid STUB.EOD", delayHours: 24, notice: "Stub end-of-day bars, not consolidated." };
 const calls = [];
 const stub = {
   name: "stub",
   describe: { coverageCopy: "Stub coverage sentence.", barsCopy: "", exampleProvenance: stubProvenance },
   async quote(symbol, opts) { calls.push(["quote", symbol, opts]); return { bars: [bar("2026-10-12", 100), bar("2026-10-13", 101)], provenance: stubProvenance, cached: false, fetchedAt: "2026-10-14T00:00:00.000Z", rangeCheckedAt: "2026-10-14T00:00:00.000Z" }; },
-  async dailyBars(symbol, opts) { calls.push(["dailyBars", symbol, opts]); return { bars: Array.from({ length: 40 }, (_, i) => bar(new Date(Date.UTC(2026, 8, 1 + i)).toISOString().slice(0, 10), 100 + i)), provenance: stubProvenance, cached: false, fetchedAt: "2026-10-14T00:00:00.000Z", rangeCheckedAt: "2026-10-14T00:00:00.000Z" }; },
+  async dailyBars(symbol, opts) { calls.push(["dailyBars", symbol, opts]); return { latestAvailable: "2026-10-10", bars: Array.from({ length: 40 }, (_, i) => bar(new Date(Date.UTC(2026, 8, 1 + i)).toISOString().slice(0, 10), 100 + i)), provenance: stubProvenance, cached: false, fetchedAt: "2026-10-14T00:00:00.000Z", rangeCheckedAt: "2026-10-14T00:00:00.000Z" }; },
 };
 checkContract(stub, "stub adapter");
 const undo = SP.__registerStockProvider("stub", { keyEnv: "STUB_STOCK_KEY", adapter: stub });
@@ -68,23 +69,38 @@ process.env.STOCK_DATA_PROVIDER = "stub";
 process.env.STUB_STOCK_KEY = "k";
 const { FINANCE_TOOLS, financeToolsEnabled } = await import("../src/tools/finance-kit.js");
 ok(financeToolsEnabled({}).length === 0, "with no provider the kit lists nothing");
-ok(financeToolsEnabled(process.env).length === 2 && FINANCE_TOOLS.every((t) => SP.STOCK_SLUGS.has(t.slug)), "with a provider the kit lists exactly the stock slugs");
+ok(JSON.stringify(financeToolsEnabled(process.env).map((t) => t.slug)) === JSON.stringify(["stock-history"]) && FINANCE_TOOLS.every((t) => SP.STOCK_SLUGS.has(t.slug)), `with a provider the kit lists stock-history alone, never stock-quote (${financeToolsEnabled(process.env).map((t) => t.slug).join(", ")})`);
+ok(SP.stockQuoteEnabled(process.env) === false && SP.stockToolServed("stock-history", process.env) === true && SP.stockToolServed("stock-quote", process.env) === false, "with a provider stock-history is served and stock-quote is not");
 ok(FINANCE_TOOLS.every((t) => t.description.includes("Stub coverage sentence.")), "descriptions carry the provider's coverage copy");
-for (const t of FINANCE_TOOLS) {
+{
+  const quoteTool = FINANCE_TOOLS.find((t) => t.slug === "stock-quote");
+  let refused = null;
+  try { await quoteTool.handler({ symbol: "AAPL" }, {}); } catch (e) { refused = e; }
+  ok(refused?.statusCode === 503 && refused.notOffered === true && !calls.some(([k]) => k === "quote"), `with a provider an in-process stock-quote call is a 503 and never reaches the adapter's quote (got ${refused?.statusCode})`);
+  let seam = null;
+  try { await SP.quote("AAPL"); } catch (e) { seam = e; }
+  ok(seam?.statusCode === 503 && !calls.some(([k]) => k === "quote"), "the seam's quote() refuses with a provider active");
+}
+for (const t of FINANCE_TOOLS.filter((x) => SP.stockToolServed(x.slug))) {
   const r = await t.handler(t.discovery.input, {});
   const ex = t.discovery.output.example;
   const missing = Object.keys(ex).filter((k) => !(k in r) && !["cached", "fetchedAt", "rangeCheckedAt"].includes(k));
   ok(missing.length === 0, `${t.slug}: its published example answers through the stub with every documented field (missing: ${missing.join(", ") || "none"})`);
   ok(r.source === stubProvenance.source && r.dataset === stubProvenance.dataset, `${t.slug}: the answer names the provider's source`);
 }
-ok(calls.some(([k, s, o]) => k === "quote" && s === "AAPL" && o.demand === true) && calls.some(([k, s, o]) => k === "dailyBars" && s === "AAPL" && o.sessions === 30 && o.maxUsd > 0), "the kit calls quote(symbol) and dailyBars(symbol, { sessions, maxUsd })");
+const HISTORY = FINANCE_TOOLS.find((t) => t.slug === "stock-history");
+ok(!calls.some(([k]) => k === "quote") && calls.some(([k, s, o]) => k === "dailyBars" && s === "AAPL" && o.sessions === 30 && o.maxUsd > 0), "the kit calls dailyBars(symbol, { sessions, maxUsd }) and never quote()");
+{
+  const r = await HISTORY.handler({ symbol: "AAPL", days: 5 }, {});
+  ok(r.latestAvailable === "2026-10-10" && r.consolidated === false && r.notice === stubProvenance.notice && r.delayHours === 24, `the history answer carries latestAvailable and the provider's notice fields (${r.latestAvailable}, ${r.consolidated})`);
+}
 calls.length = 0;
-await FINANCE_TOOLS[0].handler({ symbol: "MSFT" }, { selfcheck: true });
-ok(calls[0]?.[2]?.demand === false && calls[0]?.[2]?.lastGoodOk === false, "a self-check read is no demand and never served stale");
-try { await FINANCE_TOOLS[0].handler({ symbol: "BAD SYMBOL!" }, {}); ok(false, "a malformed ticker is refused"); }
+await HISTORY.handler({ symbol: "MSFT" }, { selfcheck: true });
+ok(calls[0]?.[2]?.demand === false, "a self-check read is no demand");
+try { await HISTORY.handler({ symbol: "BAD SYMBOL!" }, {}); ok(false, "a malformed ticker is refused"); }
 catch (e) { ok(e.statusCode === 400 && calls.length === 1, "a malformed ticker is a 400 before any provider read"); }
 process.env.STOCK_DATA_PROVIDER = "off";
-try { await FINANCE_TOOLS[0].handler({ symbol: "AAPL" }, {}); ok(false, "switched off mid-run refuses"); }
+try { await HISTORY.handler({ symbol: "AAPL" }, {}); ok(false, "switched off mid-run refuses"); }
 catch (e) { ok(e.statusCode === 503, `switched off, an in-process call (a composite's step) is a 503, never a read (got ${e.statusCode})`); }
 undo();
 delete process.env.STUB_STOCK_KEY;
@@ -104,8 +120,11 @@ ok(ALL_SKILL_PACKS.every((p) => !STOCK_TRIMMED_PACK_SLUGS.has(p.slug) || packWit
 {
   const { PACK_STEPS, __test } = await import("../src/tools/skill-runner.js");
   const off = [...STOCK_TRIMMED_PACK_SLUGS].every((s) => !__test.getStepConfig(s, { stock: false }).steps.some((st) => SP.STOCK_SLUGS.has(st.slug)));
-  const on = [...STOCK_TRIMMED_PACK_SLUGS].every((s) => __test.getStepConfig(s, { stock: true }) === PACK_STEPS[s]);
-  ok(off && on, "a trimmed pack runs without its stock step with no provider, and exactly its own steps with one");
+  const { STOCK_SERVED_PACK_SLUGS } = await import("../src/skills.js");
+  const on = [...STOCK_TRIMMED_PACK_SLUGS].every((s) => STOCK_SERVED_PACK_SLUGS.has(s)
+    ? __test.getStepConfig(s, { stock: true }) === PACK_STEPS[s]
+    : !__test.getStepConfig(s, { stock: true }).steps.some((st) => SP.STOCK_SLUGS.has(st.slug)));
+  ok(off && on, "a trimmed pack runs without its stock step with no provider; with one, a pack whose stock steps are all served runs its own steps and every other stays trimmed");
 }
 {
   // A trimmed series pack answers a FRED id end to end with no stock leg (stub tools, offline).
@@ -124,12 +143,23 @@ ok(ALL_SKILL_PACKS.every((p) => !STOCK_TRIMMED_PACK_SLUGS.has(p.slug) || packWit
       `${slug} with no provider: us-macro-series serves the series and every step answers (${r.summary})`);
   }
 }
+{
+  // With a provider: only packs whose every stock step is stock-history come back in full.
+  const { STOCK_SERVED_PACK_SLUGS, packAsListed, packServedInFull } = await import("../src/skills.js");
+  ok(JSON.stringify([...STOCK_SERVED_PACK_SLUGS].sort()) === JSON.stringify(["forecasting-bake-off", "trend-analysis"]), `the packs served in full with a provider are the stock-history-only ones (${[...STOCK_SERVED_PACK_SLUGS].join(", ")})`);
+  const onList = ALL_SKILL_PACKS.map((p) => packAsListed(p, { stock: true })).filter(Boolean);
+  ok(onList.every((p) => !p.toolSlugs.includes("stock-quote")) && onList.filter((p) => p.toolSlugs.includes("stock-history")).map((p) => p.slug).sort().join() === "forecasting-bake-off,trend-analysis", "with a provider no listed pack runs stock-quote, and stock-history only in the two served packs");
+  ok(onList.every((p) => !STOCK_CORE_PACK_SLUGS.has(p.slug)) && [...STOCK_CORE_PACK_SLUGS].every((s) => !packServedInFull(s, { stock: true })), "with a provider the packs whose answer needs a quote stay unlisted");
+  ok(!packServedInFull("trend-analysis", { stock: false }) && packServedInFull("trend-analysis", { stock: true }), "control: a served pack is in full only with a provider");
+  const full = onList.filter((p) => STOCK_SERVED_PACK_SLUGS.has(p.slug));
+  ok(full.every((p) => /24 hours/.test(JSON.stringify(p.workflow)) && !/range=/.test(JSON.stringify(p))), "the served packs' copy states the 24-hour delay and passes days, not a range");
+}
 const { RETIRED_TOOLS } = await import("../src/retired-tools.js");
 ok(Object.values(RETIRED_TOOLS).every((e) => !e.replacement || (!SP.STOCK_SLUGS.has(e.replacement) && !STOCK_CORE_PACK_SLUGS.has(String(e.replacement).replace(/^skill-/, "")))), "no retirement points at a stock tool or pack while none is listed");
 const { selfcheckSlugs } = await import("../src/selfcheck.js");
 ok(!selfcheckSlugs().some((s) => SP.STOCK_SLUGS.has(s)), "the self-check reads no stock tool with no provider");
 const { mcpInitializeInstructions } = await import("../src/mcp-flagship.js");
-ok(!/market\.quote/.test(mcpInitializeInstructions("http://x.test", { stock: false })) && /market\.quote/.test(mcpInitializeInstructions("http://x.test", { stock: true })), "the MCP instructions name market.quote only with a provider");
+ok(!/market\.quote/.test(mcpInitializeInstructions("http://x.test")) && /market\.quote/.test(mcpInitializeInstructions("http://x.test", { stock: true })), "the MCP instructions name market.quote only with a provider");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

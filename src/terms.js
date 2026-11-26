@@ -15,6 +15,7 @@ import { AWS_UNANSWERED_SENTENCE } from "./aws-unanswered-copy.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { ROBOTS_UNGATED_READS } from "./tools/robots-gate.js";
 import { refundClauseText } from "./refund-terms.js";
+import { upstreamKeyTermsItem, withUpstreamKeyDate } from "./upstream-key.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
 import { COMPANY_PHONE } from "./company.js";
@@ -192,7 +193,7 @@ If you do not agree to these terms, do not use the service.</p>
   <li>Don't use the service to create malware or exploits for unauthorized use, to defraud, phish, spam, or deceive, or to process other people's personal data unlawfully.</li>
   <li><b>High-risk use is prohibited:</b> the service is not designed for, and must not be relied on in, any context where failure or inaccuracy could lead to death, personal injury, or severe damage - including medical treatment, life-safety systems, and operation of critical infrastructure.</li>
   <li><b>Sanctions and export controls:</b> don't use or export the service or its outputs in violation of U.S. sanctions or U.S. export control laws (the Export Administration Regulations), including for a prohibited end use or by a prohibited end user. We screen the paying wallets on our crypto rails against U.S. sanctions lists.${sanctionsGeoBlockEnabled() ? ` ${esc(refusedRegionsText())}` : ""}</li>
-  <li>You are responsible for the inputs you send and how you use the outputs.</li>
+${upstreamKeyTermsItem()}  <li>You are responsible for the inputs you send and how you use the outputs.</li>
 </ul>
 
 <h2>Generated content</h2>
@@ -454,5 +455,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body: withPublicIndexDate(withCreditsSalesDate(body)) });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body: withUpstreamKeyDate(withPublicIndexDate(withCreditsSalesDate(body))) });
 }

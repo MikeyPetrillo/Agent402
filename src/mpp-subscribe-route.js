@@ -9,17 +9,21 @@
 import { mppProblem, sendMppProblem } from "./mpp-problem.js";
 import { tempoRefusalProblem } from "./mpp-tempo.js";
 import { redactSecrets } from "./tools/redact.js";
+import { limitedWithRetryAfter, retryAfterFromError } from "./rate-limit.js";
 
 /**
  * @param {object} deps
  * @param {object} deps.engine          the subscription engine (mintOffer, activateFromCredential)
- * @param {(req)=>boolean} deps.rateLimited  true when this caller is over the checkout limit
+ * @param {(req)=>({limited:boolean,retryAfterSeconds?:number}|boolean)} deps.rateLimited  the checkout
+ *        limiter's verdict for this caller (its check()); a bare true is answered with a one-minute Retry-After
  * @param {(req)=>boolean} deps.isCanary     true for a caller carrying a valid heartbeat token
  * @param {(...a)=>void} [deps.warn]
  */
+const verdictOf = (v) => (typeof v === "boolean" ? { limited: v } : v);
+
 export function mppSubscribeHandler({ engine, rateLimited, isCanary, warn = console.warn }) {
   return async (req, res) => {
-    if (!req.__checkoutRateChecked && rateLimited(req)) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (!req.__checkoutRateChecked && limitedWithRetryAfter(res, verdictOf(rateLimited(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
     res.set("Cache-Control", "no-store");
     const auth = req.headers.authorization;
     // The rail canary's own product is mintable ONLY for a caller that carries a
@@ -35,7 +39,7 @@ export function mppSubscribeHandler({ engine, rateLimited, isCanary, warn = cons
         // is in WWW-Authenticate and GET /api/mpp/monitors explains the rest.
         return res.status(402).set("WWW-Authenticate", offer.header).json({});
       } catch (e) {
-        if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        if (e?.statusCode && e.statusCode < 500) return retryAfterFromError(res, e).status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
         warn("[mpp-subs] mintOffer failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         return res.status(500).json({ error: "Could not start a subscription right now." });
       }
@@ -56,7 +60,7 @@ export function mppSubscribeHandler({ engine, rateLimited, isCanary, warn = cons
         const kind = e.binding ? "invalid-challenge" : "verification-failed";
         return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${redactSecrets(String(e.message)).slice(0, 200)}`));
       }
-      if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      if (e?.statusCode && e.statusCode < 500) return retryAfterFromError(res, e).status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
       // The first payment settled and no subscription was recorded: the
       // engine's own text says so (retry inside the challenge window, else
       // refunded). Relayed on the engine's flag, never on its wording.

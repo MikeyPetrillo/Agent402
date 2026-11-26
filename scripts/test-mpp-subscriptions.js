@@ -35,6 +35,7 @@ import {
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HttpRequestError } from "viem";
+import { oursMs, OURS_READING } from "./lib/ours-clock.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -1506,16 +1507,21 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   }
   writeFileSync(join(tmp, "offer-loop.json"), JSON.stringify(seed));
   const { engine } = makeEngine({ name: "offer-loop" });
-  let last = performance.now(), worst = 0, turns = 0;
-  const tick = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; turns++; }, 1);
-  const started = performance.now();
+  // Each gap between timer turns counts as the smaller of its wall length and
+  // our time inside it (scripts/lib/ours-clock.js), and the sweep's length is
+  // our time too: a turn the scheduler stretched on a loaded host is not a
+  // hold, while a sweep that never yields is one hold as long as the sweep.
+  let last = performance.now(), lastOurs = oursMs(), worst = 0, worstWall = 0, turns = 0;
+  const gap = () => { const t = performance.now(), c = oursMs(); worstWall = Math.max(worstWall, t - last); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; };
+  const tick = setInterval(() => { gap(); turns++; }, 1);
+  const started = oursMs();
   const open = await engine._sweepOffers();
-  const took = performance.now() - started;
-  worst = Math.max(worst, performance.now() - last);
+  gap();
+  const took = oursMs() - started;
   clearInterval(tick);
   const left = Object.keys(engine._store._snapshot()).length;
   ok(open === 0 && left === 0, `the sweep at the cap drops all ${MAX_OPEN_OFFERS} expired offers and their key records (open ${open}, entries left ${left})`);
-  ok(worst < took / 3 && worst < 400, `the sweep yields as it goes: the longest event-loop turn was ${worst.toFixed(0)} ms over a ${took.toFixed(0)} ms sweep (${turns} timer turns)`);
+  ok(worst < took / 3 && worst < 400, `the sweep yields as it goes: the longest event-loop turn was ${worst.toFixed(0)} ms over a ${took.toFixed(0)} ms sweep, read as ${OURS_READING} (${worstWall.toFixed(0)} ms wall; ${turns} timer turns)`);
 }
 
 // ---------------------------------------------------------------------------

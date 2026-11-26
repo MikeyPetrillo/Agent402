@@ -13,6 +13,7 @@ import {
   __testSetFilePath, __testSetLineCap, __testState, __testReset, WISH_STALE_DAYS,
   rotateWishes, wishRetentionDays, WISH_RETENTION_DEFAULT_DAYS, clusterHash,
 } from "../src/wish.js";
+import { oursMs, OURS_READING } from "./lib/ours-clock.js";
 
 process.env.WISH_CALLER_SALT = "test-salt-never-prod";
 let pass = 0, fail = 0;
@@ -398,23 +399,30 @@ for (const f of tmpFiles) {
 // The operator board annotates up to 500 clusters, one catalog search each.
 // The async form must give the same annotations and hand the loop back
 // between clusters instead of holding it for the whole board.
+// Both the work and the holds are read on the ours clock: each cluster's
+// search spins until this thread has spent 2 ms (on a loaded host the spin
+// takes longer on the wall, never more of our time), and each gap between
+// ticker turns counts as the smaller of its wall length and our time inside
+// it, so a turn stretched by the scheduler is not a hold, and 60 clusters
+// run with no yield read as one 120 ms hold on any host.
 {
-  const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* spin */ } };
+  const busy = (ms) => { const end = oursMs() + ms; while (oursMs() < end) { /* spin */ } };
   const scoreFn = (t) => { busy(2); return { slug: `tool-${t.length}`, score: t.length % 2 ? 60 : 1 }; };
   const mk = () => Array.from({ length: 60 }, (_, i) => ({ text: "wish ".repeat(1 + (i % 7)).trim() }));
   const syncRows = annotateServed(mk(), scoreFn, 45);
-  let worst = 0, last = performance.now(), live = true;
-  const tick = () => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (live) setImmediate(tick); };
+  let worst = 0, worstWall = 0, last = performance.now(), lastOurs = oursMs(), live = true;
+  const gap = () => { const now = performance.now(), c = oursMs(); worstWall = Math.max(worstWall, now - last); worst = Math.max(worst, Math.min(now - last, c - lastOurs)); last = now; lastOurs = c; };
+  const tick = () => { gap(); if (live) setImmediate(tick); };
   setImmediate(tick);
-  const t0 = performance.now();
+  const t0 = oursMs();
   const asyncRows = await annotateServedAsync(mk(), scoreFn, 45);
-  const total = performance.now() - t0;
+  const total = oursMs() - t0;
   // The gap since the ticker last ran counts too: a loop that never yields
   // starves the ticker entirely, and without this it would score 0 ms.
-  worst = Math.max(worst, performance.now() - last);
+  gap();
   live = false;
   ok(JSON.stringify(asyncRows) === JSON.stringify(syncRows), "the async annotator writes exactly what the sync one does");
-  ok(total > 100 && worst < 40, `the async annotator yields while it works (longest hold ${worst.toFixed(1)} ms over ${total.toFixed(0)} ms)`);
+  ok(total > 100 && worst < 40, `the async annotator yields while it works (longest hold ${worst.toFixed(1)} ms of ${OURS_READING}, ${worstWall.toFixed(1)} ms wall, over ${total.toFixed(0)} ms)`);
 }
 
 // --- retention: text older than WISH_RETENTION_DAYS is deleted, counts kept ---

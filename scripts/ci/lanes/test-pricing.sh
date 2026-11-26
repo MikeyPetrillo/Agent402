@@ -137,6 +137,8 @@ t node scripts/test-evm-buyer-chains.js
 t node scripts/test-evm-unproven-chains.js
 # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
 t node scripts/test-router-people-data.js
+# Sellers whose terms forbid passing their data on stay listed and are never labeled eligible or paid, on any chain (synthetic digests, offline, one free boot)
+t node scripts/test-router-listed-only.js
 # The raw-text gate before the category patterns never skips text the normalized gate would pass (offline)
 t node scripts/test-route-category-gate.js
 t node scripts/test-unproven-lane-labels.js

@@ -25,6 +25,10 @@
 //   first-call grant the record moved from the address to a keyed hash, so the
 //                    same wallet is still never granted twice
 //                    (allowanceRecordKey; src/first-call-allowance.js reads both).
+//   refused payments the payment refusal rows naming the wallet as their
+//                    verified payer deleted (src/payment-refusals.js). A running
+//                    server's own refusals not yet flushed (a few seconds) are
+//                    written after it as a new row.
 //   KEPT, and said so: the sales and refund ledgers (accounting and tax
 //   records; the same entries are public on chain), and sanctions-screening
 //   records, which the law requires us to keep.
@@ -32,6 +36,7 @@
 // Analytics events carry only a keyed hash of the wallet (src/posthog.js
 // telemetryPayerKey), so they hold no address to erase.
 import { createHash, createHmac, createPublicKey, verify as edVerify } from "node:crypto";
+import { PAYMENT_REFUSALS_COLLECTION } from "./payment-refusals.js";
 
 export const REQUEST_MAX_AGE_DAYS = 14;
 export const SUBJECT_ACTIONS = Object.freeze(["erase", "export"]);
@@ -201,6 +206,14 @@ export async function walletSubjectRun({ query, schema, wallet, action, dry = fa
       await query(`DELETE FROM ${T("records")} WHERE collection = 'first-call-allowance' AND id = $1`, [row.id]);
     }
     report.push({ store: "first-call-allowance", count: r.rows.length, note: `grant records ${erase ? "moved" : "would move"} to a keyed hash (the wallet still has had its one grant)` });
+  });
+  // The payment refusal record (src/payment-refusals.js): a row names the
+  // wallet only when its payment verified; the day's overflow row names none.
+  await step("payment-refusals", async () => {
+    const where = `collection = '${PAYMENT_REFUSALS_COLLECTION}' AND ${eq("body->>'payer'")}`;
+    const n = action === "export" ? await read("payment-refusals", `SELECT id, body FROM ${T("records")} WHERE ${where} ORDER BY id`)
+      : (await query(`${erase ? "DELETE" : "SELECT 1"} FROM ${T("records")} WHERE ${where}`, [w])).rowCount;
+    report.push({ store: "payment-refusals", count: n, note: action === "export" ? "refused payment records" : `refused payment records ${erase ? "deleted" : "would be deleted"}` });
   });
   if (action === "export") {
     await step("sales", async () => {

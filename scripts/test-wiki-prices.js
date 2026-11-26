@@ -107,7 +107,7 @@ ok(bands >= 20, `checked ${bands} Tool-Catalog price bands`);
 // Skill-Packs two-state rows: both prices, read from the generated tables.
 let duals = 0;
 {
-  const { PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } = await import("../src/skills.js");
+  const { PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK, STOCK_SERVED_PACK_SLUGS } = await import("../src/skills.js");
   const DUAL = /\$(\d+(?:\.\d+)?) \(with a stock data provider: \$(\d+(?:\.\d+)?)\)/;
   const text = readFileSync(join(ROOT, "wiki", "Skill-Packs.md"), "utf8");
   const listed = new Set();
@@ -116,9 +116,13 @@ let duals = 0;
     if (packs.length !== 1) return;
     const slug = packs[0];
     const d = line.match(DUAL);
-    const full = PACK_PRICE_TABLE[slug], trimmed = PACK_PRICES_WITHOUT_STOCK[slug];
+    // A pack whose stock step is never served (stock-quote) sells trimmed in both states.
+    const trimmed = PACK_PRICES_WITHOUT_STOCK[slug];
+    const full = trimmed != null && !STOCK_SERVED_PACK_SLUGS.has(slug) ? trimmed : PACK_PRICE_TABLE[slug];
     if (trimmed != null) listed.add(slug);
     if (!d) {
+      const one = /\|\s*\$(\d+(?:\.\d+)?)/.exec(line);
+      if (trimmed != null && Math.abs(trimmed - full) < 1e-9 && one) ok(Math.abs(Number(one[1]) - trimmed) < 1e-9, `wiki/Skill-Packs.md:${i + 1} states ${slug} at $${one[1]}; it sells at $${trimmed} in both states`);
       if (trimmed != null && Math.abs(trimmed - full) > 1e-9 && /\|\s*\$/.test(line)) ok(false, `wiki/Skill-Packs.md:${i + 1} prices ${slug} one way; it sells at $${trimmed} without a stock data provider and $${full} with one`);
       return;
     }
@@ -126,7 +130,7 @@ let duals = 0;
     ok(trimmed != null && Math.abs(Number(d[1]) - trimmed) < 1e-9, `wiki/Skill-Packs.md:${i + 1} states ${slug} at $${d[1]} without a stock data provider; the table says $${trimmed}`);
     ok(full != null && Math.abs(Number(d[2]) - full) < 1e-9, `wiki/Skill-Packs.md:${i + 1} states ${slug} at $${d[2]} with a stock data provider; the table says $${full}`);
   });
-  ok(duals >= 3, `checked ${duals} two-state pack rows`);
+  ok(duals >= 2, `checked ${duals} two-state pack rows`);
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed (${rows} wiki price rows, ${bands} catalog bands, ${duals} two-state pack rows checked)`);
 process.exit(fail ? 1 : 0);

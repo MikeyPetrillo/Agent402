@@ -30,7 +30,7 @@ export const FREE_TIER_SLUGS = new Set([
   "morse", "moving-average", "npv", "number-format", "openapi-diff", "openapi-extract",
   "openapi-lint", "openapi-mock-response", "openapi-redact", "openapi-required-params", "openapi-resolve-refs", "openapi-search",
   "openapi-security-summary", "openapi-to-curl", "openapi-validate-payload", "outliers", "password", "password-strength",
-  "percentage", "qr", "querystring", "random", "readability", "readability-score",
+  "percentage", "qr", "querystring", "random", "readability", "readability-score", "receipt-verify",
   "redact", "regex", "relative-time", "roman", "rot13", "rsi", "seller-trust",
   "semver", "sharpe-ratio", "skill-decode-blob", "skill-json-pipeline", "skill-jwt-toolkit", "skill-loan-comparison",
   "skill-markdown-convert", "skill-number-crunch", "skill-schema-guard", "skill-text-analyze", "skill-text-hygiene", "skill-timezone-planner",

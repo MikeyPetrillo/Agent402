@@ -194,6 +194,10 @@ try {
       `search: the same payment sent again after its run failed runs again twice, each with no settle call, the debt owed again after each (${JSON.stringify([a, b2].map((x) => [x.status, x.order, x.row]))})`);
     await ok(c.status === 402 && c.json?.error === "resend_limit_reached" && c.json?.charged === true && c.json?.refundOwed === true && /nothing more is charged/i.test(c.json?.hint || "") && c.json?.resends?.max === 2 && c.json?.refund?.status === "owed" && (() => { try { const u = new URL(c.json.refund.lookup); return u.pathname === "/api/refunds/lookup" && !!u.searchParams.get("tx"); } catch { return false; } })() && c.upstream === 0 && c.order === "nothing" && c.row === "owed" && rig.outcomesOf(w).attempts === 1,
       `search: a third resend of that payment runs nothing, is charged nothing more, says its one charge is owed back (charged: true, refundOwed: true), and is answered with the debt's refund status (${c.status} ${JSON.stringify(c.json).slice(0, 200)} ${c.order} ${c.row})`);
+    // The refusal record (src/payment-refusals.js) keeps that refusal once, under its code.
+    const rv = await rig.operator("/__operator/refusals.json?reason=resend_limit_reached");
+    await ok(rv?.matched === 1 && rv.rows?.[0]?.count === 1 && rv.rows[0].slug === SEARCH.slug && rv.rows[0].rail === "x402" && rv.rows[0].status === 402,
+      `search: the refusal past the resend limit is one record under resend_limit_reached (${JSON.stringify(rv?.rows?.map((r) => [r.reason, r.slug, r.count]))})`);
   }
 
   // ---- transcription (multipart wire) ----

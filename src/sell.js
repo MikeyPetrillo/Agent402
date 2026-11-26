@@ -81,6 +81,7 @@ const NEW_SELLER_VERDICTS = [
   ["payment_method_unsupported", "Offer the standard exact scheme, where the buyer signs a USDC authorization and the facilitator settles it. A 402 that asks the buyer to send a transfer and prove it afterwards cannot be paid by a stock x402 buyer, ours included."],
   ["route_malformed", "Give each route as a path string, or a resource URL string or a resource object whose url is a string, so the crawler reads the path you serve."],
   ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
+  ["listed_only", "Nothing to fix on the listing: the router lists you and does not buy from you. Buyers can still find and pay you directly."],
   ["category_excluded", "Nothing to fix: the route stays listed, buyers can still call it directly, and your other routes are judged on their own."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
   ["settlement_self_funded", "Payments made with USDC your own paid wallet sent the payer are netted out. Only buyers' own money counts."],

@@ -323,21 +323,42 @@ try {
     const unresolved = [];
     const surfaces = new Set();
     let current = null;
+    // A top-level function that makes the operator-view call itself (a serving
+    // path several routes share): every route whose registration names it is
+    // an operator view, and the route registered before the function is not.
+    const sharedViews = new Set();
+    // `function name(` or `const name = (...) =>`, at the top level.
+    const fnDef = (line) => { const m = /^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) || /^const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/.exec(line); return m ? m[1] : null; };
+    {
+      let fn = null;
+      for (const line of src) {
+        const def = fnDef(line);
+        if (def) fn = def;
+        else if (/^\s*app\.[a-z]+\(/.test(line) || /^\S/.test(line) && !/^[})\]]/.test(line)) fn = null;
+        if (fn && fn !== "operatorView" && /\boperatorView\(req, res\)/.test(line)) sharedViews.add(fn);
+      }
+    }
+    const namesShared = (line) => [...sharedViews].some((f) => new RegExp(`\\b${f.replace(/\$/g, "\\$")}\\b`).test(line));
+    let inShared = false;
     for (const line of src) {
-      const reg = /^\s*app\.(get|post)\(\s*(\[[^\]]*\]|"[^"]*")/.exec(line);
+      { const n = fnDef(line); if (n) { inShared = sharedViews.has(n); if (inShared) current = null; } }
+      const reg = /^\s*app\.(get|post|all)\(\s*(\[[^\]]*\]|"[^"]*")/.exec(line);
       // A route named by a constant (app.get(TOOL_RELIABILITY_PATH, ...)) is
       // a route too: resolved from its export, or the handler before it would
       // be credited with this one's operator view.
-      const named = !reg && /^\s*app\.(get|post)\(\s*([A-Z][A-Z0-9_]*)\s*,/.exec(line);
-      if (reg) current = { method: reg[1].toUpperCase(), paths: [...reg[2].matchAll(/"([^"]+)"/g)].map((x) => x[1]) };
-      else if (named) { const p = routeConstant(named[2]); current = { method: named[1].toUpperCase(), paths: p ? [p] : [], unresolved: p ? null : named[2] }; }
-      if (/\boperatorView\(req, res\)/.test(line) && !/^\s*function operatorView/.test(line) && current) {
+      const named = !reg && /^\s*app\.(get|post|all)\(\s*([A-Z][A-Z0-9_]*)\s*,/.exec(line);
+      // A route mounted for every method is read with GET.
+      const verb = (m) => (m === "all" ? "GET" : m.toUpperCase());
+      if (reg) { inShared = false; current = { method: verb(reg[1]), paths: [...reg[2].matchAll(/"([^"]+)"/g)].map((x) => x[1]) }; }
+      else if (named) { inShared = false; const p = routeConstant(named[2]); current = { method: verb(named[1]), paths: p ? [p] : [], unresolved: p ? null : named[2] }; }
+      if (!inShared && current && (/\boperatorView\(req, res\)/.test(line) || namesShared(line)) && !/^\s*function operatorView/.test(line)) {
         if (current.unresolved) unresolved.push(current.unresolved);
         for (const p of current.paths) surfaces.add(`${current.method} ${p}`);
       }
     }
     ok(unresolved.length === 0, `every operator-view route's path is read from the source (a route named by ${unresolved.join(", ") || "a constant"} that is not an exported string literal cannot be checked)`);
     ok(surfaces.has("GET /api/reliability/tools") && !surfaces.has("GET /api/reliability"), "control: a route named by a constant is its own route; the handler before it is not credited with its operator view");
+    ok(sharedViews.has("serveFindQuery") && surfaces.has("GET /api/find") && surfaces.has("POST /api/find") && surfaces.has("GET /.well-known/search") && !surfaces.has("GET /acp/manifest"), `control: a serving function several routes share credits each route that names it, never the route registered before it (${[...sharedViews].join(", ")})`);
     ok(surfaces.size >= 6 && surfaces.has("GET /api/gateway-status") && surfaces.has("GET /health"), `the source names ${surfaces.size} public surfaces with an operator view (${[...surfaces].join(", ")})`);
     const shape = (a) => { let keys = "(not json)"; try { const j = JSON.parse(a.text); keys = Object.keys(j && typeof j === "object" ? j : {}).sort().join(","); } catch { /* a page or a redirect */ } return `${a.status}|${keys}|${/private/.test(a.headers.get("cache-control") || "") ? "private" : "shared"}`; };
     for (const s of surfaces) {

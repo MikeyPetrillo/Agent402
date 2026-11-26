@@ -279,6 +279,8 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       reliability: `${baseUrl}/api/reliability`,
       // Resolve a task to the right tool in one call (skip the exploration step).
       findTool: `${baseUrl}/api/find?q={task}`,
+      // The same search at the site search path (GET ?q= or QUERY with the task in the body).
+      siteSearch: `${baseUrl}/.well-known/search?q={task}`,
       // Public on-chain ranking of x402 sellers by Base USDC settled volume.
       // A top-N slice per request (25 default, 50 ceiling unauthenticated);
       // `totalSellers` in the response carries how many are ranked in all.

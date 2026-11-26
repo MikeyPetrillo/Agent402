@@ -93,6 +93,29 @@ export function tokenLabel(value, max = TOKEN_NAME_MAX) {
   return cps.length > max ? cps.slice(0, max).join("").trim() : s;
 }
 
+// The markdown a third party's text could open: emphasis, code, links and
+// images, tags and autolinks, headings, table cells, strikethrough, entities.
+const MARKDOWN_SIGNIFICANT = /[\\`*_[\]<>#|~&]/g;
+/** Third-party text (a token name, a symbol, a source title naming one) as
+ *  inert markdown on one line: hidden, control and format characters removed,
+ *  a URL reduced to its host, every markdown-significant character
+ *  backslash-escaped (CommonMark; the report viewer reads the same escapes,
+ *  assets/js/report-view.js). Text with none of them is returned as is. */
+export function markdownText(value) {
+  if (value == null) return "";
+  return stripHiddenCharacters(String(value)).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/\b(?:https?|ftp):\/\/[^\s<>()[\]"']+/gi, (u) => { try { return new URL(u.replace(/[.,;:!?]+$/, "")).hostname; } catch { return " "; } })
+    .replace(MARKDOWN_SIGNIFICANT, (c) => `\\${c}`).replace(/\s+/g, " ").trim();
+}
+
+/** A minter-chosen name or symbol where it enters delivered markdown (a
+ *  report header, a source line): tokenLabel(), then markdownText(). null
+ *  when nothing is left. */
+export function markdownTokenLabel(value, max = TOKEN_NAME_MAX) {
+  const s = tokenLabel(value, max);
+  return s == null ? null : markdownText(s) || null;
+}
+
 /** A name or symbol inside a prompt's evidence: a JSON string literal, so a
  *  quote or bracket in it cannot read on as our own words. */
 export function quotedTokenLabel(value, max = TOKEN_NAME_MAX) {

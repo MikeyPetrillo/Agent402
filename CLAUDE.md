@@ -66,6 +66,19 @@ LLC: credit the entity, never a personal name.
   `X-Agent402-Wallet` and proves in `X-Agent402-Wallet-Proof`, off unless `RETURNING_WALLET_PRICE=on`;
   an unproven hint is never read; the price is decided again from the payment's signer;
   `.claude/rules/payments.md`).
+- `src/upstream-key.js` (bring your own key, off unless `UPSTREAM_KEY=on`: a listed tool takes the
+  buyer's own provider key in `X-Agent402-Upstream-Key` and is priced at the own-key price, decided per
+  request and again at settlement, x402 only; the header is stripped at intake in either state and
+  never stored; `.claude/rules/payments.md`).
+- `src/payment-refusals.js` + `src/refusal-mark.js` (the payment refusal record: one row per refused
+  paid attempt, kept 90 days, read on `/__operator/refusals.json`; `.claude/rules/ops.md`).
+- `src/well-known-search.js` + `src/well-known-search-path.js` (GET and QUERY on
+  `/.well-known/search`, answered by the `/api/find` serving path; `.claude/rules/mcp.md`),
+  `src/router-listed-only.js` (hashed sellers the router lists and never buys from, plus
+  `ROUTER_EXCLUDED_SELLER_HASHES`; `.claude/rules/index-router.md`).
+- `src/tools/summarize-kit.js` (`summarize`: a page or a text, model-backed, through the chat tier's
+  handler in process); the `receipt-verify` tool (`src/tools/kit2.js`) and
+  `POST /api/receipts/verify` share one check, `checkReceiptSubmission` (`src/receipt-signing.js`).
 - `src/sale-repeats.js` (one sale per Solana settlement signature: the rule the ledger's writer
   and readers share), `src/sale-source.js` (the listed `utm_source` a card sale keeps; no public
   reader selects it).
@@ -219,7 +232,7 @@ LLC: credit the entity, never a personal name.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
-`/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/reputation?seller=<host>`, `/api/stats`,
+`/api/reliability`, `/api/find?q=<task>`, `/.well-known/search`, `/api/route`, `/api/index`, `/api/reputation?seller=<host>`, `/api/stats`,
 `/api/status`, `/api/gateway-status` (bucketed status words only, never numbers), `/robots.txt`,
 `/sitemap.xml`, `/.well-known/glama.json`, `/x402-test` (payment-refusal diagnostics).
 Operator-only surfaces live under `/__operator/*` (token-authed); the operator view of a public
@@ -290,8 +303,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   and routes above the ceiling are never bought there. The repo variable
   `BAZAAR_PRESENCE_MAX_USD` caps one run's buy (default 2; more than 10 routes also refuses).
   One issue opens on a route missing two checks in a row, or three unreadable checks in a row.
-- `bazaar-mcp-listings.yml` buys the hosted connector's MCP tool listings (the six fixed-price
-  flagship tools: pdf.markdown, macro.series, weather.current, market.quote, browser.render,
+- `bazaar-mcp-listings.yml` buys the hosted connector's MCP tool listings (the fixed-price
+  flagship tools the catalog serves: pdf.markdown, macro.series, weather.current, browser.render,
   memory.read; `scripts/lib/mcp-listings.js`) through the connector's x402 transport, once each:
   `refresh-bazaar.js` MODE=mcp takes an explicit list (catalog slugs or dotted tool names) and
   refuses the run on any other entry. It signs only an offer that pays the address the server
@@ -454,7 +467,8 @@ Actions secrets), never in the repo. Rollout switches are generally "key present
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
 `X_BEARER_TOKEN`). `STOCK_DATA_PROVIDER` (`off` default, `databento`) selects the stock data adapter
 (`src/tools/stock-provider.js`); it is active only with its own key, else the stock tools and packs are unlisted. `KALSHI_TOOLS=on`
-(`src/kalshi-switch.js`) lists the Kalshi tools; unset, they are unlisted and answer 503. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
+(`src/kalshi-switch.js`) lists the Kalshi tools; unset, they are unlisted and answer 503. `UPSTREAM_KEY=on`
+(`src/upstream-key.js`) turns bring your own key on; unset, no route takes a key and no surface mentions it. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
 host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
 that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
 tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed

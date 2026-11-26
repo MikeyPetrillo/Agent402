@@ -35,7 +35,7 @@ import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-erro
 import * as ERROR_CONTRACT from "../src/stable-error-code.js";
 import { RETIRED_TOOLS, RETIRED_PACKS } from "../src/retired-tools.js";
 import { KALSHI_SLUGS } from "../src/kalshi-switch.js";
-import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
+import { STOCK_SLUGS, stockToolServed } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 import { COMMITTED_DATASET_SLUGS } from "../src/wholesale.js";
 import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
@@ -362,7 +362,7 @@ try {
     }
     ok(gone.length >= 100 && wrong.length === 0, `every retired route answers 410 with errorCode "retired" (${gone.length} routes; wrong: ${wrong.slice(0, 12).join(", ") || "none"})`);
     // Class-wide: every switched-off tool answers 503 with errorCode "unavailable".
-    const off = [...[...KALSHI_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`)];
+    const off = [...[...KALSHI_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_SLUGS].filter((s) => !stockToolServed(s)).map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`)];
     const wrongOff = [];
     for (const path of off) {
       const a = await readAnswer(await fetch(`${U}${path}`));

@@ -27,8 +27,8 @@ const { ledgerFooterCompact, analyticsSnippets } = await import("../src/ledger-c
 
 // A page with the shell's islands and footer. `region` is what the server's
 // /api/consent-region answers ({asksFirst}), "fail" for a request that errors.
-function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null, webdriver = false, region = { asksFirst: false, source: "country" }, ga = true, ph = true, phHost = "https://agent402.tools/e" } = {}) {
-  const island = JSON.stringify({ key: "phc_test", cfg: { api_host: phHost, persistence: "memory" } }).replace(/</g, "\\u003c");
+function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null, webdriver = false, region = { asksFirst: false, source: "country" }, ga = true, ph = true, phHost = "https://agent402.tools/e", phCfg = {} } = {}) {
+  const island = JSON.stringify({ key: "phc_test", cfg: { api_host: phHost, persistence: "memory", ...phCfg } }).replace(/</g, "\\u003c");
   const html = `<!doctype html><html><head><script id="unused"></script></head><body>
 ${ph ? `<script type="application/json" id="posthog-config">${island}</script>` : ""}
 ${ga ? '<script type="application/json" id="ga-config">{"id":"G-TEST1234"}</script>' : ""}
@@ -178,7 +178,33 @@ for (const [label, opts] of [
   ok(out.$set_once.$initial_referrer === "$direct", "\"$direct\" is left alone");
   ok(out.$set_once.$initial_person_info.u === "https://agent402.tools/m" && out.$set_once.$initial_person_info.r === "https://search.example/", "compressed person info (u, r) is cleaned");
   ok(!JSON.stringify(out).includes("metformin") && !JSON.stringify(out).includes("aspirin"), "no typed subject survives anywhere in the event");
-  ok(init[1].disable_session_recording !== true, "control: replay flag untouched on a public path");
+  ok(init[1].disable_session_recording === true && init[1].disable_surveys === true, "an island with no replay or survey flag means no session recording and no surveys");
+  // The config handed to the library is built by the loader: only on/off
+  // switches come from the island, and a host it names is never used.
+  ok(init[1].ui_host === "https://us.posthog.com" && Object.keys(init[1]).every((k) => typeof init[1][k] !== "string" || ["api_host", "ui_host", "persistence"].includes(k)), "the library config carries no string read from the island");
+}
+
+// --- PostHog switches: booleans built by the loader, off unless exactly set ---
+{
+  const cfgOf = async (phCfg, url) => posthogInit(await run(page({ stored: "granted", ga: false, phCfg, ...(url ? { url } : {}) })))?.[1];
+  // Replay and surveys stay off unless the island says exactly false.
+  for (const v of [undefined, null, "false", 0, "", "no", {}]) {
+    const c = await cfgOf(v === undefined ? {} : { disable_session_recording: v, disable_surveys: v });
+    ok(c?.disable_session_recording === true && c?.disable_surveys === true, `replay and surveys stay off when the island's flag is ${v === undefined ? "missing" : JSON.stringify(v)}`);
+  }
+  const on = await cfgOf({ disable_session_recording: false, disable_surveys: false });
+  ok(on?.disable_session_recording === false && on?.disable_surveys === false, "control: an island that says exactly false turns them on, on a public path");
+  const bearer = await cfgOf({ disable_session_recording: false }, "https://agent402.tools/r/cs_secret123");
+  ok(bearer?.disable_session_recording === true, "a bearer path records no session whatever the island says");
+  // Switches that turn a feature on: true only for exactly true, and always a boolean.
+  const hostile = await cfgOf({ autocapture: "yes", capture_pageview: 1, capture_pageleave: { on: true }, capture_performance: { web_vitals: "yes", network_timing: 1 }, ui_host: "https://evil.example", api_host: "https://evil.example/e", persistence: "localStorage+cookie", loaded: "alert(1)", session_recording: { maskAllInputs: false } });
+  const SWITCHES = ["autocapture", "capture_pageview", "capture_pageleave", "disable_session_recording", "disable_surveys"];
+  ok(!!hostile && SWITCHES.every((k) => typeof hostile[k] === "boolean") && hostile.autocapture === false && hostile.capture_pageview === false && hostile.capture_pageleave === false, `a switch the island gives as a string, number or object is read as off, and every switch is a boolean (${SWITCHES.map((k) => typeof hostile?.[k])})`);
+  ok(hostile.capture_performance.web_vitals === false && hostile.capture_performance.network_timing === false && Object.keys(hostile.capture_performance).sort().join() === "network_timing,web_vitals", "the performance switches are booleans too");
+  ok(hostile.ui_host === "https://us.posthog.com" && hostile.api_host === "https://agent402.tools/e" && hostile.persistence === "memory", "the hosts and the persistence are the loader's fixed values, whatever the island names");
+  ok(Object.keys(hostile).sort().join() === "api_host,autocapture,before_send,capture_pageleave,capture_pageview,capture_performance,disable_session_recording,disable_surveys,persistence,ui_host" && !JSON.stringify(hostile).includes("evil.example"), "no other key of the island reaches the library config");
+  const allOn = await cfgOf({ autocapture: true, capture_pageview: true, capture_pageleave: true, capture_performance: { web_vitals: true, network_timing: true } });
+  ok(allOn.autocapture === true && allOn.capture_pageview === true && allOn.capture_pageleave === true && allOn.capture_performance.web_vitals === true && allOn.capture_performance.network_timing === true, "control: exactly true turns each switch on");
 }
 
 // --- Global Privacy Control --------------------------------------------------

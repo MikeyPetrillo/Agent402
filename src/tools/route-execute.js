@@ -19,6 +19,7 @@
 // that names the tool and its direct route, so the buyer can call it at list
 // price instead.
 import { isOwnPayoutAddress } from "../own-wallets.js";
+import { sellerListedOnly } from "../router-listed-only.js";
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { decodePaymentHeader } from "../payment-header.js";
@@ -727,6 +728,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (!candidateList.length && flooredOut > 0) {
             throw bad(`${flooredOut} outside seller(s) matched those words on ${chain}, and none of them does that task (matched too few of the task's words to buy). Nothing was spent.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
+          // Sellers the router lists but never buys from
+          // (src/router-listed-only.js).
+          const listedOnlyOut = Number(drops.byReason?.listed_only || 0);
+          if (!candidateList.length && listedOnlyOut > 0) {
+            throw bad(`${listedOnlyOut} outside route(s) matched that task on ${chain}, and the matching outside routes are listed only: the router does not buy from them. A buyer can pay them directly. Nothing was spent.${notChargedOn(req)}`, 404);
+          }
           // Routes the router lists but never buys (src/route-category.js).
           const excludedOut = Number(drops.byReason?.category_excluded || 0);
           if (!candidateList.length && excludedOut > 0) {
@@ -768,6 +775,15 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => (EXTERNAL_CHAIN_BY_NETWORK[n] || EVM_BUYER_CHAIN_BY_NETWORK[n]) === chain))) {
             traceStep(req, "skip", { origin: ext.seller, reason: "wrong_chain" });
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
+            if (hasNext) continue; throw lastErr;
+          }
+          // Never a seller the router lists and never buys from
+          // (src/router-listed-only.js), read here at buy time whatever
+          // label the candidate carried: refused before any booking or
+          // signature, and the next candidate is tried.
+          if (sellerListedOnly(ext.url) || sellerListedOnly(ext.seller)) {
+            traceStep(req, "skip", { origin: ext.seller, reason: "listed_only" });
+            lastErr = bad(`The router lists that outside seller and does not buy from it; a buyer can pay it directly. Nothing was spent.${notChargedOn(req)}`, 409);
             if (hasNext) continue; throw lastErr;
           }
           // Never our own wallet (ownPayoutOf above): refused before any
@@ -866,7 +882,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // Each refusal names its rule as a code (spendRule), with
             // attribution "ours", a hint and a next step: this server's own
             // ceiling, never the caller's input (src/tool-error-fields.js).
-            const ruled = (e) => Object.assign(e, spendRefusalFields(allowed));
+            // A rule without its own wait still names one (Retry-After on every 429).
+            const ruled = (e) => Object.assign(e, { retryAfter: 30 }, spendRefusalFields(allowed));
             if (allowed.code === "global_unsettled_ceiling") throw ruled(bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429));
             if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw ruled(bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429));
             throw ruled(bad(`External routing is paused for this wallet: ${allowed.reason}`, 429));

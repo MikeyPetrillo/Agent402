@@ -287,6 +287,30 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   // approval recovers (the screen refuses it; records come only from a
   // verified payment, src/sanctions-events.js).
   ok(tempoPaymentParties(credential(TX_MULTISIG_REAL)).includes(msAccount), "M: the account a configurable envelope acts for is screened once an owner's approval recovers");
+  // The same envelope serialized with an explicit, different sender: the
+  // transaction's from is then not the account, so the account is screened
+  // only because its owners' approvals recover (a plain serialize derives from
+  // = account, which would name it whether or not that rule holds).
+  {
+    const other = lc(privateKeyToAccount(generatePrivateKey()).address);
+    const base = TxEnvelopeTempo.from(TX);
+    const config = { version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) };
+    // Naming a sender puts the transaction in its sponsored form, whose sign
+    // payload differs: the owners approve the payload of the envelope as it is
+    // sent (read back from a first serialization with the same sender).
+    const approve = (payload) => {
+      const digest = AccountConfig.getSignPayload({ account: msAccount, config, payload });
+      return SignatureEnvelope.from({ account: msAccount, config, signatures: msOwners.map((o) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: o.k }))) });
+    };
+    const shape = TxEnvelopeTempo.deserialize(TxEnvelopeTempo.serialize(base, { signature: approve(TxEnvelopeTempo.getSignPayload(base)), sender: other }));
+    const sig = approve(TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(shape)));
+    const raw = TxEnvelopeTempo.serialize(base, { signature: sig, sender: other });
+    const tx = TxEnvelopeTempo.deserialize(raw);
+    ok(tx.signature?.type === "configurable" && lc(tx.from) === other && other !== msAccount, "M: (fixture) a configurable envelope for the account, serialized with another sender");
+    const parties = tempoPaymentParties(credential(raw));
+    ok(parties.includes(msAccount), "M: with another sender named, the account a configurable envelope acts for is still screened once its owners' approvals recover");
+    ok(msOwners.every((o) => parties.includes(o.a)), "M: with another sender named, every approving owner is screened");
+  }
   // A configurable account acting as an access key (TIP-1111): the keychain
   // envelope's inner signer is the configurable account, and its owners'
   // approvals sign the access key's payload (the transaction for the user).

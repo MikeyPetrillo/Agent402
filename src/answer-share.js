@@ -41,7 +41,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { sanitizeReportProse } from "./report-grounding.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, records, leased } from "./state-db.js";
 import { payerFromRequest } from "./payer.js";
-import { createLimiter } from "./rate-limit.js";
+import { createLimiter, retryAfterSecondsOf } from "./rate-limit.js";
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceOf } from "./allowance-state.js";
 import { brandMarkTile, CARD_ART_VERSION } from "./brand-mark.js";
@@ -265,9 +265,11 @@ export function reserveShare(req, { log = console.warn } = {}) {
   if (allowanceOf(req)?.granted) return null;
   if (Object.hasOwn(req, RESERVATION)) return req[RESERVATION];
   const key = shareKeyOf(req);
-  if (createLimit.check(key).limited) {
+  const rl = createLimit.check(key);
+  if (rl.limited) {
     const e = new Error(`Share limit reached (${SHARES_PER_HOUR} shared answers an hour per payer). Call again without share, or later. ${NOT_CHARGED}`);
     e.statusCode = 429;
+    e.retryAfter = retryAfterSecondsOf(rl.retryAfterSeconds, 3600);
     throw e;
   }
   const slot = { key, rec: null };

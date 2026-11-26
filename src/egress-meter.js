@@ -26,6 +26,7 @@
 import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, releaseHardCapRefused, neverReachedUpstream, upstreamRefusedBeforeWork } from "./upstream-hard-caps.js";
 import { currentDispatchCaller } from "./dispatch-caller.js";
 import { CALLER_COUNTED, egressCallerLabel, noteUpstreamCall } from "./upstream-call-days.js";
+import { upstreamKeyCallTo } from "./upstream-key.js";
 
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
 const counts = new Map();        // host -> { n, callers:Set, firstAt, lastAt }
@@ -170,6 +171,9 @@ export function installEgressMeter() {
           : input instanceof URL ? input
           : input && typeof input.url === "string" ? new URL(input.url) : null;
         if (u) { h = u.host; path = u.pathname; }
+        // A call made with a buyer's own key (src/upstream-key.js) is the
+        // buyer's: no count, budget or ceiling of ours is spent on it.
+        if (h && upstreamKeyCallTo(h)) h = "";
         // Lazy: the stack is only materialised while this host still needs
         // attribution. Building it unconditionally is what slowed boot.
         if (h) recordEgress(h, needsCaller(h) ? captureStack : null);

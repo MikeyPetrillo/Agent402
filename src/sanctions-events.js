@@ -32,6 +32,20 @@
 //     rows: an address must be on the fixed list (or proven by its signature
 //     from a sanctioned region, bounded by src/sanctioned-regions.js), so the
 //     day's rows are bounded by the list and the dedupe.
+//   - FILED ELSEWHERE. With the state database, another process (any
+//     replica, the operator's filing) can file a row this process still
+//     counts on. The row write never changes a filed row, and it says when it
+//     did not land on a live one: this process then marks its copy filed,
+//     drops its dedupe key, and opens a new row (same kind, address, route
+//     class and place, `follows` the filed row's id) carrying every attempt,
+//     count and reason count past what the filed row holds, journaled like any
+//     new row; later repeats add to the new row. A journaled copy replayed onto
+//     a filed row does the same, into a row whose id is derived from the
+//     copy's (so a replay run twice lands in one row, by maximum). File mode
+//     is single-process: one process loads the file once and rewrites it from
+//     memory, so a second process on the same file would overwrite the
+//     first's rows whatever this store did; a filing there marks the same
+//     in-memory row this process counts on, and no attempt can miss it.
 //   - recordSanctionsAggregate keeps what has no address worth keeping: one
 //     row per (kind, rail, route class, country, region) per clock hour with a
 //     `count` and a count per reason (`byReason`), never an address; at most
@@ -64,7 +78,7 @@
 // an unfiled reportable event is never removed.
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
@@ -133,8 +147,12 @@ export async function __sanctionsJournalSettledForTests() { while (acksInFlight.
 /** Tests: what a process's death does to its journal holds (a shared
  *  journal's leases lapse, a local one's live in memory): every entry this
  *  process holds is freed for the next replay. */
-export function __dropSanctionsJournalHoldsForTests() {
-  for (const m of meta.values()) for (const x of m.ids) { try { x.j.release(x.id); } catch { /* stays held */ } }
+export async function __dropSanctionsJournalHoldsForTests() {
+  const freed = [];
+  // ...and forgotten here, as a dead process forgets them: a later change to
+  // the same row no longer removes them, so the replay is what lands them.
+  for (const m of meta.values()) { for (const x of m.ids) { try { freed.push(Promise.resolve(x.j.release(x.id)).catch(() => {})); } catch { /* stays held */ } } m.ids = []; }
+  await Promise.all(freed);
 }
 /** Tests: every row copy the journal holds now (a shared journal's and its local fallback's). */
 export async function __sanctionsJournalEntriesForTests() { return (await journal().entries()).filter((e) => e?.kind === "sanctions-row"); }
@@ -214,8 +232,13 @@ export async function flushSanctionsEvents() {
     const failed = (r, e) => { pending.add(r); counts.flushFailures++; console.error(`[sanctions-events] a change to ${r.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); };
     if (useDb()) {
       for (const row of rows) {
-        try { if (storeHook) await storeHook("flush", row); await upsertMaxRow(JSON.parse(JSON.stringify(row))); n++; landed(row, version.get(row)); }
-        catch (e) { failed(row, e); }
+        try {
+          if (storeHook) await storeHook("flush", row);
+          const live = await upsertMaxRow(JSON.parse(JSON.stringify(row)));
+          n++;
+          if (live) landed(row, version.get(row));
+          else await carryPastFiled(row);
+        } catch (e) { failed(row, e); }
       }
     } else {
       let hookError = null;
@@ -264,9 +287,11 @@ function mergedRow(stored, snap) {
 // last-seen time, and keeps every other field; a filed row is never touched.
 // The flush and the replay both write through it (database mode), so a write
 // from an older copy can never lower what a newer one stored.
+// Resolves true when the row landed on a live row (inserted, or merged into
+// one not filed), false when the stored row is filed and was left as it is.
 async function upsertMaxRow(row) {
   const t = `${stateDbSchema()}.records`;
-  await stateQuery(
+  const r = await stateQuery(
     `INSERT INTO ${t} (collection, id, body) VALUES ($1, $2, $3::jsonb)
      ON CONFLICT (collection, id) DO UPDATE SET body = ${t}.body || jsonb_strip_nulls(jsonb_build_object(
        'attempts', GREATEST((${t}.body->>'attempts')::numeric, (EXCLUDED.body->>'attempts')::numeric),
@@ -280,6 +305,68 @@ async function upsertMaxRow(row) {
      WHERE ${t}.body->>'filedAt' IS NULL`,
     [SANCTIONS_EVENTS_COLLECTION, row.id, JSON.stringify(row)],
   );
+  return r.rowCount > 0;
+}
+async function storedRow(id) {
+  const r = await stateQuery(`SELECT body FROM ${stateDbSchema()}.records WHERE collection = $1 AND id = $2`, [SANCTIONS_EVENTS_COLLECTION, id]);
+  return r.rows[0]?.body ?? null;
+}
+
+// What `row` holds past the filed row `filed`: a new unfiled row with the
+// extra attempts (an event row) or the extra count and reason counts (an
+// aggregate), or null when the filed row already holds all of it. Its time is
+// the filed row's last-seen time (the extras came after it), so its report
+// deadline is never later than theirs.
+function rowPastFiled(row, filed, id) {
+  const more = (a, b) => Math.max(0, (Number(a) || 0) - (Number(b) || 0));
+  const extra = { ...row, id, filedAt: null, filedRef: null, follows: filed?.id ?? row.id };
+  let any = false;
+  if (row.aggregate) {
+    extra.count = more(row.count, filed?.count);
+    extra.byReason = {};
+    for (const [k, v] of Object.entries(row.byReason || {})) { const d = more(v, filed?.byReason?.[k]); if (d) extra.byReason[k] = d; }
+    any = extra.count > 0;
+  } else {
+    extra.attempts = more(row.attempts ?? 1, filed?.attempts ?? 0);
+    any = extra.attempts > 0;
+  }
+  if (!any) return null;
+  const since = Date.parse(filed?.lastSeenAt || "") || Date.parse(row.at) || Date.now();
+  extra.at = new Date(since).toISOString();
+  if (!extra.lastSeenAt || extra.lastSeenAt < extra.at) extra.lastSeenAt = extra.at;
+  extra.dueBy = extra.report ? new Date(addBusinessDays(since)).toISOString() : null;
+  return extra;
+}
+
+// This process's row was filed by another process before its last write: the
+// copy here is marked filed, its dedupe key (or aggregate key) moves to a new
+// row carrying what the filed row does not hold, and that row is journaled
+// before the old row's entries are released (all in one synchronous step
+// after the read, so a repeat arriving meanwhile is counted once, in one of
+// the two). See FILED ELSEWHERE above.
+async function carryPastFiled(row) {
+  const filed = await storedRow(row.id);
+  row.filedAt = filed?.filedAt || new Date().toISOString();
+  row.filedRef = filed?.filedRef ?? null;
+  const extra = rowPastFiled(row, filed, newId(Date.now()));
+  for (const [k, s] of seenKeys) if (s.row === row) { if (extra) seenKeys.set(k, { row: extra, at: s.at }); else seenKeys.delete(k); }
+  for (const [k, r] of aggregates) if (r === row) { if (extra) aggregates.set(k, extra); else aggregates.delete(k); }
+  if (extra) {
+    if (extra.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(extra);
+    keep(extra, { onDisk: false });
+    console.warn(`[sanctions-events] ${row.kind} row was filed elsewhere; its later ${row.aggregate ? "counts" : "attempts"} open a new row`);
+  }
+  if (Array.isArray(dbCache.unfiled)) dbCache.unfiled = dbCache.unfiled.filter((r) => r !== row);
+  pending.delete(row);
+  landed(row, meta.get(row.id)?.v ?? 0);
+}
+// A journaled copy replayed onto a filed row: what it holds past the filed row
+// lands in a row whose id is derived from the copy's and the filing's, so the
+// same copy replayed again merges into that row by maximum.
+function derivedId(snap, filed) {
+  const h = createHash("sha256").update(`${snap.id}\u0000${filed?.filedAt ?? ""}`).digest("hex").slice(0, 10);
+  const t = Date.parse(filed?.lastSeenAt || "") || Date.parse(snap.at) || 0;
+  return `se_${String(t).padStart(14, "0")}_${h}`;
 }
 
 // File mode: one process owns the file, and the merge below reads and writes
@@ -287,8 +374,23 @@ async function upsertMaxRow(row) {
 // flush nor another replay can land between its read and its write.
 async function mergeIntoStore(snap) {
   if (storeHook) await storeHook("replay", snap);
-  if (useDb()) { await upsertMaxRow(snap); return; }
+  if (useDb()) {
+    if (await upsertMaxRow(snap)) return;
+    const filed = await storedRow(snap.id);
+    const extra = filed?.filedAt ? rowPastFiled(snap, filed, derivedId(snap, filed)) : null;
+    if (extra) await upsertMaxRow(extra);
+    return;
+  }
   const rows = loadFile();
+  const i = rows.findIndex((r) => r.id === snap.id);
+  if (i >= 0 && rows[i].filedAt) {
+    const extra = rowPastFiled(snap, rows[i], derivedId(snap, rows[i]));
+    if (extra) mergeFileRow(rows, extra);
+    return;
+  }
+  mergeFileRow(rows, snap);
+}
+function mergeFileRow(rows, snap) {
   const i = rows.findIndex((r) => r.id === snap.id);
   const row = mergedRow(i >= 0 ? rows[i] : null, snap);
   if (!row) return;

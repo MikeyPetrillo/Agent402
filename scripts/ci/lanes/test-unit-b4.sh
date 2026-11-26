@@ -60,6 +60,8 @@ t node scripts/test-route-judge-limit.js
 t node scripts/test-route-conversion.js
 # A route that went free retires its learned price (issue #1365: re-register re-asks priced rows, GET 200 retires, carry-forward keeps it over the Bazaar snapshot - offline)
 t node scripts/test-quote-retired-on-free.js
+# An unpaid quote probe never runs a seller's free route: free-marked routes get no request, a POST gets one body, a refused route is held for days (loopback sellers on port 0, offline)
+t node scripts/test-quote-probe-free-routes.js
 # A route the seller answers 410 Gone leaves the index and stays out across the Bazaar merge (offline)
 t node scripts/test-gone-routes.js
 # Request/response contracts read through local OpenAPI $refs (FastAPI shape); external, dangling and cyclic refs stay partial (offline)
@@ -115,7 +117,8 @@ t node scripts/test-stock-copy-off.js
 # Static copy (markdown trees, package READMEs, sample reports) names no Kalshi tool while KALSHI_TOOLS is off; the weather-market tools never name Kalshi
 t node scripts/test-kalshi-copy-off.js
 t node scripts/test-databento-timeouts.js
-t node scripts/test-databento-fallback.js
+# stock-history reads DBEQ.BASIC alone, bars at least 24 hours old, every answer labeled with its venues and not consolidated; refused on /ref and /aws (offline, stubbed)
+t node scripts/test-stock-history-dbeq.js
 t node scripts/test-databento-bar-range.js
 t node scripts/test-databento-range-fallback.js
 # "stock-quote: warm symbol answers with no upstream call, cold symbol with one; warmer ceiling (offline, stubbed)"

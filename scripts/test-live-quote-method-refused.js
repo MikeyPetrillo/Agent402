@@ -20,6 +20,9 @@ const eq = (a, b, m) => { n++; assert.equal(a, b, m); };
 const ORIGIN = "https://example.com";
 const accepts = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", payTo: "0x9fb365E4E9385E2a39FeBAd70368267e6f571d9A", amount: "500000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", decimals: 6 } }] };
 const header = Buffer.from(JSON.stringify(accepts)).toString("base64");
+// The seller's x402 manifest lists these routes: the paywall marker an unpaid
+// POST needs (sellerMarksPaid in src/x402-index.js).
+const LISTED = new Set(["/x402/gas", "/x402/check", "/x402/time", "/only-post", "/x402/recall"]);
 const orig = globalThis.fetch;
 const seen = [];
 const stub = (rules) => async (url, init = {}) => {
@@ -39,7 +42,7 @@ try {
     { seller: "example.com", route: "/x402/gas", method: "GET", slug: "x402_gas_get", networks: [] },
     { seller: "example.com", route: "/x402/gas", method: "POST", slug: "x402_gas_post", networks: [] },
   ];
-  await enrichLiveQuotes(tools, ORIGIN, { ignoreBudget: true });
+  await enrichLiveQuotes(tools, ORIGIN, { ignoreBudget: true, x402Listed: LISTED });
   eq(tools.length, 1, "one row remains on the path");
   eq(tools[0].method, "POST", "the answering verb's own row remains");
   eq(tools[0].slug, "x402_gas_post", "the sibling row, not a relabelled GET");
@@ -58,7 +61,7 @@ try {
     { seller: "example.com", route: "/x402/check", method: "GET", slug: "x402_check_get", price: 0.01, originDeclaredPrice: 0.01, networks: ["eip155:10"] },
     { seller: "example.com", route: "/x402/check", method: "POST", slug: "x402_check_post", networks: [] },
   ];
-  await enrichLiveQuotes(validates, ORIGIN, { ignoreBudget: true });
+  await enrichLiveQuotes(validates, ORIGIN, { ignoreBudget: true, x402Listed: LISTED });
   eq(validates.length, 2, "a 400 on the stated verb keeps its row");
   const vGet = validates.find((t) => t.method === "GET"), vPost = validates.find((t) => t.method === "POST");
   ok(vGet.networks.length === 1 && vGet.networks[0] === "eip155:10" && vGet.price === 0.01, "the GET row keeps its own chain and price");
@@ -74,7 +77,7 @@ try {
     { seller: "example.com", route: "/x402/time", method: "GET", slug: "x402_time_get", networks: [] },
     { seller: "example.com", route: "/x402/time", method: "POST", slug: "x402_time_post", networks: [] },
   ];
-  await enrichLiveQuotes(both, ORIGIN, { ignoreBudget: true });
+  await enrichLiveQuotes(both, ORIGIN, { ignoreBudget: true, x402Listed: LISTED });
   eq(both.length, 2, "both rows stay when both verbs answer");
   ok(both.every((t) => t.method === (t.slug.endsWith("_get") ? "GET" : "POST")), "verbs untouched");
   ok(both.every((t) => t.networksVerifiedMethod === t.method), "each row's stamp names its own verb");
@@ -83,7 +86,7 @@ try {
   seen.length = 0; logs.length = 0;
   globalThis.fetch = stub({ "GET /only-post": 405, "POST /only-post": 402 });
   const lone = [{ seller: "example.com", route: "/only-post", method: "GET", slug: "only_post", networks: [] }];
-  await enrichLiveQuotes(lone, ORIGIN, { ignoreBudget: true });
+  await enrichLiveQuotes(lone, ORIGIN, { ignoreBudget: true, x402Listed: LISTED });
   eq(lone.length, 1, "lone row kept");
   eq(lone[0].method, "POST", "corrected to the answering verb");
   eq(lone[0].methodCorrectedFrom, "GET", "correction recorded for the carry-forward");
@@ -96,7 +99,7 @@ try {
     { seller: "example.com", route: "/x402/recall", method: "GET", slug: "x402_recall_get", networks: [] },
     { seller: "example.com", route: "/x402/recall", method: "POST", slug: "x402_recall_post", networks: [] },
   ];
-  const ret = await enrichLiveQuotes(arr, ORIGIN, { ignoreBudget: true });
+  const ret = await enrichLiveQuotes(arr, ORIGIN, { ignoreBudget: true, x402Listed: LISTED });
   ok(ret === arr && arr.length === 1, "the array passed in is the array trimmed (two call sites read it, not the return)");
 } finally {
   globalThis.fetch = orig; console.log = origLog;

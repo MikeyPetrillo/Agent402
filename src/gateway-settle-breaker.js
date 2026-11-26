@@ -195,7 +195,8 @@ import { hasPaidRecord, notePaidSettlement } from "./paid-record.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
 import { limiterKey } from "./rate-limit.js";
-import { settleFirstBudgetMode, settleFirstMeterStatus } from "./settle-first-meter.js";
+import { settleFirstBudgetMode, settleFirstMeterStatus, settleFirstMeterRead } from "./settle-first-meter.js";
+import { markPaymentRefusal } from "./refusal-mark.js";
 import { exactRequiredOf, settledFirstResendOf } from "./settle-first.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
@@ -1347,6 +1348,8 @@ function decide(req, key, now, global, b0) {
     }
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
+    // The refusal record's reason code (src/payment-refusals.js).
+    markPaymentRefusal(req, `settle-breaker-${b.kind === "in-flight" || b.kind === "authorization" || b.kind === "unknown" ? b.kind : "wallet"}`);
     // Machine-readable, beside the message (src/tool-error-fields.js):
     // retryAfterSeconds, and for a network key the refused network, what to
     // do (retry: other-network) and where the other networks are listed. The
@@ -1409,6 +1412,9 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
   const g = SHARED ? await sharedGlobalAlarm(now) : gatewaySettleBreakerGlobalAlarm(now);
   const status = g.alarm ? "burst" : "ok";
   if (!full) return { status };
+  // The operator view reads the settle-first meter itself (bounded) rather
+  // than report the word a decision would read before any request made one.
+  await settleFirstMeterRead({ now });
   const s = gatewaySettleBreakerStatus(now);
   return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, overrunTrips: s.overrunTrips, runsInFlightCounted: s.runsInFlightCounted, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS, settleFirst: s.settleFirst };
 }

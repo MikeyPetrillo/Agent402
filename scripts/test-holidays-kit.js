@@ -709,6 +709,51 @@ for (const t of [tool("public-holidays"), ...HOLIDAY_TOOLS]) {
   ok(requestMatchesDefinition("public-holidays", `${V3_API}/PublicHolidays/2026/US`), "public-holidays: a v3 read is the shape its definition builds");
 }
 
+// ── the v3 path: one reader, and none from its end of life ────────────────────
+// v4 publishes no localName, no observed date and a narrower year window, so
+// public-holidays alone keeps a v3 read until 2027-01-31. Every other read is
+// v4, and from 2027-02-01 no code path builds a v3 address.
+{
+  const isV3 = (u) => u.startsWith(V3_API) || /\/api\/v3\//.test(u) || new URL(u).hostname === new URL(V3_API).hostname;
+  const readers = [tool("public-holidays"), ...HOLIDAY_TOOLS.filter((x) => x.slug !== "market-calendar")];
+  // Each input that sends public-holidays to v3 before its end of life: the
+  // example, a year outside v4's window, a region and a types filter.
+  const extra = { "public-holidays": [{ country: "US", year: 2020 }, { country: "DE", year: 2026, subdivision: "DE-BY" }, { country: "JP", year: 2027, types: "Public" }] };
+  const run = async (at) => {
+    __setNowForTests(() => at);
+    const out = {};
+    for (const t of readers) {
+      for (const input of [t.discovery.input, ...(extra[t.slug] || [])]) {
+        __setHolidayReadForTests(fixtureRead);
+        reads.length = 0;
+        try { await t.handler(input); } catch { /* a refusal still shows what was read */ }
+        (out[t.slug] ||= []).push(...reads.filter(isV3));
+      }
+    }
+    return out;
+  };
+  const before = await run(BEFORE_EOL);
+  const v3Slugs = Object.keys(before).filter((s) => before[s].length);
+  ok(v3Slugs.join() === "public-holidays" && before["public-holidays"].every((u) => /^https:\/\/date\.nager\.at\/api\/v3\/PublicHolidays\/\d{4}\/[A-Z]{2}$/.test(u)),
+    `before 2027-02-01 only public-holidays reads v3, and only its PublicHolidays list (${v3Slugs.join(",") || "none"})`);
+  const after = await run(AFTER_EOL);
+  const leaked = Object.entries(after).filter(([, u]) => u.length).map(([s, u]) => `${s}: ${u[0]}`);
+  ok(leaked.length === 0, `from 2027-02-01 no holiday tool builds a v3 address${leaked.length ? ` (${leaked.join("; ")})` : ""}`);
+  // In code, v3 is named by V3_API alone, in holiday-source.js, and built in one place.
+  const code = (f) => readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  const srcText = code("src/tools/holiday-source.js");
+  ok((srcText.match(/\$\{V3_API\}/g) || []).length === 1 && /\$\{V3_API\}\/PublicHolidays\//.test(srcText), "holiday-source.js builds a v3 address in one place, the PublicHolidays list");
+  ok(!/\/api\/v3\/(?:PublicHolidays|NextPublicHolidays|LongWeekend|AvailableCountries|CountryInfo|IsTodayPublicHoliday)/.test(srcText.replace(V3_API, "")), "no other v3 endpoint path is written in holiday-source.js");
+  const v3Paths = [];
+  for (const f of readdirSync("src/tools").filter((x) => x.endsWith(".js") && x !== "holiday-source.js")) {
+    if (/\bV3_API\b|\/(?:PublicHolidays|NextPublicHolidays|LongWeekend|IsTodayPublicHoliday)\//.test(code(`src/tools/${f}`))) v3Paths.push(f);
+  }
+  ok(v3Paths.length === 0, `no other tool module builds a v3 holiday address${v3Paths.length ? ` (${v3Paths.join(", ")})` : ""}`);
+  __setNowForTests(() => BEFORE_EOL);
+  __caches.V3_CACHE.clear(); __caches.YEAR_CACHE.clear(); __caches.NEXT_CACHE.clear();
+  __setHolidayReadForTests(fixtureRead);
+}
+
 // ── public-holidays' published example: today's answer, byte for byte ─────────
 {
   __setNowForTests(() => BEFORE_EOL);

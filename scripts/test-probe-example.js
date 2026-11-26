@@ -321,8 +321,9 @@ try {
   ok(!logged.some((l) => l.includes(MARK)), `no log line carries the example (${logged.length} lines read)`);
 }
 
-// A route the seller marks free (paid:false) never gets the example: a body it
-// accepts would run it. The same route marked paid does.
+// A route the seller marks free (paid:false) is never probed at all, so it
+// never gets the example: a body it accepts would run it. The same route
+// marked paid does.
 {
   const free = { seller: a.origin, route: "/v1/task/build", method: "POST", slug: "free", price: null, networks: [], paid: false };
   const paid = { ...free, slug: "paid", paid: true };
@@ -331,7 +332,7 @@ try {
   try {
     bodies.length = 0;
     await idx.enrichLiveQuotes([free], a.origin, { ignoreBudget: true, probeExamples: ex });
-    ok(bodies.length > 0 && !bodies.some((x) => x.body.includes(MARK)), `a paid:false route was probed without the example (${bodies.length} requests)`);
+    ok(bodies.length === 0, `a paid:false route is not probed at all (${bodies.length} requests)`);
     bodies.length = 0;
     await idx.enrichLiveQuotes([paid], a.origin, { ignoreBudget: true, probeExamples: ex });
     ok(bodies[0] && bodies[0].body.includes(MARK) && paid.networks.includes(ARC), "a paid route leads with the example and records the live chain");

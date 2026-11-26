@@ -48,6 +48,11 @@ export const slowOriginIntervalLabel = () => everyLabel(CRAWL_INTERVAL_MS * SLOW
 // price the seller's own documents declare). A re-registration reads it now.
 export const LIVE_QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
 export const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+// A route that answered the unpaid quote probe with no 402 at all (the
+// seller's limit, an input check, a free answer) is held this long before it
+// is asked again, doubling on each refusal up to the maximum (src/x402-index.js).
+export const QUOTE_REFUSED_BACKOFF_MS = 3 * 24 * 60 * 60 * 1000;
+export const QUOTE_REFUSED_BACKOFF_MAX_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** A span as prose: "a week", "2 days", "a day", "12 hours", "an hour", "30 minutes". */
 export function spanLabel(ms) {

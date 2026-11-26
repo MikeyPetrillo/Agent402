@@ -15,15 +15,17 @@ import { createHash } from "node:crypto";
 // the date, until that switch ships on. The prepaid credits sales text
 // (CREDITS_SALES) carries its own date instead, CREDITS_SALES_TERMS_DATE in
 // src/credits-sales.js, which both pages print while sales are on and a
-// checkout records: move it with any change to that text. While the public settlement index disclosure renders,
+// checkout records: move it with any change to that text. The item about a
+// buyer's own upstream key (UPSTREAM_KEY) does the same with
+// UPSTREAM_KEY_TERMS_DATE in src/upstream-key.js, where its text lives. While the public settlement index disclosure renders,
 // each page prints the later of this date and FACILITATOR_PUBLIC_INDEX_SINCE
 // (scripts/test-public-index-copy.js).
 const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-25", sha: "e4cc560d06641fba", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
-  "src/privacy.js": { date: "2026-11-25", sha: "00f74a30ac077cf4", with: ["src/credits-figures.js"] },
+  "src/terms.js": { date: "2026-11-25", sha: "c4c939171e8493d7", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
+  "src/privacy.js": { date: "2026-11-26", sha: "c44f93c7430a79a6", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -46,21 +48,26 @@ for (const [file, pin] of Object.entries(PINS)) {
 }
 // The rendered pages, with every optional switch off and with the switches
 // that add text on (credit sales, the connector sign-in, signed agent
-// requests): each render's text (its date set aside) is pinned to the date it
+// requests, a buyer's own upstream key): each render's text (its date set aside) is pinned to the date it
 // prints. A text change, in any variant, needs a new date: the history below
 // is append-only (a new [date, hash] row with a later date), and where the
 // main branch is at hand the test also reads main's history and fails when a
 // row main already has was rewritten (a changed hash under an old date).
 const RENDERED = {
-  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"]] },
-  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"]] },
+  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"], ["2026-11-26", "58e3293b8fb4a807"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"], ["2026-11-26", "2910e5ab1b4758b6"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"], ["2026-11-26", "d61fcb07d2c4efc0"]] },
   dpa: { off: [["2026-11-25", "f2425114421ddfba"]], on: [["2026-11-25", "f2425114421ddfba"]] },
 };
 {
   const { termsPage } = await import("../src/terms.js");
   const { privacyPage } = await import("../src/privacy.js");
   const { dpaPage } = await import("../src/dpa.js");
-  const SWITCHES = ["CREDITS_SALES", "MCP_OAUTH", "WEB_BOT_AUTH"];
+  const SWITCHES = ["CREDITS_SALES", "MCP_OAUTH", "WEB_BOT_AUTH", "UPSTREAM_KEY"];
+  // The /privacy item about a buyer's own key is written from the served
+  // catalog (the tools that take one), so the render is handed a catalog that
+  // holds one: without it the item is empty and its text is pinned by nothing.
+  const { configureUpstreamKeys, upstreamKeyPrivacyItem } = await import("../src/upstream-key.js");
+  configureUpstreamKeys({ catalog: { a: { slug: "github-repo", price: "$0.005" }, b: { slug: "hash", price: "$0.001" } } });
   const keep = Object.fromEntries(SWITCHES.map((k) => [k, process.env[k]]));
   // The text a reader sees in the page's main content: scripts, styles, tags
   // and the shared site chrome (header, nav, footer) set aside.
@@ -71,6 +78,10 @@ const RENDERED = {
   const renderHash = (html) => createHash("sha256").update(mainText(html).replace(DATE_LINE, "last updated <date>.")).digest("hex").slice(0, 16);
   for (const variant of ["off", "on"]) {
     for (const k of SWITCHES) { if (variant === "on") process.env[k] = "on"; else delete process.env[k]; }
+    if (variant === "on") {
+      const item = mainText(upstreamKeyPrivacyItem());
+      ok(item.length > 100 && mainText(privacyPage("https://agent402.tools")).includes(item), `privacy (on): the render that is pinned holds the item about a buyer's own key (${item.length} characters)`);
+    } else ok(upstreamKeyPrivacyItem() === "" , "privacy (off): no item about a buyer's own key");
     for (const [page, fn] of [["terms", termsPage], ["privacy", privacyPage], ["dpa", dpaPage]]) {
       const html = fn("https://agent402.tools");
       const printed = (html.match(DATE_LINE) || [])[1];

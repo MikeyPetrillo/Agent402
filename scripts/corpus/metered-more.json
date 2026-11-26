@@ -1274,6 +1274,23 @@
       }
     },
     {
+      "slug": "summarize",
+      "name": "a supplied text in 60 words",
+      "input": {
+        "text": "Solar and wind supplied a record share of electricity last year as new capacity came online across several regions. Battery storage installations also grew quickly, helping grids absorb midday solar output and release it in the evening. Analysts expect the trend to continue as costs fall, though grid connection queues and permitting remain the main bottlenecks for new projects.",
+        "maxWords": 60
+      },
+      "requires": "OPENROUTER_API_KEY",
+      "expect": {
+        "populated": [
+          "summary"
+        ],
+        "lt": {
+          "summaryWordCount": 90
+        }
+      }
+    },
+    {
       "slug": "search-images",
       "name": "a second image query",
       "input": {

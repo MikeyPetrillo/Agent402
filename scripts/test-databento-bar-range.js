@@ -2,7 +2,7 @@
 // Every equities read is bounded by the DAILY-BAR schema's end, not the
 // dataset's: over a weekend the dataset's end (instrument definitions,
 // statistics) runs past the last settled session, and a bar read up to it is
-// refused by both datasets. Offline: global fetch is stubbed with the shape
+// refused. Offline: global fetch is stubbed with the shape
 // the range endpoint answers.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
@@ -11,7 +11,7 @@ process.env.STOCK_DATA_PROVIDER = "databento";
 process.env.DATABENTO_WARM = "off";
 const db = await import("../src/tools/databento.js");
 const { FINANCE_TOOLS } = await import("../src/tools/finance-kit.js");
-const quote = FINANCE_TOOLS.find((t) => t.slug === "stock-quote").handler;
+const history = FINANCE_TOOLS.find((t) => t.slug === "stock-history").handler;
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
@@ -41,11 +41,11 @@ globalThis.fetch = async (url, init) => {
   return new Response("{}", { status: 404 });
 };
 try {
-  const out = await quote({ symbol: "AAPL" });
+  const out = await history({ symbol: "AAPL", days: 2 });
   ok(ends.length > 0 && ends.every((e) => e <= "2026-10-17"), `the bar read never asks past the bars' end (${ends.join(",")})`);
-  ok(out && Number.isFinite(out.close ?? out.price ?? out.last), `a weekend quote answers from the last settled session (${JSON.stringify(out).slice(0, 120)})`);
+  ok(out && Number.isFinite(out.bars?.at(-1)?.close) && out.asOf === "2026-10-16", `a weekend read answers from the last settled session (${JSON.stringify(out).slice(0, 120)})`);
 } catch (e) {
-  ok(false, `a weekend quote answers instead of throwing (${e.statusCode} ${e.message})`);
+  ok(false, `a weekend read answers instead of throwing (${e.statusCode} ${e.message})`);
 } finally { globalThis.fetch = realFetch; }
 
 console.log(`\ntest-databento-bar-range: ${pass} passed, ${fail} failed`);

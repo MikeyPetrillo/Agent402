@@ -19,13 +19,13 @@ import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
-import { stockDataEnabled } from "./stock-provider.js";
+import { stockQuoteEnabled } from "./stock-provider.js";
 import { testSeamOn } from "../test-seams.js";
 import { notChargedHere } from "../not-charged.js";
 
-// Read at boot, like every listing switch: the quote step runs only with an
-// active stock provider.
-const QUOTE_ON = stockDataEnabled();
+// Read at boot, like every listing switch: the quote step runs only while a
+// provider serves the newest session (never today: src/tools/stock-provider.js).
+const QUOTE_ON = stockQuoteEnabled();
 
 // Per-buyer OpenRouter `user` id (OpenRouter abuse isolation); never throws.
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }

@@ -13,6 +13,8 @@ t node scripts/test-dataset-snapshot.js
 t node scripts/test-dataset-health.js
 t node scripts/test-price-parse.js
 t node scripts/test-receipts.js
+# The receipt-verify tool and the free receipt check give one verdict: a minted receipt verifies, a tampered field, an unpublished key id and a changed answer or request fail with the reason, oversized or malformed fields are refused naming the field, and receipt queries find it first (boots a free-mode server - offline)
+t node scripts/test-receipt-verify-tool.js
 # The audit report: the paying wallet's rows on every rail and nobody else's, kept receipts that verify, a summary receipt over the report and the CSV that fails on tamper, caps and cursors, receipts kept on a final 200 only and swept (offline)
 t node scripts/test-audit-report.js
 t node scripts/test-feedback-kit.js

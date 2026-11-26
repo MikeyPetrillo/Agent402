@@ -28,7 +28,12 @@
 //    measured on a 16M-pixel source, decode was 160-570ms, resize 130-240ms and
 //    the largest permitted PNG encode ~600ms-1.3s, so ~2s is the realistic worst
 //    case and 5s means a genuine job is never killed while a pathological one
-//    frees its slot quickly.
+//    frees its slot quickly. It is counted from the moment the worker says it
+//    has started the job, once its modules have loaded: a worker's first job
+//    spawns the thread and evaluates jimp (and, for a barcode, the decoders),
+//    which on a busy host takes seconds of no caller's work, and that time is
+//    under its own ceiling (LOAD_TIMEOUT_MS). Nothing the caller sent is read
+//    before "started", so no input can spend the load allowance.
 import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
@@ -46,6 +51,9 @@ const JOB_TIMEOUT_MS = 5_000;
 // The wallet-only tools admit MAX_SRC_PIXELS (2.5x the free cap), so their
 // deadline scales with it; the pool size still bounds resident bitmaps.
 export const LARGE_JOB_TIMEOUT_MS = 15_000;
+// A worker's thread start and module loads, before it starts a job: a backstop
+// for a load that never finishes, never a job's own budget.
+const LOAD_TIMEOUT_MS = 30_000;
 // Idle workers are terminated so a burst of large images does not leave its peak
 // heap resident for the rest of the process's life; the next call re-spawns.
 const IDLE_MS = 30_000;
@@ -99,6 +107,7 @@ function spawnSlot() {
   const slot = { worker: new Worker(workerPath, { env: threadEnv(IMAGE_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
+    if (msg.started) { armJob(slot, slot.job, slot.job.timeoutMs); return; } // modules loaded: the job's own deadline runs from here
     if (msg.error) {
       settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }, msg.threw ? { threw: msg.threw } : {}));
     } else if (msg.result !== undefined) {
@@ -124,17 +133,23 @@ function spawnSlot() {
   return slot;
 }
 
+function armJob(slot, job, ms, what = `image transform timed out (>${job.timeoutMs}ms)`) {
+  clearTimeout(job.timer);
+  job.timer = setTimeout(() => {
+    // The worker is inside synchronous Jimp code and will not answer another
+    // message, so the slot is only recoverable by killing the thread.
+    settle(slot, job.reject, unavailable(what));
+    retire(slot);
+    pump();
+  }, ms);
+}
+
 function assign(slot, job) {
   slot.job = job;
   clearTimeout(slot.idleTimer);
   slot.worker.ref();
-  job.timer = setTimeout(() => {
-    // The worker is inside synchronous Jimp code and will not answer another
-    // message, so the slot is only recoverable by killing the thread.
-    settle(slot, job.reject, unavailable(`image transform timed out (>${job.timeoutMs}ms)`));
-    retire(slot);
-    pump();
-  }, job.timeoutMs);
+  // Until the worker says "started" it is loading modules, not reading the job.
+  armJob(slot, job, LOAD_TIMEOUT_MS, `image worker did not start within ${LOAD_TIMEOUT_MS}ms`);
   slot.worker.postMessage({ id: job.id, op: job.op, buffer: job.buffer, maxPixels: job.maxPixels, params: job.params, deadlineMs: job.timeoutMs });
 }
 

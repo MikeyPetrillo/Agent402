@@ -113,6 +113,8 @@ const NETWORK = new Set([
   // key IS present costs at most the v1-chat tier's own margin-clamped
   // worst case, ~$0.014).
   "/api/pdf-summarize",
+  // summarize: the same in-process v1-chat call, on an extracted page or a text.
+  "/api/summarize",
   // document-brief skill pack: same reasoning, one hop up (it calls
   // pdf-summarize in-process as one of its three fanout steps).
   "/api/skill/document-brief",

@@ -1,8 +1,9 @@
 // The server builds and verifies Tempo transactions with `ox` (src/mpp-tempo.js,
 // src/mppx-store.js) while mppx signs and parses them with its own `ox`. The
 // direct dependency is pinned to the version mppx declares, so one copy is
-// installed and both sides share its encoders. A drift reinstalls a second
-// copy under mppx and fails here.
+// installed and both sides share its encoders. viem also declares an exact ox,
+// so viem moves only to a release that declares the same one. A drift
+// reinstalls a second copy under mppx or viem and fails here.
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
@@ -16,6 +17,10 @@ ok(typeof wanted === "string" && /^\d+\.\d+\.\d+$/.test(wanted), `mppx declares 
 ok(pkg.dependencies?.ox === wanted, `the direct ox pin (${pkg.dependencies?.ox}) is the version mppx declares`);
 ok(lock.packages["node_modules/ox"]?.version === wanted, "the hoisted ox is that version");
 ok(!lock.packages["node_modules/mppx/node_modules/ox"], "mppx installs no second ox of its own");
+const viemOx = lock.packages["node_modules/viem"]?.dependencies?.ox;
+ok(viemOx === wanted, `viem declares the ox mppx declares (viem ${viemOx}, mppx ${wanted})`);
+const nested = Object.keys(lock.packages).filter((k) => k !== "node_modules/ox" && /(^|\/)node_modules\/ox$/.test(k));
+ok(nested.length === 0, `no package installs a nested ox (${nested.join(", ") || "none"})`);
 
 console.log(`test-ox-single-copy: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

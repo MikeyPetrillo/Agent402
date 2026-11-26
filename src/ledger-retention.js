@@ -5,11 +5,15 @@
 //     or blocked row is never removed
 //   - sanctions events: 10 years (src/sanctions-events.js; never under 10,
 //     and an event still waiting for its report is never removed)
+//   - payment refusal records: 90 days (src/payment-refusals.js). Not a money
+//     record: this part always deletes, whatever LEDGER_RETENTION says,
+//     because 90 days is the period /privacy states.
 //
 // DRY RUN BY DEFAULT. A daily pass under the lease `ledger-retention` counts
 // what is past its period and logs the counts; it deletes only while
 // LEDGER_RETENTION=apply. The last pass is on /__operator/ledger-retention.json.
-// The first pass runs ten minutes after boot.
+// The first pass runs ten minutes after boot. LEDGER_RETENTION=off skips the
+// money records; the refusal records are still removed at 90 days.
 import { leased } from "./state-db.js";
 import { contained } from "./contained-turn.js";
 
@@ -21,6 +25,7 @@ const yearsOf = (v, min) => { const n = Number(v); return Number.isFinite(n) && 
 export function retentionSettings(env = process.env) {
   return {
     apply: String(env.LEDGER_RETENTION || "").trim().toLowerCase() === "apply",
+    off: String(env.LEDGER_RETENTION || "").trim().toLowerCase() === "off",
     salesYears: yearsOf(env.LEDGER_RETENTION_SALES_YEARS, SALES_RETENTION_MIN_YEARS),
     refundYears: yearsOf(env.LEDGER_RETENTION_REFUND_YEARS, REFUNDS_RETENTION_MIN_YEARS),
   };
@@ -46,17 +51,21 @@ export async function runLedgerRetention({ now = Date.now(), env = process.env, 
     sales: async (cut, o) => (await import("./sales-ledger.js")).pruneSalesBefore(cut, o),
     refunds: async (cut, o) => (await import("./refund-ledger.js")).pruneResolvedRefundsBefore(cut, o),
     sanctions: async (o) => (await import("./sanctions-events.js")).pruneSanctionsEvents(o),
+    refusals: async (o) => (await import("./payment-refusals.js")).prunePaymentRefusals(o),
   };
   const out = { ran: true, at: new Date(now).toISOString(), apply: s.apply, salesYears: s.salesYears, refundYears: s.refundYears, parts: {} };
   const part = async (name, fn) => {
     try { out.parts[name] = await fn(); }
     catch (e) { out.parts[name] = { error: String(e?.message || e).slice(0, 160) }; }
   };
-  await part("sales", () => d.sales(yearsBefore(now, s.salesYears), { apply: s.apply }));
-  await part("refunds", () => d.refunds(yearsBefore(now, s.refundYears), { apply: s.apply }));
-  await part("sanctions", () => d.sanctions({ apply: s.apply, now }));
-  const line = Object.entries(out.parts).map(([k, v]) => (v.error ? `${k} error (${v.error})` : `${k} ${v.due} past retention${s.apply ? `, ${v.removed} removed` : ""}`)).join("; ");
-  log(`[ledger-retention] ${s.apply ? "applied" : "dry run (LEDGER_RETENTION=apply deletes)"}: ${line}`);
+  if (!s.off) {
+    await part("sales", () => d.sales(yearsBefore(now, s.salesYears), { apply: s.apply }));
+    await part("refunds", () => d.refunds(yearsBefore(now, s.refundYears), { apply: s.apply }));
+    await part("sanctions", () => d.sanctions({ apply: s.apply, now }));
+  }
+  if (typeof d.refusals === "function") await part("refusals", () => d.refusals({ apply: true, now }));
+  const line = Object.entries(out.parts).map(([k, v]) => (v.error ? `${k} error (${v.error})` : `${k} ${v.due} past retention${s.apply || k === "refusals" ? `, ${v.removed} removed` : ""}`)).join("; ");
+  log(`[ledger-retention] ${s.off ? "money records off (LEDGER_RETENTION=off)" : s.apply ? "applied" : "dry run (LEDGER_RETENTION=apply deletes)"}: ${line}`);
   last = out;
   return out;
 }

@@ -1848,6 +1848,12 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
   };
 }
 
+// The headers an input refusal names for its answer (a Retry-After), own
+// string values only.
+function setRefusalHeaders(res, headers) {
+  if (!headers || typeof headers !== "object") return;
+  for (const [k, v] of Object.entries(headers)) if (typeof v === "string" && /^[A-Za-z-]{1,40}$/.test(k)) res.setHeader(k, v);
+}
 /** INBOUND: the settlement gate itself. Buffers the real route handler's
  *  response (mirrors @x402/express's own writeHead/write/end/flushHeaders
  *  buffering, node_modules/@x402/express/dist/esm/index.mjs) so broadcast —
@@ -2031,6 +2037,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       if (bad && bad.status >= 400 && bad.status < 500) {
         logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { total: Date.now() - tStart }, detail: String(bad.body?.error || "").slice(0, 160) });
         res.setHeader("Cache-Control", "no-store");
+        setRefusalHeaders(res, bad.headers);
         return res.status(bad.status).json({ ...bad.body, charged: false });
       }
     }
@@ -2277,6 +2284,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           } finally { releaseReplay(); }
           logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
           res.setHeader("Cache-Control", "no-store");
+          setRefusalHeaders(res, bad.headers);
           return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender, and repaid after on-chain proof if it is never claimed." : ""}` });
         }
         // A transfer whose debt is already being refunded (or was) no longer

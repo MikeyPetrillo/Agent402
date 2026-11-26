@@ -32,7 +32,8 @@ for (const t of Object.values(C)) {
   for (const w of t.slug.split("-")) names.add(w);
   for (const tg of t.tags || []) names.add(String(tg).toLowerCase());
 }
-for (const p of SKILL_PACKS) for (const w of `skill-${p.slug}`.split("-")) names.add(w);
+// A pack is listed in the catalog as skill-<slug>: its whole slug and each word.
+for (const p of SKILL_PACKS) { names.add(`skill-${p.slug}`); for (const w of `skill-${p.slug}`.split("-")) names.add(w); }
 ok(Object.keys(C).length > 400, `the tool kits load (${Object.keys(C).length} tools)`);
 
 ok(FIND_SYNONYMS.length >= 10 && Object.isFrozen(FIND_SYNONYMS), "the table is frozen and holds its rules");

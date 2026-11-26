@@ -4,6 +4,8 @@
 // network is needed (the live URL path is covered by test-all's example check).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { leastOurs, oursMs } from "./lib/ours-clock.js";
+import { fileURLToPath } from "node:url";
+import { childJson } from "./lib/child-json.js";
 import { Jimp, JimpMime } from "jimp";
 import { IMAGE_TOOLS, extractExifBuffer, parseTiff, sniffFormat } from "../src/tools/image-kit.js";
 
@@ -862,6 +864,31 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
     ok(wrong.length === 0 && grew < 400, `300 mutated ${format} files (${seeds.length} seeds): ${tally.decoded} decoded, ${tally.refused} refused with a 400, none slow or lost, peak memory +${grew} MB${wrong.length ? ` | ${wrong.slice(0, 3).join("; ")}` : ""}`);
   }
   console.log(`# fuzz: 1500 cases in ${Date.now() - started} ms`);
+}
+
+// A job's deadline is the job's: a worker's thread start and module loads
+// (seconds on a busy host for a cold worker's first job) come before it says
+// "started", under their own ceiling. In a process of its own, so the pool
+// has no warm real worker to hand the job to.
+{
+  const script = `
+    import { runImageOffThread, __setImageWorkerForTest } from ${JSON.stringify(new URL("../src/tools/image-pool.js", import.meta.url).href)};
+    __setImageWorkerForTest(${JSON.stringify(fileURLToPath(new URL("./lib/slow-load-image-worker.js", import.meta.url)))});
+    const png = Buffer.from(${JSON.stringify(srcB64)}, "base64");
+    const run = async (params) => { const t0 = Date.now(); try { return { out: await runImageOffThread({ op: "resize", buffer: png, params, timeoutMs: 150 }), ms: Date.now() - t0 }; } catch (e) { return { code: e.statusCode, msg: e.message, ms: Date.now() - t0 }; } };
+    const [slow, stuck] = await Promise.all([run({ loadMs: 600 }), run({ hang: true })]);
+    console.log(JSON.stringify({ slow, stuck }));
+    process.exit(0);`;
+  // A file, not --eval: a worker inherits the parent's execArgv.
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync: writeScript } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const file = `${mkdtempSync(`${tmpdir()}/a402-image-deadline-`)}/run.mjs`;
+  writeScript(file, script);
+  const r = spawnSync(process.execPath, [file], { encoding: "utf8", timeout: 60_000 });
+  let got = null; try { got = childJson(r.stdout); } catch { /* reported below */ }
+  ok(got?.slow?.out?.loadedIn === 600, `a worker that takes 600 ms to load its modules still runs a job given 150 ms: the deadline starts when the job does (${JSON.stringify(got?.slow) ?? r.stderr.slice(-300)})`);
+  ok(got?.stuck?.code === 503 && /timed out \(>150ms\)/.test(got.stuck.msg || "") && got.stuck.ms < 30_000, `a job stuck after it started is still ended at its own deadline (${JSON.stringify(got?.stuck) ?? r.stderr.slice(-300)})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

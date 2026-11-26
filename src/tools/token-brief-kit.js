@@ -45,7 +45,7 @@ import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
 import { notChargedHere } from "../not-charged.js";
-import { TOKEN_FACTS_NOTICE, TOKEN_CLAIM_RULE, TOKEN_NAME_MAX, TOKEN_SYMBOL_MAX, checkedTokenProse, quotedTokenLabel, tokenLabel } from "../token-claims.js";
+import { TOKEN_FACTS_NOTICE, TOKEN_CLAIM_RULE, TOKEN_NAME_MAX, TOKEN_SYMBOL_MAX, checkedTokenProse, markdownText, markdownTokenLabel, quotedTokenLabel, tokenLabel } from "../token-claims.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -376,8 +376,12 @@ ${riskBlock}`;
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 
-    const header = `# Solana Token Due-Diligence Brief: ${name || mint}${symbol ? ` (${symbol})` : ""}\n\n**Mint** \`${mint}\` · **Mint authority** ${buckets.mint} · **Freeze authority** ${buckets.freeze} · **LP locked** ${buckets.lpLocked} · **Top-10 holders** ${buckets.topHolders}\n`;
-    const sourceList = numbered.map((s) => `[${s.n}] ${s.title} - ${s.url}`).join("\n");
+    // The minter's name and symbol enter the delivered markdown as inert text
+    // (src/token-claims.js markdownTokenLabel): no heading, link, code or
+    // table syntax of theirs renders. The same for a source title naming one.
+    const mdName = markdownTokenLabel(name, TOKEN_NAME_MAX), mdSymbol = markdownTokenLabel(symbol, TOKEN_SYMBOL_MAX);
+    const header = `# Solana Token Due-Diligence Brief: ${mdName || mint}${mdSymbol ? ` (${mdSymbol})` : ""}\n\n**Mint** \`${mint}\` · **Mint authority** ${buckets.mint} · **Freeze authority** ${buckets.freeze} · **LP locked** ${buckets.lpLocked} · **Top-10 holders** ${buckets.topHolders}\n`;
+    const sourceList = numbered.map((s) => `[${s.n}] ${markdownText(s.title)} - ${s.url}`).join("\n");
     const report_md = `${header}\n${prose}\n\n_${TOKEN_FACTS_NOTICE}_\n\n## Sources\n${sourceList}`;
 
     // 7) DATA APPENDIX.

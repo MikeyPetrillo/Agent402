@@ -1024,11 +1024,17 @@ const page = (results, extra = {}) =>
           rows.length === 1 && rows[0].method === "POST" && Number(rows[0].networksVerifiedAt) > readAt && rows[0].payToByNetwork?.[BASE] === NOW_PAYTO);
       }
       {
+        // GET 404 on every attempt, and the POST's one body (the placeholder
+        // query) answered 400: no second body goes to the POST, so nothing is
+        // learned and neither row is dropped on this probe.
         const route = "/x402/refuses-every";
-        globalThis.fetch = answers(route, () => 404);
+        const inner = answers(route, () => 404);
+        const sent = [];
+        globalThis.fetch = async (url, init = {}) => { sent.push(String(init.method || "GET").toUpperCase()); return inner(url, init); };
         const rows = crawl(route, readN(route), withQuery);
         await enrichLiveQuotes(rows, ORIGIN);
-        check(`GET 404 on every attempt (placeholders and bare) is a refusal: dropped (rows ${rows.length})`, rows.length === 1 && rows[0].method === "POST");
+        check(`GET 404 everywhere, POST 400 to its one body: no second POST body (POSTs ${sent.filter((m) => m === "POST").length}, rows ${rows.length})`,
+          sent.filter((m) => m === "POST").length === 1 && rows.length === 2);
       }
 
       // Rebuild after rebuild the kept GET stays, and the route backs off like

@@ -45,6 +45,7 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { returningWalletSentence } from "./returning-wallet.js";
+import { upstreamKeyLine, upstreamKeyBrief } from "./upstream-key.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { fromPriceLabel } from "./quoted-from.js";
@@ -52,7 +53,7 @@ import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION, UNCONFIRMED_R
 import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { BASE_NO_GAS_SHORT } from "./base-no-gas.js";
-import { stockDataEnabled } from "./tools/stock-provider.js";
+import { stockDataEnabled, stockQuoteEnabled } from "./tools/stock-provider.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
@@ -616,7 +617,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}${paymentChannelsLine()}
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}${paymentChannelsLine()}${upstreamKeyLine(catalog)}
 
 **${creditsSalesEnabled() ? "Pay with a prepaid credits key." : "Already hold a prepaid credits key?"}** ${creditsSalesEnabled() ? `Packs are sold by card at ${baseUrl}/credits.` : "New credits are not on sale; a key already issued keeps working."} Send it as \`Authorization: Bearer a402_...\` on any paid tool except the ones that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
@@ -662,7 +663,7 @@ ${flatTiersLine()}
 - [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines
-- [/api/find](${baseUrl}/api/find): resolve a task description to the best-matching tools with route, price, input schema, and a ready example (GET \`?q={task}\` or POST \`{"task":"..."}\`) - long-tail discovery behind the flagships. A task that names several steps ("get the price, then compute RSI") also returns a free \`plan\`: each step ranked the same way, with an estimated total
+- [/api/find](${baseUrl}/api/find): resolve a task description to the best-matching tools with route, price, input schema, and a ready example (GET \`?q={task}\` or POST \`{"task":"..."}\`) - long-tail discovery behind the flagships. A task that names several steps ("get the price, then compute RSI") also returns a free \`plan\`: each step ranked the same way, with an estimated total. The same search answers at [/.well-known/search](${baseUrl}/.well-known/search): GET \`?q={task}\`, or QUERY with the task in the body, as JSON or, with \`Accept: text/markdown\`, a Markdown list
 - [/api/route](${baseUrl}/api/route): Smart Order Router - rank tools across every x402 seller crawled from public registries; \`include:"external"\` excludes Agent402 for neutral cross-seller discovery
 - [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS. Send a task, and Agent402 resolves the best-matching tool, buys the result from the seller over x402 (any proven seller in the open index, not just ours), and sells it to you with a receipt - one payment, one request, one wallet. You never hold a wallet on their chain or sign up with them. \`{"task":"...","include":"external"}\`. Proportional tiers: ${execTierSentence} - an over-cap task gets a self-correcting 409 naming the tier that fits${catalog["POST /api/decide"] ? `\n- [/api/decide](${baseUrl}/api/decide): a paid decision. Describe a job; get a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: steps, fallbacks, params that validate against each tool's schema, cost and latency estimates. Depth quick $${decidePrices().quick} / plan $${decidePrices().plan} / full $${decidePrices().full}. The ranking formula has no first-party term and every tool carries firstParty. The fee returns as a ${decideCreditHours()}-hour credit toward \`POST /api/decide/execute\`, which runs the plan and is paid from a wallet on Base (it buys from outside sellers with our wallet, so a prepaid credits key or a card does not pay it; third-party steps at the seller's price plus a ${decideRoutingFeePct()}% markup). Its 402 lists \`upto\` first: sign the budget as a ceiling and only what the run spent is charged; \`exact\` follows at the plan's listed step prices, and any part a run does not spend is repaid on chain. A decisionId is kept 30 days; execute it again with \`"replan":true\` to plan the saved task again on current prices and reliability first (the decision price for its depth is added to the quote; the answer's \`replanned\` field lists each changed step). Report outcomes free at \`POST /api/decide/feedback\`.` : ""}
 - [/api/index](${baseUrl}/api/index): the seller index, PAGINATED - one page, 250 max, never the whole set. The response says so: complete false, a Link header with rel=next, and sellerCount for the total. For ONE origin use ?seller=<host>, which pages nothing and returns its full row with crawl history (toolCount is the routes held; toolsTotal and toolsCapped say when a listing was cut at the per-seller cap)
@@ -685,7 +686,7 @@ ${flatTiersLine()}
 
 ## Connect via MCP
 - [Start here](${baseUrl}/start): connect Claude, Claude Code or Cursor
-- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockDataEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
+- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockQuoteEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
@@ -817,7 +818,11 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
     [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
-    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example)`],
+    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example), also at \`/.well-known/search\` (GET or QUERY)`],
+    [`- [/api/search-news](`, `- [/api/search-news](${baseUrl}/api/search-news): live news search`],
+    [`- [/api/mpp-leaderboard](`, `- [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): MPP sellers ranked by USDC.e received on Tempo`],
+    [`- [/api/reliability](`, `- [/api/reliability](${baseUrl}/api/reliability): reliability report, a verification URL per claim`],
+    [`- [/api/pricing](`, `- [/api/pricing](${baseUrl}/api/pricing): every endpoint with its price, as JSON`],
     [`- [/.well-known/x402](`, `- [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest`],
     [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
     // Each depth's price stays here (from the decide configuration), and so
@@ -861,7 +866,7 @@ export function llmsTxt(baseUrl, catalog) {
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
-- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).` + (sanctionsGeoBlockEnabled() ? "\n- Regions: a request from a region this service does not serve is answered `451` (reason `unavailable_in_region`) before any payment is verified or settled; an x402 payment is not charged, and a Tempo push transfer it names is not claimed." : "");
+- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).` + (sanctionsGeoBlockEnabled() ? "\n- Regions: a request from a region this service does not serve is answered `451` (reason `unavailable_in_region`) before any payment is verified or settled, as is a paid request whose region cannot be read (`location_unreadable`); no payment is charged and no push transfer is claimed." : "");
 
   // The llms.txt order (the llms.txt spec: title, summary blockquote, then
   // plain paragraphs before the first H2): the base URL and the full-text
@@ -886,6 +891,7 @@ ${[
     mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers is in /llms-full.txt, and the list", " The list"),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),
+    upstreamKeyBrief(catalog),
     ...sections,
     identity,
   ].map((b) => String(b || "").replace(/^\n+|\n+$/g, "")).filter(Boolean).join("\n\n")}

@@ -16,7 +16,7 @@
 //
 //   node scripts/test-mcp-search-ranking.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
+import { STOCK_SLUGS, stockToolServed } from "../src/tools/stock-provider.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -59,6 +59,13 @@ async function rpc(method, params) {
 // x-to-y-slug queries go in TOPN rather than TOP1.
 const TOP1 = [
   ["qr code",                       "qr"],
+  // A page or a text goes to summarize; a PDF still goes to pdf-summarize.
+  ["summarize a news article about renewable energy", "summarize"],
+  ["summarize a web page url",      "summarize"],
+  ["summarize text",                "summarize"],
+  ["summarize this pdf report",     "pdf-summarize"],
+  ["summarize this pdf",            "pdf-summarize"],
+  ["pdf summary",                   "pdf-summarize"],
   ["whois lookup",                  "whois"],
   ["geocode city",                   "place-lookup"],
   ["validate email",                "email-validate"],
@@ -118,7 +125,7 @@ try {
   ok(names.includes("catalog.search"), `tools/list exposes catalog.search (got ${names.join(",")})`);
 
   // A stock tool is listed only with an active stock provider (this boot's env).
-  for (const [q, expected] of TOP1.filter(([, slug]) => stockDataEnabled() || !STOCK_SLUGS.has(slug))) {
+  for (const [q, expected] of TOP1.filter(([, slug]) => stockToolServed(slug) || !STOCK_SLUGS.has(slug))) {
     const found = await searchSlugs(q, 3);
     ok(found[0] === expected, `mcp top-1 for "${q}" is ${expected} (got ${found.join(",") || "none"})`);
   }

@@ -17,6 +17,8 @@ t node scripts/test-find-direction.js
 t node scripts/test-find-misses-corpus.js
 # /api/find and catalog.find: a search with the operator token records no find-miss; Vary and no-store on the header (booted)
 t node scripts/test-find-operator-quiet.js
+# /.well-known/search: GET and QUERY rank as /api/find, Markdown, 400/405/413/415, wish and limit shared with /api/find, page head tags (booted)
+t node scripts/test-well-known-search.js
 # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
 t node scripts/test-openapi-coverage.js
 # /openapi.json schemas: every operation's request and answer schema present, compiling under 2020-12, examples valid, GET tools declare every input (boots free-mode)

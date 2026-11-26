@@ -17,6 +17,12 @@
 //     from the rest of Ukraine here, and only the country set applies; the
 //     operator view says so (regionHeaders: "absent").
 //
+//   - A header Cloudflare set holds one value. One that arrives twice (Node
+//     joins a repeat with ", "), as an array, or malformed proves no
+//     location: a PAID request on it is answered 451 location_unreadable
+//     (nothing charged, nothing verified), an unpaid one is served, and
+//     neither is a sanctions event. Copies of one value read as that value.
+//
 // SWITCH. SANCTIONS_GEO_BLOCK (default on; "off" turns it off) and
 // SANCTIONS_GEO_COUNTRIES (a comma list replacing the default country set).
 // The exempt paths (/health and the legal pages) answer from anywhere.
@@ -85,6 +91,14 @@ export const SANCTIONED_REGION_TEXT = `This service is not available in your reg
 // A push credential's money moved before the request arrived, so the refusal
 // cannot say nothing was charged: it says what this server did with it.
 export const SANCTIONED_REGION_PUSH_TEXT = "This service is not available in your region. The transfer this payment credential names was not claimed for this request.";
+// A paid request whose CDN location headers arrived twice, joined or
+// malformed: its region cannot be read, so it is refused the same way.
+export const UNREADABLE_REGION_TEXT = `This service could not read your region for this paid request. ${NOT_CHARGED}`;
+export const UNREADABLE_REGION_PUSH_TEXT = "This service could not read your region for this paid request. The transfer this payment credential names was not claimed for this request.";
+
+/** Does an Authorization value carry the MPP `Payment` scheme? Read as the
+ *  gates read it: the scheme in any case, then any whitespace. */
+export const isPaymentScheme = (authorization) => /^payment\s/i.test(String(authorization ?? ""));
 
 /** The transaction a Tempo PUSH credential (`Authorization: Payment <b64url
  *  JSON>`, payload type "hash") names, lowercased; null for anything else.
@@ -92,7 +106,7 @@ export const SANCTIONED_REGION_PUSH_TEXT = "This service is not available in you
 export function pushCredentialHashOf(req) {
   try {
     const auth = String(req?.headers?.authorization ?? "");
-    const m = /^Payment\s+([A-Za-z0-9_\-+/=]{1,8192})$/.exec(auth.trim());
+    const m = /^payment\s+([A-Za-z0-9_\-+/=]{1,8192})$/i.exec(auth.trim());
     if (!m) return null;
     const cred = JSON.parse(Buffer.from(m[1], "base64url").toString("utf8"));
     const p = cred?.payload;
@@ -143,40 +157,84 @@ export function sanctionedCountries(env = process.env) {
   return new Set(list.length ? list : DEFAULT_SANCTIONED_COUNTRIES);
 }
 
-const header = (req, name) => {
-  const v = req?.headers?.[name];
-  return typeof v === "string" ? v.trim().slice(0, 64) : "";
-};
+// A location header Cloudflare set carries one value. Node joins a repeated
+// header with ", " (another framework may hand an array), so a header that
+// arrives twice, joined or malformed proves no location: UNREADABLE. Copies
+// of one value (any case) read as that value. Absent reads "" (no location
+// sent: the zone's geolocation is off), never unreadable.
+const UNREADABLE = Symbol("unreadable");
+const COUNTRY_RE = /^[A-Z0-9]{2}$/;            // ISO 3166-1 alpha-2, XX, T1
+const REGION_CODE_RE = /^(?:[A-Z]{2}-)?[A-Z0-9]{1,3}$/; // ISO 3166-2 subdivision part
+function singleHeader(req, name, re) {
+  const raw = req?.headers?.[name];
+  if (raw === undefined || raw === null) return "";
+  // An empty value is no location sent, read as absent (a paying buyer is
+  // never refused for a blank header).
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  // A Cloudflare location value is a few characters: anything longer is
+  // unreadable before it is split, so a long header costs no more than a short
+  // one (64 bounds a duplicated value with room to spare).
+  const total = Array.isArray(raw) ? raw.reduce((n, v) => n + (typeof v === "string" ? v.length : 0), 0) : (typeof raw === "string" ? raw.length : 0);
+  if (total > 64 || (Array.isArray(raw) && raw.length > 4)) return UNREADABLE;
+  const parts = (Array.isArray(raw) ? raw : [raw]).flatMap((v) => (typeof v === "string" ? v.split(",") : [UNREADABLE]));
+  if (parts.includes(UNREADABLE)) return UNREADABLE;
+  const values = new Set(parts.map((v) => v.trim().toUpperCase()));
+  if (values.size !== 1) return UNREADABLE;
+  const [v] = values;
+  return re.test(v) ? v : UNREADABLE;
+}
+// cf-region is a free-text name (it may hold a comma): copies are joined and
+// the whole text is scanned for a blocked region's name; a non-string is
+// unreadable.
+function regionNameHeader(req) {
+  const raw = req?.headers?.["cf-region"];
+  if (raw === undefined || raw === null) return "";
+  const list = Array.isArray(raw) ? raw : [raw];
+  if (list.length > 4 || !list.every((v) => typeof v === "string")) return UNREADABLE;
+  return list.map((v) => v.slice(0, 256)).join(", ").trim().slice(0, 256);
+}
 
 /**
  * The block verdict for a request: null (serve it) or { country, region }.
  * `country` is an ISO 3166-1 alpha-2 code (or null); `region` an ISO 3166-2
  * code from the fixed list of blocked subdivisions ("UA-43"), null for a
- * whole blocked country; never a name, city or coordinate.
+ * whole blocked country; never a name, city or coordinate. A location header
+ * that arrived twice, joined or malformed, where it could decide the verdict,
+ * gives { country: null, region: null, unreadable: true }: the location is
+ * not proven (the middleware refuses only a paid request on it).
  * Reads the Cloudflare headers only when `trusted` is true. Pure.
  */
 export function sanctionedLocationOf(req, { trusted = false, countries = sanctionedCountries() } = {}) {
   if (!trusted) return null;
-  const country = header(req, "cf-ipcountry").toUpperCase();
-  const regionCode = header(req, "cf-region-code").toUpperCase();
-  const regionName = header(req, "cf-region");
+  const countryRaw = singleHeader(req, "cf-ipcountry", COUNTRY_RE);
+  const regionRaw = singleHeader(req, "cf-region-code", REGION_CODE_RE);
+  const regionNameRaw = regionNameHeader(req);
+  const unreadable = { country: null, region: null, unreadable: true };
+  if (countryRaw === UNREADABLE) return unreadable;
+  const country = countryRaw;
   // A whole country: the country is the reason, so it is all that is kept.
   // A subdivision header is the caller's network to vary, and would open a
   // new row and aggregate key per value; only the fixed subdivision list
   // below keeps a region code.
-  if (/^[A-Z]{2}$/.test(country) && countries.has(country)) return { country, region: null };
+  if (country && countries.has(country)) return { country, region: null };
   // The region code arrives as the subdivision suffix ("43"); a full code
   // ("UA-43") is read the same way.
-  const code = regionCode.replace(/^UA-/, "");
+  const code = regionRaw === UNREADABLE ? "" : regionRaw.replace(/^UA-/, "");
   if (country === "UA" && SANCTIONED_UA_REGION_CODES.includes(code)) return { country, region: `UA-${code}` };
+  const regionName = regionNameRaw === UNREADABLE ? "" : regionNameRaw;
   const named = regionName ? SANCTIONED_REGION_NAME_RE.exec(regionName) : null;
   if (named && (country === "UA" || country === "RU" || !country)) {
-    return { country: /^[A-Z]{2}$/.test(country) ? country : null, region: REGION_CODE_BY_NAME[named[1].toLowerCase()] };
+    return { country: country || null, region: REGION_CODE_BY_NAME[named[1].toLowerCase()] };
   }
+  // An unreadable subdivision header matters only where a subdivision decides
+  // the verdict: the code in Ukraine, the name in Ukraine, Russia or with no
+  // country sent. Elsewhere it changes nothing, whatever it holds.
+  if (regionRaw === UNREADABLE && country === "UA") return unreadable;
+  if (regionNameRaw === UNREADABLE && (country === "UA" || country === "RU" || !country)) return unreadable;
   return null;
 }
 
-const counts = { refused: 0, refusedWithPayment: 0, byCountry: {}, lastAt: null, regionHeadersSeen: 0, cdnRequests: 0, eventsRecorded: 0, paymentUnverified: 0, paymentRepeat: 0, clientCapped: 0, hourCapped: 0, nonProgram: 0 };
+const counts = { refused: 0, refusedWithPayment: 0, byCountry: {}, lastAt: null, regionHeadersSeen: 0, cdnRequests: 0, eventsRecorded: 0, paymentUnverified: 0, paymentRepeat: 0, clientCapped: 0, hourCapped: 0, nonProgram: 0, unreadableServed: 0, unreadableRefused: 0 };
 
 /**
  * The geo-payment event gate: resolves what to record for a refused paid
@@ -239,6 +297,9 @@ export function sanctionedRegionsView(env = process.env) {
     repeats: counts.paymentRepeat,
     aggregated: { unverified: counts.paymentUnverified, clientBound: counts.clientCapped, hourBound: counts.hourCapped },
     countedOnly: { nonProgram: counts.nonProgram },
+    // CDN requests whose location headers arrived twice, joined or malformed:
+    // a paid one refused (451 location_unreadable), an unpaid one served.
+    unreadableLocation: { refused: counts.unreadableRefused, served: counts.unreadableServed },
     byCountry: { ...counts.byCountry },
     lastAt: counts.lastAt,
     // "present" once a CDN request carried cf-region-code in this process;
@@ -252,6 +313,7 @@ export function sanctionedRegionsView(env = process.env) {
 export function __resetSanctionedRegionsForTests() {
   counts.refused = 0; counts.refusedWithPayment = 0; counts.byCountry = {}; counts.lastAt = null; counts.regionHeadersSeen = 0; counts.cdnRequests = 0;
   counts.eventsRecorded = 0; counts.paymentUnverified = 0; counts.paymentRepeat = 0; counts.clientCapped = 0; counts.hourCapped = 0; counts.nonProgram = 0;
+  counts.unreadableServed = 0; counts.unreadableRefused = 0;
 }
 
 /**
@@ -289,16 +351,28 @@ export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (re
     try { trusted = trustedOf(req) === true; } catch { trusted = false; }
     if (trusted) {
       counts.cdnRequests++;
-      if (header(req, "cf-region-code")) counts.regionHeadersSeen++;
+      if (req?.headers?.["cf-region-code"] != null && req.headers["cf-region-code"] !== "") counts.regionHeadersSeen++;
     }
     if (sanctionsExemptPath(req.path)) return next();
     const hit = sanctionedLocationOf(req, { trusted, countries });
     if (!hit) return next();
+    const withPayment = Boolean(paymentHeaderOf(req) || isPaymentScheme(req.headers?.authorization));
+    if (hit.unreadable) {
+      // Not a location: never recorded as an event or counted by country.
+      // An unpaid request (a page, a free tool) is served. A prepaid credits
+      // key spends money too, so it counts as paid here.
+      const creditsKey = /^Bearer a402_/.test(String(req.headers?.authorization || ""));
+      if (!withPayment && !creditsKey) { counts.unreadableServed++; return next(); }
+      counts.unreadableRefused++;
+      res.status(451);
+      res.setHeader("Cache-Control", "no-store");
+      if (pushCredentialHashOf(req)) return res.json({ error: UNREADABLE_REGION_PUSH_TEXT, reason: "location_unreadable", transferClaimed: false });
+      return res.json({ error: UNREADABLE_REGION_TEXT, reason: "location_unreadable", charged: false });
+    }
     counts.refused++;
     const key = hit.country || "region";
     counts.byCountry[key] = (counts.byCountry[key] || 0) + 1;
     counts.lastAt = new Date().toISOString();
-    const withPayment = Boolean(paymentHeaderOf(req) || req.headers?.authorization?.toString?.().startsWith?.("Payment "));
     const pushHash = withPayment ? pushCredentialHashOf(req) : null;
     if (withPayment) {
       counts.refusedWithPayment++;

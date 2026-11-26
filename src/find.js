@@ -208,6 +208,11 @@ export function applyFrontDoorTerms(terms, q, { opening = true } = {}) {
   )) {
     terms.push("answer");
   }
+  // A PDF summary: "summarize this pdf", "pdf summary". Without it the page
+  // and text summarizer's exact slug ("summarize") outranks the PDF one.
+  if (!terms.includes("pdf-summarize") && /\bpdfs?\b/.test(ql) && /\bsummar(?:y|ies|ize|izes|izing)\b/.test(ql)) {
+    terms.push("pdf-summarize");
+  }
   const openingDoor = openingDoorTerm(terms, q);
   if (opening && openingDoor) terms.push(openingDoor.term);
   // News: "latest news", "breaking news", "headlines about"

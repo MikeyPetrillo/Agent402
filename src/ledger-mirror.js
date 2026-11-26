@@ -433,7 +433,8 @@ function createSharedDeadLetter(local, rj) {
       if (!h) return;
       const was = h.pending;
       h.pending = false;
-      h.where.then((w) => {
+      // Resolves once the entry is free for the next claim (callers may ignore it).
+      return h.where.then((w) => {
         held.delete(id);
         if (w === "local") local.release(h.localId);
         else if (w === "redis" && was) return rj.release([id]).then(() => delta(0, -1));

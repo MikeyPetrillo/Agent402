@@ -50,6 +50,7 @@ import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertNotOwnPayout } from "./own-wallets.js";
+import { assertRouterBuysFrom } from "./router-listed-only.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { spendWindowCeilings, noteSpendWindowOver, noteSpendWindowRefused } from "./router-spend-window.js";
@@ -1120,6 +1121,9 @@ export function atomicForMessage(v) {
  */
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, payer = null, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
   assertSigningAllowed("an external x402 payment");
+  // A seller the router lists and never buys from is never paid, whoever
+  // calls this and whatever its label said (src/router-listed-only.js).
+  assertRouterBuysFrom(url);
   // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
   // lives a short time (a Solana blockhash, an Algorand round window) hands
   // in what is left of it; the legs below share it instead of each taking a

@@ -304,7 +304,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS, QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant, revisitHintMsOf } from "./seller-load.js";
@@ -1924,13 +1924,19 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
           // only. A memo holding no manifest part (a restart) falls back to the
           // manifest the crawl kept packed.
           let probeExamples = probeExampleMemo.merged(origin);
-          if (!probeExampleMemo.get(origin, "manifest")) {
-            try {
-              const doc = await previousManifestDoc(fresh || existing);
-              if (doc) { const own = new Map(); normaliseManifestTools(doc, origin, { examples: own }); probeExamples = mergeProbeExamples(own, probeExamples); }
-            } catch { /* no examples */ }
-          }
-          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, probeExamples, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
+          // The routes the seller's x402 manifest lists (the probe's POST rule),
+          // from the manifest the crawl kept packed.
+          let x402Listed = null;
+          try {
+            const doc = await previousManifestDoc(fresh || existing);
+            if (doc) {
+              const own = probeExampleMemo.get(origin, "manifest") ? null : new Map();
+              const rows = normaliseManifestTools(doc, origin, own ? { examples: own } : {});
+              x402Listed = x402ListedRoutes(rows);
+              if (own) probeExamples = mergeProbeExamples(own, probeExamples);
+            }
+          } catch { /* no examples */ }
+          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, deadlineAt, probeExamples, x402Listed, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
           repriced = true;
         }
       }
@@ -5489,7 +5495,7 @@ function applyLiveNetworks(row, liveNetworks) {
 // outcome of its FIRST attempt (the primary target and verb), and every attempt
 // is counted by verb and status, so the dominant cause can be read off prod
 // instead of guessed. Counts only: no URL, no origin, no body.
-const quoteProbeStats = { since: Date.now(), probed: 0, learned: 0, free: 0, missed: 0, missByFirst: {}, attempts: {} };
+const quoteProbeStats = { since: Date.now(), probed: 0, learned: 0, free: 0, missed: 0, declaredFree: 0, held: 0, missByFirst: {}, attempts: {} };
 function bump(map, key) { map[key] = (map[key] || 0) + 1; }
 export function probeFailureCode(err) {
   const name = String(err?.name || "");
@@ -5516,7 +5522,7 @@ function sampleUnreadable402(originUrl, route, header, body) {
 }
 export function quoteProbeStatsSnapshot() {
   const top = (m) => Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 25));
-  return { since: new Date(quoteProbeStats.since).toISOString(), probed: quoteProbeStats.probed, learned: quoteProbeStats.learned, free: quoteProbeStats.free, missed: quoteProbeStats.missed, missByFirst: top(quoteProbeStats.missByFirst), attempts: top(quoteProbeStats.attempts), unreadable402Samples: [...unreadable402Samples] };
+  return { since: new Date(quoteProbeStats.since).toISOString(), probed: quoteProbeStats.probed, learned: quoteProbeStats.learned, free: quoteProbeStats.free, missed: quoteProbeStats.missed, declaredFree: quoteProbeStats.declaredFree, held: quoteProbeStats.held, missByFirst: top(quoteProbeStats.missByFirst), attempts: top(quoteProbeStats.attempts), unreadable402Samples: [...unreadable402Samples] };
 }
 let quoteProbeSummaryAt = Date.now();
 function maybeLogQuoteProbeSummary(now = Date.now()) {
@@ -5539,17 +5545,139 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false } = {}) {
+// AN UNPAID PROBE NEVER RUNS A SELLER'S FREE ENDPOINT. The quote probe exists
+// to read a 402 offer, and a paid route answers 402 before its handler runs;
+// a free route answers by running, and a free POST may change state (a trial
+// key minted, a signup sent, a daily allowance spent). Three rules follow:
+//   1. a route the seller's own documents mark free (paid:false, or a price of
+//      exactly zero) is never probed: it is listed as declared free;
+//   2. a POST is sent only to a route the seller's discovery marks paid (a
+//      price, chains or a paid annotation, a registry row, or a listing in the
+//      seller's x402 manifest), and after a POST answers anything but a 402 no
+//      further body is sent to that route on this probe;
+//   3. a route that answered the request itself, and never with a 402, is
+//      held for days (quoteRefusedUntil, kept on the row, so it survives a
+//      rebuild and a restart), never asked again on every crawl. "Itself" is
+//      a success or a refusal of its own (routeAnsweredItself: 2xx, or a 4xx
+//      other than 402, its rate limit included), to the row's own verb. A 5xx, a redirect, a
+//      timeout or a failed connection says nothing about the route and
+//      starts no hold: the next crawl asks again on the usual cadence.
+export { QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS };
+const routePathOf = (route) => String(route || "").split("?")[0].replace(/\/+$/, "") || "/";
+/** The route paths an x402 manifest's rows list, for sellerMarksPaid. */
+export function x402ListedRoutes(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const out = new Set();
+  for (const r of rows) if (r && typeof r.route === "string") out.add(routePathOf(r.route));
+  return out;
+}
+/** True when the seller's own discovery marks this route paid. `x402Listed`
+ *  is the set of route paths the seller's x402 manifest lists, when read. */
+export function sellerMarksPaid(t, x402Listed = null) {
+  if (!t) return false;
+  if (rowDeclaresPayment(t) || isPricedAboveZero(t.originDeclaredPrice)) return true;
+  if (t.provenance === "bazaar" || t.provenance === "manifest") return true;
+  if (Number(t.networksVerifiedAt) > 0 || t.quoteSource === "live-402") return true;
+  return Boolean(x402Listed && typeof x402Listed.has === "function" && x402Listed.has(routePathOf(t.route)));
+}
+/** True when the seller's own documents mark the route free: paid:false or a
+ *  price of exactly zero, with no payment signal beside it. A free reading we
+ *  made ourselves (a GET 200, quoteSource live-200) is not the seller's word
+ *  and keeps its own rule (isObservedFree). */
+export function sellerDeclaresFree(t) {
+  if (!t || t.quoteSource === "live-200") return false;
+  if (!(t.paid === false || priceToMicroUsd(t.price) === 0)) return false;
+  if (t.paid === true || (Array.isArray(t.networks) && t.networks.length > 0) || isPricedAboveZero(t.originDeclaredPrice) || t.provenance === "bazaar") return false;
+  return true;
+}
+/** The routes whose POST the seller marks paid (a POST row of its own marked
+ *  paid) and those whose POST it marks free, over one seller's rows: a GET row
+ *  may then ask the POST its declared sibling sells, and never one the seller
+ *  gives away. */
+export function postMarksOf(tools, x402Listed = null) {
+  const paid = new Set(), free = new Set();
+  for (const o of Array.isArray(tools) ? tools : []) {
+    if (!o || typeof o.route !== "string" || String(o.method || "").toUpperCase() !== "POST") continue;
+    if (sellerDeclaresFree(o)) free.add(o.route);
+    else if (sellerMarksPaid(o, x402Listed)) paid.add(o.route);
+  }
+  return { paid, free };
+}
+/** The verbs an unpaid quote probe may use on this row: probeMethodsFor, with
+ *  POST only where the seller marks the route's POST paid (the row itself, or
+ *  a declared POST sibling on the route) and never where it marks it free. */
+export function quoteProbeVerbsFor(t, x402Listed = null, postMarks = null) {
+  const verbs = probeMethodsFor(t);
+  if (!verbs.includes("POST")) return verbs;
+  const route = t?.route;
+  const free = sellerDeclaresFree(t) || Boolean(postMarks?.free?.has(route));
+  const paid = sellerMarksPaid(t, x402Listed) || Boolean(postMarks?.paid?.has(route));
+  return paid && !free ? verbs : verbs.filter((m) => m !== "POST");
+}
+/** Did this status come from the route itself (rule 3)? A success, or a
+ *  refusal of its own; never a 402, a server error or a redirect. */
+export const routeAnsweredItself = (status) => Number.isInteger(status) && ((status >= 200 && status < 300) || (status >= 400 && status < 500 && status !== 402));
+/** Inside the hold a refused route earned (rule 3). */
+export function quoteProbeHeld(t, now = Date.now()) {
+  const until = Number(t?.quoteRefusedUntil);
+  return Number.isFinite(until) && until > now;
+}
+// The hold is written on the row, and a crawl rebuilds its rows from the
+// seller's documents: each hold the previous entry held is carried onto the
+// current row of the same verb and route (exact key), a later hold kept. A
+// hold that lapsed within the longest hold is carried too, so a route that
+// refuses again is held longer (the refusal count doubles the hold).
+function carryQuoteHolds(tools, prevTools, now = Date.now()) {
+  if (!Array.isArray(prevTools) || !prevTools.length || prevTools === tools) return;
+  let held = null;
+  for (const p of prevTools) {
+    if (!p || !(Number(p.quoteRefusedUntil) > now - QUOTE_REFUSED_BACKOFF_MAX_MS) || typeof p.route !== "string") continue;
+    (held ||= new Map()).set(`${String(p.method || "GET").toUpperCase()} ${p.route}`, p);
+  }
+  if (!held) return;
+  for (const t of tools) {
+    if (!t || typeof t.route !== "string") continue;
+    const p = held.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
+    if (!p || p === t || Number(t.quoteRefusedUntil) >= Number(p.quoteRefusedUntil)) continue;
+    t.quoteRefusedUntil = Number(p.quoteRefusedUntil);
+    t.quoteRefusals = Number(p.quoteRefusals) || 1;
+  }
+}
+function holdRefusedRoute(t, now = Date.now()) {
+  const n = Math.min(30, (Number(t.quoteRefusals) || 0) + 1);
+  t.quoteRefusals = n;
+  t.quoteRefusedUntil = now + Math.min(QUOTE_REFUSED_BACKOFF_MAX_MS, QUOTE_REFUSED_BACKOFF_MS * 2 ** (n - 1));
+}
+function clearRefusedHold(t) {
+  if (!t) return;
+  delete t.quoteRefusedUntil;
+  delete t.quoteRefusals;
+}
+
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
   if (!Array.isArray(tools) || !tools.length) return tools;
   dropGoneRoutes(tools, originUrl);
   if (!tools.length) return tools;
+  carryQuoteHolds(tools, cache.get(originUrl)?.tools);
+  const postMarks = postMarksOf(tools, x402Listed);
+  const declaredFree = (t) => {
+    if (!sellerDeclaresFree(t)) return false;
+    quoteProbeStats.declaredFree++;
+    return true;
+  };
   const isCandidate =
     (t) => t
       && typeof t.route === "string" && t.route.startsWith("/")
       && t.seller !== LOCAL_SELLER                      // never probe ourselves
+      // The seller marks it free: nothing to read, and a probe would run it.
+      && !declaredFree(t)
+      // It answered our last probe with no 402 at all: held for days, so a
+      // seller's own limit (a daily cap, a validation error) is not asked
+      // again on every crawl. An explicit re-registration still re-asks.
+      && (ignoreBudget || !quoteProbeHeld(t))
       // Already priced: nothing to learn - UNLESS the amount we hold disagrees
       // with what the origin declared this crawl. That disagreement is exactly
       // how a price CUT used to be invisible: a priced route was never
@@ -5594,7 +5722,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // live 402 is read once and then once a week (and on a re-registration),
       // whatever else would make it due: a drift, a stamp from another verb.
       && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
-      && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
+      && quoteProbeVerbsFor(t, x402Listed, postMarks).length        // never PUT/PATCH/DELETE; POST only where marked paid
       && probeDue(originUrl, `quote:${t.route}`);
   // The registry fallback hands its pass runner in (`candidatePass`), so a
   // long list is picked over in the crawl lane; every other caller filters here.
@@ -5665,8 +5793,17 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // Never for a route the seller itself marks free (paid:false): a body the
     // route accepts would run it, and only a paid route answers it with a 402.
     const example = tool.paid === false ? null : probeExampleFor(probeExamples, "POST", tool.route);
+    const verbs = new Set(quoteProbeVerbsFor(tool, x402Listed, postMarks));
+    // Set once a POST answered anything but a 402 (or failed in flight, when
+    // the body may have reached the handler): no further body is sent.
+    let postSpent = false;
+    // Did the route answer any attempt itself (routeAnsweredItself), and was
+    // any answer a 402?
+    let answeredItself = false, answered402 = false;
     probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool, { example })) {
       if (pastDeadline()) break;
+      if (!verbs.has(method)) continue;
+      if (method === "POST" && postSpent) continue;
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
         // now: validate then pin, exactly as probePaywall does.
@@ -5688,6 +5825,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         note(method, String(res.status));
         statusByMethod[method] = res.status;
         (answersByMethod[method] ||= []).push(res.status);
+        // The row's own verb is the one whose answer speaks for it: a 404 or
+        // 405 to the other verb says nothing about a route whose own verb
+        // answered a 5xx. A row of unknown verb is spoken for by either.
+        if (routeAnsweredItself(res.status) && (method === own || tool.methodInferred)) answeredItself = true;
+        if (res.status === 402) answered402 = true;
+        else if (method === "POST") postSpent = true;
         if (method === "GET" && res.status === 200) {
           // The route answered WITHOUT a paywall. If the price we hold was
           // learned (a past 402, or a Bazaar settlement snapshot) rather than
@@ -5754,6 +5897,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         if (err?.sellerLoadSkip) { loadSkipped = true; break probe; }
         note(method, probeFailureCode(err));
         (answersByMethod[method] ||= []).push(0);
+        // A body that left may have reached the handler: no second one.
+        if (method === "POST" && !["dns", "refused", "ssrf-blocked"].includes(probeFailureCode(err))) postSpent = true;
         /* unreachable, blocked, or malformed - try the next method */
       }
     }
@@ -5829,6 +5974,11 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // again, both verbs, on every crawl). The sibling was just read and is not
     // due again for days; a successful read of its own clears the backoff.
     noteProbeOutcome(originUrl, `quote:${tool.route}`, Boolean(learned) && !sibling);
+    // Answered by the route itself, and never with a 402: the seller's own
+    // limit, input check or free answer. Held for days (rule 3 above); a read
+    // that learned clears it. A 5xx or a redirect alone starts no hold.
+    if (learned || freeObserved) clearRefusedHold(tool);
+    else if (answeredItself && !answered402) { holdRefusedRoute(tool); quoteProbeStats.held++; }
     quoteProbeStats.probed++;
     if (learned) quoteProbeStats.learned++;
     else if (freeObserved) quoteProbeStats.free++;
@@ -7017,7 +7167,10 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled });
+    // The routes the seller's x402 manifest lists: a paywall marker for the
+    // probe's POST rule (sellerMarksPaid).
+    const x402Listed = x402ListedRoutes(manifestRows);
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled, x402Listed });
     // Not this seller's turn: carry the last reading forward rather than
     // dropping it — null must mean "never probed", not "not probed today".
     const paywall = await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled });

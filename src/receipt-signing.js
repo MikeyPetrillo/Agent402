@@ -293,6 +293,67 @@ export function verifyReceipt(jws, { keys = receiptKeys().keys, responseBody, re
 }
 
 /**
+ * The options a receipt check reads from a submission
+ * { receipt, body?, bodySha256?, request?: { method, path, body } }: the
+ * answer text (or its digest) and the request, each only when well formed.
+ * POST RECEIPT_VERIFY_PATH and the receipt-verify tool read submissions
+ * through this one function, so both give the same verdict.
+ */
+export function receiptCheckOptions(b) {
+  const opts = {};
+  if (!b || typeof b !== "object") return opts;
+  if (typeof b.body === "string") opts.responseBody = b.body;
+  else if (typeof b.bodySha256 === "string") opts.responseSha256 = b.bodySha256;
+  if (b.request && typeof b.request === "object" && !Array.isArray(b.request) && typeof b.request.method === "string" && typeof b.request.path === "string") opts.request = { method: b.request.method, path: b.request.path, body: b.request.body };
+  return opts;
+}
+
+/** The deepest a submitted request body may nest: its digest serializes it. */
+export const RECEIPT_REQUEST_MAX_DEPTH = 64;
+// Iterative, so the check itself never recurses.
+function nestedPast(value, max) {
+  if (!value || typeof value !== "object") return false;
+  const stack = [[value, 1]];
+  while (stack.length) {
+    const [v, d] = stack.pop();
+    for (const k of Object.keys(v)) {
+      const c = v[k];
+      if (!c || typeof c !== "object") continue;
+      if (d + 1 > max) return true;
+      stack.push([c, d + 1]);
+    }
+  }
+  return false;
+}
+
+/**
+ * The verdict on a submission (see receiptCheckOptions) against `keys`. A
+ * request body nested past RECEIPT_REQUEST_MAX_DEPTH is the caller's input to
+ * fix: it throws an Error with statusCode 400 and `field`, which the route
+ * and the tool both answer as a 400 that names the field.
+ */
+export function checkReceiptSubmission(b, { keys = receiptKeys().keys } = {}) {
+  if (nestedPast(b?.request?.body, RECEIPT_REQUEST_MAX_DEPTH)) {
+    throw Object.assign(new Error(`"request.body" is nested more than ${RECEIPT_REQUEST_MAX_DEPTH} levels deep`), { statusCode: 400, field: "request.body" });
+  }
+  return verifyReceipt(b?.receipt, { keys, ...receiptCheckOptions(b) });
+}
+
+/** One sentence per verdict reason, for a reader. */
+export const RECEIPT_REASON_TEXT = Object.freeze({
+  not_a_receipt: "The value is not a receipt string of a usable length.",
+  not_a_compact_jws: "The value is not a compact JWS: three base64url parts joined by dots.",
+  unreadable: "The header or the payload does not decode as JSON.",
+  unexpected_header: "The protected header is not an Agent402 receipt header (alg EdDSA, typ agent402-receipt+jws, a kid).",
+  unexpected_record: "The payload is not an Agent402 receipt record of this version.",
+  unknown_kid: "The receipt names a key id this server does not publish.",
+  bad_signature: "The signature does not verify under the published key the receipt names.",
+  key_not_valid_at_issue: "The key was not valid at the time the receipt says it was issued.",
+  response_mismatch: "The answer given does not match the answer digest the receipt signs.",
+  request_mismatch: "The request given does not match the request digest the receipt signs.",
+});
+
+/**
  * The final server-sent comment line that carries a streamed answer's
  * receipt, after the last byte the receipt's digest covers. It opens with a
  * newline, so it ends a last line the stream left open (an empty line after

@@ -4,6 +4,108 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.17.0 - 2026-11-26
+
+### 2026-11-26 (summaries, receipt checks, token brief)
+Tools:
+- summarize returns a short summary of a web page (`url`) or of text you send
+  (`text`). The summary is AI-generated: a third-party model writes it, and
+  the answer carries `aiGenerated: true`.
+- receipt-verify checks a signed receipt against the keys this server
+  publishes and, when you send them, against the answer and the request it
+  names. It runs free through proof of work.
+- token-brief writes a token's own name and symbol into its Markdown as inert
+  text, so no heading, link or table syntax in a name renders.
+
+### 2026-11-26 (bring your own key)
+API:
+- On a server that sets `UPSTREAM_KEY=on`, github-repo takes your own GitHub
+  token in the `X-Agent402-Upstream-Key` header with an x402 payment and
+  sells the call at the own-key price, the catalog's lowest flat price. The
+  key is sent only to GitHub, used for that one call and never stored. A key GitHub refuses answers 401 or 403 with
+  `charged: false`, a key that arrives over plain HTTP answers 400 and is not
+  used, and after 5 refused keys in 15 minutes the header answers 429 with
+  Retry-After while the same call without it stays on sale.
+Site:
+- On a server that sets `UPSTREAM_KEY=on`, /terms and /privacy each carry an
+  item about a key you send for another service, dated 2026-11-26.
+
+### 2026-11-26 (site search endpoint)
+API:
+- `/.well-known/search` answers the same search as /api/find: GET with `?q=`,
+  or QUERY with the task in the body, as JSON or as Markdown for `Accept:
+  text/markdown`. Every page names it in `agent:search` meta tags.
+- A search for `readclean` finds extract, and one for cleaning junk out of
+  text or logs finds the text hygiene pack.
+- POST /api/receipts/verify answers 400 naming `request.body` when the request
+  sent with a receipt nests more than 64 levels deep.
+
+### 2026-11-26 (seller index price check)
+Index:
+- The unpaid price check skips a route the seller's own documents mark free,
+  sends a POST only to a route they mark paid, with one body at most, and
+  waits days before asking again a route that answered the request itself
+  without a 402. A server error or a redirect starts no wait.
+Router:
+- The router lists some outside sellers without buying from them: such a
+  seller reads `listed_only` on its index row and a buyer can pay it directly.
+
+### 2026-11-26 (page counter)
+Site:
+- The page counter's loader records no session and shows no survey unless its
+  configuration says exactly otherwise, and reads only on/off switches from
+  the page.
+
+### 2026-11-26 (mcp protocol versions)
+MCP:
+- The hosted connector at /mcp answers clients that name an earlier protocol
+  version (2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, or the SDK's
+  2024-10-07) in the request body as well as the header; they were refused
+  as unsupported.
+
+### 2026-11-26 (stock history)
+Tools:
+- On a server that sets `STOCK_DATA_PROVIDER=databento`, under that
+  operator's own Databento data license, stock-history returns daily bars
+  from the DBEQ venues (IEX, NYSE Texas (formerly NYSE Chicago), NYSE
+  National), at least 24 hours old: each answer says `consolidated: false`,
+  names the venues and gives `latestAvailable`. Not consolidated market
+  data; information only, not investment advice.
+
+### 2026-11-26 (model retirements)
+Models:
+- Calls naming `gpt-5` or `o3` are served by `gpt-6.1-sol`, `gpt-5-mini` by
+  `gpt-6.1-terra` and `gpt-5-nano` by `gpt-6-luna`, the successors OpenAI
+  names, from their 2026-12-11 retirement, and `gpt-5-pro` and `o3-pro` by
+  `gpt-6.1-sol-pro`, the pro mode of OpenAI's named successor;
+  `anthropic/claude-opus-4.5` moves to `anthropic/claude-opus-5.5` from
+  2027-01-22.
+
+### 2026-11-26 (holidays and money stock)
+Tools:
+- public-holidays gives local and English holiday names through 2027-01-31
+  and English names only after; us-macro-series reads M1 and M2 from the
+  Federal Reserve's H.6 release file, with the same values.
+
+### 2026-11-26 (privacy)
+Site:
+- /privacy is dated 2026-11-26: a refused paid attempt is recorded (route,
+  network, reason, amount quoted, time, and the payer only when the payment
+  verified) and kept 90 days; a signed export or erase request for a wallet
+  includes those records; and a search on /.well-known/search that finds no
+  tool is kept as text, as one on /api/find is.
+
+### 2026-11-25 (rate limits)
+API:
+- Every 429 this service answers carries Retry-After, in whole seconds.
+
+### 2026-11-25 (region block: unreadable locations)
+Payments:
+- A paid request whose location header arrives repeated with different
+  values or malformed is answered 451 with reason `location_unreadable`
+  (SANCTIONS_GEO_BLOCK, on by default) before any payment is verified
+  (`charged: false`); an unpaid request is served as before.
+
 ## v2.16.0 - 2026-11-25
 
 ### 2026-11-25 (region block)

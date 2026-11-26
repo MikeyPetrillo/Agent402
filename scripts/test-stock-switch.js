@@ -10,14 +10,16 @@
 //      challenge (ahead of every gate), while a priced route still asks 402.
 //   3. FREE_MODE, provider on (databento against a local stub through
 //      scripts/lib/databento-stub-preload.js, so no market-data host is
-//      reached): the tools and packs are back, and each tool's published
-//      example answers 200 with its documented fields.
+//      reached): stock-history and the packs that run it alone are back, its
+//      published example answers 200 with its documented fields and the
+//      venues notice; stock-quote, market.quote and the quote packs stay
+//      unlisted and answer 503.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
 import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
-import { STOCK_CORE_PACK_SLUGS as STOCK_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } from "../src/skills.js";
+import { STOCK_CORE_PACK_SLUGS as STOCK_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, STOCK_SERVED_PACK_SLUGS, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } from "../src/skills.js";
 
 // The kit's published examples as the databento provider publishes them.
 process.env.STOCK_DATA_PROVIDER = "databento";
@@ -167,31 +169,46 @@ try {
       ["--import", "./scripts/lib/databento-stub-preload.js"]);
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     const listed = new Set((pricing.endpoints || []).map((e) => e.slug));
-    const missing = [...[...STOCK_SLUGS], ...[...STOCK_PACK_SLUGS].map((s) => `skill-${s}`)].filter((s) => !listed.has(s));
-    ok(missing.length === 0, `provider on: every stock tool and pack is listed again (missing: ${missing.join(", ") || "none"})`);
+    const rowOf = new Map((pricing.endpoints || []).map((e) => [e.slug, e]));
+    // Served with a provider: stock-history and the packs whose every stock step is it.
+    const missing = ["stock-history", ...[...STOCK_SERVED_PACK_SLUGS].map((s) => `skill-${s}`)].filter((s) => !listed.has(s));
+    ok(STOCK_SERVED_PACK_SLUGS.size === 2 && missing.length === 0, `provider on: stock-history and the packs that run it alone are listed (missing: ${missing.join(", ") || "none"})`);
+    const unlistedLeaks = ["stock-quote", ...[...STOCK_PACK_SLUGS].map((s) => `skill-${s}`)].filter((s) => listed.has(s));
+    ok(unlistedLeaks.length === 0, `provider on: stock-quote and the packs whose answer needs a quote stay unlisted (${unlistedLeaks.join(", ") || "none listed"})`);
     const kitPrice = Object.fromEntries(FINANCE_TOOLS.map((t) => [t.slug, t.price]));
-    ok([...STOCK_SLUGS].every((s) => (pricing.endpoints || []).find((e) => e.slug === s)?.price === kitPrice[s]), "provider on: listed at the kit's prices");
-    const fullPriced = [...STOCK_TRIMMED_PACK_SLUGS, ...STOCK_PACK_SLUGS].filter((s) => {
-      const row = (pricing.endpoints || []).find((e) => e.slug === `skill-${s}`);
-      return Number(String(row?.price || "").replace("$", "")) !== PACK_PRICE_TABLE[s] || !/stock-(quote|history)/.test(row?.description || "");
+    ok(rowOf.get("stock-history")?.price === kitPrice["stock-history"], "provider on: stock-history is listed at the kit's price");
+    const wrongPrice = [...STOCK_TRIMMED_PACK_SLUGS].filter((s) => {
+      const row = rowOf.get(`skill-${s}`);
+      const want = STOCK_SERVED_PACK_SLUGS.has(s) ? PACK_PRICE_TABLE[s] : PACK_PRICES_WITHOUT_STOCK[s];
+      const namesHistory = /stock-history/.test(row?.description || "");
+      return Number(String(row?.price || "").replace("$", "")) !== want || /stock-quote/.test(row?.description || "") || namesHistory !== STOCK_SERVED_PACK_SLUGS.has(s);
     });
-    ok(fullPriced.length === 0, `provider on: every stock pack is listed whole, at its full price and naming its stock step (${fullPriced.join(", ") || "all"})`);
+    ok(wrongPrice.length === 0, `provider on: the stock-history packs are whole at their full price, every other stock pack stays trimmed at its trimmed price, none names stock-quote (${wrongPrice.join(", ") || "all"})`);
     const openapi = await (await fetch(`${base}/openapi.json`)).json();
-    ok([...STOCK_SLUGS].every((s) => openapi.paths?.[`/api/${s}`]), "provider on: /openapi.json carries the routes");
-    ok(/market\.quote/.test(await mcp(base, "tools/list")), "provider on: the MCP flagship market.quote is listed");
-    for (const t of FINANCE_TOOLS) {
+    ok(openapi.paths?.["/api/stock-history"] && !openapi.paths?.["/api/stock-quote"], "provider on: /openapi.json carries stock-history and not stock-quote");
+    ok(!/market\.quote/.test(await mcp(base, "tools/list")), "provider on: the MCP flagship market.quote stays unlisted");
+    const t = FINANCE_TOOLS.find((x) => x.slug === "stock-history");
+    {
       const r = await fetch(`${base}/api/${t.slug}?${new URLSearchParams(Object.entries(t.discovery.input).map(([k, v]) => [k, String(v)]))}`);
       const body = await r.json().catch(() => ({}));
       const absent = Object.keys(t.discovery.output.example).filter((k) => !(k in body));
-      ok(r.status === 200 && absent.length === 0, `provider on: ${t.slug}'s published example answers 200 with every documented field (${r.status}; missing: ${absent.join(", ") || "none"})`);
+      ok(r.status === 200 && absent.length === 0 && body.consolidated === false && /Not consolidated/.test(body.notice || "") && body.delayHours === 24, `provider on: stock-history's published example answers 200 with every documented field and the venues notice (${r.status}; missing: ${absent.join(", ") || "none"})`);
     }
-    const page = await fetch(`${base}/tools/stock-quote`);
-    ok(page.status === 200, `provider on: the tool page is served (${page.status})`);
-    ok(/Flagship tools: [^"]*market\.quote/.test(await mcp(base, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } })), "provider on: the connector's instructions name market.quote");
+    const offRoutes = [];
+    for (const path of ["/api/stock-quote?symbol=AAPL", ...[...STOCK_PACK_SLUGS].map((s) => `/api/skill/${s}`)]) {
+      const r = await fetch(`${base}${path}`, path.includes("/skill/") ? { method: "POST", headers: { "content-type": "application/json" }, body: '{"ticker":"AAPL"}' } : {});
+      const b = await r.json().catch(() => ({}));
+      if (!(r.status === 503 && b.error === "not-offered")) offRoutes.push(`${path} ${r.status}`);
+    }
+    ok(offRoutes.length === 0, `provider on: stock-quote and the quote packs still answer 503 not-offered (${offRoutes.join(", ") || "all"})`);
+    const page = await fetch(`${base}/tools/stock-history`);
+    const quotePage = await fetch(`${base}/tools/stock-quote`);
+    ok(page.status === 200 && quotePage.status === 404, `provider on: the stock-history page is served, the stock-quote page is not (${page.status}, ${quotePage.status})`);
+    ok(!/market\.quote/.test(await mcp(base, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } })), "provider on: the connector's instructions do not name market.quote");
     const docs = await runAgainst("scripts/test-docs-truth.js", base);
     ok(docs.status === 0 && /two-state pack prices are read against this server's state \(\d+ lines, stock data provider on\)/.test(docs.out), `provider on: test-docs-truth passes against this boot (${failLines(docs.out) || docs.status})`);
     const cc = await runAgainst("scripts/mcp-client-check.js", base);
-    ok(cc.status === 0 && /ok - market\.quote without payment/.test(cc.out), `provider on: mcp-client-check expects market.quote and reads its unpaid ask (${failLines(cc.out) || cc.status})`);
+    ok(cc.status === 0 && /ok - market\.quote unlisted/.test(cc.out), `provider on: mcp-client-check passes and checks market.quote refused (${failLines(cc.out) || cc.status})`);
     child.kill("SIGTERM");
   }
 } catch (e) {

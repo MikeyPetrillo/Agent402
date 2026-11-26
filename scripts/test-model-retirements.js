@@ -19,7 +19,8 @@ const RETIRING = [
   { vendor: "OpenAI", ids: ["gpt-image-1-mini", "openai/gpt-image-1-mini", "gpt-image-1.5", "openai/gpt-image-1.5"], retires: "2026-12-01" },
   { vendor: "OpenAI", ids: ["gpt-5", "openai/gpt-5", "gpt-5-mini", "openai/gpt-5-mini", "gpt-5-nano", "openai/gpt-5-nano", "gpt-5-pro", "openai/gpt-5-pro", "o3", "openai/o3", "o3-pro", "openai/o3-pro"], retires: "2026-12-11" },
   { vendor: "OpenAI", ids: ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"], retires: "2027-01-06" },
-  { vendor: "Anthropic", ids: ["claude-sonnet-4-5-20250929", "anthropic/claude-sonnet-4-5-20250929"], retires: "2026-11-30" },
+  { vendor: "Anthropic", ids: ["claude-sonnet-4-5-20250929", "anthropic/claude-sonnet-4-5-20250929", "claude-sonnet-4-5", "anthropic/claude-sonnet-4.5"], retires: "2026-11-30" },
+  { vendor: "Anthropic", ids: ["claude-opus-4-5-20251101", "anthropic/claude-opus-4-5-20251101", "claude-opus-4-5", "anthropic/claude-opus-4.5"], retires: "2027-01-22" },
   { vendor: "OpenAI", ids: ["gpt-image-2", "openai/gpt-image-2", "gpt-image-2-2026-04-21"], retires: "2027-02-10" },
 ];
 
@@ -33,7 +34,10 @@ function sources(dir, out = []) {
 }
 const files = sources(fileURLToPath(new URL("../src", import.meta.url)));
 const RETIREMENT_KEY = /(["'`])[^"'`\n]+\1:\s*\{\s*until:/g;
-const text = new Map(files.map((f) => [f, readFileSync(f, "utf8").replace(RETIREMENT_KEY, "")]));
+// An air-quality pollutant code ("o3" is ozone) is a contract value, not a
+// model id: a quoted value under a `pollutant` key is not read.
+const POLLUTANT_VALUE = /\bpollutant:\s*(["'`])[^"'`\n]+\1/g;
+const text = new Map(files.map((f) => [f, readFileSync(f, "utf8").replace(RETIREMENT_KEY, "").replace(POLLUTANT_VALUE, "")]));
 const NOW_OVERRIDE = process.env.MODEL_RETIREMENTS_NOW;
 const now = NOW_OVERRIDE ? Date.parse(NOW_OVERRIDE) : Date.now();
 if (!Number.isFinite(now)) { console.log(`FAIL MODEL_RETIREMENTS_NOW is not a date: ${NOW_OVERRIDE}`); process.exit(1); }
@@ -48,20 +52,21 @@ for (const r of RETIRING) {
   }
   if (!hits.length) { pass++; continue; }
   if (days <= 0) { fail++; console.log(`FAIL ${r.vendor} retired ${r.retires}, still in code:\n  ${hits.join("\n  ")}`); }
-  else console.log(`warn ${r.vendor} retires ${r.retires} (${days} days): still referenced in ${hits.length} place(s)`);
+  else console.log(`warn ${r.vendor} retires ${r.retires} (${days} days${days <= 14 ? ", within 14" : ""}): still referenced in ${hits.length} place(s)${days <= 14 ? `:\n  ${hits.join("\n  ")}` : ""}`);
 }
-// OpenAI's 2026-06-11 notice ("GPT-5 and o3 model deprecations") removes these
-// ids from the API on 2026-12-11, each with the replacement it names (pro mode
-// for the -pro ids is the -pro listing). The scan group above and the
-// gateway's RETIRING_MODELS must both carry that date and successor, so moving
-// one date (or one successor) fails here instead of drifting.
+// OpenAI's 2026-06-11 notice removes these ids from the API on 2026-12-11;
+// its deprecations page (developers.openai.com/api/docs/deprecations, read
+// 2026-11-25) names each replacement (pro mode for the -pro ids is the -pro
+// listing). The scan group above and the gateway's RETIRING_MODELS must both
+// carry that date and successor, so moving one date (or one successor) fails
+// here instead of drifting.
 const NOTICE_2026_12_11 = {
-  "openai/gpt-5": "openai/gpt-5.6-sol",
-  "openai/gpt-5-mini": "openai/gpt-5.6-terra",
-  "openai/gpt-5-nano": "openai/gpt-5.6-luna",
-  "openai/gpt-5-pro": "openai/gpt-5.6-sol-pro",
-  "openai/o3": "openai/gpt-5.6-sol",
-  "openai/o3-pro": "openai/gpt-5.6-sol-pro",
+  "openai/gpt-5": "openai/gpt-6.1-sol",
+  "openai/gpt-5-mini": "openai/gpt-6.1-terra",
+  "openai/gpt-5-nano": "openai/gpt-6-luna",
+  "openai/gpt-5-pro": "openai/gpt-6.1-sol-pro",
+  "openai/o3": "openai/gpt-6.1-sol",
+  "openai/o3-pro": "openai/gpt-6.1-sol-pro",
 };
 {
   const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
@@ -72,6 +77,25 @@ const NOTICE_2026_12_11 = {
     const okTable = e?.until === "2026-12-11" && e.use === use && e.asItselfUntil === true;
     if (okDate && okTable) pass++;
     else { fail++; console.log(`FAIL ${id}: scan group ${group?.retires ?? "missing"}, RETIRING_MODELS ${e ? `${e.until} -> ${e.use}` : "missing"} (notice: 2026-12-11 -> ${use})`); }
+  }
+  // The /api/llm-premium proxy (llm-kit.js) serves o3 and o3-pro by the same
+  // named replacement from the same day.
+  const { RETIRING: PROXY_RETIRING } = await import("../src/tools/llm-kit.js");
+  for (const id of ["o3", "o3-pro"]) {
+    const e = PROXY_RETIRING[id], use = NOTICE_2026_12_11[`openai/${id}`].replace(/^openai\//, "").replace(/-pro$/, "");
+    if (e?.until === "2026-12-11" && e.use === use) pass++;
+    else { fail++; console.log(`FAIL llm-kit RETIRING ${id}: ${e ? `${e.until} -> ${e.use}` : "missing"} (notice: 2026-12-11 -> ${use})`); }
+  }
+  // Anthropic's model deprecations page (platform.claude.com/docs/en/about-claude/model-deprecations,
+  // read 2026-11-25): each retirement with the replacement it names.
+  const ANTHROPIC_NOTICES = {
+    "anthropic/claude-sonnet-4.5": ["2026-11-30", "anthropic/claude-sonnet-5.5"],
+    "anthropic/claude-opus-4.5": ["2027-01-22", "anthropic/claude-opus-5.5"],
+  };
+  for (const [id, [until, use]] of Object.entries(ANTHROPIC_NOTICES)) {
+    const e = RETIRING_MODELS[id];
+    if (e?.until === until && e.use === use && e.asItselfUntil === true) pass++;
+    else { fail++; console.log(`FAIL ${id}: RETIRING_MODELS ${e ? `${e.until} -> ${e.use}` : "missing"} (notice: ${until} -> ${use})`); }
   }
   // Every scan id that is also a RETIRING_MODELS key carries the same date.
   for (const r of RETIRING) for (const id of r.ids) {

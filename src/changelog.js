@@ -1,5 +1,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
+import { upstreamKeyEnabled } from "./upstream-key.js";
+import { stockToolServed } from "./tools/stock-provider.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS } from "./card-refund-readback.js";
 import { DEFAULT_WITHHELD_USER_AGENT_PREFIXES, mppOfferGateEnabled } from "./mpp-offer-gate.js";
@@ -25,6 +27,7 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 // The OUSD entry: shown while this server's Tempo challenges include OUSD
 // (src/mpp-offers.js reads the same list for its Visa CLI sentence).
+export const stockHistoryShown = () => stockToolServed("stock-history");
 export const tempoOusdShown = () => Boolean(visaCliMppSentence());
 
 // The offer gate entry: shown while this server sends MPP challenges and the
@@ -56,6 +59,99 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-26",
+    title: "Summaries, receipt checks, token brief",
+    items: [
+      "Tools: summarize returns a short summary of a web page (`url`) or of text you send (`text`). The summary is AI-generated: a third-party model writes it, and the answer carries `aiGenerated: true`.",
+      "Tools: receipt-verify checks a signed receipt against the keys this server publishes and, when you send them, against the answer and the request it names. It runs free through proof of work.",
+      "Tools: token-brief writes a token's own name and symbol into its Markdown as inert text, so no heading, link or table syntax in a name renders.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Bring your own key",
+    shownWhen: upstreamKeyEnabled,
+    items: [
+      "API: On a server that sets `UPSTREAM_KEY=on`, github-repo takes your own GitHub token in the `X-Agent402-Upstream-Key` header with an x402 payment and sells the call at the own-key price, the catalog's lowest flat price. The key is sent only to GitHub, used for that one call and never stored. A key GitHub refuses answers 401 or 403 with `charged: false`, a key that arrives over plain HTTP answers 400 and is not used, and after 5 refused keys in 15 minutes the header answers 429 with Retry-After while the same call without it stays on sale.",
+      "Site: On a server that sets `UPSTREAM_KEY=on`, /terms and /privacy each carry an item about a key you send for another service, dated 2026-11-26.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Site search endpoint",
+    items: [
+      "API: `/.well-known/search` answers the same search as /api/find: GET with `?q=`, or QUERY with the task in the body, as JSON or as Markdown for `Accept: text/markdown`. Every page names it in `agent:search` meta tags.",
+      "API: A search for `readclean` finds extract, and one for cleaning junk out of text or logs finds the text hygiene pack.",
+      "API: POST /api/receipts/verify answers 400 naming `request.body` when the request sent with a receipt nests more than 64 levels deep.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Seller index price check",
+    items: [
+      "Index: The unpaid price check skips a route the seller's own documents mark free, sends a POST only to a route they mark paid, with one body at most, and waits days before asking again a route that answered the request itself without a 402. A server error or a redirect starts no wait.",
+      "Router: The router lists some outside sellers without buying from them: such a seller reads `listed_only` on its index row and a buyer can pay it directly.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Page counter",
+    items: [
+      "Site: The page counter's loader records no session and shows no survey unless its configuration says exactly otherwise, and reads only on/off switches from the page.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "MCP protocol versions",
+    items: [
+      "MCP: The hosted connector at /mcp answers clients that name an earlier protocol version (2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, or the SDK's 2024-10-07) in the request body as well as the header; they were refused as unsupported.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Stock history",
+    shownWhen: stockHistoryShown,
+    items: [
+      "Tools: On a server that sets `STOCK_DATA_PROVIDER=databento`, under that operator's own Databento data license, stock-history returns daily bars from the DBEQ venues (IEX, NYSE Texas (formerly NYSE Chicago), NYSE National), at least 24 hours old: each answer says `consolidated: false`, names the venues and gives `latestAvailable`. Not consolidated market data; information only, not investment advice.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Model retirements",
+    items: [
+      "Models: Calls naming `gpt-5` or `o3` are served by `gpt-6.1-sol`, `gpt-5-mini` by `gpt-6.1-terra` and `gpt-5-nano` by `gpt-6-luna`, the successors OpenAI names, from their 2026-12-11 retirement, and `gpt-5-pro` and `o3-pro` by `gpt-6.1-sol-pro`, the pro mode of OpenAI's named successor; `anthropic/claude-opus-4.5` moves to `anthropic/claude-opus-5.5` from 2027-01-22.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Holidays and money stock",
+    items: [
+      "Tools: public-holidays gives local and English holiday names through 2027-01-31 and English names only after; us-macro-series reads M1 and M2 from the Federal Reserve's H.6 release file, with the same values.",
+    ],
+  },
+  {
+    date: "2026-11-26",
+    title: "Privacy",
+    items: [
+      "Site: /privacy is dated 2026-11-26: a refused paid attempt is recorded (route, network, reason, amount quoted, time, and the payer only when the payment verified) and kept 90 days; a signed export or erase request for a wallet includes those records; and a search on /.well-known/search that finds no tool is kept as text, as one on /api/find is.",
+    ],
+  },
+  {
+    date: "2026-11-25",
+    title: "Rate limits",
+    items: [
+      "API: Every 429 this service answers carries Retry-After, in whole seconds.",
+    ],
+  },
+  {
+    date: "2026-11-25",
+    title: "Region block: unreadable locations",
+    shownWhen: sanctionsGeoBlockEnabled,
+    items: [
+      "Payments: A paid request whose location header arrives repeated with different values or malformed is answered 451 with reason `location_unreadable` (SANCTIONS_GEO_BLOCK, on by default) before any payment is verified (`charged: false`); an unpaid request is served as before.",
+    ],
+  },
   {
     date: "2026-11-25",
     title: "Region block",

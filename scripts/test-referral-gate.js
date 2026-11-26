@@ -264,14 +264,24 @@ const call = async (url, { method = "POST", body, headers = {}, rawBody } = {}) 
   let json = null; try { json = JSON.parse(text); } catch { /* asserted by the caller */ }
   return { status: r.status, headers: r.headers, text, json };
 };
-// One POST whose client hangs up after `abortAfterMs`.
+// One POST whose client hangs up after `abortAfterMs`, or, given `{ when }`,
+// as soon as when() says the server has reached the step the hang-up is meant
+// for (the handler running, the settle call sent): a fixed time lands on a
+// different step on a loaded host.
 const rawPost = (url, body, headers, abortAfterMs) => new Promise((resolve) => {
   const data = JSON.stringify(body);
   const req = httpRequest(url, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data), ...headers } }, (res) => { res.resume(); res.on("end", () => resolve("answered")); });
   req.on("error", () => resolve("aborted"));
   req.end(data);
-  setTimeout(() => req.destroy(), abortAfterMs);
+  if (typeof abortAfterMs === "number") { setTimeout(() => req.destroy(), abortAfterMs); return; }
+  const end = Date.now() + (abortAfterMs.maxMs ?? 20_000);
+  const poll = () => { if (abortAfterMs.when() || Date.now() > end) req.destroy(); else setTimeout(poll, 2); };
+  poll();
 });
+// Wait for an outcome with a deadline, never a fixed sleep and then a count:
+// true once pred() holds. A caller then reads what it asserts, so a late
+// extra effect still fails it.
+const until = async (pred, ms = 20_000) => { const end = Date.now() + ms; for (;;) { if (await pred()) return true; if (Date.now() > end) return false; await wait(10); } };
 
 // One paid POST over a raw socket whose client reads `readBytes` of the body
 // and then RESETS the connection; with 0 it reads nothing and resets once
@@ -757,6 +767,10 @@ const send = async (url, opts) => { const r = await call(url, opts); responses.p
 let ipSeq = 0;
 const freshIp = () => `10.9.${Math.floor(++ipSeq / 250)}.${ipSeq % 250}`;
 const settles = () => fac.of("/settle").length;
+// The step a hang-up is aimed at: the busy tool's handler has started, or a
+// settle call has reached the facilitator.
+const whenBusyRuns = () => { const n = runs.busy; return { when: () => runs.busy > n }; };
+const whenSettleSent = () => { const n = fac.of("/settle").length; return { when: () => fac.of("/settle").length > n }; };
 const verifies = () => fac.of("/verify").length;
 const quietLedger = () => wait(40);
 
@@ -2202,8 +2216,8 @@ try {
     const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
     const key = gateMod.referralReplayKey(p.authorization);
     const ip = freshIp();
-    const outcome = await rawPost(R("echo"), { text: "lagging" }, { "payment-signature": p.header, "x-test-ip": ip }, 150);
-    await wait(700);
+    const outcome = await rawPost(R("echo"), { text: "lagging" }, { "payment-signature": p.header, "x-test-ip": ip }, whenSettleSent());
+    await until(() => app1.gate.stats().inflight === 0 && app1.book.get(key)?.state === "unconfirmed");
     const afterHangup = app1.book.get(key);
     fac.mode.settleDelayMs = 0;
     const fetched = await send(R("echo"), { body: { text: "lagging" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
@@ -2470,8 +2484,8 @@ try {
     // With a forgiveness ticket: not settled, the authorization held.
     const acct = newAccount();
     const p = await signPayment(accept, { account: acct });
-    const outcome = await rawPost(R("busy"), { text: "gone" }, { "payment-signature": p.header, "x-test-ip": "5.5.5.5" }, 120);
-    await wait(500);
+    const outcome = await rawPost(R("busy"), { text: "gone" }, { "payment-signature": p.header, "x-test-ip": "5.5.5.5" }, whenBusyRuns());
+    await until(() => app1.gate.stats().inflight === 0 && logLines.some((l) => /client gone before settlement \(busy/.test(l)));
     ok(outcome === "aborted" && settles() === 0 && sales.length === 0 && logLines.some((l) => /client gone before settlement \(busy/.test(l)), `a connection closed before settlement starts, inside the forgiveness budget, is not settled (${settles()} settle, ${sales.length} sale)`);
     const again = await send(R("echo"), { body: { text: "back" }, headers: { "payment-signature": p.header, "x-test-ip": "5.5.5.5" } });
     ok(again.status === 409, `its claim is HELD: the same authorization buys nothing more (${again.status})`);
@@ -2480,8 +2494,8 @@ try {
     const q = await signPayment(accept, { account: acct });
     const key = gateMod.referralReplayKey(q.authorization);
     const ran = runs.busy;
-    const second = await rawPost(R("busy"), { text: "gone again" }, { "payment-signature": q.header, "x-test-ip": "5.5.5.5" }, 120);
-    await wait(600);
+    const second = await rawPost(R("busy"), { text: "gone again" }, { "payment-signature": q.header, "x-test-ip": "5.5.5.5" }, whenBusyRuns());
+    await until(() => app1.gate.stats().inflight === 0 && app1.book.get(key)?.state === "charged-undelivered" && logLines.some((l) => /CHARGED-BUT-NOT-SERVED: the buyer's connection closed before the answer could be sent \(busy/.test(l)));
     ok(second === "aborted" && settles() === 1 && sales.length === 1 && runs.busy === ran + 1 && app1.book.get(key)?.state === "charged-undelivered" && logLines.some((l) => /CHARGED-BUT-NOT-SERVED: the buyer's connection closed before the answer could be sent \(busy/.test(l)), `past the forgiveness budget a hang-up is settled as for any run: one sale, the case in the book, logged CHARGED-BUT-NOT-SERVED (${settles()} settle, ${sales.length} sale, book ${app1.book.get(key)?.state})`);
     const fetched = await send(R("busy"), { body: { text: "gone again" }, headers: { "payment-signature": q.header, "x-test-ip": "5.5.5.5" } });
     ok(fetched.status === 200 && fetched.json?.echo === "gone again" && /^0x[0-9a-f]{64}$/.test(fetched.json.transaction || "") && runs.busy === ran + 1 && sales.length === 1 && settles() === 1 && app1.book.get(key) === null, `the buyer's re-send of that payment returns the kept answer: no second run, settle or sale, and the book entry is closed (${fetched.status})`);
@@ -2493,8 +2507,8 @@ try {
     const key = gateMod.referralReplayKey(p.authorization);
     const before = app1.gate.stats().chargedNotServed;
     const ran = runs.echo;
-    const outcome = await rawPost(R("echo"), { text: "leaving" }, { "payment-signature": p.header, "x-test-ip": freshIp() }, 150);
-    await wait(700);
+    const outcome = await rawPost(R("echo"), { text: "leaving" }, { "payment-signature": p.header, "x-test-ip": freshIp() }, whenSettleSent());
+    await until(() => app1.gate.stats().inflight === 0 && app1.book.get(key)?.state === "charged-undelivered" && app1.book.get(key).saleBooked === true);
     ok(outcome === "aborted" && settles() === 1 && sales.length === 1 && app1.gate.stats().chargedNotServed === before + 1 && app1.book.get(key)?.state === "charged-undelivered" && app1.book.get(key).saleBooked === true, `a connection closed during the settle call: the sale is booked, logged CHARGED-BUT-NOT-SERVED, counted, and kept in the book (${app1.gate.stats().chargedNotServed - before})`);
     fac.mode.settleDelayMs = 0;
     const fetched = await send(R("echo"), { body: { text: "leaving" }, headers: { "payment-signature": p.header } });
@@ -2508,15 +2522,16 @@ try {
     try {
       const acct = newAccount();
       const before = settles();
-      for (let i = 0; i < 10; i++) { await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450); }
-      // Each settle lands after its client left: wait for the count, not a fixed time.
-      for (let i = 0; i < 50 && settles() - before < 9; i++) await wait(100);
+      // Each run ends (its settle lands after its client left) before the next starts: wait for that, not a fixed time.
+      const ended = () => until(() => app8.gate.stats().inflight === 0);
+      for (let i = 0; i < 10; i++) { await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": "8.8.4.4" }, whenBusyRuns()); await ended(); }
+      await until(() => settles() - before >= 9);
       const st = app8.gate.stats();
       ok(st.forgivenHangups === 1 && settles() - before === 9 && st.forgivenUsd === 0.03, `10 hang-ups in a row by one payer and address: 1 forgiven, 9 settled (${st.forgivenHangups} forgiven, ${settles() - before} settled)`);
       // Another payer on the same address is bound by the address's budget; another payer elsewhere has its own.
-      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450);
-      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.5" }, 120); await wait(450);
-      for (let i = 0; i < 50 && settles() - before < 10; i++) await wait(100);
+      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.4" }, whenBusyRuns()); await ended();
+      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.5" }, whenBusyRuns()); await ended();
+      await until(() => settles() - before >= 10);
       ok(app8.gate.stats().forgivenHangups === 2 && settles() - before === 10, `the address's budget binds whatever wallet signs, and another payer on another address has its own (${app8.gate.stats().forgivenHangups} forgiven, ${settles() - before} settled)`);
     } finally { await app8.close(); }
   }
@@ -2712,16 +2727,16 @@ try {
     const acct = newAccount();
     const first = await mount();
     const p1 = await signPayment(accept, { account: acct });
-    await rawPost(`${first.url}/ref/busy`, { text: "gone" }, { "payment-signature": p1.header, "x-test-ip": "6.6.6.6" }, 120);
-    await wait(500);
+    await rawPost(`${first.url}/ref/busy`, { text: "gone" }, { "payment-signature": p1.header, "x-test-ip": "6.6.6.6" }, whenBusyRuns());
+    await until(() => first.gate.stats().inflight === 0 && first.gate.stats().forgivenUsd > 0);
     const spent = first.gate.stats().forgivenUsd;
     await first.close();
     const second = await mount({}, { book: first.book });
     try {
       await wait(50);
       const p2 = await signPayment(accept, { account: acct });
-      await rawPost(`${second.url}/ref/busy`, { text: "gone" }, { "payment-signature": p2.header, "x-test-ip": "6.6.6.6" }, 120);
-      await wait(600);
+      await rawPost(`${second.url}/ref/busy`, { text: "gone" }, { "payment-signature": p2.header, "x-test-ip": "6.6.6.6" }, whenBusyRuns());
+      await until(() => second.gate.stats().inflight === 0 && settles() >= 1);
       ok(spent === 0.03 && settles() === 1 && second.gate.stats().forgivenUsd === 0.03, `a restart does not refill the forgiveness budget: the same payer's next hang-up is settled (${settles()} settle; ${second.gate.stats().forgivenUsd} forgiven)`);
       ok(JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore, "and none of it touched the budget a direct buyer's hang-up is judged against");
     } finally { await second.close(); }
@@ -2985,7 +3000,7 @@ try {
     try {
       const leave = async (acct, ip, text) => {
         const p = await signPayment(accept, { account: acct, validBefore: String(Math.floor(Date.now() / 1000) + 600) });
-        const outcome = await rawPost(`${appH.url}/ref/echo`, { text }, { "payment-signature": p.header, "x-test-ip": ip }, 150);
+        const outcome = await rawPost(`${appH.url}/ref/echo`, { text }, { "payment-signature": p.header, "x-test-ip": ip }, whenSettleSent());
         return { p, key: gateMod.referralReplayKey(p.authorization), outcome };
       };
       // The answer expires unread; the sweep then owes the payment back.
@@ -2994,12 +3009,12 @@ try {
       // 1. The first one, inside the budget: the settle (400 ms) is in flight when the buyer leaves, and lands.
       fac.mode.settleDelayMs = 400;
       const first = await leave(acct, ip, "first");
-      await wait(800);
+      await until(() => appH.gate.stats().inflight === 0 && appH.book.get(first.key)?.state === "charged-undelivered" && sales.length >= 1);
       const e1 = appH.book.get(first.key);
       ok(first.outcome === "aborted" && e1?.state === "charged-undelivered" && e1.hangup === "settle in flight" && sales.length === 1 && Math.abs(appH.gate.stats().forgivenUsd - 0.03) < 1e-9, `a buyer gone during the settle call whose payment lands: charged, undelivered, recorded as a hang-up, and its forgiveness ticket is SPENT (${e1?.state} ${e1?.hangup}; ${appH.gate.stats().forgivenUsd} forgiven)`);
       // 2. The same payer does it again: the budget is spent, so this one carries the reason the refund run holds.
       const second = await leave(acct, ip, "second");
-      await wait(800);
+      await until(() => appH.gate.stats().inflight === 0 && appH.book.get(second.key)?.state === "charged-undelivered");
       const e2 = appH.book.get(second.key);
       ok(second.outcome === "aborted" && e2?.state === "charged-undelivered" && e2.hangup === "payer budget", `a repeat hang-up during the settle call carries the spent-budget reason, not the first one's (${e2?.state} ${e2?.hangup})`);
       fac.mode.settleDelayMs = 0;
@@ -3017,7 +3032,7 @@ try {
       fac.mode.settleDelayMs = 400;
       fac.mode.settle = () => ({ status: 500, body: {} });
       const third = await leave(newAccount(), freshIp(), "third");
-      await wait(2200);
+      await until(() => appH.gate.stats().inflight === 0 && appH.book.get(third.key)?.state === "in-doubt" && appH.book.get(third.key).hangup);
       const doubt = appH.book.get(third.key);
       const tx3 = fac.land(third.p.authorization, "0x" + "c3".repeat(32));
       fac.mode.settleDelayMs = 0;
@@ -4100,7 +4115,7 @@ try {
         fac.mode.verify = () => ({ status: 200, body: { isValid: true } });
         fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "insufficient_funds" } });
         const during = one(app, "mb", { body: { ms: 300 } });
-        await wait(150);
+        await until(() => held() === 1, 5_000);
         seen.whileRunning = held();
         const waiting = await one(app, "mb");
         const refused = await during; seen.settleRefused = held();
@@ -4109,8 +4124,8 @@ try {
         fac.mode.settle = () => ({ status: 500, body: {} });
         const doubt = await one(app, "mb"); seen.settleInDoubt = held();
         const pH = await signPayment(accept, { account: newAccount() });
-        const hung = await rawPost(`${app.url}/ref/mb`, { ms: 400 }, { "payment-signature": pH.header, "x-test-ip": freshIp() }, 120);
-        await wait(700); seen.hangUp = held();
+        const hung = await rawPost(`${app.url}/ref/mb`, { ms: 400 }, { "payment-signature": pH.header, "x-test-ip": freshIp() }, { when: () => held() === 1 });
+        await until(() => app.gate.stats().inflight === 0); seen.hangUp = held();
         fac.mode.settle = pays(1234);
         const honest = await one(app, "mb");
         ok(seen.verifyRefused === 0 && seen.whileRunning === 1 && waiting.status === 503 && waiting.reason === "rate_under_review" && refused.status === 402 && seen.settleRefused === 0 && failed.status === 422 && seen.handlerError === 0 && timedOut.status === 504 && seen.timeout === 0 && doubt.status === 402 && seen.settleInDoubt === 0 && hung === "aborted" && seen.hangUp === 0 && honest.status === 200, `a cold slug's place is held only while a verified call runs (another payer waits then) and is given back when it ends: a settle refused or in doubt, a handler error, a timeout, a hang-up; the next buyer is served (${JSON.stringify(seen)}; then ${honest.status})`);
@@ -4127,8 +4142,12 @@ try {
     const fine = (bps = 1234) => (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: BigInt(bps) }), network: REFERRAL_NETWORK } });
     const pay8 = async (app, slug, { account = newAccount(), body = { text: "r8" }, acc = accept } = {}) => { const p = await signPayment(acc, { account }); const r = await send(`${app.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason || null, p, json: r.json }; };
     // 2. A stream of payments that run a tool and do not settle, from many payers.
+    // Twelve calls at once in this one process (buyers, gate and facilitator
+    // share its loop): the stub's answers wait their turn on a loaded host, so
+    // the gate waits longer for /verify and /settle here than the suite's
+    // short knobs allow; no check below is about those waits.
     {
-      const app = await mount({ REFERRAL_UNSETTLED_GLOBAL_MAX: "3", REFERRAL_MAX_INFLIGHT: "8" }, { book: book8("share") });
+      const app = await mount({ REFERRAL_UNSETTLED_GLOBAL_MAX: "3", REFERRAL_MAX_INFLIGHT: "8", REFERRAL_VERIFY_MS: "15000", REFERRAL_SETTLE_MS: "20000" }, { book: book8("share") });
       try {
         fac.mode.settle = fine();
         await pay8(app, "busy"); // the slug's rate has proven: its own cold bound is out of the way
@@ -4142,11 +4161,24 @@ try {
         // Six new payers and six payers with a paid sale, all at once, on eight run slots.
         const regulars = Array.from({ length: 6 }, () => { const a = newAccount(); paidPayers.add(a.address.toLowerCase()); return a; });
         const newcomers = Array.from({ length: 6 }, () => newAccount());
-        const both = await atOnce([...newcomers, ...regulars]);
+        // The burst meets the rule on its own: nothing from the calls above
+        // still holds a slot, and every admitted call holds its slot until
+        // all eight have been admitted (the settles wait for the eighth, or
+        // for a deadline when fewer are admitted), so the share decides who
+        // runs, not how far apart the calls happened to arrive.
+        await until(() => app.gate.stats().inflight === 0);
+        const inflightAtBurst = app.gate.stats().inflight;
+        const s0 = settles();
+        let open; const allIn = new Promise((r) => { open = r; });
+        const late = setTimeout(open, 15_000);
+        const watch = setInterval(() => { if (settles() - s0 >= 8) open(); }, 5);
+        fac.mode.settle = async (c) => { await allIn; return fine()(c); };
+        const both = await Promise.all([...newcomers, ...regulars].map((account) => pay8(app, "busy", { account })));
+        clearTimeout(late); clearInterval(watch); fac.mode.settle = fine();
         const strangers = both.slice(0, 6), returning = both.slice(6);
         const served = (rs) => rs.filter((c) => c.status === 200).length;
         ok(served(before) === 6 && !wordBefore.reasons.some((x) => /unsettled runs came from/.test(x)) && word.status === "attention" && word.reasons.some((x) => x === "unsettled runs came from 3 payers in the window: payers with no paid sale share 2 of 8 run slots"), `while unsettled runs stand from REFERRAL_UNSETTLED_GLOBAL_MAX payers the word reads attention and names the rule (${word.reasons.join("; ")})`);
-        ok(served(strangers) === 2 && strangers.filter((c) => c.status === 503 && c.reason === "busy").length === 4 && served(returning) === 6 && app.gate.stats().newPayerShareRefused === 4, `under it, payers with no paid sale share a quarter of the run slots (2 of 8: 2 of 6 at once run, 4 are answered busy with nothing run) and payers with a paid sale are never refused by it (${served(returning)} of 6) (${strangers.map((c) => c.status).join(" ")})`);
+        ok(served(strangers) === 2 && strangers.filter((c) => c.status === 503 && c.reason === "busy").length === 4 && served(returning) === 6 && app.gate.stats().newPayerShareRefused === 4, `under it, payers with no paid sale share a quarter of the run slots (2 of 8: 2 of 6 at once run, 4 are answered busy with nothing run) and payers with a paid sale are never refused by it (${served(returning)} of 6) (${strangers.map((c) => c.status).join(" ")} | ${returning.map((c) => `${c.status}${c.reason ? `:${c.reason}` : ""}`).join(" ")}; ${inflightAtBurst} in flight at the burst, ${app.gate.stats().newPayerShareRefused} share refusals)`);
       } finally { fac.mode.settleDelayMs = 0; await app.close(); }
     }
     fac.reset();
@@ -5401,11 +5433,15 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
 {
   const w = await bootPaidServer({
     label: "referral-wiring",
-    env: { ...REF_ENV, ...COSTS, REFERRAL_SLUGS: "hash,v1-chat-metered,onchain-sql", TRUST_PROXY_HOPS: "1", UNPAID_QUOTE_BUDGET_PER_HOUR: "5", SHED_INFLIGHT: "1" },
+    env: { ...REF_ENV, ...COSTS, REFERRAL_SLUGS: "hash,v1-chat-metered,onchain-sql,github-repo", RESALE_CLEARED_FOR_TEST: `${CLEARED_FOR_TEST},github-repo`, UPSTREAM_KEY: "on", TRUST_PROXY_HOPS: "1", UNPAID_QUOTE_BUDGET_PER_HOUR: "5", SHED_INFLIGHT: "1" },
   });
   const at = (ip, extra = {}) => ({ "x-forwarded-for": ip, ...extra });
   try {
     ok(/Referral gate enabled for 3 route\(s\): hash, v1-chat-metered, onchain-sql/.test(w.log()), "the wiring boot serves hash, the metered chat tier and onchain-sql");
+    // Price parity with a buyer's own upstream key (src/upstream-key.js): a
+    // tool that takes one on the public route is refused under /ref at boot,
+    // its resale terms cleared or not (the boot above still serves three).
+    ok(w.log().split("\n").some((l) => l.endsWith("[referral] github-repo is not served under /ref: the public route can be had for less than the listed price (a buyer's own upstream key prices it at the own-key price)")), "a tool that takes a buyer's own upstream key is refused under /ref at boot, with the reason");
     // Load shed: with the in-flight ceiling at 1 a free route is shed, a /ref copy is not.
     const free = await call(`${w.url}/api/find?q=hash`, { method: "GET", headers: at("198.51.100.1") });
     const ref = await call(`${w.url}/ref/hash`, { method: "GET", headers: at("198.51.100.1") });

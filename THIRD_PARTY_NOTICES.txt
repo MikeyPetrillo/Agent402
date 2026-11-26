@@ -347,7 +347,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   jose@6.2.3  MIT  (optional, platform-specific)
   jpeg-js@0.4.4  BSD-3-Clause
   js-sha256@0.9.0  MIT
-  js-sha3@0.15.0  MIT
+  js-sha3@0.16.0  MIT
   js-sha3@0.8.0  MIT
   js-sha512@0.8.0  MIT
   js-yaml@5.5.0  MIT
@@ -373,7 +373,7 @@ Packages: 511. Licenses: MIT 388, Apache-2.0 79, ISC 21, BSD-2-Clause 7, BSD-3-C
   mppx@0.21.2  MIT
   ms@2.0.0  MIT
   ms@2.1.3  MIT
-  music-metadata@12.5.0  MIT
+  music-metadata@12.7.0  MIT
   nanoid@6.0.2  MIT
   negotiator@0.6.4  MIT
   negotiator@1.0.0  MIT

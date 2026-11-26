@@ -70,11 +70,11 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**loan-comparison**](https://agent402.tools/skills/loan-comparison) | $0.006 | Compare loan offers with different rates and terms: payment, amortization, compound interest, NPV, IRR. |
-| [**financial-research**](https://agent402.tools/skills/financial-research) | $0.013 (with a stock data provider: $0.018) | SEC filings, XBRL company facts, insider filings and macro context for a single ticker. |
-| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.03 (with a stock data provider: $0.031) | Raw company data in one call: financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
-| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.012 (with a stock data provider: $0.013) | Has this company just reported? Newest SEC filings and recent coverage of analyst expectations. |
-| [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.026 (with a stock data provider: $0.027) | Everything before a company reports: latest financials, recent filings and fresh news in one pass. |
-| [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.008 (with a stock data provider: $0.009) | Insider buying/selling for a stock: Form 4 trades and recent SEC filings. |
+| [**financial-research**](https://agent402.tools/skills/financial-research) | $0.013 | SEC filings, XBRL company facts, insider filings and macro context for a single ticker. |
+| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.03 | Raw company data in one call: financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
+| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.012 | Has this company just reported? Newest SEC filings and recent coverage of analyst expectations. |
+| [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.026 | Everything before a company reports: latest financials, recent filings and fresh news in one pass. |
+| [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.008 | Insider buying/selling for a stock: Form 4 trades and recent SEC filings. |
 
 ## Macro & SEC (12)
 

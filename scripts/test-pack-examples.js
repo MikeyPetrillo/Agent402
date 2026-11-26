@@ -38,12 +38,12 @@ const EXPECTED_MISSES = {
   // the handler itself is covered by test-media.js.
   "media-pipeline": ["barcode-decode", "audio-normalize", "media-info"],
 };
-// With an active stock data provider these two packs take a stock ticker, and
+// With an active stock data provider (stock-history listed) these two packs take a stock ticker, and
 // a ticker is legitimately not a FRED series id. With none they run without
 // the stock step on a FRED series id, so us-macro-series is the data step: a key
 // or upstream failure is classified below like any other, a code failure
 // fails. The server's own catalog says which state it is in.
-const STOCK_ON = (await (await fetch(`${BASE}/api/pricing`)).json().catch(() => ({}))).endpoints?.some?.((e) => e.slug === "stock-quote") === true;
+const STOCK_ON = (await (await fetch(`${BASE}/api/pricing`)).json().catch(() => ({}))).endpoints?.some?.((e) => e.slug === "stock-history") === true;
 if (STOCK_ON) {
   EXPECTED_MISSES["trend-analysis"] = ["us-macro-series"];
   EXPECTED_MISSES["forecasting-bake-off"] = ["us-macro-series"];

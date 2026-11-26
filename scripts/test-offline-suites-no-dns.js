@@ -37,7 +37,7 @@ const SUITES = [
   "test-crawl-conditional.js",
   "test-crawl-kit.js",
   "test-databento-bar-range.js",
-  "test-databento-fallback.js",
+  "test-stock-history-dbeq.js",
   "test-databento-range-fallback.js",
   "test-databento-timeouts.js",
   "test-dossier-inputs.js",

@@ -144,7 +144,10 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   ok(narrow.truncated === false, "a ranking that fits is NOT truncated - the flag tracks the cut, not the query");
 
   const src = await (await import("node:fs")).promises.readFile(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/const k = req\.query\.k \?\? req\.query\.top;/.test(src),
+  // Both verbs of /api/find hand the shared serving path `k ?? top` (the
+  // routes were folded into serveFindQuery, so the pin reads its two callers;
+  // scripts/test-well-known-search.js reads the same by behavior).
+  ok(/serveFindQuery\(req, res, \{ q: [^\n]*, k: req\.query\.k \?\? req\.query\.top \}\)/.test(src) && /serveFindQuery\(req, res, \{ q: [^\n]*, k: req\.body\?\.k \?\? req\.body\?\.top \}\)/.test(src),
      "/api/find accepts `top`, the name its sibling /api/route takes, instead of silently serving the default");
 }
 

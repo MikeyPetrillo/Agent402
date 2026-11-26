@@ -9,7 +9,8 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAI
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT, goneSuggestions } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
+import { createFunnel, funnelEventOf, emptyFunnelRow, hadCredential as hadPaymentCredential, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
+import { recordPaymentRefusal, refusalOfResponse, watchRefusalBody, flushPaymentRefusals, paymentRefusalsView, paymentRefusalsStatus, refusalFiltersOf, REFUSALS_READ_MAX } from "./payment-refusals.js";
 import { createDiscoveryTrail, discoveryDocOf, noPaymentReasonsOf, conversionBySource } from "./funnel-sources.js";
 import { createOperatorResolver, payToOperatorOf } from "./payer-operators.js";
 import { summarizeOperators, composeScoreboard } from "./scoreboard.js";
@@ -84,7 +85,7 @@ import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByO
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
-import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
+import { compositeGuardBlocked, compositeGuardRetryAfterSeconds, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
 import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
@@ -143,6 +144,9 @@ const GATEWAY_METER_ON = String(process.env.GATEWAY_METERED_BILLING || "").toLow
 // same way so the three gates hold/bind the price the handler will serve at.
 const priceFnOf = (def) => (typeof def?.quote === "function" ? def.quote : typeof def?.tierQuote === "function" ? def.tierQuote : null);
 function quotedPriceUsd(def, req) {
+  // A buyer's own upstream key prices the call at the own-key price (src/upstream-key.js).
+  const ownKeyUsd = upstreamKeyPriceUsd(req, def);
+  if (ownKeyUsd > 0) return ownKeyUsd;
   const flat = Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
   const quoteFn = priceFnOf(def);
   if (!quoteFn || !req) return flat;
@@ -171,7 +175,7 @@ function paymentGuideFor(def, req, res) {
     const network = Object.entries(PAY_NETWORKS).find(([, c]) => c === caip2)?.[0];
     if (!network || typeof def?.price !== "string") return null;
     const flatUsd = Number(def.price.replace(/[^0-9.]/g, "")) || 0;
-    const quotedUsd = priceFnOf(def) ? quotedPriceUsd(def, req) : flatUsd;
+    const quotedUsd = quotedPriceUsd(def, req);
     // The catalog's own spelling for a list price; a per-request quote is spelled from its figure.
     const list = Number.isFinite(quotedUsd) && quotedUsd > 0 && quotedUsd !== flatUsd ? usdText(quotedUsd) : def.price;
     return paymentGuide({
@@ -189,6 +193,8 @@ function paymentGuideFor(def, req, res) {
 // per-request quote, else the catalog price. Flat tiers fall through to the
 // catalog price unchanged.
 function settledPriceUsd(def, req, res) {
+  const ownKeyUsd = upstreamKeyPriceUsd(req, def);
+  if (ownKeyUsd > 0) return ownKeyUsd;
   const flat = Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
   const metered = meteredUsdOf(req, res);
   if (Number.isFinite(metered) && metered > 0) return metered;
@@ -502,7 +508,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { quoteWarmerStatus } from "./tools/databento.js";
-import { activeStockAdapter, stockDataEnabled, selectedStockProvider, STOCK_SLUGS, stockNotOffered, stockProviderWarning } from "./tools/stock-provider.js";
+import { activeStockAdapter, stockDataEnabled, stockToolServed, selectedStockProvider, STOCK_SLUGS, stockNotOffered, stockProviderWarning } from "./tools/stock-provider.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, markCoverRefusalLine, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
@@ -559,7 +565,7 @@ import { securityPage } from "./security-page.js";
 import { accessibilityPage } from "./accessibility-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted, gateMounted } from "./gate-mounts.js";
-import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_FETCH_PATH, RECEIPT_HEADER, isReceiptFetchKey } from "./receipt-signing.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, checkReceiptSubmission, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_FETCH_PATH, RECEIPT_HEADER, isReceiptFetchKey } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { refundTermsFullDocumentCached, resetRefundTermsCache, REFUND_TERMS_PATH } from "./refund-terms-doc.js";
 import { toolReliabilityDocument, toolOutcomesCached, toolReliabilityEnabled, TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE } from "./tool-reliability.js";
@@ -618,7 +624,7 @@ import { reputationStatus, startSellerReputation, sellerReputation, sellerDelive
 import { setCrawlRecheckSource, setOurSideIssueHook, setOurSideControl } from "./x402-index.js";
 import { ourSideControlUrls, readOurSideControl } from "./our-side-control.js";
 import { CRAWL_INTERVAL_MS as REPUTATION_CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
-import { partialFields } from "./partial-answer.js";
+import { partialFields, clampFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -676,6 +682,7 @@ import { SEARCH_TOOLS, braveCallMeter } from "./tools/search.js";
 import { LLM_CONTEXT_TOOLS } from "./tools/llm-context-kit.js";
 import { PDF_TOOLS } from "./tools/pdf-kit.js";
 import { PDF_SUMMARIZE_TOOLS } from "./tools/pdf-summarize-kit.js";
+import { SUMMARIZE_TOOLS } from "./tools/summarize-kit.js";
 import { ACTION_GATE_TOOLS } from "./tools/action-gate-kit.js";
 import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { MEDIA_TOOLS as MEDIA_TOOLS_RAW } from "./tools/media-kit.js";
@@ -853,6 +860,7 @@ import { priceWebhooks, startPriceWebhooks, signingKeyOf as priceWebhookSigningK
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
 import { corsMiddleware, allowCorsPrefix } from "./cors.js";
+import { WELL_KNOWN_SEARCH_PATH, wellKnownSearchBodyGate, wellKnownSearchHandler } from "./well-known-search.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
@@ -860,7 +868,7 @@ import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-medi
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDES } from "./guides.js";
-import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, packServedInFull, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES, docsSlugs } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage, playgroundToolEntry, PLAYGROUND_TOOL_PATH } from "./playground.js";
@@ -915,6 +923,7 @@ import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend, unprovenLaneAtLivePayTo } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { sellerListedOnly } from "./router-listed-only.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
 import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
@@ -949,7 +958,7 @@ const JUDGE_TOOLS_ENABLED = judgeEnabled() ? JUDGE_TOOLS : [];
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -967,7 +976,7 @@ const MODEL_BACKED_KITS = [
   ...JUDGE_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LOOP_GATE_TOOLS,                       // the loop gate sells the same judgment (its code-only stops are still a model-backed route)
   ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...STT_TOOLS,
-  ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
+  ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...SUMMARIZE_TOOLS,
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
   ...LINKEDIN_TOOLS,
@@ -1029,12 +1038,13 @@ import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./te
 import { withCallerInputErrors, readableAsText } from "./caller-input-errors.js";
 import { withCapRefusalCount, upstreamCapsWord, upstreamCapRefusals } from "./upstream-cap-refusals.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
-import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
+import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey, limitedWithRetryAfter, retryAfterSecondsOf, retryAfterFromError, toolErrorRetryAfter } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
 import { judgeTimingReport } from "./judge-timing.js";
 import { returningWalletEnabled, returningWalletOfferMiddleware, returningWalletStatus, configureReturningWallet } from "./returning-wallet.js";
+import { upstreamKeyIntake, upstreamKeyTransport, upstreamKeyBound, upstreamKeyGate, upstreamKeyOtherRailRefusal, upstreamKeyListed, upstreamKeyStatus, upstreamKeyApplies, upstreamKeyPriceUsd, configureUpstreamKeys } from "./upstream-key.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
@@ -1839,6 +1849,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   const spendChains = spendChainsConfigured();
   const verdict = dispatchEligibility({
     local,
+    seller: origin || row.url || null,
     routable: local ? true : (row.routable !== undefined ? !!row.routable : true),
     networks,
     settled: ev.settled.get(origin) || 0,
@@ -2116,7 +2127,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // observation. Only the tally is new; the decision is untouched, and it
       // is computed ONCE per candidate rather than once per branch.
       .filter((r) => {
-        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: [chain], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, ...(chain === "base" ? { usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null } : { usdcDomainByChain: { [chain]: r.evmDomainByNetwork?.[evmCfg.caip2] || null } }) });
+        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: [chain], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, seller: r.seller || r.url || null, routeText: r, ...(chain === "base" ? { usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null } : { usdcDomainByChain: { [chain]: r.evmDomainByNetwork?.[evmCfg.caip2] || null } }) });
         const eligible = verdict.chains[chain]?.eligible === true;
         // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
         // else wrong and a price within the ceiling. Kept, marked, and
@@ -2158,6 +2169,14 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // (src/route-category.js, the same one the labels and routeQuery read) is
   // applied here to whatever any branch produced.
   candidates = candidates.filter((r) => {
+    // A seller the router lists and never buys from (src/router-listed-only.js)
+    // is never bought on any chain, whichever catalog the candidate came
+    // from; discovery keeps listing it.
+    if (sellerListedOnly(r.url) || sellerListedOnly(r.seller)) {
+      gateDrops.total++;
+      gateDrops.byReason.listed_only = (gateDrops.byReason.listed_only || 0) + 1;
+      return false;
+    }
     if (!routeExcludedCategory(r)) return true;
     noteExcluded(1);
     return false;
@@ -2832,11 +2851,13 @@ const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/
 const REFERRAL_OWN_HOSTS = [...new Set([(() => { try { return new URL(BASE_URL).host; } catch { return ""; } })(), "agent402.tools"].filter(Boolean))];
 /** The path by which the public route gives this call for less than its
  *  listed price, or null: proof-of-work (and the trial parameter, which only
- *  the same pure-CPU set takes), or the first-call allowance while it is on. */
+ *  the same pure-CPU set takes), the first-call allowance while it is on, or
+ *  a buyer's own upstream key (src/upstream-key.js). */
 function referralCheaperDirect(def) {
   try {
     if (isComputePayable(def)) return "free by proof-of-work or the trial parameter";
     if (firstCallAllowanceEnabled() && allowanceRouteRefusal(def) === null) return "the first-call allowance covers it";
+    if (upstreamKeyListed(def)) return "a buyer's own upstream key prices it at the own-key price";
   } catch { return "could not be checked"; }
   return null;
 }
@@ -3032,6 +3053,11 @@ let catalogPathByFold = null;
 // else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
 // remembered on the request and its secret never reaches a handler.
 app.use(stripMcpMarker);
+// A buyer's own upstream key (X-Agent402-Upstream-Key) leaves the request
+// next, before any other reader sees it (src/upstream-key.js). The marker
+// strip above reads its own header by name only, and the compact-header
+// hook mounted before it reads nothing until a 402's head is written.
+app.use(upstreamKeyIntake());
 // The connector's internal x402 twins (src/mcp-x402-routes.js): a marked
 // loopback request to /__mcp-x402/<slug> is rewritten to the tool's own path
 // here, before every gate, so it runs the HTTP route's chain; any other
@@ -3108,6 +3134,10 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// A buyer's key that arrived over plain HTTP is refused before any payment
+// work (loopback exempt; the scheme rule is in src/upstream-key.js).
+app.use(upstreamKeyTransport({ hops: TRUST_PROXY_HOPS }));
+app.use(upstreamKeyBound());
 // The block reads location only from a request proven to come through the
 // CDN: on with no way to prove that, it never fires, so say so at boot (the
 // sanctionsReport word reads attention too, sanctionsReportWord).
@@ -3151,8 +3181,9 @@ app.use(sanctionedRegionsMiddleware({
 startSanctionsJournalReplay();
 // Money records past their retention period (src/ledger-retention.js): sales
 // and resolved refunds at 7 years, sanctions events at 10. A daily leased pass,
-// a dry run unless LEDGER_RETENTION=apply. Off with LEDGER_RETENTION=off.
-if (String(process.env.LEDGER_RETENTION || "").trim().toLowerCase() !== "off") startLedgerRetention();
+// a dry run unless LEDGER_RETENTION=apply. LEDGER_RETENTION=off skips the money
+// records only: refusal records are removed at 90 days whatever it says.
+startLedgerRetention();
 // A credits key in a URL is refused before anything reads or records the URL
 // (src/credits-key-url.js).
 app.use(refuseCreditsKeyInUrl());
@@ -3369,12 +3400,60 @@ app.use((req, res, next) => {
   if (doc) res.once("finish", () => { try { if (res.statusCode < 400) FUNNEL_TRAIL.note(clientIp(req), doc); } catch { /* optional */ } });
   next();
 });
-function noteFunnelOnFinish(req, res) {
+// The funnel count and the refusal record both read a finished response.
+// They share ONE finish listener per response (a paid, signed answer already
+// carries close to the emitter's listener bound): each registers its turn
+// here, and the turns run in the order they were registered.
+const ROUTE_FINISH_TURNS = Symbol("a402.routeFinishTurns");
+function onRouteFinish(req, res, turn) {
+  let turns = Object.hasOwn(req, ROUTE_FINISH_TURNS) ? req[ROUTE_FINISH_TURNS] : null;
+  if (!turns) {
+    turns = [];
+    Object.defineProperty(req, ROUTE_FINISH_TURNS, { value: turns, enumerable: false });
+    res.once("finish", () => { for (const t of turns) { try { t(); } catch { /* a record never fails a response */ } } });
+  }
+  turns.push(turn);
+}
+function noteFunnelOnFinish(req, res, { def = null, slug = null, routeClass = "direct" } = {}) {
+  noteRefusalOnFinish(req, res, { def, slug, routeClass });
   if (Object.hasOwn(req, "__a402FunnelNoted")) return;
   req.__a402FunnelNoted = true;
-  res.once("finish", () => {
+  onRouteFinish(req, res, () => {
     try { FUNNEL.record(funnelEventOf(req, res, { ours: callIsOurs(req), ownHost: FUNNEL_OWN_HOST }), { ip: clientIp(req) }); } catch { /* counting never fails a response */ }
   });
+}
+// The payment refusal record (src/payment-refusals.js): a request that carried
+// a payment credential and was answered 402, or another 4xx a gate marked,
+// with the payer only when its payment verified on the request. Registered
+// once per request, before every payment gate on the catalog routes (the
+// early hook below) and by the /ref and /aws routes, so a gate that answers
+// on its own (Tempo, Stripe, credits, the resend limit) is recorded too.
+// Best effort, never in the way.
+const REFUSAL_NOTED = Symbol("a402.refusalNoted");
+function noteRefusalOnFinish(req, res, { def = null, slug = null, routeClass = "direct" } = {}) {
+  if (Object.hasOwn(req, REFUSAL_NOTED)) return;
+  Object.defineProperty(req, REFUSAL_NOTED, { value: true, enumerable: false });
+  watchRefusalBody(res);
+  onRouteFinish(req, res, () => {
+    try {
+      const d = def || (slug ? CATALOG_BY_SLUG_FOR_REFUSALS().get(slug) : null);
+      const memo = Number(req.__meteredQuoteUsd);
+      const amountUsd = Number.isFinite(memo) && memo > 0 ? memo : d ? Number(String(d.price ?? "").replace(/[^0-9.]/g, "")) || null : null;
+      const r = refusalOfResponse(req, res, { hadCredential: hadPaymentCredential, slug: d?.slug || slug, routeClass, amountUsd });
+      if (r) recordPaymentRefusal(r);
+    } catch { /* the record never fails a response */ }
+  });
+}
+// The catalog route a request names, as the gates and the method alias below
+// read it (a POST to a GET-only tool, a GET or HEAD to a POST-only one).
+function catalogDefForRefusal(req) {
+  const p = req.path;
+  return CATALOG[`${req.method} ${p}`] || (req.method === "POST" ? CATALOG[`GET ${p}`] : (req.method === "GET" || req.method === "HEAD") ? CATALOG[`POST ${p}`] : null) || null;
+}
+let catalogBySlugForRefusals = null;
+function CATALOG_BY_SLUG_FOR_REFUSALS() {
+  if (!catalogBySlugForRefusals) { catalogBySlugForRefusals = new Map(); for (const d of Object.values(CATALOG)) if (d?.slug && !catalogBySlugForRefusals.has(d.slug)) catalogBySlugForRefusals.set(d.slug, d); }
+  return catalogBySlugForRefusals;
 }
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
 app.use((req, res, next) => {
@@ -3493,7 +3572,8 @@ const _monitorTargetValidators = {
     const key = String(t).trim().toLowerCase().slice(0, 200);
     const hit = _fundResolveCache.get(key);
     if (hit && Date.now() - hit.at < 60 * 60_000) { if (hit.err) throw hit.err; return hit.name; }
-    if (_fundResolveLimiter.check("global").limited) { const e = new Error("Fund lookups are busy right now. Enter the manager's SEC CIK number, or try again in a minute."); e.statusCode = 429; e.buyerSafe = true; throw e; }
+    const fundRl = _fundResolveLimiter.check("global");
+    if (fundRl.limited) { const e = new Error("Fund lookups are busy right now. Enter the manager's SEC CIK number, or try again in a minute."); e.statusCode = 429; e.retryAfter = retryAfterSecondsOf(fundRl.retryAfterSeconds); e.buyerSafe = true; throw e; }
     try {
       const r = /^\d{1,10}$/.test(t) ? await edgarResolveManager({ cik: t }) : await edgarResolveManager({ name: t });
       const name = r?.name || t;
@@ -3618,6 +3698,11 @@ startSharedLimitsProbe();
 // The returning-wallet price reads a wallet's paid days from the sales ledger
 // (the mirror, in database mode) and never discounts one of our own wallets;
 // a wallet proof names this server's host name (BASE_URL's).
+// The payer a payment header names is read on every x402 rail: the EVM
+// authorization's signer, else the signer of the Solana, Stellar or Algorand
+// transaction (src/non-evm-payer.js, case kept). The key gate reads it, and a
+// refused key is recorded under it.
+configureUpstreamKeys({ catalog: () => CATALOG, claimedPayerOf: (req) => payerFromRequest(req) || nonEvmPayerFromRequest(req) });
 configureReturningWallet({ paidDays: (wallet, sinceMs, minDayUsd) => payerPaidDays(wallet, sinceMs, minDayUsd), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
@@ -3715,7 +3800,7 @@ const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perH
 const alertsEmailLimiter = createRateLimiter("alerts-email", { perMin: 2, perHour: 5 });
 const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:var(--fs-2xl);margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
 app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
-  if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
+  if (limitedWithRetryAfter(res, alertsSignupLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
   const b = req.body || {};
   for (const k of ["email", "kind", "target", "source"]) if (b[k] !== null && typeof b[k] === "object") return res.status(400).json({ error: `"${k}" must be a string` });
   if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot: bots see success, nothing is stored
@@ -3723,7 +3808,7 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
   try { res.json(await _freeAlerts.signup({ email: b.email, kind: b.kind, target: b.target, source: b.source })); }
   catch (e) {
-    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+    if (e?.buyerSafe && e.statusCode) return retryAfterFromError(res, e).status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
     console.warn("[free-alerts] signup failed:", redactSecrets(String(e?.message || e)).slice(0, 160));
     res.status(500).json({ error: "Could not sign you up. Please try again." });
   }
@@ -3945,7 +4030,7 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: fa
   res.setHeader("X-Content-Type-Options", "nosniff");
   if (!PH_METHODS.has(req.method)) return res.status(405).end();
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
-  if (phProxyLimiter.check(ip).limited) return res.status(429).end();
+  if (limitedWithRetryAfter(res, phProxyLimiter.check(ip))) return res.status(429).end();
   // Only the paths the analytics library uses (src/posthog-proxy.js), checked
   // before any upstream call.
   if (!posthogProxyPathAllowed(req.params[0] || "")) {
@@ -3971,6 +4056,8 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: fa
     if (!posthogProxyTypeAllowed(up.headers.get("content-type"))) { try { await up.body?.cancel(); } catch { /* */ } return res.status(502).end(); }
     res.status(up.status);
     for (const h of ["content-type", "cache-control"]) { const v = up.headers.get(h); if (v) res.setHeader(h, v); }
+    // A relayed 429 keeps the upstream's own wait (or one minute when it names none).
+    if (up.status === 429) { const ra = String(up.headers.get("retry-after") || "").trim(); res.setHeader("Retry-After", /^\d{1,6}$/.test(ra) ? ra : "60"); }
     // Perf: fetch() transparently DECOMPRESSES posthog's gzip, and this route
     // mounts before the compression middleware — so the 228KB analytics lib
     // was reaching phones as plaintext (Lighthouse: 155KB wasted, the top
@@ -4311,7 +4398,7 @@ app.use(["/v1/metered", ...REFERRAL_METERED_PATHS], (req, res, next) => {
 // letting the in-route checks run again - one request must consume one token.
 app.use(CHECKOUT_RATE_PATHS, (req, res, next) => {
   if (req.method !== "POST") return next();
-  if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+  if (limitedWithRetryAfter(res, checkoutLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
   req.__checkoutRateChecked = true;
   next();
 });
@@ -4337,6 +4424,8 @@ app.use(REVENUE_READ_PATHS, (req, res, next) => {
     : res.status(429).json({ error: "Too many requests", detail: "The transaction surfaces are cached 30-300s; poll no faster than that.", retryAfterSeconds: 60 });
 });
 
+// A search body is bounded and parsed before the global parser (src/well-known-search.js).
+app.use(WELL_KNOWN_SEARCH_PATH, wellKnownSearchBodyGate());
 app.use(unlessBodyUnread(express.json({ limit: "100kb" })));
 // Decide execute is quoted from the decision and the caller's credit, read
 // synchronously from the ledger's mirror when the 402 is priced. Before any
@@ -4451,14 +4540,15 @@ app.use(rugcheckPauseMiddleware(
   { pushException: (req, message) => withPushException(req, message) },
 ));
 
-// With no active stock provider (src/tools/stock-provider.js) the stock tools
-// and the packs whose answer is the stock data (src/skills.js) are not listed anywhere; a call to one of their
-// routes answers a free 503 naming the slug, ahead of every payment gate, so
-// it is never a 402 and never the guessed-slug 404.
-if (!stockDataEnabled()) {
+// A stock tool this boot does not serve (src/tools/stock-provider.js: every
+// one with no active provider, and stock-quote always) and the packs whose
+// answer is that stock data (src/skills.js) are not listed anywhere; a call to
+// one of their routes answers a free 503 naming the slug, ahead of every
+// payment gate, so it is never a 402 and never the guessed-slug 404.
+{
   const notOffered = new Map([
-    ...[...STOCK_SLUGS].map((slug) => [`/api/${slug}`, slug]),
-    ...[...STOCK_CORE_PACK_SLUGS].map((slug) => [`/api/skill/${slug}`, `skill-${slug}`]),
+    ...[...STOCK_SLUGS].filter((slug) => !stockToolServed(slug)).map((slug) => [`/api/${slug}`, slug]),
+    ...[...STOCK_CORE_PACK_SLUGS].filter((slug) => !packServedInFull(slug)).map((slug) => [`/api/skill/${slug}`, `skill-${slug}`]),
   ]);
   app.use((req, res, next) => {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
@@ -5161,11 +5251,15 @@ app.post(RECEIPT_VERIFY_PATH, express.json({ limit: "256kb" }), (req, res) => {
   }
   const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   if (typeof b.receipt !== "string" || !b.receipt) return res.status(400).json({ error: "Send { receipt } (the Agent402-Receipt header value); optionally body (the answer text) or bodySha256, and request { method, path, body }." });
-  const opts = {};
-  if (typeof b.body === "string") opts.responseBody = b.body;
-  else if (typeof b.bodySha256 === "string") opts.responseSha256 = b.bodySha256;
-  if (b.request && typeof b.request === "object" && !Array.isArray(b.request) && typeof b.request.method === "string" && typeof b.request.path === "string") opts.request = { method: b.request.method, path: b.request.path, body: b.request.body };
-  return res.json(verifyReceipt(b.receipt, opts));
+  // The same reading the receipt-verify tool makes (src/receipt-signing.js),
+  // its refusal of a body nested too deep included: a 400 that names the field.
+  let verdict;
+  try { verdict = checkReceiptSubmission(b); }
+  catch (err) {
+    if (err?.statusCode !== 400) throw err;
+    return res.status(400).json({ error: redactSecrets(String(err.message)).slice(0, 300), field: err.field ?? null });
+  }
+  return res.json(verdict);
 });
 // A streamed paid answer's receipt, kept where its head said
 // (X-Agent402-Receipt-Url): the same receipt a trailer would carry. Keyed by
@@ -5290,7 +5384,7 @@ app.get("/reports/public/:publicId", async (req, res, next) => {
     return next();
   }
   res.vary("Accept");
-  if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
+  if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
   res.set("Link", `</reports/public/${encodeURIComponent(raw)}.json>; rel="alternate"; type="application/json"`);
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
@@ -5310,7 +5404,7 @@ app.get("/reports/public/:publicId", async (req, res, next) => {
   }));
 });
 app.get("/api/reports/public/:publicId", async (req, res) => {
-  if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+  if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
   // A report a model wrote carries the AI mark here as on the buyer's own link.
@@ -5853,7 +5947,7 @@ if (_credits) {
     // Sales off: refuse before Stripe is touched, so no session is created and
     // no obligation exists. Redemption below is untouched on purpose.
     if (!creditsSalesEnabled()) return res.status(503).json({ error: "Prepaid credits are not on sale. Existing keys still work and spend down as normal; pay per call with a wallet over x402, or buy a report by card." });
-    if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (!req.__checkoutRateChecked && limitedWithRetryAfter(res, checkoutLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
     // A purchase belongs to an account: it starts from the balance page,
     // signed in with the email the credits go to (POST /credits/account/buy).
     res.status(401).json({ error: "Sign in to buy credits: a purchase starts from your balance page, signed in with the email the credits go to.", signIn: `${BASE_URL}/credits/account`, buy: { method: "POST", url: `${BASE_URL}/credits/account/buy`, body: { pack: Object.keys(sellablePacks())[0] || null } } });
@@ -5872,7 +5966,7 @@ if (_credits) {
   });
   app.get("/api/credits/claim", async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+    if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
     try { res.json(await _credits.claim(String(req.query.session || ""))); }
     catch (e) { console.warn("[credits] claim failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not claim the key right now." }); }
   });
@@ -6008,7 +6102,7 @@ if (humanCheckoutEnabled()) {
       res.set("Cache-Control", "no-store").json({ ...(await _humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
     });
     app.post("/api/buy", async (req, res) => {
-      if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+      if (!req.__checkoutRateChecked && limitedWithRetryAfter(res, checkoutLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
       const product = typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null;
       try {
         const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input, { source: req.body?.source })).url;
@@ -6019,7 +6113,7 @@ if (humanCheckoutEnabled()) {
         try { capturePostHogHumanFunnel({ step: "checkout_refused", product, reason: e?.statusCode && e.statusCode < 500 ? String(e.message).slice(0, 80) : "server" }); } catch { /* telemetry never breaks the request */ }
         // Our own 4xx messages are safe to show; a Stripe/SDK error is logged
         // and answered generically (its text can echo key mode/request detail).
-        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+        if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return retryAfterFromError(res, e).status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
         console.warn("[human-checkout] createSession failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
         res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
       }
@@ -6034,14 +6128,14 @@ if (humanCheckoutEnabled()) {
     });
     // The session id is the bearer: only its holder can publish or unpublish.
     app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), async (req, res) => {
-      if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+      if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
       const r = await _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
       if (r.status !== "done") return res.status(r.status === "invalid" ? 400 : 404).json(r);
       try { capturePostHogHumanFunnel({ step: r.public ? "report_published" : "report_unpublished" }); } catch { /* telemetry never breaks the request */ }
       res.set("Cache-Control", "no-store").json({ ...r, url: r.public ? `${BASE_URL}/reports/public/${r.publicId}` : null });
     });
     app.get("/api/r/:sessionId", async (req, res) => {
-      if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+      if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
       try { res.set("Cache-Control", "no-store").json(withReportAiMark(res, await _humanCheckout.fulfill(String(req.params.sessionId || "")))); }
       catch (e) {
         // The detail (a database or driver message) is for the operator log only.
@@ -6070,21 +6164,21 @@ app.post("/monitors/manage-link", express.urlencoded({ extended: false, limit: "
 // lifecycle (renewals/cancellations) in sync.
 if (_subs) {
   app.post("/api/subscribe", async (req, res) => {
-    if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (!req.__checkoutRateChecked && limitedWithRetryAfter(res, checkoutLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
     try {
       const url = (await _subs.createCheckout(req.body?.product, req.body?.target, { source: req.body?.source })).url;
       try { capturePostHogHumanFunnel({ step: "monitor_checkout_started", product: typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null }); } catch { /* telemetry never breaks the request */ }
       res.json({ url });
     }
     catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
+      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return retryAfterFromError(res, e).status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
       console.warn("[monitors] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
   });
   app.get("/api/monitors/confirm", async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+    if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
     try {
       const r = await _subs.recordFromSession(String(req.query.session || ""));
       // Do NOT mint a billing portal on the auto-poll (a portal can view invoices
@@ -6105,7 +6199,7 @@ if (_subs) {
   // email only). The bare report id is deliberately NOT enough: subscribers are
   // told to share report links, and the portal shows card/billing details.
   app.get("/monitors/manage", async (req, res) => {
-    if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("text").send("Too many requests");
+    if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).type("text").send("Too many requests");
     try {
       let customer = null;
       if (req.query.report && _monitors) {
@@ -6160,7 +6254,7 @@ if (_mppSubs) {
   // settles and the subscription exists.
   app.post("/api/mpp/monitors/subscribe", mppSubscribeHandler({
     engine: _mppSubs,
-    rateLimited: (req) => checkoutLimiter.check(clientIp(req)).limited,
+    rateLimited: (req) => checkoutLimiter.check(clientIp(req)),
     isCanary: (req) => isSyntheticRequest(req),
   }));
 
@@ -6174,7 +6268,7 @@ if (_mppSubs) {
   const mppManageHeaders = (res) => res.set(MANAGE_RESPONSE_HEADERS);
   const mppMonitorStatus = async (req, res) => {
     mppManageHeaders(res);
-    if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
     const subId = String(req.params.subId || "");
     // Read fresh: the subscription may have been activated or cancelled on
     // the other container moments ago.
@@ -6197,7 +6291,7 @@ if (_mppSubs) {
   app.post("/api/mpp/monitors/:subId", mppMonitorStatus);
   app.post("/api/mpp/monitors/:subId/cancel", async (req, res) => {
     mppManageHeaders(res);
-    if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (limitedWithRetryAfter(res, sessionReadLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json(await _mppSubs.cancel(String(req.params.subId || ""), mppManageTokenOf(req))); }
     catch (e) {
       if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
@@ -7235,7 +7329,7 @@ app.get("/__operator/login", (_req, res) => {
 });
 app.post("/__operator/login", async (req, res) => {
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
-  if (operatorLoginLimiter.check(ip).limited) return res.status(429).json({ ok: false, error: "too many attempts, slow down" });
+  if (limitedWithRetryAfter(res, operatorLoginLimiter.check(ip))) return res.status(429).json({ ok: false, error: "too many attempts, slow down" });
   const token = typeof req.body?.token === "string" ? req.body.token : "";
   if (!operatorTokenOk(token)) { noteOperatorAuthFailure(); return res.status(401).json({ ok: false, error: "invalid token" }); }
   // A correct root token supersedes whatever failures this IP has accumulated.
@@ -7574,6 +7668,13 @@ app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
     return withDispatchFields({ ...t, priceUsd }, { rowLevel: true }).routerDispatchByChain?.base?.eligible === true;
   },
 }));
+// Calls made with a buyer's own upstream key are left out of the egress count
+// (they are the buyer's calls): their outcomes per tool since boot are here.
+// No key, payer or address (src/upstream-key.js).
+app.get("/__operator/upstream-key.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "no-store").json(upstreamKeyStatus());
+});
 app.get("/__operator/egress.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // Cheap read of an in-memory counter - no upstream, so no heavy-route limiter.
@@ -8199,6 +8300,21 @@ app.get("/__operator/sanctions-events.json", async (req, res) => {
   res.set("Cache-Control", "private, no-store");
   try { res.json({ ...(await sanctionsEventsOperatorView()), geo: sanctionedRegionsView() }); }
   catch (e) { res.status(503).json({ error: `the sanctions events store could not be read (${redactSecrets(String(e?.message || e)).slice(0, 120)})` }); }
+});
+// The payment refusal record (src/payment-refusals.js): refused paid attempts
+// by day, filtered by payer, slug, reason and since, with a per-day count by
+// reason. Private: operator token only.
+app.get("/__operator/refusals.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorLedgerLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const f = refusalFiltersOf(req.query || {});
+  if (f.error) return res.status(400).json({ error: f.error });
+  try {
+    const want = req.query?.limit;
+    const v = await paymentRefusalsView(f, { limit: want });
+    res.json({ filters: { payer: f.payer, slug: f.slug, reason: f.reason, sinceDay: f.sinceDay, sinceAt: f.sinceAt }, ...partialFields(v.matched, v.returned), ...clampFields(want, REFUSALS_READ_MAX), rows: v.rows, summary: { byDay: v.summary }, status: paymentRefusalsStatus() });
+  } catch (e) { res.status(503).json({ error: `the refusal record could not be read (${redactSecrets(String(e?.message || e)).slice(0, 120)})` }); }
 });
 // The money records' retention pass (src/ledger-retention.js): its last run.
 app.get("/__operator/ledger-retention.json", (req, res) => {
@@ -9158,24 +9274,26 @@ const withRouteAnswerNote = (req, res, source) => {
 // this public surface) record no find-miss: re-running the demand board's
 // queries must not add to it. The answer body is unchanged; operatorView keys
 // every answer on the header and makes the operator's private, no-store.
-app.get("/api/find", (req, res) => {
+// One serving path for every find surface (/api/find either verb, and
+// /.well-known/search): the same answer cache, search limits and miss rule.
+const serveFindQuery = (req, res, { q, k }) => {
   withRouteAnswerNote(req, res, "find");
-  const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
+  const quiet = operatorView(req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
+};
+app.get("/api/find", (req, res) => {
   // `top` as well as `k`: the sibling /api/route accepts BOTH, so a caller that
   // learned one name there and reused it here was silently handed the 5-result
   // default and told `count: 5`. Same defect as the index listing taking only
   // `limit` while a consumer guessed `perPage` (2026-09-22).
-  const k = req.query.k ?? req.query.top;
-  const quiet = operatorView(req, res);
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
+  return serveFindQuery(req, res, { q: readableAsText(req.query.q ?? req.query.task ?? req.query.query), k: req.query.k ?? req.query.top });
 });
-app.post("/api/find", (req, res) => {
-  withRouteAnswerNote(req, res, "find");
-  const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
-  const k = req.body?.k ?? req.body?.top;
-  const quiet = operatorView(req, res);
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
-});
+app.post("/api/find", (req, res) => serveFindQuery(req, res, { q: readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query), k: req.body?.k ?? req.body?.top }));
+// The site search endpoint (src/well-known-search.js): GET ?q= or QUERY with
+// the task in the body, answered by the find serving path above.
+// Every answer of the search endpoint varies on the operator header, its own
+// refusals (a missing task, an oversized body) included, as /api/find's do.
+app.all(WELL_KNOWN_SEARCH_PATH, (req, res, next) => { operatorView(req, res); next(); }, wellKnownSearchHandler({ serveFind: serveFindQuery, baseUrl: BASE_URL }));
 
 // Agent wish loop: free, pre-paywall, like /api/find. When an agent needs a
 // tool we don't have, this captures that demand instead of losing it
@@ -9189,7 +9307,7 @@ const decideFeedbackLimiter = createRateLimiter("decide-feedback", { perMin: 30,
 let _decideFeedback = null;
 app.post("/api/decide/feedback", express.json({ limit: "4kb" }), (req, res) => {
   if (!decideEnabled() || !decideLedger()) return res.status(404).json({ error: "Not found" });
-  if (decideFeedbackLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many reports from this address. Try again shortly." });
+  if (limitedWithRetryAfter(res, decideFeedbackLimiter.check(clientIp(req)))) return res.status(429).json({ error: "Too many reports from this address. Try again shortly." });
   try {
     _decideFeedback ||= makeFeedbackHandler({ ledger: decideLedger() });
     res.json(_decideFeedback(req.body));
@@ -9204,7 +9322,7 @@ app.post("/api/wish", (req, res) => {
     res.json(result);
   } catch (err) {
     const status = err.statusCode || 500;
-    res.status(status).json({ error: redactSecrets(err?.message) });
+    retryAfterFromError(res, err).status(status).json({ error: redactSecrets(err?.message) });
   }
 });
 // PUBLIC BEACON: aggregate totals + qualified-cluster COUNT only — never the
@@ -10522,12 +10640,12 @@ app.post("/api/index/register", async (req, res) => {
   // An IPv6 client is keyed on its /64: one host is routinely assigned a whole
   // /64, so a full-address key gave it a fresh 5/hour per address.
   const ip = limiterKey(req.ip || "?");
-  if (!(await regLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!(await regLimiter.ipAllowed(ip, now))) return res.set("Retry-After", String(REG_WINDOW_MS / 1000)).status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
   if (v.error) return res.status(400).json({ error: v.error });
   if (isRemovedOrigin(v.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
   const taken = await regLimiter.take(ip, now);
-  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok && taken.reason === "ip") return res.set("Retry-After", String(REG_WINDOW_MS / 1000)).status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   if (!taken.ok) {
     // A global cap is a backstop, not the fairness mechanism - the per-IP cap
     // above is. At 30/hour it did the second job badly: one actor spending 5
@@ -10542,7 +10660,7 @@ app.post("/api/index/register", async (req, res) => {
       console.warn(`[index-register] GLOBAL cap hit (${REG_GLOBAL_MAX} in the last hour across replicas) - NEW sellers are being refused`);
       regGlobalTripped = now;
     }
-    return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
+    return res.set("Retry-After", "600").status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   }
   const slot = taken.slot;
   // Optional succession: a seller moving off a throwaway host to a permanent
@@ -10591,12 +10709,12 @@ setInterval(() => { mppRegLimiter.sweep(); }, 60_000).unref?.();
 app.post("/api/mpp-index/register", async (req, res) => {
   const now = Date.now();
   const ip = limiterKey(req.ip || "?");
-  if (!(await mppRegLimiter.ipAllowed(ip, now))) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!(await mppRegLimiter.ipAllowed(ip, now))) return res.set("Retry-After", String(REG_WINDOW_MS / 1000)).status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
   const v = validateMppOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
   if (v.error) return res.status(400).json({ error: v.error });
   const taken = await mppRegLimiter.take(ip, now);
-  if (!taken.ok && taken.reason === "ip") return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
-  if (!taken.ok) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
+  if (!taken.ok && taken.reason === "ip") return res.set("Retry-After", String(REG_WINDOW_MS / 1000)).status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
+  if (!taken.ok) return res.set("Retry-After", "600").status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
   const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method, registrant: ip });
@@ -11523,6 +11641,8 @@ app.get("/api/pow/challenge", (req, res) => {
   if (!ts) powChallengeHits.set(ip, (ts = []));
   while (ts.length && ts[0] < now - 60000) ts.shift();
   if (ts.length >= POW_CHALLENGE_PER_MIN) {
+    // The oldest request in the minute leaves the window first.
+    res.set("Retry-After", String(retryAfterSecondsOf((ts[ts.length - POW_CHALLENGE_PER_MIN] + 60000 - now) / 1000)));
     return res.status(429).json({ error: `Too many challenge requests (${POW_CHALLENGE_PER_MIN}/min). Solve the ones you have, or pay via x402.` });
   }
   ts.push(now);
@@ -11708,7 +11828,8 @@ const mcpMountOpts = {
   // refreshed in-process; safe to call freely from /mcp.
   // The same per-IP limiter as POST /api/decide/feedback: feedback moves ranking.
   decideFeedback: decideEnabled() && decideLedger() ? (args, ctx = {}) => {
-    if (decideFeedbackLimiter.check(ctx.ip || "?").limited) throw Object.assign(new Error("Too many reports from this address. Try again shortly."), { statusCode: 429 });
+    const rl = decideFeedbackLimiter.check(ctx.ip || "?");
+    if (rl.limited) throw Object.assign(new Error("Too many reports from this address. Try again shortly."), { statusCode: 429, retryAfter: retryAfterSecondsOf(rl.retryAfterSeconds) });
     _decideFeedback ||= makeFeedbackHandler({ ledger: decideLedger() });
     return _decideFeedback(args);
   } : null,
@@ -12287,7 +12408,7 @@ if (REFERRAL_GATE) {
   // Every answer the copy sends (a 200) is tallied per slug and day: the
   // "served" side of the operator's reconciliation (below).
   const referralRoute = (req, res) => {
-    noteFunnelOnFinish(req, res);
+    noteFunnelOnFinish(req, res, { slug: typeof req.params?.slug === "string" ? req.params.slug : null, routeClass: "ref" });
     res.once("finish", () => { if (res.statusCode === 200) { try { recordReferralAnswer(req.params?.slug); } catch { /* a tally never fails a call */ } } });
     return REFERRAL_GATE.handler(req, res);
   };
@@ -12333,7 +12454,7 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
   const awsRoute = async (req, res, next) => {
     const gate = AWS_GATE || await awsGateReady;
     if (!gate) return next();
-    noteFunnelOnFinish(req, res);
+    noteFunnelOnFinish(req, res, { slug: typeof req.params?.slug === "string" ? req.params.slug : null, routeClass: "aws" });
     return gate.handler(req, res, next);
   };
   app.get(AWS_JWKS_PATH, async (req, res, next) => {
@@ -12484,6 +12605,11 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
 // gate below; read again at finish to void a debt whose transfer was served.
 let tempoPushDebts = null;
+// The refusal record's finish hook, ahead of every payment gate (see noteRefusalOnFinish).
+app.use((req, res, next) => {
+  try { const def = catalogDefForRefusal(req); if (def) noteRefusalOnFinish(req, res, { def }); } catch { /* never in the way */ }
+  next();
+});
 if (!FREE_MODE) {
   // A buyer who hangs up before the first byte is not charged, within the
   // hang-up forgiveness budget (src/hangup-settlement.js,
@@ -12557,7 +12683,7 @@ if (!FREE_MODE) {
     secretKey: process.env.MPP_SECRET_KEY || "",
     priceFor: (method, path, req) => {
       const def = CATALOG[`${method} ${path}`];
-      if (!def) return null;
+      if (!def || upstreamKeyApplies(req, def)) return null;
       const priceUsd = quotedPriceUsd(def, req);
       if (!priceUsd) return null;
       return { priceUsd, description: def.name, identityBound: isIdentityBoundRoute(def), longRunning: isLongRunningSlug(def.slug) };
@@ -12573,7 +12699,7 @@ if (!FREE_MODE) {
     realm: new URL(BASE_URL).host,
     priceFor: (method, path, req) => {
       const def = CATALOG[`${method} ${path}`];
-      if (!def) return null;
+      if (!def || upstreamKeyApplies(req, def)) return null;
       const priceUsd = cardPriceUsd(def, req);
       if (!priceUsd) return null;
       return { priceUsd, description: def.name, identityBound: isIdentityBoundRoute(def), longRunning: isLongRunningSlug(def.slug) };
@@ -12668,6 +12794,13 @@ if (!FREE_MODE) {
     // Input check before the relay round trip (see createTempoGate). Same
     // envelope the dispatcher's 400 carries, so the caller corrects itself.
     preValidate: (req) => {
+      // A buyer's own upstream key is taken with an x402 payment only
+      // (src/upstream-key.js). Refused here, where this gate checks a
+      // request's input: before a pull credential is validated or broadcast,
+      // and before a push transfer is claimed (it is booked as owed until the
+      // credential comes back without the header, like any input refusal).
+      const keyed = upstreamKeyOtherRailRefusal(req, CATALOG[`${req.method} ${req.path}`]);
+      if (keyed) return keyed;
       const bad = preValidateInput(CATALOG[`${req.method} ${req.path}`], req);
       if (bad?.body && typeof bad.body.error === "string") bad.body.error = withPushException(req, bad.body.error);
       return bad;
@@ -12817,6 +12950,15 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// A buyer's own upstream key is decided here, after the Tempo, card and
+// credits gates and before the paywall that prices it (src/upstream-key.js).
+// The payer the payment header names is read by the reader handed to
+// configureUpstreamKeys. A transfer another rail has already claimed (a
+// Tempo push credential) is never refused here.
+app.use(upstreamKeyGate((req) => CATALOG[`${req.method} ${req.path}`] || null, {
+  claimedOf: (req) => req.tempoSettled === true && !!tempoPushHashOf(req),
+}));
 
 // Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
 // credits gate and the method alias, and before the paywall, so a replay hit
@@ -13130,7 +13272,7 @@ if (FREE_MODE) {
   app.use((req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) {
-      noteFunnelOnFinish(req, res);
+      noteFunnelOnFinish(req, res, { def });
       // Make the free tier DISCOVERABLE at the moment of rejection: PostHog
       // showed 2.1M 402 challenges vs 235 PoW challenges issued in 14 days —
       // the on-ramp exists but nothing at the paywall points to it. For
@@ -14261,7 +14403,7 @@ function withToolCallLog(slugOf, handler) {
     } catch (err) {
       latencyMs = Date.now() - startedAt;
       const status = Number(err?.statusCode) >= 400 ? Number(err.statusCode) : 500;
-      if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+      toolErrorRetryAfter(res, err, status);
       const def = CATALOG[`${req.method} ${req.path}`];
       // A coverage refusal logs as on the kit dispatcher: the wallet's first
       // in a minute prints its "[tool-error]" line, the rest are counted in
@@ -14467,7 +14609,7 @@ function sendToolError(res, err, slug) {
   // Scrubbed like the route binder's answer (src/tools/redact.js).
   const errorMessage = redactSecrets(err?.message);
   logToolError(slug || "unknown", status, errorMessage, undefined, isSyntheticRequest(res.req));
-  if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+  toolErrorRetryAfter(res, err, status);
   // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
   if (err?.shed === true && res.locals) res.locals.shed = true;
   return res.status(status).json({
@@ -14744,6 +14886,8 @@ for (const tool of ALL_KIT) {
         if (await compositeGuardBlocked(guardKey)) {
           const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
+          // The block's own length: it lifts on its own by then.
+          e.retryAfter = compositeGuardRetryAfterSeconds(guardKey);
           throw e;
         }
         // onSettleOutcome reports the final outcome whether or not the buyer
@@ -15055,7 +15199,7 @@ for (const tool of ALL_KIT) {
       // the caller's ("upstream", "upstream-access", "ours", "unknown") is
       // not the input, so no schema hint.
       const fromUpstream = notCallersInput(err, 0);
-      if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+      toolErrorRetryAfter(res, err, status);
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
       const provenance = toolErrorFields(err);
@@ -15649,7 +15793,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushSanctionsEvents, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushSanctionsEvents, flushPaymentRefusals, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

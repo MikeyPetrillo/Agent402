@@ -1,6 +1,7 @@
 // Opt-in idempotency for catalog routes, mounted by src/server.js right after
 // the credits gate and before the paywall. Lives here so its tests drive the
 // same code the server runs (scripts/test-idempotency-inflight.js).
+import { markPaymentRefusal } from "./refusal-mark.js";
 import { createHash } from "node:crypto";
 import { bodyDigestOf } from "./body-digest.js";
 import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./payer.js";
@@ -472,6 +473,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       let spent = null;
       try { spent = typeof settledFirstResendSpent === "function" ? await settledFirstResendSpent(req, { ...credit, resends }) : null; } catch { spent = null; }
       store.release(cKey).catch(() => {});
+      markPaymentRefusal(req, "resend_limit_reached");
       res.status(Number(spent?.status) || 402).json(spent?.body && typeof spent.body === "object" ? spent.body : { error: "resend_limit_reached", charged: true, refundOwed: true, resends: { max: SETTLE_FIRST_MAX_RESENDS } });
       return true;
     }

@@ -379,6 +379,33 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
 }
 
 // ---------------------------------------------------------------------------
+// 8c) The minter's name and symbol enter the delivered markdown as inert text:
+//     no heading, link, code, emphasis or table syntax of theirs renders, in
+//     the header or a source line; the report viewer shows the plain text.
+// ---------------------------------------------------------------------------
+{
+  const NAME = "# Buy now [x](http://e.x) `run` **big** | <b>";
+  const SYM = "`$X`|<i>";
+  stub({ rcReport: { ...RC_REPORT, tokenMeta: { ...RC_REPORT.tokenMeta, name: NAME, symbol: SYM } }, jupSearch: [{ ...JUP_TOKEN, name: NAME, symbol: SYM }] });
+  const r = await handler({ mint: MINT });
+  restore();
+  const head = r.report.split("\n")[0];
+  ok(head === "# Solana Token Due-Diligence Brief: \\# Buy now \\[x\\](e.x) \\`run\\` \\*\\*big\\*\\* \\| \\<b\\> (\\`$X\\`\\|\\<i\\>)", `the header escapes every markdown character of the name and symbol (${head})`);
+  ok(!/http:\/\/e\.x/.test(r.report), "a URL in the name is reduced to its host in the delivered markdown");
+  const srcLines = r.report.slice(r.report.indexOf("## Sources")).split("\n").filter((l) => /^\[\d+\] /.test(l));
+  const symLines = srcLines.filter((l) => l.includes("$X"));
+  ok(symLines.length >= 1 && symLines.every((l) => l.includes("\\`$X\\`\\|\\<i\\>")), `a source line naming the symbol escapes it (${symLines[0]})`);
+  ok(r.sources.some((s) => s.title.includes(SYM)), "the structured sources keep the symbol as data, unescaped");
+  ok(r.evidence.identity.name === NAME && r.meta.symbol === SYM, "the evidence and meta keep the name and symbol as data");
+  const { reportDoneHtml } = await import("../src/report-prerender.js");
+  const html = reportDoneHtml({ status: "done", kind: "token-brief", title: "t", report: r.report, sources: r.sources, tables: r.tables, at: "2026-01-01T00:00:00Z" }, {});
+  const h1 = (/<h1>([^\n]*?)<\/h1>/.exec(html) || [])[1] || "";
+  ok(h1.includes("# Buy now [x](e.x) `run` **big** | &lt;b&gt; (`$X`|&lt;i&gt;)") && !/<strong>|<a |<b>|\\/.test(h1), `the viewer draws the header as the plain name, no markup and no backslash (${h1})`);
+  // Live control: a plain name is unchanged.
+  ok(happy.report.startsWith("# Solana Token Due-Diligence Brief: Jupiter (JUP)\n") && !happy.report.split("## Sources")[1].includes("\\"), "a plain name and its source lines are unchanged");
+}
+
+// ---------------------------------------------------------------------------
 // 9) Bucket helpers
 // ---------------------------------------------------------------------------
 {

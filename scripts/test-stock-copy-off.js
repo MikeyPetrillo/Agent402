@@ -27,7 +27,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
-import { STOCK_CORE_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } from "../src/skills.js";
+import { STOCK_CORE_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, STOCK_SERVED_PACK_SLUGS, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } from "../src/skills.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -86,10 +86,13 @@ for (const f of samples) {
   for (const [path, s] of strings) for (const x of scan(s)) findings.push(`${f} ${path} line ${x.line} ${x.what}: ${x.text}`);
 }
 
-// A pack that runs a stock step only with a provider sells at two prices
-// (src/skills.js PACK_PRICE_TABLE with one, PACK_PRICES_WITHOUT_STOCK without),
-// so a markdown line pricing it states both, "$a (with a stock data provider:
-// $b)", and both match the tables: the docs read true in either state.
+// A pack that runs a stock step only with a provider (STOCK_SERVED_PACK_SLUGS:
+// its stock steps are all stock-history) sells at two prices (src/skills.js
+// PACK_PRICE_TABLE with one, PACK_PRICES_WITHOUT_STOCK without), so a markdown
+// line pricing it states both, "$a (with a stock data provider: $b)", and both
+// match the tables: the docs read true in either state. A trimmed pack whose
+// stock step is stock-quote is trimmed in both states, so its line states one
+// price, the trimmed one.
 {
   const DUAL = /\$(\d+\.\d+) \(with a stock data provider: \$(\d+\.\d+)\)/;
   const bad = [];
@@ -101,6 +104,11 @@ for (const f of samples) {
       const named = [...STOCK_TRIMMED_PACK_SLUGS].filter((s) => new RegExp(`/skills/${esc(s)}(?![a-z0-9-])`).test(line));
       if (named.length !== 1) return;
       const s = named[0], m = line.match(DUAL);
+      if (!STOCK_SERVED_PACK_SLUGS.has(s)) {
+        if (m) bad.push(`${f}:${i + 1} ${s}: states a price with a provider, but its stock step is never served`);
+        else if (prices[0] !== PACK_PRICES_WITHOUT_STOCK[s]) bad.push(`${f}:${i + 1} ${s}: says $${prices[0]}, the table says $${PACK_PRICES_WITHOUT_STOCK[s]}`);
+        return;
+      }
       if (!m) { bad.push(`${f}:${i + 1} ${s}: one price, not the two-state form`); return; }
       dual++;
       if (Number(m[1]) !== PACK_PRICES_WITHOUT_STOCK[s] || Number(m[2]) !== PACK_PRICE_TABLE[s]) bad.push(`${f}:${i + 1} ${s}: says $${m[1]} / $${m[2]}, tables say $${PACK_PRICES_WITHOUT_STOCK[s]} / $${PACK_PRICE_TABLE[s]}`);
@@ -119,9 +127,28 @@ for (const f of samples) {
   const flag = (d) => /Flagships:[^;]*\bmarket data\b/.test(d);
   ok(!flag(mcpServerDescription({ stock: false })) && flag(mcpServerDescription({ stock: true })), "the hosted serverInfo description names the market data flagship only with a stock provider");
   ok(!flag(HOSTED) && !flag(STDIO), "the published descriptions (hosted default, stdio package) name no market data flagship");
-  ok(/description: (?:plainText\()?mcpServerDescription\(\{[^}]*\bstock: stockDataEnabled\(\)/.test(readFileSync(join(ROOT, "src/mcp-http.js"), "utf8")), "the hosted connector's description reads the stock switch");
+  ok(/description: (?:plainText\()?mcpServerDescription\(\{[^}]*\bstock: stockQuoteEnabled\(\)/.test(readFileSync(join(ROOT, "src/mcp-http.js"), "utf8")), "the hosted connector's description reads the quote switch (never on: no provider serves the newest session)");
   const line = (llmsTxt("https://example.test", []).split("\n").find((l) => l.includes("Hosted MCP connector")) || "");
-  ok(line && !/render\/data\//.test(line) && (stockDataEnabled() ? /\/quote\//.test(line) : !/\/quote\//.test(line)), `llms.txt names the quote flagship only with a stock provider (${line.slice(0, 120)})`);
+  ok(line && !/render\/data\//.test(line) && !/\/quote\//.test(line), `llms.txt never names the quote flagship (${line.slice(0, 120)})`);
+}
+
+// The stock-history entry, in both changelogs, says whose license a server
+// that turns the provider on runs under; and the provider client's comments
+// state its rules (one dataset, the delay, the label) without saying that
+// passing the data on is allowed.
+{
+  const CLAUSE = ", under that operator's own Databento data license,";
+  const flat = (t) => t.replace(/\s+/g, " ");
+  for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
+    const text = flat(readFileSync(join(ROOT, file), "utf8"));
+    const at = text.indexOf("On a server that sets `STOCK_DATA_PROVIDER=databento`");
+    ok(at >= 0 && text.slice(at, at + 200).includes(`On a server that sets \`STOCK_DATA_PROVIDER=databento\`${CLAUSE} stock-history returns`), `${file}: the stock-history entry names the operator's own data license`);
+  }
+  const comments = flat(readFileSync(join(ROOT, "src/tools/databento.js"), "utf8").split("\n").filter((l) => /^\s*(\/\/|\/?\*)/.test(l)).join("\n"));
+  const CLAIM = /redistributed externally|free to licen[sc]e|licen[sc]ed? for (?:re)?distribution|(?:allow|permit|clear)(?:s|ed)?\b[^.]{0,80}\b(?:redistribut|resale|resell|resold)|(?:may|can) be (?:redistributed|resold)|redistributable/i;
+  ok(comments.includes("The hosted service runs with STOCK_DATA_PROVIDER unset."), "src/tools/databento.js says the hosted service runs with no stock provider");
+  ok(comments.length > 2000 && !CLAIM.test(comments), `src/tools/databento.js comments make no claim that passing the data on is allowed (${comments.match(CLAIM)?.[0] || "none"})`);
+  ok(CLAIM.test("its pricing FAQ allows most datasets to be redistributed externally after 24 hours") && CLAIM.test("the guide calls DBEQ free to license for distribution") && !CLAIM.test("the remaining question is redistribution scope"), "control: the claim pattern reads a claim and not a question");
 }
 
 if (stockDataEnabled()) {

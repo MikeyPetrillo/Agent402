@@ -35,6 +35,21 @@ export const FIND_SYNONYMS = Object.freeze([
   { when: ["time", "zones"], add: ["timezone"] },
   { when: ["time", "zone"], add: ["timezone"] },
   { when: ["timezones"], add: ["timezone"] },
+  // "readclean" names a reader-mode tool: the article extractor, which reads
+  // one URL as clean markdown (demand board, 2026-11-26). Its words split
+  // ("read" and "clean") are not a rule: they also mean reading and cleaning
+  // a csv, a json document or a pdf.
+  { when: ["readclean"], add: ["extract", "scraping", "markdown"] },
+  // Junk in a text or a log dump is what the text hygiene pack removes (it
+  // redacts, dedupes and sorts a dump: its tagline says log dumps). "junk"
+  // alone is not a rule: junk mail is an email question. Cleaning junk names
+  // the same pack, so the "clean" operation reads covered by it, never by the
+  // line deduper alone (which only removes duplicates).
+  { when: ["junk", "text"], add: ["skill-text-hygiene", "hygiene"] },
+  { when: ["junk", "lines"], add: ["skill-text-hygiene", "hygiene"] },
+  { when: ["junk", "log"], add: ["skill-text-hygiene", "hygiene"] },
+  { when: ["junk", "logs"], add: ["skill-text-hygiene", "hygiene"] },
+  { when: ["clean", "junk"], add: ["skill-text-hygiene", "hygiene"] },
 ].map((r) => Object.freeze({ when: Object.freeze(r.when), add: Object.freeze(r.add) })));
 
 /**

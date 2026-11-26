@@ -24,6 +24,7 @@ const { sttLongEnabled } = await import("../src/tools/stt-kit.js");
 const { creditsSalesEnabled, creditsConnectorOn } = await import("../src/credits-sales.js");
 const { webBotAuthEnabled } = await import("../src/web-bot-auth.js");
 const { tempoOusdShown } = await import("../src/changelog.js");
+const { upstreamKeyEnabled } = await import("../src/upstream-key.js");
 // `offs`: values that leave the switch off (default: unset, empty, off, yes);
 // `also`: settings the switch needs beside it, set for every render.
 const SWITCHED = [
@@ -33,6 +34,8 @@ const SWITCHED = [
   { route: "/mcp/credits", env: "MCP_OAUTH", on: "on", fn: creditsConnectorOn, also: { CREDITS_SALES: "on" } },
   { route: "OUSD", env: "TEMPO_CURRENCY", on: "usdc,ousd", fn: tempoOusdShown, offs: [undefined, "", "usdc", "pathusd"], also: { TEMPO_API_KEY: "test-key", TEMPO_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000dEaD" } },
   { route: "Visa CLI", env: "WEB_BOT_AUTH", on: "on", fn: webBotAuthEnabled },
+  // Bring your own key (src/upstream-key.js): off by default.
+  { route: "X-Agent402-Upstream-Key", env: "UPSTREAM_KEY", on: "on", fn: upstreamKeyEnabled, offs: [undefined, "", "off", "no"] },
 ];
 
 for (const s of SWITCHED) {
@@ -206,6 +209,22 @@ const mdItemAt = (needle) => {
   const floor = CHANGELOG_ENTRIES.find((x) => x.items.some((i) => i.includes("RETURNING_WALLET_MIN_DAY_SPEND_USD")));
   const { returningWalletEnabled } = await import("../src/returning-wallet.js");
   ok(floor && floor.shownWhen === returningWalletEnabled && !render().includes(floor.title), "the paid-day spend floor entry reads RETURNING_WALLET_PRICE and is hidden while it is off");
+}
+
+// The stock history entry: shown only while a stock provider serves stock-history.
+{
+  const { stockHistoryShown } = await import("../src/changelog.js");
+  // Older entries record stock-history's earlier history and stay; the entry
+  // that offers today's DBEQ bars is the one that must read the switch.
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes("DBEQ")));
+  ok(naming.length > 0 && naming.every((x) => x.shownWhen === stockHistoryShown), "every entry that names the DBEQ stock history reads the stock provider switch (shownWhen)");
+  const saved = { p: process.env.STOCK_DATA_PROVIDER, k: process.env.DATABENTO_API_KEY };
+  const page = () => `${changelogPage("https://example.test")}\n${changelogRss("https://example.test")}`;
+  delete process.env.STOCK_DATA_PROVIDER; delete process.env.DATABENTO_API_KEY;
+  ok(!page().includes("DBEQ"), "STOCK_DATA_PROVIDER unset: /changelog and /changelog.xml do not name the DBEQ stock history");
+  process.env.STOCK_DATA_PROVIDER = "databento"; process.env.DATABENTO_API_KEY = "test-key";
+  ok(page().includes("DBEQ"), "control: with the provider on and its key set, the stock history entry renders");
+  for (const [k, v] of [["STOCK_DATA_PROVIDER", saved.p], ["DATABENTO_API_KEY", saved.k]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 }
 
 // Control: an entry with no switch is always shown.
