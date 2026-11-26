@@ -13,7 +13,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // plan: [exitCode, output] per call, in order (the last repeats); each call is
 // logged to calls.txt as its first two arguments.
-function scenario(plan, { scale = "0.02" } = {}) {
+function scenario(plan, { scale = "0.02", output = "" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "clawhub-"));
   const bin = join(dir, "clawhub");
   writeFileSync(join(dir, "plan.json"), JSON.stringify(plan));
@@ -28,7 +28,7 @@ const [code, out] = plan[Math.min(n, plan.length - 1)];
   chmodSync(bin, 0o755);
   const r = spawnSync(process.execPath, [script], {
     encoding: "utf8",
-    env: { ...process.env, CLAWHUB_CMD: bin, VERSION: "1.2.3", CLAWHUB_TIME_SCALE: scale, GITHUB_REPOSITORY: "o/r", GITHUB_SHA: "abc", GITHUB_REF_NAME: "main" },
+    env: { ...process.env, CLAWHUB_CMD: bin, VERSION: "1.2.3", CLAWHUB_TIME_SCALE: scale, GITHUB_REPOSITORY: "o/r", GITHUB_SHA: "abc", GITHUB_REF_NAME: "main", GITHUB_OUTPUT: output },
   });
   const calls = existsSync(join(dir, "calls.txt")) ? readFileSync(join(dir, "calls.txt"), "utf8").split("\n").filter(Boolean) : [];
   return { code: r.status, out: r.stdout + r.stderr, calls };
@@ -75,6 +75,22 @@ ok(r.code === 0, "publish 'already exists' is a no-op");
 
 r = scenario([NF, [1, "is staged by failed publish attempt"]]);
 ok(r.code === 0 && /::warning::/.test(r.out), "staged version warns and passes");
+
+// A renamed package: the old one still holds the plugin id. The failure names
+// the cause and the remedy, sets the step's reason, and runs no other command.
+{
+  const outFile = join(mkdtempSync(join(tmpdir(), "clawhub-out-")), "out.txt");
+  writeFileSync(outFile, "");
+  r = scenario([NF, [1, 'Error: Plugin id "agent402" is already claimed by another package in this publisher namespace (reset in 30s)']], { output: outFile });
+  ok(r.code === 1 && r.calls.join("|") === `${INS}|${PUB}`, "a claimed plugin id fails after one publish, with no retry and no other command");
+  ok(/::error::ClawHub refused the publish: plugin id "agent402" is already claimed/.test(r.out) && /soft-delete the superseded package or transfer/.test(r.out) && !/::error::ClawHub publish failed/.test(r.out), "the claimed-id failure names the id, the cause and the remedy, not the generic failure");
+  ok(readFileSync(outFile, "utf8").trim() === "reason=plugin-id-claimed", "the step output names the reason for the warning step");
+  r = scenario([NF, [1, "Error: boom"]], { output: outFile });
+  ok(readFileSync(outFile, "utf8").trim() === "reason=plugin-id-claimed", "a generic failure sets no reason");
+  const wf = readFileSync(fileURLToPath(new URL("../.github/workflows/deploy.yml", import.meta.url)), "utf8");
+  ok(/REASON: \$\{\{ steps\.clawhub\.outputs\.reason \}\}/.test(wf) && /"\$REASON" = "plugin-id-claimed"/.test(wf), "deploy.yml's warning step reads the reason through env");
+  ok(!/clawhub[^\n]*\b(package\s+)?(delete|remove|transfer)\b/i.test(wf.split("\n").filter((l) => !/^\s*#|echo /.test(l)).join("\n")), "deploy.yml runs no ClawHub delete, remove or transfer command");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
