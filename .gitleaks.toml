@@ -179,6 +179,11 @@ regexes = [
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkw''',
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ4IiwiZXhw''',
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ3ZWJob29rIiwi''',
+  # The receipt-verify tool's published example (src/tools/kit2.js
+  # RECEIPT_EXAMPLE): an EdDSA receipt signed by a throwaway key under the
+  # kid "docs-example", which no server publishes; allowlisted by its header
+  # plus the start of its fixed payload ({"v":1,"id":"docsExampleReceipt0001"...}).
+  '''eyJhbGciOiJFZERTQSIsImtpZCI6ImRvY3MtZXhhbXBsZSIsInR5cCI6ImFnZW50NDAyLXJlY2VpcHQrandzIn0\.eyJ2IjoxLCJpZCI6ImRvY3NFeGFtcGxlUmVjZWlw''',
   # src/tools/mev-and-l2-kit.js mev-block-payment example: the builder and
   # proposer BLS PUBLIC keys of Ethereum block 26104983, as the relay data API
   # publishes them. Public identifiers, never secrets; pinned exactly.
