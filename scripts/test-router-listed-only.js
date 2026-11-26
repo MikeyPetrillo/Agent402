@@ -105,7 +105,7 @@ const PASSING = { routable: true, networks: ["eip155:8453", "solana:5eykt4UsFv8P
   ok(!only.err.message.includes(EXCLUDED_DOMAIN), "the refusal names no host");
   PUBLIC_TEXT.push(["route-execute 409", only.err.message]);
   const both = await run([row(EXCLUDED), row(CONTROL)]);
-  ok(both.buys.length === 1 && both.buys[0].startsWith(CONTROL), `the next candidate, an unlisted control, is bought (${both.buys.join(", ")})`);
+  ok(both.buys.length === 1 && new URL(both.buys[0]).origin === new URL(CONTROL).origin, `the next candidate, an unlisted control, is bought (${both.buys.join(", ")})`);
   // Every candidate dropped by the resolver as listed only: the refusal says so.
   const none = []; Object.defineProperty(none, "__gateDrops", { value: { total: 1, byReason: { listed_only: 1 } }, enumerable: false });
   const dropped = await run(none);
@@ -239,7 +239,7 @@ const PASSING = { routable: true, networks: ["eip155:8453", "solana:5eykt4UsFv8P
     const text = readFileSync(new URL(file, import.meta.url), "utf8");
     const at = text.indexOf("The router lists some outside sellers without buying from them");
     const entry = at < 0 ? "" : text.slice(at, at + 220).split(/",\n|\n\n|\n- |\n###/)[0];
-    ok(at >= 0 && entry.includes("`listed_only`") && !REASON_WORDS.test(entry) && !text.includes(OLD_CODE), `${file.replace("../", "")} states the listing-only fact and no reason`);
+    ok(at >= 0 && entry.includes("`listed_only`") && !REASON_WORDS.test(entry) && !text.includes(OLD_CODE), `${file.replace(/^\.\.\//, "")} states the listing-only fact and no reason`);
   }
 }
 

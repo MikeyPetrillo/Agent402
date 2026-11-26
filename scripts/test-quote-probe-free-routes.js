@@ -105,8 +105,11 @@ const b = await listen(seller); // the 429 seller (a 429 holds a host's probes o
 const c = await listen(seller); // the seller whose routes answer a 502 and a redirect first
 __setProbeFetchForTest((url, opts) => {
   const u = new URL(url);
-  if (u.hostname !== "127.0.0.1") return Promise.reject(Object.assign(new Error(`left the loopback: ${url}`), { code: "ENOTFOUND" }));
-  return fetch(url, { ...opts, redirect: "manual" });
+  // Only this suite's own loopback sellers are reached: the request is rebuilt
+  // from the loopback address and one of their ports, never the URL as given.
+  const port = [a, b, c].map((s) => new URL(s.origin).port).find((p) => p === u.port);
+  if (u.hostname !== "127.0.0.1" || !port) return Promise.reject(Object.assign(new Error(`left the loopback: ${url}`), { code: "ENOTFOUND" }));
+  return fetch(`http://127.0.0.1:${port}${u.pathname}${u.search}`, { ...opts, redirect: "manual" });
 });
 const served = new Map();
 __setCrawlFetchForTest(async (url) => {

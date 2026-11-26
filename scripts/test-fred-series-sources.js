@@ -281,7 +281,7 @@ try {
     const held = (await import("../src/tools/us-macro-series.js"))._cachedValueForTest("frb:h6");
     ok(held && JSON.stringify(Object.keys(held).sort()) === JSON.stringify(["M1.M", "M1_N.M", "M2.M", "M2_N.M"]), `the held H.6 file keeps only the four series the IDs read (${held ? Object.keys(held).join(",") : "none"})`);
   }
-  ok(hosts.includes("www.federalreserve.gov") && ddpH6Asks.length === 0, `the money stock is read from the release's XML file, never the Data Download Program (${ddpH6Asks.length} program reads)`);
+  ok(hosts.some((h) => h === "www.federalreserve.gov") && ddpH6Asks.length === 0, `the money stock is read from the release's XML file, never the Data Download Program (${ddpH6Asks.length} program reads)`);
   {
     const M = await import("../src/tools/us-macro-series.js");
     ok(M.H6_XML_URL === "https://www.federalreserve.gov/releases/h6/data/FRB_h6_xml.zip" && !M.FED_DDP_PACKAGE_READS.includes("H6") && !("H6_PACKAGE_URL" in M), `H.6 reads the release page's XML file and is off the package list (${M.FED_DDP_PACKAGE_READS.join(", ")})`);

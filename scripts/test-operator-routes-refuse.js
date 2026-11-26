@@ -338,7 +338,7 @@ try {
         if (fn && fn !== "operatorView" && /\boperatorView\(req, res\)/.test(line)) sharedViews.add(fn);
       }
     }
-    const namesShared = (line) => [...sharedViews].some((f) => new RegExp(`\\b${f.replace(/\$/g, "\\$")}\\b`).test(line));
+    const namesShared = (line) => [...sharedViews].some((f) => new RegExp(`\\b${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(line));
     let inShared = false;
     for (const line of src) {
       { const n = fnDef(line); if (n) { inShared = sharedViews.has(n); if (inShared) current = null; } }
