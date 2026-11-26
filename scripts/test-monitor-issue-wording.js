@@ -25,6 +25,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { load as yamlLoad } from "js-yaml";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandWords, ghIssueCalls, unquoted } from "./lib/shell-words.js";
@@ -134,6 +135,47 @@ for (const f of withIssues) {
 }
 check(openers >= 110, `every check's create goes through the opener (found ${openers})`);
 check(calls + openers >= 250, `at least 250 issue calls read (found ${calls + openers})`);
+// ---- 6b. every job that runs the opener checks out the opener and all it imports ----
+// A sparse checkout that leaves one imported file out makes the opener throw
+// before it files anything, so the alarm is silent. The closure is read from
+// the files' own relative imports, so a new import is covered the day it lands.
+const importClosure = (start) => {
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(join(ROOT, rel), "utf8");
+    for (const m of src.matchAll(/^\s*(?:import|export)\b[^"'`;]*?(?:from\s*)?["'](\.{1,2}\/[^"']+)["']/gm)) walk(join(dirname(rel), m[1]).split("\\").join("/"));
+    for (const m of src.matchAll(/\bimport\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)) walk(join(dirname(rel), m[1]).split("\\").join("/"));
+  };
+  walk(start);
+  return [...seen].sort();
+};
+const OPENER_CLOSURE = importClosure("scripts/check-issue.js");
+check(OPENER_CLOSURE.includes("scripts/lib/monitor-issue-text.js") && OPENER_CLOSURE.includes("workers/status-probe/src/reopen-window.js"), `the opener's import closure is read (${OPENER_CLOSURE.join(", ")})`);
+/** The files a job's checkout before step `i` leaves out of `need` (null when nothing checks the repository out). */
+const missingFromCheckout = (steps, i, need) => {
+  const co = steps.slice(0, i).filter((s) => /^actions\/checkout@/.test(String(s?.uses || ""))).at(-1);
+  if (!co) return null;
+  const sparse = co.with?.["sparse-checkout"];
+  if (!sparse) return [];
+  const pats = String(sparse).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  return need.filter((f) => !pats.some((p) => p === f || (p.endsWith("/") && f.startsWith(p)) || (p.endsWith("/*") && f.startsWith(p.slice(0, -1)))));
+};
+let openerJobs = 0;
+for (const f of withIssues) {
+  const doc = yamlLoad(readFileSync(join(WF, f), "utf8"));
+  for (const [name, job] of Object.entries(doc?.jobs || {})) {
+    const steps = job?.steps || [];
+    steps.forEach((s, i) => {
+      if (!/node scripts\/check-issue\.js/.test(String(s?.run || ""))) return;
+      openerJobs++;
+      const miss = missingFromCheckout(steps, i, OPENER_CLOSURE);
+      check(miss !== null && miss.length === 0, `${f}:${name}: the checkout before "${s.name}" holds the opener and every file it imports (${miss === null ? "no checkout" : miss.join(", ") || "all"})`);
+    });
+  }
+}
+check(openerJobs >= 30, `every job that runs the opener was read (found ${openerJobs})`);
 {
   const run = "https://github.com/o/r/actions/runs/1";
   check(OPEN_BODY_RE.test(openText(run)) && openText(run) === OPEN_BODY.replace(RUN_LINK, run), "the opener files the fixed opening text");

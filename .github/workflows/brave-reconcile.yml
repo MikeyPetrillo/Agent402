@@ -70,6 +70,9 @@ jobs:
           sparse-checkout: |
             scripts/adopt-issue-titles.js
             workers/status-probe/src/previous-issue-titles.js
+            scripts/check-issue.js
+            scripts/lib/monitor-issue-text.js
+            workers/status-probe/src/reopen-window.js
 
       # An open issue this check filed under a previous title gets the current
       # one, so the lookups below find it (scripts/adopt-issue-titles.js).
