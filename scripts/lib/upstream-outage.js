@@ -365,3 +365,47 @@ export async function sourceAllowanceVerdict({ slug, error, read = directReadAns
   try { said = status === 200 ? `, status ${String(JSON.parse(text)?.status).slice(0, 40)}` : ""; } catch { /* the HTTP status is the evidence */ }
   return { verdict: "upstream", evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
 }
+
+// A HOLLOW EXAMPLE IS OURS UNLESS THE UPSTREAM IS HOLLOW FOR THE RUNNER TOO.
+// A published example that answers 200 with an empty documented array fails
+// a sweep (scripts/sweep-shape.js). For a tool listed here, that answer is
+// excused, and named in the log, only when ALL of these hold:
+//
+//   1. the tool has an entry below (per-tool opt-in: a tool with no entry is
+//      never excused, whatever its upstream answers);
+//   2. the tool's own definition declares the entry's host;
+//   3. the runner's own keyless direct GET of the same request the tool
+//      builds for the example input, right now, is empty or fails (`hollow`).
+//
+// If the upstream answers the runner with rows while the tool answered none,
+// the empty answer is ours and it fails.
+export const HOLLOW_READS = Object.freeze({
+  // The crt.sh query certTransparencyHandler builds (src/tools/network-kit2.js).
+  "cert-transparency": {
+    host: "crt.sh",
+    url: (input) => {
+      const domain = String(input?.domain ?? "").trim().toLowerCase();
+      if (!domain) return null;
+      return `https://crt.sh/?q=${encodeURIComponent("%." + domain)}&output=json${input?.includeExpired === true ? "" : "&exclude=expired"}`;
+    },
+    // crt.sh answers a JSON list; a 404 is its front end's mislabelled backend
+    // failure. Anything but a non-empty list is hollow or failed.
+    hollow: (status, text) => {
+      if (status !== 200) return true;
+      try { const rows = JSON.parse(text); return !Array.isArray(rows) || rows.length === 0; } catch { return true; }
+    },
+  },
+});
+/** The verdict on an example's empty documented arrays: null when the tool
+ *  has no HOLLOW_READS entry (the caller fails it), else
+ *  { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function hollowAnswerVerdict({ slug, input, read = directReadAnswer, root = ROOT, reads = HOLLOW_READS }) {
+  const h = Object.hasOwn(reads, slug) ? reads[slug] : null;
+  if (!h) return null;
+  if (!upstreamHostsForSlug(slug, root).has(h.host)) return { verdict: "fail", reason: `${slug} does not declare ${h.host}` };
+  const url = h.url(input);
+  if (!url) return { verdict: "fail", reason: `no direct read of ${h.host} can be built from the example input` };
+  const { status, text } = await read(url);
+  if (!h.hollow(status, text)) return { verdict: "fail", reason: `${h.host} answers the runner's direct read of the same request with rows (HTTP ${status}) while the tool answered none` };
+  return { verdict: "upstream", evidence: `${h.host} answers the runner's direct read of the same request empty or failed too (HTTP ${status || "none"})` };
+}

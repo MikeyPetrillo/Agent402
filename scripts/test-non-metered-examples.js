@@ -294,7 +294,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict } from "./lib/upstream-outage.js";
 import { CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 
@@ -562,6 +562,25 @@ function shouldRetry(status, body, threw, slug) {
   if (status === 502 || status === 503 || status === 504 || status === 429) return true;
   if (isUpstreamMediaSourceFlake(slug, status, body, threw)) return true;
   return /timeout|aborted|AbortError|UND_ERR_CONNECT|ECONNRESET|ETIMEDOUT|fetch failed|rate.?limit/i.test(errText(body, threw));
+}
+
+/** The example input a sweep sends: the JSON body's example, or the query
+ *  parameters' examples. */
+function exampleInputOf(method, op) {
+  if (method !== "get") return op?.requestBody?.content?.["application/json"]?.example ?? {};
+  const out = {};
+  for (const p of op?.parameters ?? []) if (p.example !== undefined) out[p.name] = p.example;
+  return out;
+}
+/** An example's empty documented arrays: { skip } when the tool's hollow-read
+ *  entry (scripts/lib/upstream-outage.js HOLLOW_READS) finds the upstream
+ *  empty or failing for the runner's own direct read of the same request,
+ *  else { fail } (no entry, or the upstream gives the runner rows). */
+export async function hollowGrade(t, hollow, read) {
+  const head = `${t.method} ${t.path} → documented example returns an EMPTY array for: ${hollow.join(",")}`;
+  const v = await hollowAnswerVerdict({ slug: t.slug, input: exampleInputOf(t.method, t.op), ...(read ? { read } : {}) });
+  if (v?.verdict === "upstream") return { skip: `${t.slug}: ${head.slice(head.indexOf("documented"))}, and ${v.evidence} (upstream, not our defect)` };
+  return { fail: `${head} (its own published input produces nothing)${v ? ` [not excused: ${v.reason}]` : ""}` };
 }
 
 async function callExample(path, method, op, slug) {
@@ -982,6 +1001,22 @@ export async function runVerdictStubControls() {
   };
   const tool = await listen((req, res) => { const [st, b] = shapes[req.url]; res.writeHead(st, { "content-type": "application/json" }); res.end(JSON.stringify(b)); });
   const url = (srv, p = "/") => `http://127.0.0.1:${srv.address().port}${p}`;
+  {
+    // A hollow example: excused only for a tool with a hollow-read entry, and
+    // only when the runner's direct read of the same request is empty too.
+    const ct = { method: "post", path: "/api/cert-transparency", slug: "cert-transparency", op: { requestBody: { content: { "application/json": { example: { domain: "agent402.tools" } } } } } };
+    let asked = null;
+    const reads = (status, text) => async (u) => { asked = u; return { status, text }; };
+    const emptyToo = await hollowGrade(ct, ["subdomains", "certs"], reads(200, "[]"));
+    ok(Boolean(emptyToo.skip) && /crt\.sh answers the runner's direct read/.test(emptyToo.skip) && asked === "https://crt.sh/?q=%25.agent402.tools&output=json&exclude=expired",
+      "control (stub): cert-transparency's empty example while the runner's direct read of the same crt.sh query is empty too: excused, named");
+    ok(Boolean((await hollowGrade(ct, ["subdomains", "certs"], reads(404, "bad gateway"))).skip), "control (stub): cert-transparency's empty example while crt.sh fails the runner too: excused");
+    const rows = await hollowGrade(ct, ["subdomains", "certs"], reads(200, '[{"id":1}]'));
+    ok(Boolean(rows.fail) && /with rows/.test(rows.fail), "control (stub): cert-transparency's empty example while crt.sh gives the runner rows FAILS (ours)");
+    asked = null;
+    const noEntry = await hollowGrade({ ...ct, path: "/api/dns-lookup", slug: "dns-lookup" }, ["records"], reads(200, "[]"));
+    ok(Boolean(noEntry.fail) && asked === null, "control (stub): a tool with no hollow-read entry and an empty example FAILS, and nothing is read");
+  }
   const probeAt = (srv) => async () => { try { return (await fetch(url(srv))).ok; } catch { return false; } };
   try {
     for (const slug of OPEN_METEO_SLUGS) {
@@ -1182,7 +1217,13 @@ async function main() {
       // Present-but-empty is its own failure: a published example that returns
       // nothing teaches an agent the tool is broken (2026-08-29, sweep-shape.js).
       const hollow = binary ? [] : emptyPromisedArrays(t.path, t.op, r.body);
-      if (hollow.length) shapeMismatches.push(`${t.method} ${t.path} → documented example returns an EMPTY array for: ${hollow.join(",")} (its own published input produces nothing)`);
+      if (hollow.length) {
+        const g = await hollowGrade(t, hollow);
+        if (g.skip) {
+          skippedRunnerUnreachable++;
+          console.log(`\nskip - ${g.skip}`);
+        } else shapeMismatches.push(g.fail);
+      }
       return;
     }
 

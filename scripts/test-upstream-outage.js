@@ -15,6 +15,7 @@ import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
   bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts, legRefusalStatus,
+  hollowAnswerVerdict, HOLLOW_READS,
 } from "./lib/upstream-outage.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -262,6 +263,41 @@ try {
   ok((await runCheck(stubCheck, { callTool: fixed(200, { nope: 1 }), verdict: verdict(at(down)) })).outcome === "fail", "(live check) a malformed 200 FAILS");
   ok((await runCheck(stubCheck, { callTool: fixed(500, { error: "Internal error" }), verdict: verdict(at(down)) })).outcome === "fail", "(live check) our own 500 FAILS while the upstream is down");
 
+  // ---- hollow examples: excused only per tool, only when the runner's direct
+  // read of the same request is empty or failing too
+  {
+    const input = { domain: "agent402.tools" };
+    let asked = [];
+    const reads = (status, text) => async (u) => { asked.push(u); return { status, text }; };
+    // The entry's URL is the one the tool builds for the same input.
+    const { NETWORK_TOOLS2 } = await import("../src/tools/network-kit2.js");
+    const ct = NETWORK_TOOLS2.find((t) => t.slug === "cert-transparency");
+    const realFetch = globalThis.fetch, built = [];
+    const savedKey = process.env.CERTSPOTTER_API_KEY;
+    delete process.env.CERTSPOTTER_API_KEY;
+    globalThis.fetch = async (u) => { built.push(String(u)); return { ok: true, status: 200, text: async () => "[]" }; };
+    try { await ct.handler(input); await ct.handler({ ...input, includeExpired: true }); } finally { globalThis.fetch = realFetch; if (savedKey !== undefined) process.env.CERTSPOTTER_API_KEY = savedKey; }
+    const entry = HOLLOW_READS["cert-transparency"];
+    ok(built[0] === entry.url(input) && built.at(-1) === entry.url({ ...input, includeExpired: true }), `(hollow) the crt.sh read the sweep makes is the one the tool builds (${built[0]})`);
+    ok(declaresUpstreamHosts("cert-transparency") && upstreamHostsForSlug("cert-transparency").has("crt.sh"), "(hollow) cert-transparency declares crt.sh");
+    let v = await hollowAnswerVerdict({ slug: "cert-transparency", input, read: reads(200, "[]") });
+    ok(v?.verdict === "upstream" && /crt\.sh/.test(v.evidence), `(hollow) tool empty and the runner's direct read empty: excused with the reason (${v?.evidence})`);
+    for (const [st, text] of [[0, ""], [502, "busy"], [404, "502 Bad Gateway"], [200, '{"error":"busy"}'], [200, "<html>"]]) {
+      v = await hollowAnswerVerdict({ slug: "cert-transparency", input, read: reads(st, text) });
+      ok(v?.verdict === "upstream", `(hollow) the runner's direct read failing (HTTP ${st || "none"}, ${text.slice(0, 16) || "no body"}) excuses it too`);
+    }
+    v = await hollowAnswerVerdict({ slug: "cert-transparency", input, read: reads(200, '[{"id":1,"name_value":"agent402.tools"}]') });
+    ok(v?.verdict === "fail" && /with rows/.test(v.reason), `(hollow) tool empty while the runner's direct read has rows: FAILS (${v?.reason})`);
+    asked = [];
+    v = await hollowAnswerVerdict({ slug: "dns-lookup", input, read: reads(200, "[]") });
+    ok(v === null && asked.length === 0, "(hollow) a tool with no hollow-read entry is never excused, and nothing is read");
+    v = await hollowAnswerVerdict({ slug: "cert-transparency", input: {}, read: reads(200, "[]") });
+    ok(v?.verdict === "fail", "(hollow) no direct read built from the input excuses nothing");
+    v = await hollowAnswerVerdict({ slug: "stub-tool", input, read: reads(200, "[]"), reads: { "stub-tool": entry }, root: kitRoot });
+    ok(v?.verdict === "fail" && /does not declare crt\.sh/.test(v.reason), "(hollow) an entry for a tool that does not declare its host excuses nothing");
+    ok(Object.keys(HOLLOW_READS).join() === "cert-transparency", "(hollow) only cert-transparency holds a hollow-read entry");
+  }
+
   // ---- wiring: the strict sweep grades a bundle's failure by the bundle rule
   // after the pure-computation grade and before its rate-limit skip
   {
@@ -276,6 +312,7 @@ try {
   ok(/node scripts\/live-public-data-check\.js/.test(yml) && !/weather-alerts malformed/.test(yml), "the live-sites step runs live-public-data-check.js, not a bare curl assert");
   const sweep = readFileSync(join(ROOT, "scripts/test-non-metered-examples.js"), "utf8");
   ok(sweep.includes("upstreamOutageVerdict(") && sweep.includes("upstream-failure-log-preload.js"), "the strict sweep reads the outage verdict and boots its own server with the preload");
+  ok(/if \(hollow\.length\) \{\s*const g = await hollowGrade\(t, hollow\)/.test(sweep), "the strict sweep grades an empty documented array by the hollow-read rule");
 } finally {
   for (const s of [limited, up, down, notFound, forbidden, unauth]) s.close();
   rmSync(work, { recursive: true, force: true });

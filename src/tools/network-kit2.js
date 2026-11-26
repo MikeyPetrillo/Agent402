@@ -59,7 +59,8 @@ function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) 
 // handler (domain-audit-pro's certificate probe included). No key, or the
 // hour's reads spent: crt.sh alone answers.
 export const CERTSPOTTER_HOURLY_MAX = 100;
-// With crt.sh alone, a failure inside this long is asked once more.
+// With crt.sh alone, a failure or an empty list inside this long is asked
+// once more.
 const CRT_RETRY_WITHIN_MS = 3000;
 const HOUR_MS = 3_600_000;
 const certspotterReads = []; // send times (ms) inside the last hour, oldest first
@@ -179,10 +180,15 @@ async function certTransparencyHandler(body) {
   if (!csKey) {
     // crt.sh alone. A fast upstream failure (its front end answers a backend
     // failure in well under a second) is asked once more; then its failure is
-    // the answer's.
+    // the answer's. A fast EMPTY list is asked once more too: a degraded
+    // backend can answer [] for a domain that holds certificates, a false "no
+    // certificates". A second empty list is the answer (a real empty one, as
+    // far as the log can say); an empty list then a failure is the failure's.
     let err = null;
     try { result = await crtP; } catch (e) { err = e; }
-    if (!result && err?.statusCode === 502 && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+    const emptyFirst = result?.total === 0;
+    if ((emptyFirst || (!result && err?.statusCode === 502)) && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+      result = null;
       try { result = await crtRead(); err = null; } catch (e) { err = e; }
     }
     if (!result) {
@@ -207,6 +213,12 @@ async function certTransparencyHandler(body) {
     }
   } finally {
     clearTimeout(hedgeTimer);
+  }
+  // With the key, an empty crt.sh list is checked against the second log
+  // (under its hourly reads): its certificates answer when it holds any, and
+  // otherwise, or when it fails or its reads are spent, the empty list stands.
+  if (csKey && result.source === "crt.sh" && result.total === 0) {
+    try { const cs = await fireCertspotter(); if (cs.certs.length) result = cs; } catch { /* the empty list stands */ }
   }
   const { certs, total, source } = result;
 

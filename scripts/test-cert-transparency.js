@@ -195,9 +195,38 @@ try {
   try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
   ok(threw?.statusCode === 502, `crt.sh answering an object, not a list, is a 502, not an empty answer (${threw?.statusCode ?? "answered"})`);
   ok(crtCalls === 2, `that failure is asked once more like any fast failure (${crtCalls} reads)`);
-  stub((url) => isHost(url, "crt.sh") ? Promise.resolve(jsonRes([])) : Promise.reject(new Error("unexpected host")));
+  crtCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) { crtCalls++; return Promise.resolve(jsonRes([])); } return Promise.reject(new Error("unexpected host")); });
   const empty = await tool.handler({ domain: "example.com" });
-  ok(empty.count === 0 && Array.isArray(empty.subdomains) && empty.subdomains.length === 0, "a real empty list is still a valid answer");
+  ok(empty.count === 0 && Array.isArray(empty.subdomains) && empty.subdomains.length === 0 && empty.source === "crt.sh", "a real empty list is still a valid answer");
+  ok(crtCalls === 2, `an empty list is asked once more, then two empty lists are the answer (${crtCalls} reads)`);
+  // A degraded log answering [] for a domain with certificates: the second read's rows serve.
+  crtCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(jsonRes(++crtCalls === 1 ? [] : CRT_ROWS)); return Promise.reject(new Error("unexpected host")); });
+  const recovered = await tool.handler({ domain: "example.com" });
+  ok(recovered.count === 1 && recovered.subdomains.includes("a.example.com") && crtCalls === 2, `an empty list then rows serves the rows (${crtCalls} reads, ${recovered.count} certs)`);
+  // An empty list then a failure is the failure's 502, never a third read.
+  crtCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(++crtCalls === 1 ? jsonRes([]) : errRes(502)); return Promise.reject(new Error("unexpected host")); });
+  threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 502 && crtCalls === 2, `an empty list then a failure answers 502 after two reads (${threw?.statusCode ?? "answered"}, ${crtCalls} reads)`);
+  // With the key: an empty crt.sh list is checked against the second log.
+  process.env.CERTSPOTTER_API_KEY = KEY;
+  resetCertspotterReads();
+  let csCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(jsonRes([])); csCalls++; return Promise.resolve(jsonRes(CS_ROWS)); });
+  const confirmed = await tool.handler({ domain: "example.com" });
+  ok(confirmed.source === "certspotter" && confirmed.count === 1 && csCalls === 1, `key held: an empty crt.sh list the second log has rows for serves its rows (${confirmed.source}, ${csCalls} reads)`);
+  csCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(jsonRes([])); csCalls++; return Promise.resolve(jsonRes([])); });
+  const bothEmpty = await tool.handler({ domain: "example.com" });
+  ok(bothEmpty.source === "crt.sh" && bothEmpty.count === 0 && csCalls === 1, `key held: both logs empty answers crt.sh's empty list (${bothEmpty.source}, ${csCalls} reads)`);
+  for (let i = 0; i < CERTSPOTTER_HOURLY_MAX; i++) takeCertspotterRead();
+  csCalls = 0;
+  const spent = await tool.handler({ domain: "example.com" });
+  ok(spent.source === "crt.sh" && spent.count === 0 && csCalls === 0, `key held, hour's reads spent: the empty list stands, the second log is not asked (${csCalls})`);
+  delete process.env.CERTSPOTTER_API_KEY;
   process.env.CERTSPOTTER_API_KEY = KEY;
   resetCertspotterReads();
   stub((url) => isHost(url, "crt.sh") ? Promise.resolve(errRes(502)) : Promise.resolve(jsonRes({ message: "rate limited" })));
