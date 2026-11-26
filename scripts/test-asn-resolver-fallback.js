@@ -68,6 +68,16 @@ for (const code of ["ENOTFOUND", "ENODATA"]) {
     ok(r !== "held", "an owner lookup that never answers does not hold the call");
     ok(r?.asn === "AS15169" && r.prefix === "8.8.8.0/24" && r.owner === null && r.ownerUnavailable === true && ownerAsked === 1, `the answer keeps the origin record, with owner null and ownerUnavailable (${JSON.stringify(r)})`);
   } finally { setCymruLookups(null); }
+  // Past the owner deadline nothing is left running: both resolvers' owner
+  // lookups (the host resolver and the hedged fallback) are canceled.
+  const ownerSignals = [];
+  const hangOwner = (who) => (n, signal) => (n.endsWith(".origin.asn.cymru.com") ? Promise.resolve(REC) : (ownerSignals.push([who, signal]), new Promise(() => {})));
+  setCymruLookups({ primary: hangOwner("primary"), fallback: hangOwner("fallback"), hedgeMs: 5, ownerMs: 40 });
+  try {
+    const r = await asnTool.handler({ ip: "8.8.8.8" });
+    const pending = ownerSignals.filter(([, s]) => !s?.aborted).map(([w]) => w);
+    ok(r.ownerUnavailable === true && ownerSignals.length === 2 && pending.length === 0, `the owner deadline cancels both resolver lookups (${ownerSignals.length} started, still running: ${pending.join(",") || "none"})`);
+  } finally { setCymruLookups(null); }
   // An owner lookup that answers in time is unchanged, and says nothing extra.
   setCymruLookups({ primary: async (n) => (n.endsWith(".origin.asn.cymru.com") ? REC : [["15169 | US | arin | 2000-03-30 | GOOGLE, US"]]), ownerMs: 40 });
   try {
