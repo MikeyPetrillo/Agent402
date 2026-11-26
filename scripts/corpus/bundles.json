@@ -47,7 +47,7 @@
       "expect": {
         "equals": { "coins": 2, "rows[0].id": "solana", "rows[1].id": "dogecoin", "pricing.units": 2 },
         "count": { "comparison.byMarketCap": 2 },
-        "populated": ["rows[0].market.marketCap", "rows[0].computed.maxDrawdown1yPct", "rows[1].computed.volatilityAnnualizedPct", "rows[1].supply.circulating"]
+        "populated": ["rows[0].supply.circulatingShare", "rows[0].computed.maxDrawdown1yPct", "rows[1].computed.volatilityAnnualizedPct", "rows[1].computed.fdvToMarketCap"]
       }
     },
     {

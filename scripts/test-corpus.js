@@ -182,7 +182,10 @@ export function unmeasuredMarks(body, depth = 0, at = "") {
     const p = join(k);
     if (k === "lookupError" && v) out.push({ text: `lookupError at ${p}`, covers: [at], lookup: dnsLookupOf(v) });
     else if (k === "unmeasured" && Array.isArray(v) && v.length) out.push({ text: `unmeasured ${v.slice(0, 5).join(",")}`, covers: v.slice(0, 50).map((n) => join(String(n))) });
-    else if (/^[a-z][A-Za-z0-9]*Unavailable$/.test(k) && v === true) out.push({ text: `${k} at ${p}`, covers: [join(k.slice(0, -"Unavailable".length))] });
+    else if (/^[a-z][A-Za-z0-9]*Unavailable$/.test(k) && v === true) {
+      const part = k.slice(0, -"Unavailable".length);
+      out.push({ text: `${k} at ${p}`, covers: [join(part)], lookup: namedLookupOf(body[`${part}Lookup`]) });
+    }
     else if (k === "hasRecord" && v === null) out.push({ text: `hasRecord null at ${p}`, covers: [at] });
     else if (v && typeof v === "object") out.push(...unmeasuredMarks(v, depth + 1, p));
   }
@@ -194,6 +197,14 @@ const DNS_ERROR_RE = /\bquery(A|Aaaa|Any|Caa|Cname|Mx|Naptr|Ns|Ptr|Soa|Srv|Txt) 
 function dnsLookupOf(v) {
   const m = DNS_ERROR_RE.exec(String(v));
   return m ? { type: m[1].toUpperCase(), code: m[2], name: m[3] } : null;
+}
+// The query an `xUnavailable` mark names beside it (`xLookup: { type, name }`,
+// asn-info's owner query): the runner asks that query, never a host.
+const LOOKUP_TYPES = new Set(["A", "AAAA", "ANY", "CAA", "CNAME", "MX", "NAPTR", "NS", "PTR", "SOA", "SRV", "TXT"]);
+function namedLookupOf(v) {
+  if (!v || typeof v !== "object") return null;
+  const type = String(v.type ?? "").toUpperCase(), name = String(v.name ?? "");
+  return LOOKUP_TYPES.has(type) && /^[A-Za-z0-9_.-]{1,253}$/.test(name) ? { type, name } : null;
 }
 
 /** The dot path a failed expectation is about (checkExpect's text starts with
@@ -209,23 +220,30 @@ const covered = (path, marks) => path !== null && marks.some((m) => m.covers.som
 // DNS answers that say the record is absent are answers: the resolver is up.
 const DNS_ANSWERED = new Set(["ENOTFOUND", "ENODATA", "ENONAME", "NXDOMAIN"]);
 /** The runner's own read of what the marks name, right now: the DNS query a
- *  lookup error names (failing again unless it now answers, an absent record
- *  included), else a direct read of the case's outside host or the hosts the
- *  tool's definition declares (scripts/lib/upstream-outage.js: a failure is
- *  no answer, a 5xx or a 429). Confirmed only when that read fails too. */
+ *  mark names (a lookup error's, or the `xLookup` beside an `xUnavailable`;
+ *  failing again unless it now answers, an absent record included), and, for
+ *  a mark that names no query, a direct read of the case's outside host or
+ *  the hosts the tool's definition declares (scripts/lib/upstream-outage.js:
+ *  a failure is no answer, a 5xx or a 429). Confirmed only when every read
+ *  fails too; a mark that names its query (or sits on a part one names) is
+ *  never confirmed by a host. */
 export async function runnerConfirmsUnmeasured({ marks, slug, targetHost, resolve = (name, type) => dnsPromises.resolve(name, type), readFails = directReadFails, hostsOf = upstreamHostsForSlug }) {
   const lookups = marks.map((m) => m.lookup).filter(Boolean);
-  if (lookups.length) {
-    for (const l of lookups) {
-      try { await resolve(l.name, l.type); return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers` }; }
-      catch (e) { if (DNS_ANSWERED.has(e?.code)) return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers (${e.code})` }; }
-    }
-    return { confirmed: true, evidence: `the runner's own lookup fails too (${lookups.map((l) => `${l.type} ${l.name}`).join(", ").slice(0, 120)})` };
+  for (const l of lookups) {
+    try { await resolve(l.name, l.type); return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers` }; }
+    catch (e) { if (DNS_ANSWERED.has(e?.code)) return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers (${e.code})` }; }
   }
+  const lookedUp = lookups.length ? `the runner's own lookup fails too (${lookups.map((l) => `${l.type} ${l.name}`).join(", ").slice(0, 120)})` : "";
+  // A mark with no query of its own is read by the query a mark on the same
+  // part names (a lookup error beside its record read as null).
+  const named = marks.filter((m) => m.lookup);
+  const byQuery = (m) => m.lookup || m.covers.every((c) => named.some((n) => n.covers.some((nc) => nc === "" || c === nc || c.startsWith(`${nc}.`))));
+  if (marks.every(byQuery)) return lookups.length ? { confirmed: true, evidence: lookedUp } : { confirmed: false, evidence: "no outside host or lookup the runner can read" };
   const hosts = targetHost ? [targetHost] : [...(slug ? hostsOf(slug) : [])].slice(0, 4);
   if (!hosts.length) return { confirmed: false, evidence: "no outside host or lookup the runner can read" };
   for (const h of hosts) if (!(await readFails(`https://${h}/`))) return { confirmed: false, evidence: `the runner reads ${h}` };
-  return { confirmed: true, evidence: `the runner's direct read of ${hosts.join(", ").slice(0, 120)} fails too` };
+  const readHosts = `the runner's direct read of ${hosts.join(", ").slice(0, 120)} fails too`;
+  return { confirmed: true, evidence: lookedUp ? `${lookedUp}; ${readHosts}` : readHosts };
 }
 
 /** What one outcome says about OUR code. `targetHost` is the outside host the
