@@ -69,5 +69,5 @@ jobs:
             [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" \
               --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           else
-            [ -n "$OPEN" ] || node scripts/check-issue.js --title "$TITLE"
+            [ -n "$OPEN" ] || node scripts/check-issue.js --title "$TITLE" --trust-owner
           fi

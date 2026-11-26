@@ -130,7 +130,7 @@ jobs:
             if [ -n "$FUND_OPEN" ]; then
               gh issue comment "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              node scripts/check-issue.js --title "$FUND_TITLE"
+              node scripts/check-issue.js --title "$FUND_TITLE" --trust-owner
             fi
             exit 0
           fi
@@ -145,7 +145,7 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              node scripts/check-issue.js --title "$TITLE"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
           elif [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

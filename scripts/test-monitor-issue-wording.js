@@ -128,7 +128,7 @@ for (const f of withIssues) {
   for (const c of openerCalls(text)) {
     openers++;
     const at = `${f} (${OPENER} near offset ${c.index})`;
-    const rest = c.words.slice(2).filter((w) => !/^(>|2>|>\/dev\/null|2>&1)/.test(w));
+    const rest = c.words.slice(2).filter((w) => !/^(>|2>|>\/dev\/null|2>&1)/.test(w) && w !== "--trust-owner");
     if (STATE_BODY[f]) check(rest.length === 0 || (rest.length === 2 && rest[0] === "--body-file" && /^out\/[a-z-]+\.md$/.test(rest[1])), `${at}: the saved-state body file only`);
     else check(rest.length === 0, `${at}: passes the title only (the opener writes the fixed text), found ${rest.join(" ")}`);
   }
@@ -176,6 +176,40 @@ for (const f of withIssues) {
   }
 }
 check(openerJobs >= 30, `every job that runs the opener was read (found ${openerJobs})`);
+
+// ---- 6c. the opener takes exactly the issues the step's own lookup takes -------------
+// The opener trusts only the Actions bot unless the call passes --trust-owner.
+// A call passes it exactly when the lookups of its title in the same step (or,
+// with none there, in the same job) keep the owner's issues; otherwise an
+// owner-filed issue the step never sees would be commented on, edited or
+// reopened by the opener, and never closed by the step.
+let trustCalls = 0;
+for (const f of withIssues) {
+  if (NOT_A_CHECK[f]) continue;
+  const doc = yamlLoad(readFileSync(join(WF, f), "utf8"));
+  for (const [name, job] of Object.entries(doc?.jobs || {})) {
+    const runs = (job?.steps || []).map((s) => String(s?.run || ""));
+    const lookups = (text, v) => text.split("\n").filter((l) => /gh issue list\b/.test(l) && !/^\s*#/.test(l) && new RegExp(`\\$\\{?${v}\\}?(?![A-Za-z0-9_])`).test(l));
+    runs.forEach((run, i) => {
+      for (const c of openerCalls(run)) {
+        const v = (unquoted(c.words[1]) || "").match(/^\$\{?([A-Z_0-9]+)\}?$/)?.[1];
+        if (!v) continue; // a literal title (a dated report) is filed once and never looked up
+        trustCalls++;
+        // A step's lookup function (its title passed as $1) covers every title in that step.
+        let ls = lookups(run, v);
+        if (!ls.length) ls = lookups(run, "1");
+        if (!ls.length) ls = runs.flatMap((r) => lookups(r, v));
+        const owner = ls.map((l) => /env\.[A-Z_]*OWNER\b/.test(l));
+        const flagged = c.words.includes("--trust-owner");
+        const at = `${f}:${name} step ${i + 1} (${v})`;
+        check(ls.length > 0, `${at}: the title the opener files is looked up in its job`);
+        check(!(owner.some(Boolean) && !owner.every(Boolean)), `${at}: the lookups of one title agree on whose issues they keep`);
+        check(flagged === (owner.length > 0 && owner.every(Boolean)), `${at}: --trust-owner ${flagged ? "passed" : "absent"} matches the step's lookup, which ${owner.every(Boolean) && owner.length ? "keeps" : "drops"} the owner's issues`);
+      }
+    });
+  }
+}
+check(trustCalls >= 100, `every opener call's trust was compared with its lookup (found ${trustCalls})`);
 {
   const run = "https://github.com/o/r/actions/runs/1";
   check(OPEN_BODY_RE.test(openText(run)) && openText(run) === OPEN_BODY.replace(RUN_LINK, run), "the opener files the fixed opening text");

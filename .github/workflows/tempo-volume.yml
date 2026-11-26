@@ -79,7 +79,7 @@ jobs:
           # bucketed balance, a truncated last error) - never the raw log tail.
           if [ "$CODE" != "0" ]; then
             if [ -z "$OPEN" ]; then
-              node scripts/check-issue.js --title "$TITLE"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi

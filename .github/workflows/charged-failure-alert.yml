@@ -129,7 +129,7 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              node scripts/check-issue.js --title "$TITLE"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
             exit 1
           fi

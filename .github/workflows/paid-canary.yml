@@ -302,7 +302,7 @@ jobs:
             FTITLE="Scheduled check needs review: canary-wallet (b)"
             FOPEN=$(ISSUE_TITLE="$FTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             if [ -z "$FOPEN" ]; then
-              node scripts/check-issue.js --title "$FTITLE"
+              node scripts/check-issue.js --title "$FTITLE" --trust-owner
             else
               gh issue comment "$FOPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -317,7 +317,7 @@ jobs:
             ROPEN=$(ISSUE_TITLE="$RTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             RAIL_LIST="${RAILS:-see run log}"
             if [ -z "$ROPEN" ]; then
-              node scripts/check-issue.js --title "$RTITLE"
+              node scripts/check-issue.js --title "$RTITLE" --trust-owner
             else
               gh issue comment "$ROPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -328,7 +328,7 @@ jobs:
             LTITLE="Scheduled check needs review: canary-wallet (c)"
             LOPEN=$(ISSUE_TITLE="$LTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             if [ -z "$LOPEN" ]; then
-              node scripts/check-issue.js --title "$LTITLE"
+              node scripts/check-issue.js --title "$LTITLE" --trust-owner
             else
               gh issue comment "$LOPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -351,7 +351,7 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              node scripts/check-issue.js --title "$TITLE"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
             exit 1
           elif [ "$RESULT" = "ok" ] && [ -n "$OPEN" ]; then
