@@ -96,7 +96,7 @@
     "pg": "^8.23.1",
     "playwright": "^1.65.1",
     "pngjs": "^7.0.0",
-    "posthog-node": "^5.74.0",
+    "posthog-node": "^6.0.5",
     "pptxgenjs": "4.0.1",
     "qrcode": "^1.5.4",
     "railway": "3.17.0",
