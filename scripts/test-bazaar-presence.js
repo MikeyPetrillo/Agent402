@@ -441,8 +441,8 @@ const runOnce = async (name, fetchJson, extraEnv = {}, validate = unreadableVali
   const save = (job.steps || []).find((s) => /actions\/cache\/save@[0-9a-f]{40}/.test(s.uses || ""));
   ok(restore && save && restore.with?.path === save.with?.path && /run_id/.test(save.with?.key || ""), "the state is restored and saved through the pinned cache action");
   ok(/always\(\)/.test(save?.if || "") && /steps\.check\.outcome == 'success'/.test(save?.if || ""), "the state is saved after a failed buy too, never after a failed check");
-  const issue = (job.steps || []).find((s) => /gh issue create/.test(s.run || "")) || {};
-  ok(/--body-file out\/body\.md/.test(issue.run || "") && /--title "\$TITLE"/.test(issue.run || ""), "the issue is the fixed title and the check's body");
+  const issue = (job.steps || []).find((s) => /node scripts\/check-issue\.js --title /.test(s.run || "")) || {};
+  ok(/node scripts\/check-issue\.js --title "\$TITLE" --body-file out\/body\.md/.test(issue.run || "") && !/gh issue create/.test(issue.run || ""), "the issue is the fixed title and the check's body");
   ok(/always\(\)/.test(issue.if || ""), "the issue step runs after a failed buy too");
   const busy = wf.jobs?.busy;
   ok(job.needs === "busy" && /needs\.busy\.outputs\.busy == 'false'/.test(job.if || ""), "the buying job waits out a running or queued keep-alive pass");

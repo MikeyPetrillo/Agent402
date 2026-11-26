@@ -116,7 +116,7 @@ jobs:
             STREAK=$((PRIOR + 1))
             echo "The index was unavailable on this run ($STREAK scheduled runs in a row; pages at $NEED)."
             if [ "$STREAK" -ge "$NEED" ] && [ -z "$AVAIL_OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$AVAIL_TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$AVAIL_TITLE"
             fi
             exit 0
           fi
@@ -131,7 +131,7 @@ jobs:
               gh issue close "$FAIL_OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -z "$FAIL_OPEN" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$FAIL_TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            node scripts/check-issue.js --title "$FAIL_TITLE"
           fi
 
           # A listing written back. A deploy's own correction a few hours before
@@ -146,7 +146,7 @@ jobs:
           if [ "$CODE" = "3" ]; then
             echo "Remedy for a listing written back: one paid call to each named route, by dispatching the keep-alive workflow with slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd at or above its price."
             if [ -z "$BACK_OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$BACK_TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$BACK_TITLE"
             elif [ "${LAST_KIND:-}" = "clean" ]; then
               gh issue comment "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID state: again"
             fi

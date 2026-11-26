@@ -36,6 +36,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "Scheduled check needs review: listing-usage-report ($(date -u +%Y-%m-%d))" \
-            --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+          node scripts/check-issue.js --title "Scheduled check needs review: listing-usage-report ($(date -u +%Y-%m-%d))"

@@ -265,7 +265,7 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   ok(buy.env?.SLUGS === "${{ steps.plan.outputs.slugs }}" && buy.env?.REQUIRE_SLUGS === "1" && buy.env?.BATCH_COUNT === "1" && buy.env?.MODE === "sweep" && buy.env?.PAY_NETWORK === "base", "the buy is the keep-alive's sweep over the plan's slugs, in one process");
   ok(/steps\.plan\.outputs\.slugs != ''/.test(String(buy.if)) && !planStep.env?.BURNER_KEY, "no plan, no buy; the plan step holds no key");
   ok(buy.env?.BURNER_KEY === "${{ secrets.BURNER_KEY }}" && /BURNER_KEY is not set[^\n]*exit 1/.test(buy.run) && /add-mask::\$BURNER_KEY/.test(buy.run), "a missing burner key fails the pass, and the key is masked");
-  ok(/gh issue create/.test(JSON.stringify(wf.jobs?.report || {})) && wf.jobs?.report?.if === "always()", "a failed pass pages");
+  ok(/node scripts\/check-issue\.js --title /.test(JSON.stringify(wf.jobs?.report || {})) && wf.jobs?.report?.if === "always()", "a failed pass pages");
 
   const dep = load(read(".github/workflows/deploy.yml")).jobs.deploy.steps;
   const snapAt = dep.findIndex((s) => /keepalive-plan\.js snapshot/.test(String(s.run || "")));
@@ -300,7 +300,7 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   const hbSteps = Object.values(load(read(".github/workflows/heartbeat.yml")).jobs).flatMap((j) => j.steps || []);
   const step = hbSteps.find((s) => /^Canary burner balance watch/.test(String(s.name || "")));
   const dir = mkdtempSync(join(tmpdir(), "ka-hb-"));
-  writeFileSync(join(dir, "node"), `#!/usr/bin/env bash\nif [ "$1" = "scripts/keepalive-plan.js" ]; then [ -n "$LW_OUT" ] && echo "$LW_OUT"; exit \${LW_CODE:-0}; fi\nexec "${process.execPath}" "$@"\n`);
+  writeFileSync(join(dir, "node"), `#!/usr/bin/env bash\nif [ "$1" = "scripts/keepalive-plan.js" ]; then [ -n "$LW_OUT" ] && echo "$LW_OUT"; exit \${LW_CODE:-0}; fi\nif [ "$1" = "scripts/check-issue.js" ]; then shift; exec "${process.execPath}" "${fileURLToPath(new URL("./check-issue.js", import.meta.url))}" "$@"; fi\nexec "${process.execPath}" "$@"\n`);
   writeFileSync(join(dir, "curl"), `#!/usr/bin/env bash\nprintf '{"jsonrpc":"2.0","id":1,"result":"%s"}' "$BAL_HEX"\n`);
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env bash
 jqx=""; prev=""; for a in "$@"; do [ "$prev" = "--jq" ] && jqx="$a"; prev="$a"; done

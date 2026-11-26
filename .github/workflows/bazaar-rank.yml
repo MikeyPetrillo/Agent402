@@ -68,7 +68,7 @@ jobs:
           fi
           ACTION=$(cat out/action.txt)
           case "$ACTION" in
-            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            open) node scripts/check-issue.js --title "$TITLE" --body-file out/body.md ;;
             update)
               gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "The set of absent queries changed; the description lists the current set. Run: $RUN_URL" ;;

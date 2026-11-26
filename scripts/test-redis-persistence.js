@@ -221,8 +221,9 @@ const INFO_REWRITE_ERR = INFO_ON.replace("aof_last_bgrewrite_status:ok", "aof_la
   const step = start < 0 ? "" : hb.slice(start, hb.indexOf("- name:", start + 10));
   ok(step.length > 0, "heartbeat.yml has the Redis persistence step");
   ok(/\.redisPersistence\.status/.test(step) && /if \[ "\$WORD" = "off" \] \|\| \[ "\$WORD" = "degraded" \]; then sleep 30; WORD=\$\(read_rp\); fi/.test(step), "it reads redisPersistence.status and confirms off or degraded on a second reading 30 s later");
-  ok(/off\|degraded\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step) && /on\)\s+if \[ -n "\$OPEN" \]; then\s+gh issue close/.test(step), "off and degraded open one issue; on closes it; unknown does neither");
-  const body = (step.match(/--body "([^"]+)"/) || [])[1] || "";
+  ok(/off\|degraded\)\s+if \[ -z "\$OPEN" \]; then\s+node scripts\/check-issue\.js --title "\$TITLE"/.test(step) && /on\)\s+if \[ -n "\$OPEN" \]; then\s+gh issue close/.test(step), "off and degraded open one issue; on closes it; unknown does neither");
+  // The opening text is the shared opener's (scripts/check-issue.js); the step passes none of its own.
+  const body = /node scripts\/check-issue\.js --title "\$TITLE"/.test(step) && !/--body /.test(step.replace(/gh issue (comment|close)[^\n]*/g, "")) ? (await import("./check-issue.js")).openText("https://run.example/1") : "";
   ok(body.startsWith("A scheduled check reported a result that needs review. Run: ") && !/appendonly|INFO persistence|LEDGER_JOURNAL_REDIS/.test(body), "the body is the fixed text: no command, setting or switch");
   ok(!/\$\{?[A-Z_]*(KEY|TOKEN|SECRET)\b/.test(body) && !/\d+ ?(s|ms|minutes|USD|\$)/.test(body), "and carries no number or secret");
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
