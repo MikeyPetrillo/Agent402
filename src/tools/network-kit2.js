@@ -109,6 +109,15 @@ async function certTransparencyHandler(body) {
     }
   }
 
+  // A CT search answers a JSON list, an empty one when nothing was issued. A
+  // degraded front end can answer 200 with something else (an error object);
+  // read as a list that would be a false "no certificates" sold as an answer,
+  // so it is the same retryable upstream failure as a 5xx.
+  const rowsOf = (rows, label) => {
+    if (Array.isArray(rows)) return rows;
+    throw bad(`${label} answered something other than a list of certificates - try again later`, 502);
+  };
+
   // Map each CT-log source's raw rows to our normalized cert shape (deduped, capped).
   const mapCrtSh = (rows) => {
     const seen = new Set(), certs = [];
@@ -152,12 +161,12 @@ async function certTransparencyHandler(body) {
   const HEDGE_MS = 1500;
 
   const csKey = certspotterKey();
-  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(rowsOf(rows, "crt.sh")) }));
   const crtStarted = Date.now();
   const crtP = crtRead();
   let csP = null;
   const fireCertspotter = () => (csP ??= takeCertspotterRead()
-    ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) }))
+    ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(rowsOf(rows, "certspotter")) }))
     : Promise.reject(Object.assign(bad("the second CT search's hourly reads are spent", 502), { budget: true })));
   // Resolve on the FIRST fulfillment; reject with the first error only once ALL reject.
   const firstSuccess = (ps) => new Promise((resolve, reject) => {

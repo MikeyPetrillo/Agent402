@@ -184,6 +184,28 @@ try {
 // The description must match the hedge: it answered from either CT search
 // while saying "(via crt.sh)" (2026-10-02). It now names no single source and
 // points at the `source` field, which the published example documents.
+// A 200 that is not a list (a degraded front end's error object) is an
+// upstream failure, never a false "no certificates"; an empty list stays a
+// real answer.
+try {
+  delete process.env.CERTSPOTTER_API_KEY;
+  let crtCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) { crtCalls++; return Promise.resolve(jsonRes({ error: "database busy" })); } return Promise.reject(new Error("unexpected host")); });
+  let threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 502, `crt.sh answering an object, not a list, is a 502, not an empty answer (${threw?.statusCode ?? "answered"})`);
+  ok(crtCalls === 2, `that failure is asked once more like any fast failure (${crtCalls} reads)`);
+  stub((url) => isHost(url, "crt.sh") ? Promise.resolve(jsonRes([])) : Promise.reject(new Error("unexpected host")));
+  const empty = await tool.handler({ domain: "example.com" });
+  ok(empty.count === 0 && Array.isArray(empty.subdomains) && empty.subdomains.length === 0, "a real empty list is still a valid answer");
+  process.env.CERTSPOTTER_API_KEY = KEY;
+  resetCertspotterReads();
+  stub((url) => isHost(url, "crt.sh") ? Promise.resolve(errRes(502)) : Promise.resolve(jsonRes({ message: "rate limited" })));
+  threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 502, `certspotter answering an object while crt.sh fails is a 502, not an empty answer (${threw?.statusCode ?? "answered"})`);
+} finally { restore(); }
+
 ok(!/via crt\.sh|via certspotter/i.test(tool.description), "description does not attribute every answer to one CT search");
 ok(/`source`/.test(tool.description) && "source" in tool.discovery.output.example, "description and example document the `source` field");
 
