@@ -204,7 +204,7 @@ try {
   crtCalls = 0;
   stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(jsonRes(++crtCalls === 1 ? [] : CRT_ROWS)); return Promise.reject(new Error("unexpected host")); });
   const recovered = await tool.handler({ domain: "example.com" });
-  ok(recovered.count === 1 && recovered.subdomains.includes("a.example.com") && crtCalls === 2, `an empty list then rows serves the rows (${crtCalls} reads, ${recovered.count} certs)`);
+  ok(recovered.count === 1 && recovered.subdomains.some((name) => name === "a.example.com") && crtCalls === 2, `an empty list then rows serves the rows (${crtCalls} reads, ${recovered.count} certs)`);
   // An empty list then a failure is the failure's 502, never a third read.
   crtCalls = 0;
   stub((url) => { if (isHost(url, "crt.sh")) return Promise.resolve(++crtCalls === 1 ? jsonRes([]) : errRes(502)); return Promise.reject(new Error("unexpected host")); });
