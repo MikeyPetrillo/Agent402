@@ -83,6 +83,11 @@ ok(refusalReason("2 outside seller(s) matched those words on base, and none of t
 // The vocabulary is a closed set a query can GROUP BY.
 ok(new Set(REFUSAL_REASONS).size === REFUSAL_REASONS.length && REFUSAL_REASONS.includes("other"), "the vocabulary is unique and always has a fallback");
 ok(Object.isFrozen(REFUSAL_REASONS), "the vocabulary is frozen, so a caller cannot widen it at runtime");
+// A 422 the provider's content filter stopped names its class on the error
+// (contentFiltered); the class is a declared member, and only the 422 reads it.
+ok(REFUSAL_REASONS.includes("content_filtered"), "content_filtered is a declared member of REFUSAL_REASONS");
+ok(refusalReason("words this module has never seen", 422, { contentFiltered: true }) === "content_filtered", "a 422 marked contentFiltered classifies as content_filtered, whatever its message");
+ok(refusalReason("words this module has never seen", 422, { contentFiltered: "yes" }) !== "content_filtered" && refusalReason("x", 400, { contentFiltered: true }) !== "content_filtered", "only a 422 with contentFiltered === true reads the class");
 
 // Wired where it is actually needed: the dispatcher classifies, and the
 // telemetry carries the class and not the message.
