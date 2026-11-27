@@ -265,7 +265,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   shared store the word reads the shared day total and a refusal mark held to 00:00 UTC, so a
   fresh process on a capped day reads capped, and unknown, which does neither, until its first
   shared read; the free share alone reads ok; closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
-  forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
+  forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback: the public lanes, tried first by
+  design for recent ranges, or the configured keyed list served most recent reads; idle does
   neither, and reads idle until five recent reads are in, so one failure after a deploy never
   pages), `speechUpstream` cooling (ok, probing: the cool-down ended and the next call tries the
   primary link, so a quiet service does not hold the page open; closes on the second clear read in
@@ -273,13 +274,17 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on),
   `directUpstreamSpend` high and `directUpstreamBalance` exhausted (ok, off; unknown and starting
-  do neither; alarms only, see gateway.md; rolling back past them leaves an open issue to close by
+  do neither: starting is this process before its first direct answer or balance refusal, so it
+  holds after a deploy until a call takes the direct link; alarms only, see gateway.md; rolling back past them leaves an open issue to close by
   hand), `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
   off: the MPP subscription engine is configured but did not build at boot, including an installed
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
-  `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: a keyed Open-Meteo request was
-  refused, by 401, 403 or a 400 whose reason names the key or a plan, in the last 15 minutes;
-  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503), `mppReconcile.run`
+  `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: the last keyed
+  outcome of an Open-Meteo API in this process was a refusal, two in a row by 401, 403 or a 400
+  whose reason names a plan, or one 400 naming the key; `openMeteoStatus` in
+  `src/tools/weather-kit.js`; buyers got an uncharged 503. The word is fed only by buyers' keyed
+  weather calls and changes on the next keyed outcome, never with time: unknown, from boot until
+  the first one, does neither, so after a deploy it reads unknown until a weather tool is called), `mppReconcile.run`
   stale (the daily MPP reconciliation has not finished a run for 36 hours, a run that throws not
   counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
   close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first
