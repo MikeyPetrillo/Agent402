@@ -17,7 +17,10 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 const browser = await chromium.launch();
 try {
-  for (const [path, width] of [["/how-to-pay", 375], ["/", 375], ["/docs", 1440]]) {
+  // Each page is one where the widow pass edits text at that width (the
+  // control below): the copy handler is site-wide, so any such page reads it.
+  // The home page's short lead leaves it nothing to join at 375 px.
+  for (const [path, width] of [["/how-to-pay", 375], ["/pricing", 375], ["/docs", 1440]]) {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     await page.goto(`${BASE}${path}`, { waitUntil: "load" });
     await page.waitForTimeout(300);
