@@ -39,10 +39,14 @@
 // The line holds at most SEC_QUEUE_MAX waiting reads (what the pace can start
 // inside the longest wait), so it cannot grow without bound.
 //
-// A RUN ALREADY PAID FOR is never refused by the pace. A read of a run whose
-// payment settled before its upstream work (src/settle-first.js) waits for
-// the next place outside the line, bounded by the run's ceiling and the
-// caller's signal alone, so our own pace is never a charged failure.
+// A RUN ALREADY PAID FOR is never refused by the pace, and starts first. A
+// read of a run whose payment settled before its upstream work
+// (src/settle-first.js) waits in a line of its own, first come first served,
+// bounded by the run's ceiling and the caller's signal alone, so our own pace
+// is never a charged failure. The read holding the next place in the unpaid
+// line yields it while a paid read waits: each place that opens goes to the
+// paid line first, then to the line, and every start is still counted by the
+// one window, so the pace to the source is the same whoever starts.
 //
 // PER PROCESS. The count lives in this process; with more than one replica
 // each takes its share of the pace (RATE_LIMIT_REPLICAS, as the rate limiter
@@ -104,7 +108,10 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
   // The line: one lane, so one read at a time holds the next place to open,
   // and the room orders the rest across callers.
   const turns = createCallerTurns({ maxRunning: 1, maxWaiters: lineMax, hardWaiters: lineMax, now });
-  const active = new Set(); // reads waiting (in the room, holding the next place, or outside the line)
+  const active = new Set(); // reads waiting (in the room, holding the next place, or in the paid line)
+  const paidLine = []; // reads of runs already paid for, oldest first: `serve()` starts one
+  let paidTimer = null; // the paid line's wait for the next place
+  let yielded = null;   // the unpaid line holder's `place`, held back while a paid read waits
   let started = 0, refused = 0, longestLine = 0;
 
   const prune = (t) => { while (recent.length && t - recent[0] >= windowMs) recent.shift(); };
@@ -128,6 +135,19 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     return at - t;
   };
   const busyRefusal = () => { refused++; return secBusyError(); };
+  /** Start paid reads in the order they came while places are open, then
+   *  hand the next place back to the line's holder. */
+  const servePaid = () => {
+    clearTimeout(paidTimer); paidTimer = null;
+    while (paidLine.length) {
+      const wait = take();
+      if (wait !== 0) { paidTimer = setTimeout(servePaid, wait); return; }
+      paidLine.shift().serve();
+    }
+    const next = yielded;
+    yielded = null;
+    if (next) next();
+  };
 
   /** Resolves when this read may start; rejects when its wait ended first. */
   function turn({ signal = undefined, waitMs = null } = {}) {
@@ -153,23 +173,36 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     return new Promise((resolve, reject) => {
       const t0 = now();
       let done = false, timer = null, ceiling = null, pending = null, held = null;
-      const me = { finish: null };
+      const me = { finish: null, serve: null };
       const finish = (settle, value) => {
         if (done) return;
         done = true;
         clearTimeout(timer); clearTimeout(ceiling);
         signal?.removeEventListener?.("abort", onAbort);
         active.delete(me);
+        if (yielded === place) yielded = null;
+        const inPaid = paidLine.indexOf(me);
+        // A paid read that left (its ceiling, its caller) leaves its line; the
+        // line's wait for the next place then hands it to the holder.
+        if (inPaid >= 0) paidLine.splice(inPaid, 1);
         if (pending && !held) pending.cancel();
         if (held) held.release();
         settle(value);
       };
       me.finish = () => finish(resolve);
+      me.serve = me.finish;
       const onAbort = () => finish(reject, abortReason(signal));
-      // The next place to open is this read's: take it, or wait for it.
+      // The next place to open is this read's, unless a paid read waits: take
+      // it, or wait for it (to its own deadline, as ever).
       const place = () => {
         if (done) return;
+        clearTimeout(timer);
         if (Number.isFinite(allowed) && now() - t0 >= allowed) return finish(reject, busyRefusal());
+        if (paidLine.length) {
+          yielded = place;
+          if (Number.isFinite(allowed)) timer = setTimeout(place, Math.max(1, Math.ceil(allowed - (now() - t0))));
+          return;
+        }
         const wait = take();
         if (wait === 0) return finish(resolve);
         timer = setTimeout(place, Number.isFinite(allowed) ? Math.max(1, Math.min(wait, Math.ceil(allowed - (now() - t0)))) : wait);
@@ -179,7 +212,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       const left = ceilingLeftMs();
       if (left !== Infinity) ceiling = setTimeout(() => finish(reject, ceilingCutError()), Math.max(1, Math.floor(left)));
       signal?.addEventListener?.("abort", onAbort, { once: true });
-      if (paid) { place(); return; }
+      if (paid) { paidLine.push(me); if (!paidTimer) servePaid(); return; }
       pending = turns.acquire(LANE, who, { waitMs: Math.max(1, Math.floor(allowed)) });
       pending.then((t) => {
         if (done) { t.release(); return; }
@@ -201,7 +234,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
 
   return { paced, turn, limit, lineMax,
     status: () => ({ limit, waiting: active.size, inWindow: (prune(now()), recent.length), started, refused, longestLine }),
-    _reset: () => { recent.length = 0; for (const w of [...active]) w.finish(); turns.reset(); started = 0; refused = 0; longestLine = 0; } };
+    _reset: () => { recent.length = 0; clearTimeout(paidTimer); paidTimer = null; paidLine.length = 0; yielded = null; for (const w of [...active]) w.finish(); turns.reset(); started = 0; refused = 0; longestLine = 0; } };
 }
 
 const pace = createSecPace();

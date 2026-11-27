@@ -11,7 +11,8 @@
 //     "ours", uncharged wording) at once instead of waiting for it;
 //   - turns are fair across callers: one caller's burst does not hold another
 //     caller's read, a caller that left frees its places, and a run already
-//     paid for is never refused by the pace;
+//     paid for is never refused by the pace and starts ahead of the unpaid
+//     line, inside about one window, however many unpaid callers keep coming;
 //   - spaced arrivals (a fake clock) never exceed eight starts a second;
 //   - the wait ends at the run's ceiling (a 504, and nothing starts after it),
 //     on the caller's signal and inside the handler budget;
@@ -238,6 +239,81 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   try { await withRunCeiling(120, () => pace.paced(async () => { ran++; })); } catch (x) { err = x; }
   setPaidBeforeRunAmbient(null);
   ok(err?.ceilingCut === true && ran === 0, "its wait still ends at the run's ceiling");
+}
+
+// ---- a paid read starts ahead of the unpaid line, at the same pace ----
+// Unpaid reads keep arriving from distinct callers faster than the pace starts
+// them, so the line always has a holder. A paid read must not wait behind it.
+{
+  const { setPaidBeforeRunAmbient } = await import("../src/settle-first.js");
+  const WINDOW = 500, LIMIT = 8, SLACK = 250;
+  let who = ["ip:0"], paid = false, n = 0;
+  setPaidBeforeRunAmbient(() => paid);
+  const pace = createSecPace({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 1500, callerOf: () => who });
+  const startsAt = []; // { at, kind }
+  const unpaidJobs = [];
+  let onUnpaidStart = null;
+  const unpaid = () => {
+    paid = false; who = [`ip:${++n}`];
+    unpaidJobs.push(pace.paced(async () => { startsAt.push({ at: performance.now(), kind: "unpaid" }); onUnpaidStart?.(); }).catch(() => {}));
+  };
+  // Forty unpaid arrivals a window against eight places.
+  const feed = setInterval(() => { unpaid(); unpaid(); }, 25);
+  /** The outcome, or "none" at the deadline: no fixed sleep then count. */
+  const within = (p, ms) => { let t; return Promise.race([p, new Promise((r) => { t = setTimeout(() => r("none"), ms); })]).finally(() => clearTimeout(t)); };
+  const paidRead = (label) => {
+    paid = true; who = ["payer:0xPAID"];
+    const arrived = performance.now();
+    const p = pace.paced(async () => { const at = performance.now(); startsAt.push({ at, kind: "paid", label }); return { label, waited: at - arrived }; });
+    paid = false;
+    return p;
+  };
+  try {
+    await sleep(WINDOW + 200); // the line is standing: the first window is spent and a holder waits
+    const standing = pace.status().waiting;
+    const first = await within(Promise.all([paidRead("p1"), paidRead("p2"), paidRead("p3")]), 4 * WINDOW);
+    ok(standing >= LIMIT && first !== "none" && first.every((o) => o.waited <= WINDOW + SLACK),
+      `under sustained unpaid demand (${standing} waiting), three paid reads each start within about one window of arriving (${first === "none" ? `none started in ${4 * WINDOW} ms` : first.map((o) => `${Math.round(o.waited)} ms`).join(", ")}; window ${WINDOW} ms)`);
+    const order = startsAt.filter((x) => x.kind === "paid").map((x) => x.label).join();
+    ok(first === "none" ? false : order === "p1,p2,p3", `paid reads start in the order they arrived (${order || "none"})`);
+    // More paid reads than one window holds: all served, oldest first, each window's places theirs first.
+    const many = await within(Promise.all(Array.from({ length: 12 }, (_, i) => paidRead(`m${i}`))), 6 * WINDOW);
+    const manyOrder = startsAt.filter((x) => x.kind === "paid" && /^m/.test(x.label)).map((x) => x.label).join();
+    ok(many !== "none" && Math.max(...many.map((o) => o.waited)) <= 2 * WINDOW + SLACK && manyOrder === Array.from({ length: 12 }, (_, i) => `m${i}`).join(),
+      `twelve paid reads are all started inside two windows, oldest first (${many === "none" ? "not all started" : `longest ${Math.round(Math.max(...many.map((o) => o.waited)))} ms`})`);
+    // Paid reads stop: the unpaid line moves again, from the next place that opens.
+    const lastPaid = Math.max(0, ...startsAt.filter((x) => x.kind === "paid").map((x) => x.at));
+    const unpaidAfter = () => startsAt.filter((x) => x.kind === "unpaid" && x.at > lastPaid).length;
+    const moved = await within(new Promise((r) => { onUnpaidStart = () => { if (unpaidAfter() >= LIMIT) r("moved"); }; onUnpaidStart(); }), 4 * WINDOW);
+    ok(moved === "moved", `once paid reads stop, unpaid callers are started again (${unpaidAfter()} unpaid starts after the last paid one)`);
+    ok(startsAt.some((x) => x.kind === "unpaid" && x.at < lastPaid), "and unpaid reads were started before the paid ones came");
+  } finally {
+    clearInterval(feed);
+    onUnpaidStart = null;
+    await Promise.all(unpaidJobs);
+    setPaidBeforeRunAmbient(null);
+  }
+  // Every start, paid or not, is one start in the one window.
+  const most = mostPerWindow(startsAt.map((x) => x.at), WINDOW - 10);
+  ok(most <= LIMIT && most >= LIMIT - 1 && startsAt.length > 3 * LIMIT, `paid and unpaid starts together stay at eight to any rolling window (most ${most} of ${startsAt.length} starts)`);
+  ok(pace.status().waiting === 0, "and nobody is left waiting");
+  // A paid read that leaves hands the next place back to the line's holder.
+  setPaidBeforeRunAmbient(() => paid);
+  const small = createSecPace({ perSecond: 1, windowMs: 200, maxWaitMs: 2000, callerOf: () => who });
+  await small.paced(async () => 1);
+  paid = false; who = ["ip:holder"];
+  const t0 = performance.now();
+  const holder = small.paced(async () => performance.now() - t0);
+  await sleep(10);
+  paid = true;
+  const ac = new AbortController();
+  const leaver = small.paced(async () => "ran", { signal: ac.signal }).then((v) => v, (e) => e);
+  paid = false;
+  await sleep(10);
+  ac.abort(Object.assign(new Error("caller went away"), { name: "AbortError" }));
+  const [gone, at] = [await leaver, await within(holder, 1000)];
+  setPaidBeforeRunAmbient(null);
+  ok(gone?.name === "AbortError" && at !== "none" && at < 200 + 150 && small.status().waiting === 0, `a paid read whose caller left frees the next place for the line's holder (${gone?.name}, holder at ${at === "none" ? "never" : `${Math.round(at)} ms`})`);
 }
 
 // ---- spaced arrivals never exceed the pace (a fake clock) ----
