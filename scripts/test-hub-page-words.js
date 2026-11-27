@@ -1,7 +1,7 @@
 // The home page and the hub pages (/sell, /docs) are short answers first:
 // at most LEAD_MAX words of paragraph above the first h2, and at most
 // BODY_MAX words a reader sees without opening anything (code, navigation and
-// the bodies of closed <details> are not counted: scripts/lib/page-words.js).
+// the bodies of closed <details> are not counted: scripts/lib/hub-page-words.js).
 // Long detail lives on a linked page, or collapsed where it is optional.
 //
 // Boots a FREE_MODE server on port 0 and reads the pages it serves; with

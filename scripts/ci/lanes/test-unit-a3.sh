@@ -15,6 +15,8 @@ t node scripts/test-find-ranking.js
 t node scripts/test-find-direction.js
 # /api/find: past find-misses a catalog tool answers rank it first and read as served (scripts/fixtures/find-misses.json)
 t node scripts/test-find-misses-corpus.js
+# Catalog descriptions: a word ceiling for every tool, 120 words and a short first sentence for the trimmed ones (booted, free mode)
+t node scripts/test-description-length.js
 # /api/find and catalog.find: a search with the operator token records no find-miss; Vary and no-store on the header (booted)
 t node scripts/test-find-operator-quiet.js
 # /.well-known/search: GET and QUERY rank as /api/find, Markdown, 400/405/413/415, wish and limit shared with /api/find, page head tags (booted)
