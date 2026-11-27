@@ -12,7 +12,9 @@
 //                     or src/server.js for an entry written there)
 //   skill pack pages  the newest commit touching the module that defines the
 //                     pack (a pack and a tool may share a name: /skills/<slug>
-//                     and /tools/<slug> are two pages with two sources)
+//                     and /tools/<slug> are two pages with two sources), or a
+//                     later one touching a module every pack page renders
+//                     (PACK_PAGE_MODULES)
 //   legal pages       the "last updated" date the page itself prints
 //   sample reports    the fixture's own generation date
 //   public reports    the report's publication date
@@ -111,6 +113,13 @@ export const FAMILY_SOURCES = [
   ["/guides/", ["src/guides.js"]],
   ["/skills/", ["src/skills.js"]],
 ];
+
+/** Modules whose text every skill pack page (/skills/<slug>) renders beside
+ *  its own entry: a change to one moves every pack page's date, never back.
+ *  A listed module that is not on disk is skipped (the generator dates the
+ *  ones that exist, and the lookup reads only a date the table holds), so a
+ *  module may be listed in the change before the one that adds it. */
+export const PACK_PAGE_MODULES = ["src/skill-page-copy.js"];
 
 /** Pages that carry Article JSON-LD and are rendered by one module: their
  *  published date is that module's first commit, their modified date the
@@ -213,9 +222,22 @@ export function packLastmod(slug) {
   return file ? filesLastmod([file]) : null;
 }
 
+/** A pack page's date: its own, or the later date of a module every pack page
+ *  renders. A path outside /skills/<slug>, or an undated page, is unchanged. */
+function packPageDay(p, day) {
+  if (!day || !p.startsWith("/skills/")) return day;
+  const { files } = loadTable();
+  let out = day;
+  for (const f of PACK_PAGE_MODULES) { const d = validDay(files[f]); if (d && d > out) out = d; }
+  return out;
+}
+
 /** lastmod for a sitemap path, or null when nothing truthful is known. */
 export function pageLastmod(path) {
   const p = String(path || "").split("?")[0];
+  return packPageDay(p, ownLastmod(p));
+}
+function ownLastmod(p) {
   if (p === "/terms" || p === "/privacy" || p === "/dpa") return legalLastmod(p);
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
@@ -248,7 +270,7 @@ export function entryDates(path) {
 export function articleDates(path, { published: printed = null } = {}) {
   const p = String(path || "").split("?")[0];
   const entry = entryDates(p);
-  let modified = entry ? entry.modified : pageLastmod(p);
+  let modified = entry ? packPageDay(p, entry.modified) : pageLastmod(p);
   // A printed date later than the source's last change (a post committed
   // before its publication day) is the newest truthful date for both.
   if (validDay(printed) && (!modified || validDay(printed) > modified)) modified = validDay(printed);

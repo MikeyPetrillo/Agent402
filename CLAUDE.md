@@ -101,6 +101,11 @@ LLC: credit the entity, never a personal name.
   is judged and queried in one canonical form), `src/tools/mailbox-provider.js` (email-validate's
   `mailboxProvider`, from the MX hosts already read), `src/tools/price-webhook-kit.js` (the
   `price-webhook` catalog entry).
+- `src/official-surfaces.js` (the official packages and endpoints: /company, `official` in
+  `/.well-known/x402` and the README section, from `src/generated/official-packages.json`; after
+  adding, renaming or removing a published package run `node scripts/gen-official-surfaces.js --write`),
+  `src/mcp-registry-auth.js` (`/.well-known/mcp-registry-auth`, on while `MCP_REGISTRY_AUTH_PROOF` holds
+  a proof record; `scripts/test-official-surfaces.js`).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),

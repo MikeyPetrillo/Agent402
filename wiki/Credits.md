@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-A credits key already issued (`a402_...`) holds a prepaid balance that pays for this server's own services: send it as `Authorization: Bearer a402_...`. The [`/credits`](https://agent402.tools/credits) page says whether new keys are on sale.
+A credits key (`a402_...`) holds a prepaid balance that pays for this server's own services: send it as `Authorization: Bearer a402_...`. The [`/credits`](https://agent402.tools/credits) page says whether keys are on sale; a key keeps spending its balance either way.
 
 ## How a call is paid
 

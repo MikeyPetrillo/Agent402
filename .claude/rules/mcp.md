@@ -138,6 +138,11 @@ Loaded when a connector or front-door file is read.
   `role="alert"` tied to their field, a disabled form on lockout with a resend) are held by
   `scripts/test-mcp-oauth-pages.js`. Authorize errors are shown on this site, never redirected to the app's address. A refusal never
   names its check (`scripts/test-mcp-oauth.js`).
+- **Registry namespace proof:** `src/mcp-registry-auth.js` serves `/.well-known/mcp-registry-auth` (text/plain, one
+  line) while `MCP_REGISTRY_AUTH_PROOF` holds an MCP Registry proof record (`v=MCPv1; k=ed25519; p=<public key>`, a
+  public value); unset or malformed it is the ordinary 404 and the malformed value is named at boot, never served. The
+  operator document store refuses the name. The server name in `mcp/server.json` and `mcpName` in `mcp/package.json`
+  must be equal, and the official list (`src/official-surfaces.js`) reads the name from there.
 - **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
   is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
   fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.

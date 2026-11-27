@@ -23,7 +23,7 @@ const TTL_MS = 24 * 60 * 60 * 1000;
 // typo can never sit in the store silently shadowed (the serving catch-all
 // falls through when the store misses, so a reserved-name entry would simply
 // never serve; rejecting at write time makes the mistake loud instead).
-const RESERVED = new Set(["x402", "security.txt", "glama.json", "agent402-conformance.json", "agent402-receipt-key.json", "agent402-refund-terms.json"]);
+const RESERVED = new Set(["x402", "security.txt", "glama.json", "agent402-conformance.json", "agent402-receipt-key.json", "agent402-refund-terms.json", "mcp-registry-auth"]);
 
 // One clean path segment: no dot-prefix (blocks "." / ".."), no separators
 // beyond the explicit "/" between segments — path traversal is structurally

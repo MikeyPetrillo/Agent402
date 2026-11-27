@@ -10,8 +10,8 @@
 //   node scripts/test-page-dates.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { buildTable, readTable, diffTables, isShallow, scanToolSources } from "./gen-page-dates.js";
-import { pageLastmod, toolLastmod, legalLastmod, filesLastmod, dayOf, pageSourceFiles, PAGE_SOURCES, _setPageDatesTable, entryDates, articleDates } from "../src/page-dates.js";
+import { buildTable, readTable, diffTables, isShallow, scanToolSources, presentModules } from "./gen-page-dates.js";
+import { pageLastmod, toolLastmod, legalLastmod, filesLastmod, dayOf, pageSourceFiles, PAGE_SOURCES, PACK_PAGE_MODULES, _setPageDatesTable, entryDates, articleDates } from "../src/page-dates.js";
 import { entrySpans } from "./gen-page-dates.js";
 
 let pass = 0, fail = 0;
@@ -55,7 +55,7 @@ if (!isShallow() && stored) {
   const shared = Object.keys(packSources || {}).filter((s) => s in toolSources);
   ok(shared.includes("market-brief") && shared.every((s) => toolSources[s] !== packSources[s]), `every name a tool and a pack share keeps both sources (${shared.join(", ")})`);
   ok(ISO.test(pageLastmod("/tools/market-brief") || "") && pageLastmod("/tools/market-brief") === filesLastmod(["src/tools/research-deep-kit.js"]), `/tools/market-brief is dated by its kit (${pageLastmod("/tools/market-brief")})`);
-  ok(ISO.test(pageLastmod("/skills/market-brief") || "") && pageLastmod("/skills/market-brief") === entryDates("/skills/market-brief")?.modified, `/skills/market-brief is dated by its own entry in the pack module (${pageLastmod("/skills/market-brief")})`);
+  ok(ISO.test(pageLastmod("/skills/market-brief") || "") && pageLastmod("/skills/market-brief") === [entryDates("/skills/market-brief")?.modified, ...presentModules().map((f) => filesLastmod([f]))].filter(Boolean).sort().pop(), `/skills/market-brief is dated by its own entry in the pack module, or a later change to a module every pack page renders (${pageLastmod("/skills/market-brief")})`);
   // The lookup reads the two maps apart: one name, two dates.
   _setPageDatesTable({
     files: { "src/tools/k.js": "2026-02-01", "src/packs.js": "2026-05-01", "src/skills.js": "2026-06-01" },
@@ -163,6 +163,37 @@ ok(pageLastmod("/api/find?q=search+the+web") === null, "a query string does not 
 ok(dayOf("2026-10-02T14:03:00.000Z") === "2026-10-02" && dayOf(null) === null && dayOf("not a date") === null, "dayOf reduces a timestamp to a day and rejects junk");
 
 // --- a partly dated source is undated, and a missing table dates nothing --------
+// --- a module every pack page renders moves every pack page's date ----------
+// A pack page is its own entry plus text shared by all of them
+// (PACK_PAGE_MODULES). A later change to a listed module dates every pack
+// page; an earlier one, or a listed module the table does not hold (not on
+// disk in this tree), changes nothing. Nothing outside /skills/<slug> moves.
+{
+  const shared = PACK_PAGE_MODULES[0];
+  ok(PACK_PAGE_MODULES.includes("src/skill-page-copy.js") && PACK_PAGE_MODULES.every((f) => /^src\/[a-z0-9-]+\.js$/.test(f)), `the pack pages list their shared modules (${PACK_PAGE_MODULES.join(", ")})`);
+  const fixture = (extra) => ({
+    files: { "src/skills.js": "2026-06-01", "src/packs.js": "2026-05-01", "src/guides.js": "2026-03-01", "src/tools/k.js": "2026-02-01", ...extra },
+    entries: { "/skills/alpha": { published: "2026-01-10", modified: "2026-04-01" }, "/guides/alpha": { published: "2026-01-10", modified: "2026-03-01" } },
+    toolSources: { beta: "src/tools/k.js" },
+    packSources: { beta: "src/packs.js" },
+  });
+  _setPageDatesTable(fixture({}));
+  ok(pageLastmod("/skills/alpha") === "2026-04-01" && pageLastmod("/skills/beta") === "2026-05-01" && pageLastmod("/skills/gamma") === "2026-06-01", "seam: with the shared module absent from the table, each pack page keeps its own date");
+  _setPageDatesTable(fixture({ [shared]: "2026-07-15" }));
+  ok(pageLastmod("/skills/alpha") === "2026-07-15" && pageLastmod("/skills/beta") === "2026-07-15" && pageLastmod("/skills/gamma") === "2026-07-15", `seam: a later change to the shared module dates every pack page (${pageLastmod("/skills/alpha")}, ${pageLastmod("/skills/beta")}, ${pageLastmod("/skills/gamma")})`);
+  ok(articleDates("/skills/alpha").dateModified === "2026-07-15" && articleDates("/skills/alpha").datePublished === "2026-01-10", "seam: the pack page's stated modified date moves with it, its published date does not");
+  ok(pageLastmod("/guides/alpha") === "2026-03-01" && pageLastmod("/tools/beta") === "2026-02-01" && pageLastmod("/skills") === "2026-06-01", "seam: a guide, a tool page and the pack index are not dated by the pack pages' shared module");
+  _setPageDatesTable(fixture({ [shared]: "2026-03-15" }));
+  ok(pageLastmod("/skills/alpha") === "2026-04-01" && pageLastmod("/skills/beta") === "2026-05-01", "seam: a shared module older than a pack's own change never moves its date back");
+  _setPageDatesTable(fixture({ [shared]: "not-a-date" }));
+  ok(pageLastmod("/skills/alpha") === "2026-04-01", "seam: an undated shared module is skipped, it never undates a pack page");
+  _setPageDatesTable(null);
+  // The generator dates a listed module that is on disk and skips one that is not.
+  ok(JSON.stringify(presentModules(["src/skills.js", "src/no-such-module-for-this-test.js"])) === JSON.stringify(["src/skills.js"]), "the generator keeps a listed module that exists and skips a missing one");
+  const { table, missing } = buildTable();
+  ok(PACK_PAGE_MODULES.every((f) => !missing.includes(f)) && presentModules().every((f) => ISO.test(table.files[f] || "")) && PACK_PAGE_MODULES.filter((f) => !presentModules().includes(f)).every((f) => !(f in table.files)), `a listed module is dated when present and left out, without failing the build, when absent (present: ${presentModules().join(", ") || "none"})`);
+}
+
 {
   _setPageDatesTable({ files: { "src/ledger-home.js": "2026-01-02" }, toolSources: { x: "src/tools/nowhere.js" } });
   ok(pageLastmod("/") === "2026-01-02", "seam: the lookup reads the table it is given");

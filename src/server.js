@@ -503,6 +503,7 @@ import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend, globalUnsettledStatus } from "./external-spend-guard.js";
 import { registerWellKnown, removeWellKnown, getWellKnownShared, listWellKnown } from "./well-known-store.js";
+import { MCP_REGISTRY_AUTH_PATH, registryAuthProof, registryAuthHandler } from "./mcp-registry-auth.js";
 import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
@@ -5285,6 +5286,16 @@ app.get(`${RECEIPT_FETCH_PATH}/:key`, async (req, res) => {
   if (!jws) return res.status(404).json({ error: `No receipt is kept under that key. A streamed paid answer's receipt is kept for ${RECEIPT_FETCH_DAYS} days once the answer finished; a failed, free or trial call has none.` });
   return res.json({ receipt: jws, header: RECEIPT_HEADER, keys: `${BASE_URL}${RECEIPT_KEYS_PATH}`, verify: `${BASE_URL}${RECEIPT_VERIFY_PATH}` });
 });
+// The MCP Registry's HTTP proof of this domain's namespace
+// (src/mcp-registry-auth.js): the public proof record as text, on while
+// MCP_REGISTRY_AUTH_PROOF holds one; otherwise the ordinary 404. Read once at
+// boot; a value that is not a proof record is named here, never served.
+{
+  const { proof, error } = registryAuthProof();
+  if (error) console.error(`[mcp-registry] ${error}`);
+  else if (proof) console.log(`[mcp-registry] serving the namespace proof at ${MCP_REGISTRY_AUTH_PATH}`);
+}
+app.get(MCP_REGISTRY_AUTH_PATH, registryAuthHandler());
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "help@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
