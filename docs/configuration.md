@@ -481,7 +481,7 @@ holds it.
 | --- | --- | --- | --- |
 | `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
 | `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
-| `FUNDING_RUNWAY_DAYS` | How many days ahead the operator view's fundingRunway word looks: a wallet whose fitted spend reaches its low-water line within it reads low-soon (default 3). A warning only. |  | `src/funding-runway.js` |
+| `FUNDING_RUNWAY_DAYS` | How many days ahead the operator view's fundingRunway word looks: a wallet whose fitted spend reaches its low-water line within it reads low-soon (default 3). A warning only. |  | `src/changelog.js`, `src/funding-runway.js` |
 
 ## FUNNEL
 
