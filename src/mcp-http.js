@@ -42,7 +42,8 @@ class McpError extends ProtocolError {
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport, toWebRequest } from "@modelcontextprotocol/node";
-import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
+import { MCP_REGISTRY_NAMESPACE } from "./org-profiles.js";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
@@ -465,7 +466,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   const site = baseUrl || MCP_SERVER_WEBSITE;
   return {
     ...(SERVER_CARD_SCHEMA ? { $schema: SERVER_CARD_SCHEMA } : {}),
-    name: `${REPO_NAMESPACE}/${serverName}`,
+    name: `${MCP_REGISTRY_NAMESPACE}/${serverName}`,
     version: VERSION,
     title: "Agent402",
     description: mcpShortDescription({ mpp }),

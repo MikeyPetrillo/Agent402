@@ -4763,8 +4763,9 @@ app.get("/.well-known/security.txt", (_req, res) => {
   ].join("\n");
   res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(body);
 });
-// Glama connector ownership verification: claims our listing at
-// glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
+// Glama connector ownership verification: claims our connector listing there,
+// which is keyed on the repository account namespace (REPO_NAMESPACE), not on
+// the MCP Registry name (MCP_REGISTRY_NAME, the domain's). The maintainer email
 // must match the Glama account. Defaults to the project's domain-scoped
 // maintainer address; GLAMA_MAINTAINER_EMAIL env override exists for forks.
 // OpenAI-compatible model discovery for the x402 LLM gateway — free, like
