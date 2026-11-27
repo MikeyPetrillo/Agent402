@@ -6,7 +6,9 @@
 //    notice once however often it is imported;
 //  - no published name carries another party's mark (the names below);
 //  - outside the places that record history or the move itself, an earlier
-//    name appears only on a line that says it was renamed;
+//    name appears only on a line that says it was renamed; the generated
+//    package list is read by its fields instead (an earlier name's entry
+//    carries its replacement in `renamedTo`);
 //  - the publish job publishes the forwarding releases after every new name and
 //    its trusted-publisher probe reads renamed/.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -100,7 +102,46 @@ for (const r of PACKAGE_RENAMES) {
   const KEEP = new Set(["CHANGELOG.md", "src/changelog.js", "scripts/lib/package-renames.js", "scripts/test-package-renames.js", "src/sale-path.js", "workers/status-probe/src/previous-issue-titles.js"]);
   const olds = [...new Set(PACKAGE_RENAMES.map((r) => r.old))];
   const re = new RegExp(`(?<![\\w-])(${olds.map(escapeRegex).join("|")}|agent402_langchain)(?![\\w-])`);
-  const files = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" }).split("\n").filter((f) => f && !KEEP.has(f) && !f.startsWith("renamed/") && !/\.(png|jpe?g|gif|ico|woff2?|ttf|otf|pdf)$/.test(f));
+  // The generated package list is data, not prose: it names each earlier
+  // package on purpose (the pages built from it say where each one moved), so
+  // it is read by its fields. An entry under an earlier name must carry
+  // `renamedTo` with that name's replacement on the same registry, and the
+  // earlier name appears nowhere else in the file.
+  const LIST = "src/generated/official-packages.json";
+  const listFindings = (text) => {
+    const out = [];
+    let doc; try { doc = JSON.parse(text); } catch { return ["not JSON"]; }
+    const { packages = [], ...rest } = doc;
+    for (const p of packages) {
+      if (!re.test(String(p.name))) {
+        if (re.test(JSON.stringify(p))) out.push(`${p.name}: an earlier name in an entry that is not its own`);
+        continue;
+      }
+      const want = PACKAGE_RENAMES.find((r) => r.old === p.name && r.registry === p.registry)?.name;
+      if (!want) out.push(`${p.name} (${p.registry}): no rename is recorded for it`);
+      else if (p.renamedTo !== want) out.push(`${p.name} (${p.registry}): renamedTo is ${p.renamedTo === undefined ? "missing" : p.renamedTo}, expected ${want}`);
+      const others = Object.entries(p).filter(([k]) => !["name", "registry", "path", "renamedTo"].includes(k));
+      if (others.some(([, v]) => re.test(JSON.stringify(v)))) out.push(`${p.name}: an earlier name in another field`);
+    }
+    if (re.test(JSON.stringify(rest))) out.push("an earlier name outside the package entries");
+    return out;
+  };
+  {
+    const text = readFileSync(join(ROOT, LIST), "utf8");
+    const found = listFindings(text);
+    const doc = JSON.parse(text);
+    const paired = doc.packages.filter((p) => p.renamedTo);
+    ok(found.length === 0 && paired.length >= PACKAGE_RENAMES.length, `${LIST}: every earlier name is paired with its replacement (${paired.length} entries)${found.length ? `: ${found.slice(0, 6).join("; ")}` : ""}`);
+    // Controls on copies of the real list: the pairing removed, pointed at
+    // another package, and an earlier name in an entry that is not its own.
+    const mutate = (fn) => { const d = JSON.parse(text); fn(d.packages); return listFindings(JSON.stringify(d)); };
+    const at = (ps) => ps.find((p) => p.renamedTo);
+    ok(mutate((ps) => { delete at(ps).renamedTo; }).some((m) => /renamedTo is missing/.test(m)), "control: an earlier name without its replacement fails");
+    ok(mutate((ps) => { at(ps).renamedTo = "agent402-client"; }).some((m) => /expected /.test(m)), "control: an earlier name paired with another package fails");
+    ok(mutate((ps) => { ps.find((p) => !p.renamedTo).note = `install ${olds[0]}`; }).some((m) => /not its own/.test(m)), "control: an earlier name in a current package's entry fails");
+    ok(mutate((ps) => { ps.push({ name: "agent402_langchain", registry: "npm", path: "x" }); }).some((m) => /no rename is recorded/.test(m)), "control: an earlier name with no recorded rename fails");
+  }
+  const files = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" }).split("\n").filter((f) => f && f !== LIST && !KEEP.has(f) && !f.startsWith("renamed/") && !/\.(png|jpe?g|gif|ico|woff2?|ttf|otf|pdf)$/.test(f));
   const bad = [];
   for (const f of files) {
     let s; try { s = readFileSync(join(ROOT, f), "utf8"); } catch { continue; }
