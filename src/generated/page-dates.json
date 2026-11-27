@@ -17,9 +17,9 @@
     "src/glossary.js": "2026-11-24",
     "src/guides.js": "2026-11-27",
     "src/how-to-pay.js": "2026-11-24",
-    "src/human-reports-page.js": "2026-11-24",
+    "src/human-reports-page.js": "2026-11-27",
     "src/index-tools-page.js": "2026-11-23",
-    "src/integration-pages.js": "2026-11-26",
+    "src/integration-pages.js": "2026-11-27",
     "src/learn.js": "2026-11-24",
     "src/ledger-catalog.js": "2026-11-23",
     "src/ledger-docs.js": "2026-11-27",
@@ -102,7 +102,7 @@
     "src/tools/dossier-kit.js": "2026-11-26",
     "src/tools/dub-kit.js": "2026-11-24",
     "src/tools/edgar-13f-datasets.js": "2026-11-15",
-    "src/tools/edgar-kit.js": "2026-11-24",
+    "src/tools/edgar-kit.js": "2026-11-27",
     "src/tools/email-guard-html.js": "2026-10-20",
     "src/tools/email-guard-kit.js": "2026-11-27",
     "src/tools/email-guard-mime.js": "2026-11-23",
@@ -527,7 +527,7 @@
     },
     "/skills/contact-verify": {
       "published": "2026-07-04",
-      "modified": "2026-07-24"
+      "modified": "2026-11-27"
     },
     "/skills/content-extraction": {
       "published": "2026-06-19",
@@ -579,7 +579,7 @@
     },
     "/skills/domain-intel": {
       "published": "2026-07-04",
-      "modified": "2026-11-23"
+      "modified": "2026-11-27"
     },
     "/skills/earnings-deep-dive": {
       "published": "2026-07-06",
@@ -591,7 +591,7 @@
     },
     "/skills/email-deliverability": {
       "published": "2026-06-19",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/email-security": {
       "published": "2026-07-04",
@@ -679,7 +679,7 @@
     },
     "/skills/macro-economics": {
       "published": "2026-06-19",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/macro-snapshot": {
       "published": "2026-11-24",
@@ -755,7 +755,7 @@
     },
     "/skills/seo-audit": {
       "published": "2026-07-03",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/ssl-audit": {
       "published": "2026-07-04",
@@ -779,7 +779,7 @@
     },
     "/skills/text-hygiene": {
       "published": "2026-06-21",
-      "modified": "2026-08-30"
+      "modified": "2026-11-27"
     },
     "/skills/timezone-planner": {
       "published": "2026-07-04",
@@ -803,7 +803,7 @@
     },
     "/skills/user-onboarding": {
       "published": "2026-06-21",
-      "modified": "2026-10-13"
+      "modified": "2026-11-27"
     },
     "/skills/wallet-audit": {
       "published": "2026-07-04",
