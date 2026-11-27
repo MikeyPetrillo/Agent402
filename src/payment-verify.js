@@ -491,27 +491,33 @@ export async function verifyInboundPayment({
 
     if (n.startsWith("stellar:")) {
       if (typeof stellarConfirm !== "function") return fail("no Stellar verifier available");
-      // Reuses the same payer->payTo, same-transaction proof the late-settle
-      // fix already relies on; the window opens just before the debt was
-      // recorded so a late confirmation still counts.
-      const found = await stellarConfirm({
-        payer, payTo, sinceMs: Number(createdAt || 0) - 120_000, waitMs: 0,
-        assetCode: STELLAR_USDC_CODE, assetIssuer: STELLAR_USDC_ISSUER,
-      });
-      if (!found) return fail("no confirmed transfer from this payer to our payTo");
-      // BIND IT TO THIS DEBT, UNCONDITIONALLY. The confirmer answers "did this
-      // payer pay us near this time", which is weaker than the other rails:
-      // they resolve a specific transaction. The binding used to apply only
-      // when the row happened to record a 64-hex hash - but the ledger's
-      // fallback evidence is payer|slug|minute, and on THAT path the check was
-      // skipped entirely. Two such rows plus one dust payment would then verify
-      // both, and each would be repaid at full face value. A row we cannot bind
-      // is held for a human, which is the asymmetry this module exists for.
       const recorded = String(tx || "");
-      if (!/^[0-9a-fA-F]{64}$/.test(recorded)) {
+      const recordedHash = /^[0-9a-fA-F]{64}$/.test(recorded) ? recorded.toLowerCase() : null;
+      // A row that records its transaction is proven by THAT transaction:
+      // successful, debiting this payer and crediting our payTo in USDC by
+      // issuer, each for at least the debt. Asking "did this payer pay us
+      // since then" instead returns the payer's newest payment, so a buyer
+      // who paid us again later held their own refund forever.
+      const found = recordedHash
+        ? await stellarConfirm({
+          payer, payTo, txHash: recordedHash, waitMs: 0,
+          assetCode: STELLAR_USDC_CODE, assetIssuer: STELLAR_USDC_ISSUER,
+        })
+        // A row with no hash keeps the window lookup, and is held below.
+        : await stellarConfirm({
+          payer, payTo, sinceMs: Number(createdAt || 0) - 120_000, waitMs: 0,
+          assetCode: STELLAR_USDC_CODE, assetIssuer: STELLAR_USDC_ISSUER,
+        });
+      if (!found) return fail("no confirmed transfer from this payer to our payTo");
+      // BIND IT TO THIS DEBT, UNCONDITIONALLY. The ledger's fallback evidence
+      // is payer|slug|minute; a window match on such a row could vouch for
+      // two debts with one payment, each repaid at full face value. A row we
+      // cannot bind is held for a human, which is the asymmetry this module
+      // exists for.
+      if (!recordedHash) {
         return fail("no transaction recorded - cannot bind a confirmation to this debt");
       }
-      if (String(found.transaction) !== recorded) {
+      if (String(found.transaction || "").toLowerCase() !== recordedHash) {
         return fail("the confirmed transfer is a different transaction than this debt recorded");
       }
       // USDC BY ISSUER. Anyone can issue a Stellar asset whose code reads
@@ -520,18 +526,19 @@ export async function verifyInboundPayment({
       if (found.assetCode !== STELLAR_USDC_CODE || found.assetIssuer !== STELLAR_USDC_ISSUER) {
         return fail("the confirmed transfer is not USDC from its issuer");
       }
-      // COMPARE THE AMOUNT. Every other rail enforces "at least the amount";
-      // this branch carried found.amount and never checked it, so a dust
-      // transfer satisfied a debt of any size. Stellar amounts are decimal
-      // strings with 7 places - compare in integer stroops, not floats.
+      // COMPARE THE AMOUNTS: what reached us and what left this payer, each
+      // at least the debt. Stellar amounts are decimal strings with 7 places;
+      // compare in integer stroops, not floats.
       const stroops = (v) => {
         try { return usdToBaseUnits(typeof v === "string" ? v : Number(v), 7); } catch { return null; }
       };
       const got = stroops(found.amount);
+      const paid = found.debitedAmount == null ? null : stroops(found.debitedAmount);
       const want = stroops(amountUsd);
-      if (got === null || want === null) return fail("could not read the transferred amount");
+      if (got === null || paid === null || want === null) return fail("could not read the transferred amount");
       if (want <= 0n) return fail("expected amount is zero");
       if (got < want) return fail(`transfer is short: ${found.amount} < ${amountUsd}`);
+      if (paid < want) return fail(`the payer's debit is short: ${found.debitedAmount} < ${amountUsd}`);
       return pass({ tx: found.transaction, amount: found.amount });
     }
 

@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## v2.17.1 - 2026-11-27
 
+### 2026-11-27 (Stellar refund proof)
+Payments:
+- A refund owed on a Stellar payment is proven by the transaction the debt
+  recorded: it must have succeeded, debited the buyer and credited this
+  server's address in USDC, each for at least the amount owed. A buyer who
+  paid again after the failed call is no longer held for review.
+
 ### 2026-11-27 (ASN lookups, video filter answers)
 Tools:
 - asn-info is named IP to ASN lookup and no longer answers geolocation
