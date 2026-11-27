@@ -78,6 +78,7 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
 // venue close. Read on every pack in full and on its page copy, stock on and off.
 {
   const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { PACK_BRAND_FLOOR } = await import("./sync-count.js");
   const RULES = [
     ["a mailbox probe or a typo suggestion", /mailbox reachab|dead mailbox|likely[- ]typos?|reachable MX|MX is actually reachable|typo of a major provider/i, () => false],
     ["core CPI from cpi-yoy", /headline and core|core (CPI|inflation)/i, () => false],
@@ -92,7 +93,7 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   };
   const findings = (packs, rules = RULES) => packs.flatMap((p) => strings(p).flatMap((t) => rules.filter(([, re, allowed]) => re.test(t) && !allowed(p)).map(([what]) => `${p.slug} claims ${what}: "${t.slice(0, 70)}"`)));
   const found = findings(ALL_SKILL_PACKS);
-  ok(ALL_SKILL_PACKS.length > 40 && found.length === 0, `no pack's copy claims what its tools do not do${found.length ? `: ${found.join("; ")}` : ""}`);
+  ok(ALL_SKILL_PACKS.length >= PACK_BRAND_FLOOR && found.length === 0, `no pack's copy claims what its tools do not do${found.length ? `: ${found.join("; ")}` : ""}`);
   const fake = (text, toolSlugs = ["email-validate"]) => [{ slug: "control-pack", tagline: text, toolSlugs }];
   for (const [text, tools] of [["Catches typos, disposable domains and dead mailboxes."], ["Read headline and core CPI year over year with cpi-yoy."], ["into something safe to store"], ["robots policy, and certificate transparency.", ["whois"]], ["and the on-page link graph."]]) {
     ok(findings(fake(text, tools)).length >= 1, `control: "${text}" is caught`);

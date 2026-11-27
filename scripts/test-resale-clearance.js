@@ -157,7 +157,7 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   }
   // The look-back tools: marked computed, and no series field in the example.
   const denySeries = new Set(R.RAW_SOURCE_FIELDS);
-  ok(R.COMPUTED_SERIES_SLUGS.length === 5 && R.RAW_MARKET_FIELDS.every((k) => denySeries.has(k)) && ["bars", "points", "first", "last", "high", "low"].every((k) => denySeries.has(k) && !deny.has(k)), `${CLASS} the series denylist holds the market one and the series field names`);
+  ok(R.COMPUTED_SERIES_SLUGS.every((s) => Object.hasOwn(R.WITHDRAWN_SOURCE_FIELDS, s)) && R.RAW_MARKET_FIELDS.every((k) => denySeries.has(k)) && ["bars", "points", "first", "last", "high", "low"].every((k) => denySeries.has(k) && !deny.has(k)), `${CLASS} the series denylist holds the market one and the series field names`);
   for (const slug of R.COMPUTED_SERIES_SLUGS) {
     const d = defs.get(slug);
     const pub = d?.discovery?.output?.example;
