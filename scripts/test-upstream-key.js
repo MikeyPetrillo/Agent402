@@ -425,7 +425,9 @@ try {
   ok(advice.test(row?.description || "") && /HTTPS only/.test(row?.description || ""), "the github-repo description carries the advice");
   const privacy = await fetch(`${B}/privacy`).then((r) => r.text());
   const termsOn = (await fetch(`${B}/terms`).then((r) => r.text())).replace(/\s+/g, " ");
-  ok(termsOn.includes("If you send your own key for another service with a call, you confirm that the key is yours to use, that the other service's terms allow this use, and that you are responsible for the key and for the calls made with it. A key you send is one of the inputs you send; <a href=\"/privacy\">/privacy</a> says what we do with it.</li>") && !/We use it only for that call|do not store it/.test(termsOn) && termsOn.includes(`last updated ${uk.UPSTREAM_KEY_TERMS_DATE}.`), "/terms carries the clause and its date while the switch is on");
+  // The page prints the later of its own date and the clause's (withUpstreamKeyDate).
+  const termsOwn = (readFileSync(new URL("../src/terms.js", import.meta.url), "utf8").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1] || "";
+  ok(termsOn.includes("If you send your own key for another service with a call, you confirm that the key is yours to use, that the other service's terms allow this use, and that you are responsible for the key and for the calls made with it. A key you send is one of the inputs you send; <a href=\"/privacy\">/privacy</a> says what we do with it.</li>") && !/We use it only for that call|do not store it/.test(termsOn) && termsOn.includes(`last updated ${uk.UPSTREAM_KEY_TERMS_DATE > termsOwn ? uk.UPSTREAM_KEY_TERMS_DATE : termsOwn}.`), `/terms carries the clause and the later of its date and the page's own (${termsOwn}) while the switch is on`);
   const changelogOn = await fetch(`${B}/changelog`).then((r) => r.text());
   ok(changelogOn.includes("X-Agent402-Upstream-Key"), "/changelog carries the entry while the switch is on");
   const viewOn = await fetch(`${B}/__operator/upstream-key.json`, { headers: { "X-Operator-Token": OP } }).then((r) => r.json());
