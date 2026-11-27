@@ -47,6 +47,10 @@
 // line yields it while a paid read waits: each place that opens goes to the
 // paid line first, then to the line, and every start is still counted by the
 // one window, so the pace to the source is the same whoever starts.
+// Paid means the payment is final. A read that came while its run's settlement
+// was still in flight waits as an unpaid one; when its wait would end in the
+// pace's 503 the run is read again, and a read whose payment has settled by
+// then moves to the paid line instead. A settlement that failed is unpaid.
 //
 // PER PROCESS. The count lives in this process; with more than one replica
 // each takes its share of the pace (RATE_LIMIT_REPLICAS, as the rate limiter
@@ -163,7 +167,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     // for has none: its wait ends at the ceiling or on its signal.
     const budget = currentBudget();
     const budgetLeft = budget ? budget.remaining() - SEC_READ_RESERVE_MS : Infinity;
-    const allowed = paid ? Infinity : Math.min(maxWaitMs, budgetLeft, Number.isFinite(Number(waitMs)) && waitMs != null ? Number(waitMs) : Infinity);
+    let allowed = paid ? Infinity : Math.min(maxWaitMs, budgetLeft, Number.isFinite(Number(waitMs)) && waitMs != null ? Number(waitMs) : Infinity);
     let who = null;
     try { who = callerOf(); } catch { who = null; }
     // A place the pace cannot reach in time: the read holding the next place
@@ -192,12 +196,28 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       me.finish = () => finish(resolve);
       me.serve = me.finish;
       const onAbort = () => finish(reject, abortReason(signal));
+      // The pace's own refusal of a waiting read. The run is read once more
+      // first: a payment that became final during the wait makes this a paid
+      // read, which leaves the line for the paid one and is never refused.
+      const refuse = () => {
+        let nowPaid = false;
+        if (!paid) { try { nowPaid = paidOf() === true; } catch { nowPaid = false; } }
+        if (!nowPaid) return finish(reject, busyRefusal());
+        paid = true; allowed = Infinity;
+        clearTimeout(timer); timer = null;
+        if (yielded === place) yielded = null;
+        if (pending && !held) pending.cancel();
+        pending = null;
+        if (held) { const t = held; held = null; t.release(); }
+        paidLine.push(me);
+        if (!paidTimer) servePaid();
+      };
       // The next place to open is this read's, unless a paid read waits: take
       // it, or wait for it (to its own deadline, as ever).
       const place = () => {
         if (done) return;
         clearTimeout(timer);
-        if (Number.isFinite(allowed) && now() - t0 >= allowed) return finish(reject, busyRefusal());
+        if (Number.isFinite(allowed) && now() - t0 >= allowed) return refuse();
         if (paidLine.length) {
           yielded = place;
           if (Number.isFinite(allowed)) timer = setTimeout(place, Math.max(1, Math.ceil(allowed - (now() - t0))));
@@ -221,7 +241,8 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       }, (e) => {
         // "left" is this read's own cancel (finish already answered it).
         if (e instanceof TurnRefused && e.why === "left") return;
-        finish(reject, e instanceof TurnRefused ? busyRefusal() : e);
+        if (e instanceof TurnRefused) { pending = null; return refuse(); }
+        finish(reject, e);
       });
     });
   }

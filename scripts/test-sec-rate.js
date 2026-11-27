@@ -262,6 +262,85 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   }
 }
 
+// ---- paid means the payment is final, not that a settlement started ----
+// A run with two legs: one reaches the settle point while the other still
+// reads the source. The second leg's reads are paid only once the settle
+// point returned success; in flight and after a failure they are unpaid.
+{
+  const sf = await import("../src/settle-first.js");
+  const armed = (run) => { const req = {}; sf.armSettleFirst(req, { run, reason: "test" }); return { req, scope: { settleFirstRequest: req } }; };
+  const gate = () => { let open, fail; const p = new Promise((res, rej) => { open = res; fail = rej; }); return { p, open, fail }; };
+  // In flight, then success.
+  const g1 = gate(), a = armed(() => g1.p);
+  const before = sf.scopePaidBeforeRun(a.scope);
+  const p1 = sf.settleBeforeUpstream(a.req);
+  const inFlight = sf.scopePaidBeforeRun(a.scope);
+  g1.open(); await p1; await null;
+  ok(before === false && inFlight === false && sf.settleFirstStarted(a.req) === true && sf.scopePaidBeforeRun(a.scope) === true,
+    `an armed run reads unpaid before its settle point and while the settlement is in flight, and paid once it returned success (before ${before}, in flight ${inFlight}, after ${sf.scopePaidBeforeRun(a.scope)})`);
+  // Failure.
+  const g2 = gate(), b = armed(() => g2.p);
+  const p2 = sf.settleBeforeUpstream(b.req);
+  g2.fail(sf.settleFirstRefusal ? sf.settleFirstRefusal({ status: 402, body: {} }) : new Error("refused"));
+  await p2.catch(() => {}); await null;
+  ok(sf.settleFirstStarted(b.req) === true && sf.scopePaidBeforeRun(b.scope) === false, `a run whose settlement failed reads unpaid (${sf.scopePaidBeforeRun(b.scope)})`);
+  // Through the pace: the second leg's read stands in a line the pace cannot
+  // clear in time. While the settlement is in flight, or after it failed, it
+  // is answered the unpaid 503; once the settlement succeeded it is served.
+  const viaPace = async (settle) => {
+    const g = gate(), r = armed(() => g.p);
+    sf.setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(r.scope));
+    const pace = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 100, queueMax: 1 });
+    await pace.paced(async () => 1);
+    const point = sf.settleBeforeUpstream(r.req); // the first leg reaches the settle point
+    point.catch(() => {});
+    const t0 = performance.now();
+    const out = await (async () => {
+      if (settle === "success") { g.open(); await point; await null; }
+      if (settle === "failure") { g.fail(new Error("refused")); await point.catch(() => {}); await null; }
+      return pace.paced(async () => performance.now() - t0).then((at) => ({ at }), (e) => ({ e }));
+    })();
+    if (settle === "in-flight") g.open();
+    sf.setPaidBeforeRunAmbient(null);
+    return { ...out, waiting: pace.status().waiting };
+  };
+  const flight = await viaPace("in-flight"), failed = await viaPace("failure"), settled = await viaPace("success");
+  // A read admitted to the line while its settlement is in flight, behind two
+  // other callers' reads, so its turn comes after its own deadline. With the
+  // settlement still in flight at that deadline it is answered 503; with the
+  // settlement succeeded by then it moves to the paid line and is served.
+  const waited = async (settleAt) => {
+    const g = gate(), r = armed(() => g.p);
+    let who = ["ip:first"], mine = false;
+    sf.setPaidBeforeRunAmbient(() => mine && sf.scopePaidBeforeRun(r.scope));
+    const pace = createSecPace({ perSecond: 1, windowMs: 200, maxWaitMs: 2000, queueMax: 8, callerOf: () => who });
+    await pace.paced(async () => 1);
+    const others = [];
+    who = ["ip:a"]; others.push(pace.paced(async () => 1).catch(() => 0));
+    who = ["ip:b"]; others.push(pace.paced(async () => 1).catch(() => 0));
+    const point = sf.settleBeforeUpstream(r.req);
+    point.catch(() => {});
+    who = ["ip:mine"]; mine = true;
+    const t0 = performance.now();
+    const read = pace.paced(async () => performance.now() - t0, { waitMs: 500 }).then((at) => ({ at }), (e) => ({ e }));
+    mine = false;
+    // The reader is asked again from inside the read's own wait.
+    sf.setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(r.scope));
+    const timer = settleAt == null ? null : setTimeout(() => g.open(), settleAt);
+    const out = await read;
+    clearTimeout(timer); g.open();
+    await Promise.all(others);
+    sf.setPaidBeforeRunAmbient(null);
+    return { ...out, waiting: pace.status().waiting };
+  };
+  const stillFlying = await waited(null), late = await waited(40);
+  const say = (o) => (o.e ? `refused ${o.e.statusCode}` : `served at ${Math.round(o.at)} ms`);
+  ok(flight.e?.secBusy === true && failed.e?.secBusy === true, `a read beside a settlement in flight, or after one that failed, is an unpaid read: the pace answers it 503 (in flight: ${say(flight)}; failed: ${say(failed)})`);
+  ok(settled.at >= 100 && !settled.e && settled.waiting === 0, `CONTROL: after the settle point returned success the same read waits past the longest wait and is served (${say(settled)})`);
+  ok(stillFlying.e?.secBusy === true && stillFlying.waiting === 0, `CONTROL: a waiting read whose settlement is still in flight at its deadline is answered 503 (${say(stillFlying)})`);
+  ok(late.at >= 500 && !late.e && late.waiting === 0, `a read that waited as unpaid while its settlement was in flight is served, not refused, once the settlement succeeded (${say(late)})`);
+}
+
 // ---- a paid read starts ahead of the unpaid line, at the same pace ----
 // Unpaid reads keep arriving from distinct callers faster than the pace starts
 // them, so the line always has a holder. A paid read must not wait behind it.
@@ -496,8 +575,8 @@ ok(SEC_STARTS_PER_SECOND_TOTAL <= 8 && SEC_HOSTS.join() === "sec.gov,www.sec.gov
   "CONTROL: the guard fails a call taken out of the pace and a new raw call beside it");
 }
 
-// The server names the runs that are paid before their work: an armed run past
-// its settle point, and the resend of a payment settled first.
+// The server names the runs that are paid before their work: an armed run
+// whose settle point returned success, and the resend of a payment settled first.
 {
   const server = readFileSync(join(ROOT, "src/server.js"), "utf8");
   ok(/setPaidBeforeRunAmbient\(\(\) => scopePaidBeforeRun\(currentRequestScope\(\)\)\);/.test(server) && /markSettledFirstResend\(req,[^\n]+\n[^\n]*\n\s*\{ const scope = currentRequestScope\(\); if \(scope\) scope\.settledFirstResend = true; \}/.test(server),
