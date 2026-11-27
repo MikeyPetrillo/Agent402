@@ -6,8 +6,13 @@
 // Proves, with the real EDGAR handlers over a stand-in for the SEC's hosts:
 //   - thirty calls made at once all succeed, and in no rolling second do more
 //     than eight requests start (each one counted when the stand-in gets it);
-//   - nothing is refused before its deadline: a waiting read is answered the
-//     503 (Retry-After, "ours", uncharged wording) only once its wait is spent;
+//   - a read whose place the pace can reach is never refused before its
+//     deadline, and one it cannot reach is answered the 503 (Retry-After,
+//     "ours", uncharged wording) at once instead of waiting for it;
+//   - turns are fair across callers: one caller's burst does not hold another
+//     caller's read, a caller that left frees its places, and a run already
+//     paid for is never refused by the pace;
+//   - spaced arrivals (a fake clock) never exceed eight starts a second;
 //   - the wait ends at the run's ceiling (a 504, and nothing starts after it),
 //     on the caller's signal and inside the handler budget;
 //   - the line is bounded, and the pace is divided across replicas;
@@ -20,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { createSecPace, secPaced, secPaceStatus, secStartsPerSecond, secBusyError, isSecHost, SEC_HOSTS, SEC_STARTS_PER_SECOND_TOTAL, SEC_MAX_WAIT_MS, SEC_READ_RESERVE_MS, _resetSecPaceForTests } = await import("../src/tools/sec-rate.js");
+const { createSecPace, secPaced, secPaceStatus, secStartsPerSecond, secBusyError, isSecHost, SEC_HOSTS, SEC_STARTS_PER_SECOND_TOTAL, SEC_MAX_WAIT_MS, SEC_READ_RESERVE_MS, SEC_WINDOW_MS, _resetSecPaceForTests } = await import("../src/tools/sec-rate.js");
 const { withRunCeiling } = await import("../src/run-ceiling.js");
 const { underBudget } = await import("../src/upstream-deadline.js");
 const { runAsRouteCall, runAsStep } = await import("../src/not-charged.js");
@@ -29,6 +34,7 @@ const { fetchDocText } = await import("../src/tools/filing-watch-kit.js");
 const { rangeBytes } = await import("../src/tools/edgar-13f-datasets.js");
 const { scanInfoTableForIssuer } = await import("../src/tools/ticker-pack-kit.js");
 
+const SEC_WINDOW_MS_QUARTER = Math.round(SEC_WINDOW_MS / 4);
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -95,14 +101,14 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   ok(most <= SEC_STARTS_PER_SECOND_TOTAL && new Set(starts.map((s) => s.host)).size >= 2, `across hosts and kits, at most eight starts to a rolling second (most ${most}; hosts ${[...new Set(starts.map((s) => s.host))].join(", ")})`);
 }
 
-// ---- nothing is refused before its deadline; past it, the 503 ----
+// ---- a place the pace cannot reach is refused at once; a reachable one never before its deadline ----
 {
   const pace = createSecPace({ perSecond: 4, maxWaitMs: 400, queueMax: 64 });
   const t0 = performance.now();
   const outcomes = await Promise.all(Array.from({ length: 12 }, () => runAsRouteCall(() => pace.paced(async () => "read")).then((v) => ({ v, at: performance.now() - t0 }), (e) => ({ e, at: performance.now() - t0 }))));
   const served = outcomes.filter((o) => o.v === "read"), refused = outcomes.filter((o) => o.e);
-  ok(served.length === 4 && refused.length === 8, `with four places and a 400 ms wait, four of twelve are served and eight wait (${served.length} served, ${refused.length} refused)`);
-  ok(refused.every((o) => o.at >= 395), `none of the eight is refused before its deadline (earliest ${Math.round(Math.min(...refused.map((o) => o.at)))} ms)`);
+  ok(served.length === 4 && refused.length === 8, `with four places and a 400 ms wait, four of twelve are served and eight are not (${served.length} served, ${refused.length} refused)`);
+  ok(refused.every((o) => o.at < 50), `the eight no place can reach inside the wait are answered in under 50 ms, not after it (latest ${Math.round(Math.max(...refused.map((o) => o.at)))} ms)`);
   const e = refused[0].e;
   ok(e.statusCode === 503 && e.retryAfter > 0 && e.attribution === "ours" && e.secBusy === true && /EDGAR is busy/.test(e.message) && /Nothing was read\. Nothing was charged\./.test(e.message), `the refusal is a 503 with Retry-After, ours, uncharged (${e.statusCode} ${e.message})`);
   ok(pace.status().waiting === 0 && pace.status().refused === 8, "a refused read leaves the line");
@@ -113,6 +119,147 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   const roomy = createSecPace({ perSecond: 4 });
   const all = await Promise.allSettled(Array.from({ length: 12 }, () => roomy.paced(async () => "read")));
   ok(all.every((r) => r.status === "fulfilled") && roomy.status().refused === 0, "CONTROL: with the default wait all twelve are served");
+  // A place the pace CAN reach is never refused early: with a wait that covers
+  // the next window, the reads behind the first four wait and are served.
+  const reach = createSecPace({ perSecond: 4, windowMs: 300, maxWaitMs: 400 });
+  const r0 = performance.now();
+  const got = await Promise.all(Array.from({ length: 8 }, () => reach.paced(async () => performance.now() - r0).then((at) => ({ at }), (err) => ({ err }))));
+  ok(got.every((o) => o.at != null) && got.filter((o) => o.at >= 290).length === 4 && reach.status().refused === 0, `a place the next window reaches waits for it and is served (${got.map((o) => (o.err ? "refused" : Math.round(o.at))).join(", ")})`);
+  // ...and one that was reachable when it joined, then stood behind another
+  // caller's read, is answered at its deadline and not a moment before.
+  let who = ["payer:0xY"];
+  const tight = createSecPace({ perSecond: 2, windowMs: 300, maxWaitMs: 400, callerOf: () => who });
+  await Promise.all([tight.paced(async () => 1), tight.paced(async () => 1)]); // the window is full
+  const q0 = performance.now();
+  const stamp = (p) => p.then(() => ({ at: performance.now() - q0 }), (err) => ({ err, at: performance.now() - q0 }));
+  const y1 = stamp(tight.paced(async () => 1)), y2 = stamp(tight.paced(async () => 1));
+  who = ["payer:0xZ"];
+  const z1 = stamp(tight.paced(async () => 1));
+  const [a, b, c] = await Promise.all([y1, y2, z1]);
+  ok(!a.err && !c.err && b.err?.secBusy === true && b.at >= 395 && b.at < 700, `a read that could be reached when it joined is refused at its deadline, never before (first ${Math.round(a.at)} ms, the other caller ${Math.round(c.at)} ms, refused at ${Math.round(b.at)} ms)`);
+}
+
+// ---- turns are fair across callers ----
+{
+  let who = ["payer:0xBURST"];
+  const pace = createSecPace({ perSecond: 4, windowMs: 200, maxWaitMs: 3000, callerOf: () => who });
+  const t0 = performance.now();
+  const order = [];
+  const run = (label) => pace.paced(async () => { order.push(label); return performance.now() - t0; }).then((at) => ({ at }), (e) => ({ e, at: performance.now() - t0 }));
+  const burst = Array.from({ length: 100 }, () => run("burst"));
+  await sleep(20);
+  who = ["payer:0xONE"];
+  const one = await run("one");
+  ok(one.at != null && one.at < 200 + 150 && order.indexOf("one") <= 5, `one caller's burst of 100 does not hold another caller's single read: it starts with the next window (${one.e ? `refused ${one.e.statusCode}` : `${Math.round(one.at)} ms`}, start number ${order.indexOf("one") + 1})`);
+  const settledBurst = await Promise.all(burst);
+  const late = settledBurst.filter((o) => o.e);
+  // (A read that was just reachable when it joined and then stood behind the
+  // other caller's, or missed its window by a timer's slack, is answered at its
+  // deadline, as above: the last window's worth at most.)
+  const atOnce = late.filter((o) => o.at < 50), atDeadline = late.filter((o) => o.at >= 2990);
+  ok(settledBurst.filter((o) => o.at != null && !o.e).length >= 50 && atOnce.length >= 30 && atDeadline.length <= 8 && atOnce.length + atDeadline.length === late.length && late.every((o) => o.e.secBusy),
+    `the burst's own reads past what the pace can reach are answered at once (${atOnce.length} at once, ${atDeadline.length} at the deadline, of 100), the rest served`);
+  ok(pace.status().waiting === 0, "and the line empties");
+  // Work no request asked for (a page build) is one caller of its own.
+  const { runAsCallerOf, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
+  const seen = [];
+  const named = createSecPace({ perSecond: 1, windowMs: 50, callerOf: () => { const k = admissionCallerOfNow(); seen.push(k.join()); return k; } });
+  const { admissionCallerOf } = await import("../src/dispatch-caller.js");
+  function admissionCallerOfNow() { return admissionCallerOf(null); }
+  await named.paced(async () => 1);
+  await named.paced(async () => 1);
+  await runAsCallerOf({ ip: "203.0.113.7" }, () => named.paced(async () => 1));
+  ok(seen[0] === IN_PROCESS_CALLER && /^ip:/.test(seen[1] || ""), `a read with no request is the in-process caller, and a dispatched one is its request's caller (${seen.join(" | ")})`);
+}
+
+// ---- a caller that left frees its places ----
+{
+  const { EventEmitter } = await import("node:events");
+  const { runAsCallerOf, currentCallerLeftSignal } = await import("../src/dispatch-caller.js");
+  let who = ["payer:0xGONE"];
+  const pace = createSecPace({ perSecond: 2, windowMs: 300, maxWaitMs: 5000, callerOf: () => who });
+  await Promise.all([pace.paced(async () => 1), pace.paced(async () => 1)]);
+  const ac = new AbortController();
+  let ran = 0;
+  const gone = Array.from({ length: 20 }, () => pace.paced(async () => { ran++; }, { signal: ac.signal }).then(() => null, (e) => e));
+  await sleep(10);
+  const before = pace.status().waiting;
+  who = ["payer:0xSTAYS"];
+  const t0 = performance.now();
+  const stays = pace.paced(async () => performance.now() - t0);
+  ac.abort(Object.assign(new Error("caller went away"), { name: "AbortError" }));
+  const errs = await Promise.all(gone);
+  const waitingAfter = pace.status().waiting;
+  const at = await stays;
+  ok(before === 20 && errs.every((e) => e?.name === "AbortError") && ran === 0 && waitingAfter === 1 && at < 300 + 100, `an aborted caller's twenty reads leave the line at once and the next caller takes the next place (waiting ${before} -> ${waitingAfter}, served at ${Math.round(at)} ms)`);
+  // With no signal passed, the dispatching request's own is read: a caller
+  // whose connection closed before the first byte, and who is not charged.
+  const wasFree = process.env.FREE_MODE;
+  const reqOf = () => { const res = new EventEmitter(); res.headersSent = false; res.destroyed = false; return { ip: "203.0.113.9", res, socket: {} }; };
+  const hangUp = (req) => { req.res.destroyed = true; req.res.emit("close"); };
+  const viaRequest = async (free) => {
+    if (free) process.env.FREE_MODE = "true"; else delete process.env.FREE_MODE;
+    const p = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 5000 });
+    await p.paced(async () => 1);
+    const req = reqOf();
+    let sawSignal = null;
+    const out = runAsCallerOf(req, () => { sawSignal = currentCallerLeftSignal(); return p.paced(async () => "ran"); }).then((v) => ({ v }), (e) => ({ e }));
+    await sleep(20);
+    hangUp(req);
+    await sleep(20);
+    const waiting = p.status().waiting;
+    return { ...(await out), waiting, sawSignal };
+  };
+  const left = await viaRequest(true);
+  ok(left.e?.clientGone === true && left.e.statusCode === 499 && left.waiting === 0 && left.sawSignal instanceof AbortSignal, `a dispatched read whose caller hung up, uncharged, leaves the line (${left.e?.statusCode}, waiting ${left.waiting})`);
+  const charged = await viaRequest(false);
+  ok(charged.v === "ran" && charged.waiting === 1, `CONTROL: a caller that is still charged keeps its place and its read runs (${charged.v || charged.e?.message}, waiting ${charged.waiting})`);
+  if (wasFree === undefined) delete process.env.FREE_MODE; else process.env.FREE_MODE = wasFree;
+  ok(currentCallerLeftSignal() === null, "outside a dispatch there is no caller signal");
+}
+
+// ---- a run already paid for is never refused by the pace ----
+{
+  const { setPaidBeforeRunAmbient, paidBeforeRunHere } = await import("../src/settle-first.js");
+  ok(paidBeforeRunHere() === false, "with no reader registered no run reads as paid before its work");
+  let paid = false;
+  setPaidBeforeRunAmbient(() => paid);
+  const pace = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 100, queueMax: 1 });
+  await pace.paced(async () => 1);
+  const refusedNow = await pace.paced(async () => 1).then(() => null, (e) => e);
+  paid = true;
+  const t0 = performance.now();
+  const got = await Promise.all(Array.from({ length: 3 }, () => pace.paced(async () => performance.now() - t0).then((at) => ({ at }), (e) => ({ e }))));
+  setPaidBeforeRunAmbient(null);
+  ok(refusedNow?.secBusy === true && got.every((o) => o.at != null) && Math.max(...got.map((o) => o.at)) >= 600, `reads of a run whose payment settled first wait past the longest wait and the line bound and are served (unpaid: ${refusedNow?.statusCode}; paid at ${got.map((o) => (o.e ? `refused ${o.e.statusCode}` : Math.round(o.at))).join(", ")} ms)`);
+  ok(mostPerWindow(got.map((o) => o.at), 240) === 1 && pace.status().waiting === 0, "and they still start one to a window");
+  let err = null, ran = 0;
+  paid = true; setPaidBeforeRunAmbient(() => paid);
+  try { await withRunCeiling(120, () => pace.paced(async () => { ran++; })); } catch (x) { err = x; }
+  setPaidBeforeRunAmbient(null);
+  ok(err?.ceilingCut === true && ran === 0, "its wait still ends at the run's ceiling");
+}
+
+// ---- spaced arrivals never exceed the pace (a fake clock) ----
+{
+  const { mock } = await import("node:test");
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const tick = async (ms) => { mock.timers.tick(ms); for (let i = 0; i < 6; i++) await Promise.resolve(); };
+  try {
+    const spaced = (opts = {}) => createSecPace({ perSecond: 8, now: () => Date.now(), callerOf: () => ["payer:0xSPACED"], ...opts });
+    const drive = async (pace) => {
+      const at = [];
+      for (let i = 0; i < 660; i++) { pace.turn().then(() => at.push(Date.now()), () => {}); await tick(30); }
+      for (let i = 0; i < 400; i++) await tick(30);
+      return at;
+    };
+    const at = await drive(spaced());
+    const most = mostPerWindow(at);
+    ok(at.length >= 150 && most <= 8 && most >= 7, `660 reads arriving 30 ms apart start at most eight to any rolling second (${at.length} started, most ${most})`);
+    // CONTROL: a pace that forgot starts after a quarter of the window is caught by the same count.
+    const quick = await drive(spaced({ windowMs: SEC_WINDOW_MS_QUARTER }));
+    ok(mostPerWindow(quick) > 8, `CONTROL: a window a quarter as long is seen (most ${mostPerWindow(quick)})`);
+  } finally { mock.timers.reset(); }
 }
 
 // ---- the wait ends at the run's ceiling, and nothing starts after it ----
@@ -149,15 +296,27 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
 
 // ---- inside a handler budget: the wait leaves the read its reserve ----
 {
-  const pace = createSecPace({ perSecond: 1, windowMs: 60_000 });
-  await pace.paced(async () => "first");
-  const budgeted = underBudget(async () => pace.paced(async () => "late"), SEC_READ_RESERVE_MS + 250);
+  let who = ["payer:0xY"];
+  const pace = createSecPace({ perSecond: 2, windowMs: 300, callerOf: () => who });
+  await Promise.all([pace.paced(async () => 1), pace.paced(async () => 1)]);
+  // Reachable when it joined (the next window), then behind another caller's read.
+  const first = pace.paced(async () => "first");
+  const budgeted = underBudget(async () => pace.paced(async () => "late"), SEC_READ_RESERVE_MS + 400);
   const t0 = performance.now();
+  const late = budgeted({}).then(() => null, (e) => ({ e, took: performance.now() - t0 }));
+  who = ["payer:0xZ"];
+  const other = pace.paced(async () => "other");
+  const out = await late;
+  await Promise.all([first, other]);
+  ok(out?.e?.secBusy === true && out.took >= 350 && out.took < 900, `a wait is bounded by the handler budget less the read's reserve (${out?.e?.statusCode} after ${Math.round(out?.took ?? 0)} ms)`);
+  const far = createSecPace({ perSecond: 1, windowMs: 60_000 });
+  await far.paced(async () => "first");
+  const short = underBudget(async () => far.paced(async () => "late"), SEC_READ_RESERVE_MS + 250);
   let err = null;
-  try { await budgeted({}); } catch (e) { err = e; }
-  const took = performance.now() - t0;
-  ok(err?.secBusy === true && took >= 200 && took < 900, `a wait is bounded by the handler budget less the read's reserve (${err?.statusCode} after ${Math.round(took)} ms)`);
-  const spent = underBudget(async () => pace.paced(async () => "late"), SEC_READ_RESERVE_MS - 500);
+  const t2 = performance.now();
+  try { await short({}); } catch (e) { err = e; }
+  ok(err?.secBusy === true && performance.now() - t2 < 50, `a place the budget cannot wait for is answered at once (${Math.round(performance.now() - t2)} ms)`);
+  const spent = underBudget(async () => far.paced(async () => "late"), SEC_READ_RESERVE_MS - 500);
   err = null;
   const t1 = performance.now();
   try { await spent({}); } catch (e) { err = e; }
@@ -225,6 +384,15 @@ ok(SEC_STARTS_PER_SECOND_TOTAL <= 8 && SEC_HOSTS.join() === "sec.gov,www.sec.gov
   ok(unpaced(kit.replace("await secPaced(() => upstreamFetch(safeUrl, { headers: { \"User-Agent\": edgarUserAgent(), Accept: \"application/json\" } }, ctx));", "await upstreamFetch(safeUrl, { headers: { \"User-Agent\": edgarUserAgent(), Accept: \"application/json\" } }, ctx);")).length === 1
     && unpaced(`${kit}\nconst r = await fetch("https://data.sec.gov/x");\n`).length === 1 && unpaced(`${kit}\n  const res = await safeFetch(u);\n`).length === 1,
   "CONTROL: the guard fails a call taken out of the pace and a new raw call beside it");
+}
+
+// The server names the runs that are paid before their work: an armed run past
+// its settle point, and the resend of a payment settled first.
+{
+  const server = readFileSync(join(ROOT, "src/server.js"), "utf8");
+  const reader = server.slice(server.indexOf("setPaidBeforeRunAmbient(() =>"), server.indexOf("setPaidBeforeRunAmbient(() =>") + 260);
+  ok(/scope\.settledFirstResend === true/.test(reader) && /settleFirstStarted\(scope\.settleFirstRequest\)/.test(reader) && /markSettledFirstResend\(req,[^\n]+\n[^\n]*\n\s*\{ const scope = currentRequestScope\(\); if \(scope\) scope\.settledFirstResend = true; \}/.test(server),
+    "the server registers the paid-before-run reader over the armed request and the resend mark");
 }
 
 globalThis.fetch = realFetch;

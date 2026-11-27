@@ -7,10 +7,17 @@
 // is one across all of them: at most SEC_STARTS_PER_SECOND requests STARTED in
 // any rolling second, by this process, to any host in SEC_HOSTS.
 //
-// THIS PACES OUR OUTBOUND READS. It is not a limit on callers: nothing counts
-// who asked, no call is refused for how many came before it, and a read that
-// finds the second full waits its turn (first come, first served) and then
-// runs as it always did.
+// THIS PACES OUR OUTBOUND READS. It is not a limit on callers: no call is
+// refused for how many came before it, and a read that finds the second full
+// waits its turn and then runs as it always did.
+//
+// WHOSE TURN. Turns are fair across callers (src/caller-turns.js, the rule the
+// OCR engines use; src/dispatch-caller.js names the caller: the signed payer,
+// a credits key, a Tempo sender, then the client address, and one shared key
+// for work no request asked for, such as a page build). One caller's burst
+// stands behind its own earlier reads, so another caller's read is the next
+// to start when a place opens, and a caller that already holds places is the
+// one answered busy when the line is full.
 //
 // THE WAIT IS BOUNDED AND ENDS WITH THE RUN. A waiting read leaves the line
 // when the first of these comes:
@@ -18,14 +25,24 @@
 //   - its deadline: the handler budget it runs under (src/upstream-deadline.js
 //     currentBudget) less what a read still needs, never more than
 //     SEC_MAX_WAIT_MS. Past it the call is answered 503 with Retry-After,
-//     "the source is busy": our own pace, nothing was read, nothing charged;
+//     "the source is busy": our own pace, nothing was read, nothing charged.
+//     A read the pace cannot start before that deadline even if nobody else
+//     were ahead of it (the holder of the next place and the caller's own
+//     earlier reads counted, no one else) is answered the same 503 at once
+//     instead of waiting for it;
 //   - the run's ceiling (src/run-ceiling.js): a 504 (ceilingCutError), and
 //     nothing starts once the ceiling has passed, so a tool whose reads come
 //     through here keeps its `endsAtCeiling` mark;
-//   - the caller's own signal, when it passes one.
+//   - the caller's signal: the one passed, or the dispatching request's own
+//     (currentCallerLeftSignal: its connection closed before the first byte
+//     and its call is no longer charged).
 // The line holds at most SEC_QUEUE_MAX waiting reads (what the pace can start
-// inside the longest wait, twice over), so it cannot grow without bound; a
-// read that finds it full is answered the same 503 at once.
+// inside the longest wait), so it cannot grow without bound.
+//
+// A RUN ALREADY PAID FOR is never refused by the pace. A read of a run whose
+// payment settled before its upstream work (src/settle-first.js) waits for
+// the next place outside the line, bounded by the run's ceiling and the
+// caller's signal alone, so our own pace is never a charged failure.
 //
 // PER PROCESS. The count lives in this process; with more than one replica
 // each takes its share of the pace (RATE_LIMIT_REPLICAS, as the rate limiter
@@ -36,6 +53,9 @@
 import { currentBudget } from "../upstream-deadline.js";
 import { ceilingLeftMs, ceilingPassed, ceilingCutError } from "../run-ceiling.js";
 import { notChargedHere } from "../not-charged.js";
+import { createCallerTurns, TurnRefused } from "../caller-turns.js";
+import { admissionCallerOf, currentCallerLeftSignal } from "../dispatch-caller.js";
+import { paidBeforeRunHere } from "../settle-first.js";
 
 export const SEC_HOSTS = Object.freeze(["sec.gov", "www.sec.gov", "data.sec.gov", "efts.sec.gov"]);
 /** Whether a URL names one of the SEC's hosts (the ones the pace covers). */
@@ -68,67 +88,108 @@ export function secBusyError() {
   });
 }
 
-/** A pace of its own (the process has one, below; tests build others). */
-export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC_WINDOW_MS, maxWaitMs = SEC_MAX_WAIT_MS, queueMax = null, now = () => performance.now() } = {}) {
+const abortReason = (signal) => signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
+const LANE = "sec";
+
+/** A pace of its own (the process has one, below; tests build others).
+ *  `callerOf()` names the caller a read runs for, `leftSignalOf()` the signal
+ *  of a caller that has left, `paidOf()` whether the run is already paid for. */
+export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC_WINDOW_MS, maxWaitMs = SEC_MAX_WAIT_MS, queueMax = null, now = () => performance.now(),
+  callerOf = () => admissionCallerOf(null), leftSignalOf = currentCallerLeftSignal, paidOf = paidBeforeRunHere } = {}) {
   const limit = Math.max(1, Math.floor(perSecond));
-  const lineMax = queueMax ?? Math.max(limit, Math.ceil((limit * maxWaitMs) / windowMs) * 2);
+  // What the pace can start inside the longest wait: a place past it is
+  // never reached in time.
+  const lineMax = queueMax ?? Math.max(limit, Math.ceil((limit * maxWaitMs) / windowMs));
   const recent = []; // start times inside the window, oldest first (at most `limit`)
-  const line = [];   // waiting reads, first come first
-  let timer = null;
+  // The line: one lane, so one read at a time holds the next place to open,
+  // and the room orders the rest across callers.
+  const turns = createCallerTurns({ maxRunning: 1, maxWaiters: lineMax, hardWaiters: lineMax, now });
+  const active = new Set(); // reads waiting (in the room, holding the next place, or outside the line)
   let started = 0, refused = 0, longestLine = 0;
 
   const prune = (t) => { while (recent.length && t - recent[0] >= windowMs) recent.shift(); };
-  function pump() {
-    if (timer) { clearTimeout(timer); timer = null; }
+  /** Take a place in the window now, or say when the next one opens. */
+  const take = () => {
     const t = now();
     prune(t);
-    while (line.length && recent.length < limit) {
-      const w = line.shift();
-      recent.push(t);
-      started++;
-      w.go();
+    if (recent.length < limit) { recent.push(t); started++; return 0; }
+    return Math.max(1, Math.ceil(recent[0] + windowMs - t));
+  };
+  /** When the `k`-th start from now can leave at the earliest. */
+  const earliest = (k) => {
+    const t = now();
+    prune(t);
+    const sim = recent.slice();
+    let at = t;
+    for (let i = 0; i < k; i++) {
+      if (sim.length >= limit) at = Math.max(at, sim[sim.length - limit] + windowMs);
+      sim.push(at);
     }
-    if (line.length) {
-      // The next place opens when the oldest start leaves the window. (The
-      // timers here hold the process open: a read in line is work in flight.)
-      timer = setTimeout(pump, Math.max(1, Math.ceil(recent[0] + windowMs - now())));
-    }
-  }
+    return at - t;
+  };
+  const busyRefusal = () => { refused++; return secBusyError(); };
 
   /** Resolves when this read may start; rejects when its wait ended first. */
-  function turn({ signal = null, waitMs = null } = {}) {
+  function turn({ signal = undefined, waitMs = null } = {}) {
     if (ceilingPassed()) return Promise.reject(ceilingCutError());
-    if (signal?.aborted) return Promise.reject(signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
-    const t = now();
-    prune(t);
-    if (!line.length && recent.length < limit) { recent.push(t); started++; return Promise.resolve(); }
+    if (signal === undefined) { try { signal = leftSignalOf() || null; } catch { signal = null; } }
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
+    const room = turns.state(LANE);
+    if (!room.busy && !room.waitingAll && !active.size && take() === 0) return Promise.resolve();
+    let paid = false;
+    try { paid = paidOf() === true; } catch { paid = false; }
     // The deadline: the handler budget less what the read needs, the longest
-    // wait, or what the caller gave, whichever is least.
+    // wait, or what the caller gave, whichever is least. A run already paid
+    // for has none: its wait ends at the ceiling or on its signal.
     const budget = currentBudget();
     const budgetLeft = budget ? budget.remaining() - SEC_READ_RESERVE_MS : Infinity;
-    const allowed = Math.min(maxWaitMs, budgetLeft, Number.isFinite(Number(waitMs)) && waitMs != null ? Number(waitMs) : Infinity);
-    if (line.length >= lineMax || !(allowed > 0)) { refused++; return Promise.reject(secBusyError()); }
+    const allowed = paid ? Infinity : Math.min(maxWaitMs, budgetLeft, Number.isFinite(Number(waitMs)) && waitMs != null ? Number(waitMs) : Infinity);
+    let who = null;
+    try { who = callerOf(); } catch { who = null; }
+    // A place the pace cannot reach in time: the read holding the next place
+    // and this caller's own earlier reads start first, whoever else waits.
+    if (!paid && (!(allowed > 0) || earliest((room.busy ? 1 : 0) + turns.ownAhead(who) + 1) >= allowed)) return Promise.reject(busyRefusal());
+
     return new Promise((resolve, reject) => {
-      const w = { go: null };
-      let done = false, deadline = null, ceiling = null;
-      const leave = (settle, value) => {
+      const t0 = now();
+      let done = false, timer = null, ceiling = null, pending = null, held = null;
+      const me = { finish: null };
+      const finish = (settle, value) => {
         if (done) return;
         done = true;
-        clearTimeout(deadline); clearTimeout(ceiling);
+        clearTimeout(timer); clearTimeout(ceiling);
         signal?.removeEventListener?.("abort", onAbort);
-        const i = line.indexOf(w);
-        if (i >= 0) line.splice(i, 1);
+        active.delete(me);
+        if (pending && !held) pending.cancel();
+        if (held) held.release();
         settle(value);
       };
-      const onAbort = () => leave(reject, signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
-      w.go = () => leave(resolve);
-      deadline = setTimeout(() => { refused++; leave(reject, secBusyError()); }, Math.max(1, Math.floor(allowed)));
+      me.finish = () => finish(resolve);
+      const onAbort = () => finish(reject, abortReason(signal));
+      // The next place to open is this read's: take it, or wait for it.
+      const place = () => {
+        if (done) return;
+        if (Number.isFinite(allowed) && now() - t0 >= allowed) return finish(reject, busyRefusal());
+        const wait = take();
+        if (wait === 0) return finish(resolve);
+        timer = setTimeout(place, Number.isFinite(allowed) ? Math.max(1, Math.min(wait, Math.ceil(allowed - (now() - t0)))) : wait);
+      };
+      active.add(me);
+      if (active.size > longestLine) longestLine = active.size;
       const left = ceilingLeftMs();
-      if (left !== Infinity) { ceiling = setTimeout(() => leave(reject, ceilingCutError()), Math.max(1, Math.floor(left))); }
+      if (left !== Infinity) ceiling = setTimeout(() => finish(reject, ceilingCutError()), Math.max(1, Math.floor(left)));
       signal?.addEventListener?.("abort", onAbort, { once: true });
-      line.push(w);
-      if (line.length > longestLine) longestLine = line.length;
-      if (!timer) pump();
+      if (paid) { place(); return; }
+      pending = turns.acquire(LANE, who, { waitMs: Math.max(1, Math.floor(allowed)) });
+      pending.then((t) => {
+        if (done) { t.release(); return; }
+        held = t;
+        place();
+      }, (e) => {
+        // "left" is this read's own cancel (finish already answered it).
+        if (e instanceof TurnRefused && e.why === "left") return;
+        finish(reject, e instanceof TurnRefused ? busyRefusal() : e);
+      });
     });
   }
 
@@ -138,13 +199,16 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     return read();
   }
 
-  return { paced, turn, limit, lineMax, status: () => ({ limit, waiting: line.length, inWindow: (prune(now()), recent.length), started, refused, longestLine }), _reset: () => { recent.length = 0; for (const w of line.splice(0)) w.go(); started = 0; refused = 0; longestLine = 0; if (timer) { clearTimeout(timer); timer = null; } } };
+  return { paced, turn, limit, lineMax,
+    status: () => ({ limit, waiting: active.size, inWindow: (prune(now()), recent.length), started, refused, longestLine }),
+    _reset: () => { recent.length = 0; for (const w of [...active]) w.finish(); turns.reset(); started = 0; refused = 0; longestLine = 0; } };
 }
 
 const pace = createSecPace();
 
 /** Run `read`, a function that starts ONE request to an SEC host, in its turn.
- *  `signal` ends the wait when the caller's own work is cancelled. */
+ *  `signal` ends the wait when the caller's own work is canceled; without
+ *  one, the dispatching request's own signal does (currentCallerLeftSignal). */
 export function secPaced(read, opts = {}) { return pace.paced(read, opts); }
 /** Counts for a test or an operator view: no host, URL or caller. */
 export function secPaceStatus() { return pace.status(); }

@@ -16,6 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { identityPayerOf, paymentHeaderOf, freeModeOn } from "./payer.js";
 import { limiterKey } from "./rate-limit.js";
+import { chargeCancelledForClientGone, clientGoneBeforeFirstByte, clientGoneError } from "./hangup-settlement.js";
 
 const scope = new AsyncLocalStorage();
 /** The key every request-less call with no caller of its own shares, so its
@@ -92,6 +93,15 @@ export function currentSettleHook() {
   return scope.getStore()?.onSettled || null;
 }
 
+/** A signal for work that waits on the dispatching request's behalf (a
+ *  place in a line): aborted when that request's connection closed before
+ *  the first response byte AND its call is no longer charged (the charge was
+ *  canceled, src/hangup-settlement.js; in FREE_MODE nothing is charged). A
+ *  caller that is still charged keeps its place. Null with no such request. */
+export function currentCallerLeftSignal() {
+  return scope.getStore()?.left?.() || null;
+}
+
 /** Every caller key the current request-less call runs for, or null. */
 export function currentDispatchCallerKeys() {
   return scope.getStore()?.keys || null;
@@ -127,5 +137,22 @@ export function runAsCallerOf(req, fn) {
   // Only a request whose response the dispatcher waits on reports its
   // settlement to the hooks on it.
   const onSettled = req.res && typeof req.res.once === "function" ? (hook) => { if (typeof hook === "function") (req.__onSettled ||= []).push(hook); } : null;
-  return scope.run(Object.freeze({ keys, capKey, onSettled }), fn);
+  // Made only when a waiting helper asks for it; the request never leaves here.
+  let leftCtl = null;
+  const left = () => {
+    if (leftCtl) return leftCtl.signal;
+    const res = req.res;
+    if (!res || typeof res.once !== "function") return null;
+    leftCtl = new AbortController();
+    const check = () => {
+      if (leftCtl.signal.aborted) return;
+      let gone = false;
+      try { gone = chargeCancelledForClientGone(req) || (freeModeOn() && clientGoneBeforeFirstByte(req)); } catch { gone = false; }
+      if (gone) leftCtl.abort(clientGoneError());
+    };
+    res.once("close", check);
+    check();
+    return leftCtl.signal;
+  };
+  return scope.run(Object.freeze({ keys, capKey, onSettled, left }), fn);
 }

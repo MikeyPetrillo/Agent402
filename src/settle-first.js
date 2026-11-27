@@ -61,6 +61,19 @@ function stateOf(req) {
   return req && typeof req === "object" && Object.hasOwn(req, STATE) ? req[STATE] : null;
 }
 
+let paidAmbient = null;
+/** The server: whether the call running now belongs to a request whose
+ *  payment was taken before its run (its settle point was reached, or it is
+ *  the resend of a payment settled first). */
+export function setPaidBeforeRunAmbient(fn) { paidAmbient = typeof fn === "function" ? fn : null; }
+/** True when the run this call belongs to is already paid for, so a refusal
+ *  of our own making here would be a charged failure (src/tools/sec-rate.js
+ *  never refuses such a read for its pace). False with no reader registered. */
+export function paidBeforeRunHere() {
+  if (!paidAmbient) return false;
+  try { return paidAmbient() === true; } catch { return false; }
+}
+
 /** Arm a request: its payment is settled by `run()` at the settle point.
  *  `run` resolves once the payment settled and throws the refusal otherwise.
  *  `reason` is why the run settles first. Returns the state, or null when the

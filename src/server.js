@@ -87,7 +87,7 @@ import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardRetryAfterSeconds, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
-import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, setPaidBeforeRunAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
 import { installSettledFirstBody } from "./settle-first-body.js";
@@ -13149,6 +13149,8 @@ async function settledFirstResend(req, credit) {
   }
   const note = isSettleFirstFailedRefund({ note: priorNote }) ? priorNote : typeof credit.note === "string" && isSettleFirstFailedRefund({ note: credit.note }) ? credit.note : settleFirstFailedNote(502);
   markSettledFirstResend(req, { tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, held, note, receipt: typeof credit.receipt === "string" ? credit.receipt : null });
+  // A resend is paid for already: a helper that reads no request sees it here.
+  { const scope = currentRequestScope(); if (scope) scope.settledFirstResend = true; }
   noteSettleFirst("resent");
   const res = req.res;
   // The charge's receipt rides a 2xx answer (the sale is booked under its
@@ -14576,6 +14578,9 @@ function exactPaymentRequiredBody(def, kind) {
 // The ambient request of a settle point: the armed request of the scope the
 // call runs in, or null.
 setSettleFirstAmbient(() => currentRequestScope()?.settleFirstRequest || null);
+// A run paid for before its upstream work: its settle point was reached, or
+// it is the resend of a payment settled first (src/tools/sec-rate.js reads it).
+setPaidBeforeRunAmbient(() => { const scope = currentRequestScope(); return !!scope && (scope.settledFirstResend === true || settleFirstStarted(scope.settleFirstRequest)); });
 // The settle-first budget meter (src/settle-first-meter.js): every /v1 run
 // served and not paid adds its upstream cost (the upstream's own figure, or
 // the cost table's, noted on the run's scope), or its quoted price when the

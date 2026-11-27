@@ -347,6 +347,17 @@ export function createCallerTurns({
       const t = running.get(lane);
       return { busy: !!t, holder: t ? t.own : null, fresh: t ? t.fresh : null, waiting: laneCount(lane), running: running.size, waitingAll: waiters.length, queuedBytes, callers: places.callers(), tickets: tickets.size, recorded: record.size };
     },
+    /** How many of this caller's own waiting calls stand ahead of one it
+     *  would make now (its kept place counted): the calls certain to be
+     *  served before it, whoever else waits. */
+    ownAhead(who) {
+      const keys = placeKeysOf(who), own = keys[0];
+      const t = now(), kept = tickets.get(own);
+      const mine = placeOf({ keys, own, since: kept && kept.expires > t ? Math.min(kept.since, t) : t, seq: kept && kept.expires > t ? kept.seq : Infinity });
+      let n = 0;
+      for (const o of waiters) if (o.own === own && before(placeOf(o), mine) < 0) n++;
+      return n;
+    },
     /** Forget every kept place and every caller's engine time (tests). */
     reset() { tickets.clear(); record.clear(); overflowAt = -Infinity; },
   };
