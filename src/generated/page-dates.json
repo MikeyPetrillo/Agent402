@@ -167,7 +167,7 @@
     "src/tools/mev-and-l2-kit.js": "2026-11-24",
     "src/tools/moderate-kit.js": "2026-11-21",
     "src/tools/network-kit.js": "2026-11-23",
-    "src/tools/network-kit2.js": "2026-11-26",
+    "src/tools/network-kit2.js": "2026-11-27",
     "src/tools/nft-market-kit.js": "2026-11-24",
     "src/tools/ocr-kit.js": "2026-11-24",
     "src/tools/office-kit.js": "2026-11-21",
@@ -292,7 +292,7 @@
     "wiki/Self-Hosting.md": "2026-11-26",
     "wiki/Seller-Reputation.md": "2026-11-21",
     "wiki/Sessions-and-Channels.md": "2026-11-22",
-    "wiki/Skill-Packs.md": "2026-11-26",
+    "wiki/Skill-Packs.md": "2026-11-27",
     "wiki/Solana.md": "2026-11-23",
     "wiki/Stellar.md": "2026-11-24",
     "wiki/TTS.md": "2026-11-24",
@@ -303,7 +303,7 @@
     "wiki/Upgrading.md": "2026-11-23",
     "wiki/Why-Pay-Here.md": "2026-11-24",
     "wiki/agent402-client.md": "2026-11-23",
-    "wiki/x402-Index-and-Router.md": "2026-11-24",
+    "wiki/x402-Index-and-Router.md": "2026-11-27",
     "wiki/x402-Leaderboard.md": "2026-11-21"
   },
   "filesFirst": {
