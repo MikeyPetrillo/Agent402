@@ -7,6 +7,10 @@ import { stripTags } from "./html-text.js";
 const LEAD_END_NUMBER = /^[$€£]?\d[\d.,:/-]*%?$/;
 export const LEAD_END_WORDS = ["a", "an", "the", "and", "or", "nor", "but", "of", "on", "in", "to", "for", "by", "with", "from", "at", "as", "via", "into", "onto", "per", "than", "that", "which", "its", "is", "are", "plus", "over", "under", "across", "between", "through", "within", "without", "when", "while", "if", "vs"];
 const END_WORD = new Set(LEAD_END_WORDS);
+// After a closing bracket the sentence may go on with a preposition ("...(or
+// the Agent SDK) at base_url..."): the words before the bracket then wait for
+// what follows, so a lead cut there stops mid-clause.
+const PREPOSITION_AFTER_BRACKET = /^ (?:of|on|in|to|for|by|with|from|at|as|via|into|onto|per|over|under|across|between|through|within|without) /i;
 
 /** What is wrong with how a page's lead ends, as a list of words (empty when
  *  nothing is). `lead` and `about` are the texts of the lead and the Details
@@ -18,7 +22,8 @@ const END_WORD = new Set(LEAD_END_WORDS);
  *      (a connecting word), and for one ending "..." also "mid-clause": the
  *      text it was cut from does not go on with a comma, semicolon, colon,
  *      spaced dash or opening parenthesis, and the lead does not end on a
- *      closing bracket. */
+ *      closing bracket; a lead that ends on a closing bracket where the text
+ *      goes on with a preposition is "mid-clause" too. */
 export function leadFaults(lead, about = "") {
   const L = String(lead || "").trim();
   const ellipsis = L.endsWith("...");
@@ -35,7 +40,8 @@ export function leadFaults(lead, about = "") {
   const last = (body.split(/\s+/).at(-1) || "").replace(/[,;:.!?)\]}"'`]+$/g, "").replace(/^[(\[{"'`]+/, "");
   if (LEAD_END_NUMBER.test(last)) faults.push("number");
   if (END_WORD.has(last.toLowerCase())) faults.push(`word:${last}`);
-  if (ellipsis && !/[)\]}]$/.test(body) && !(rest != null && /^(?:[,;:]| [-–] | \()/.test(rest))) faults.push("mid-clause");
+  const afterBracket = /[)\]}]$/.test(body);
+  if (ellipsis && (afterBracket ? rest != null && PREPOSITION_AFTER_BRACKET.test(rest) : !(rest != null && /^(?:[,;:]| [-–] | \()/.test(rest)))) faults.push("mid-clause");
   return faults;
 }
 

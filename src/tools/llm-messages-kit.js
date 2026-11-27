@@ -759,6 +759,15 @@ function describe(tierSlug) {
     : base + dflt;
 }
 
+/** The tiers whose route page shows a text of its own (`pageSummary`): the
+ *  first sentence of their description does not fit a page lead whole. The
+ *  catalog description is unchanged (scripts/test-description-length.js). */
+export const MESSAGES_PAGE_SUMMARY_TIERS = Object.freeze(["v1-chat-nano", "v1-chat", "v1-chat-pro"]);
+function pageSummaryOf(tierSlug) {
+  const t = TIERS[tierSlug];
+  return `Messages-format chat over x402: point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Compatible with the Anthropic Messages wire format. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.${t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel}; the price does not change.` : ""}`;
+}
+
 // Example model per tier: a LIVE id (the "answers its own example" CI check
 // calls upstream with it; a bare allowlist prefix would 400 there) - Claude
 // where the tier serves Claude, the tier's cheapest chat example otherwise.
@@ -783,6 +792,7 @@ export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([ti
   // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).
   ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, body?.model) } : {}),
   description: describe(tierSlug),
+  ...(MESSAGES_PAGE_SUMMARY_TIERS.includes(tierSlug) ? { pageSummary: pageSummaryOf(tierSlug) } : {}),
   tags: tierSlug === "v1-chat-metered" ? [...TAGS, "metered", "pay-per-token"] : TAGS,
   discovery: {
     bodyType: "json",

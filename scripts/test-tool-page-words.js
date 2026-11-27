@@ -74,6 +74,11 @@ const REPORT = process.argv.includes("--report");
     && f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field)...") === ""
     && f('Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field) and "one more" thing.') === "",
   "control: a lead cut before a dash, at a comma, before or after a parenthesis, or closed at a semicolon is clean");
+  {
+    const wire = "Chat over x402: point the SDK (or the Agent SDK) at base_url https://example.test/v1 and pay per call, with a list (one, two) and more.";
+    ok(f("Chat over x402: point the SDK (or the Agent SDK)...", wire) === "mid-clause" && f("Chat over x402: point the SDK (or the Agent SDK) at base_url https://example.test/v1 and pay per call, with a list (one, two)...", wire) === "",
+      "control: a lead cut after a closing bracket where the text goes on with a preposition is a fault; one where it goes on with a conjunction is clean");
+  }
   ok(f("Full-text search across every filing since 2001.", "") === "" && f("Returns the rate at which NPV = 0.", "More detail follows here.") === "", "control: a whole first sentence may end on a number");
   ok(f("Returns the rate at 0.", "Returns the rate at 0; then more.") === "number", "control: a lead closed with a period where its sentence went on is held as a cut one");
   ok(LEAD_END_WORDS.length <= 45 && new Set(LEAD_END_WORDS).size === LEAD_END_WORDS.length, `the connecting words are a small closed list (${LEAD_END_WORDS.length})`);

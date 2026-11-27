@@ -93,7 +93,12 @@ ok(new Set(PAGE_SUMMARY).size === PAGE_SUMMARY.length, `the page-summary list na
   const dir = fileURLToPath(new URL("../src/tools/", import.meta.url));
   let keys = 0;
   for (const f of readdirSync(dir).filter((n) => n.endsWith(".js"))) keys += (readFileSync(dir + f, "utf8").match(/^\s*pageSummary:/gm) || []).length;
-  ok(keys === PAGE_SUMMARY.length, `every pageSummary in src/tools is on the list (${keys} keys, ${PAGE_SUMMARY.length} listed)`);
+  // The two wire kits set the field from one line for the tiers they name.
+  const { MESSAGES_PAGE_SUMMARY_TIERS } = await import("../src/tools/llm-messages-kit.js");
+  const { RESPONSES_PAGE_SUMMARY_TIERS } = await import("../src/tools/llm-responses-kit.js");
+  const generated = [...MESSAGES_PAGE_SUMMARY_TIERS.map((t) => `${t}-messages`), ...RESPONSES_PAGE_SUMMARY_TIERS.map((t) => `${t}-responses`)];
+  ok(generated.length === new Set(generated).size && generated.every((s) => PAGE_SUMMARY.includes(s)), `each tier a wire kit gives a page text is on the list (${generated.join(", ")})`);
+  ok(keys + generated.length === PAGE_SUMMARY.length, `every pageSummary in src/tools is on the list (${keys} keys and ${generated.length} set per tier, ${PAGE_SUMMARY.length} listed)`);
 }
 
 const srv = await bootServer({ stores: "description-length", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", KALSHI_TOOLS: "on", RUGCHECK_TOOLS: "on" } });

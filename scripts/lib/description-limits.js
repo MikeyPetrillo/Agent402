@@ -13,4 +13,7 @@ export const PAGE_SUMMARY = [
   "html-frames", "token-risk", "price-webhook", "token-brief", "page-speed", "dex-pool-health", "redact-chat",
   "sol-token-report", "demand-radar", "token-risk-pro", "linkedin-article", "seller-dossier", "attest", "ticker-pack",
   "token-safety", "onchain-sql", "email-guard", "filing-report", "loop-gate", "insider-report",
+  "site-map", "token-price-history", "coin-ohlc", "lending-rates",
+  // Set per tier by the wire kits (MESSAGES_PAGE_SUMMARY_TIERS, RESPONSES_PAGE_SUMMARY_TIERS).
+  "v1-chat-nano-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-nano-responses", "v1-chat-responses", "v1-chat-pro-responses",
 ];

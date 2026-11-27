@@ -164,6 +164,8 @@ export const LENDING_TOOLS = [
     price: "$0.005",
     description:
       "Supply and borrow rates for the major assets (USDC, USDT, DAI, WETH, WBTC or cbBTC) on Aave v3 and Compound v3, read from the lending contracts on Ethereum, Base, Arbitrum One, OP Mainnet or Polygon at the latest block: supply APY and APR, variable borrow APY and APR, the borrow-to-supply spread, Compound's utilization, and per asset the protocol with the higher supply rate, the one with the lower borrow rate and the gap between the two. Base rates as the contracts report them, without token rewards. Pass `asset` for one asset. Two bounded contract reads per network, kept 30 seconds. Deterministic code over on-chain state, no market-data vendor.",
+    pageSummary:
+      "Supply and borrow rates for the major assets on Aave v3 and Compound v3, read from the lending contracts. Assets: USDC, USDT, DAI, WETH, WBTC or cbBTC. Networks: Ethereum, Base, Arbitrum One, OP Mainnet or Polygon, at the latest block. Returns supply APY and APR, variable borrow APY and APR, the borrow-to-supply spread, Compound's utilization, and per asset the protocol with the higher supply rate, the one with the lower borrow rate and the gap between the two. Base rates as the contracts report them, without token rewards. Pass `asset` for one asset. Deterministic code over on-chain state, no market-data vendor.",
     tags: ["crypto", "defi", "lending", "yield", "yields", "apy", "borrow-rate", "aave", "compound", "onchain", "stablecoin-yield"],
     discovery: {
       input: { network: "ethereum" },
