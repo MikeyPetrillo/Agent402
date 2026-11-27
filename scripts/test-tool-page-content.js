@@ -244,6 +244,16 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
       ok(/pays from a wallet\.$/.test(n) && !/AGENT402_CREDITS_KEY/.test(n), `MCP note: no credits key on a tool ${what} (${n.slice(-60)})`);
     }
   }
+  // A lead cut to its budget ends at a clause boundary, with every parenthesis closed, never inside a phrase.
+  {
+    const leadOfPage = (description) => decode(stripTags((toolPage("https://example.test", { ...plain, description }, []).match(/<p class="tp-lead">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    const long = "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup, no card on file, no monthly plan, no minimum spend and no contract of any kind at all.";
+    const lead = leadOfPage(long);
+    ok(/\.\.\.$/.test(lead) && /(accepted rail\)|no API key|no signup|no card on file|no monthly plan)\.\.\.$/.test(lead), `a cut lead ends at a clause boundary (${lead.slice(-50)})`);
+    ok((lead.match(/\(/g) || []).length === (lead.match(/\)/g) || []).length, "a cut lead closes every parenthesis it opens");
+    const flat = leadOfPage(`${Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ")}.`);
+    ok(/word\d+\.\.\.$/.test(flat), "a sentence with no clause boundary is still cut at a word");
+  }
   ok(displayPrice("$3.3") === "$3.30" && displayPrice("$0.010") === "$0.01" && displayPrice("$0.001") === "$0.001" && displayPrice("$0.500") === "$0.50" && displayPrice("$2") === "$2.00", "displayPrice: one display form for catalog prices");
   {
     const one = categoryPage("https://example.test", { "GET /api/one": { name: "One", slug: "one", category: "chain", price: "$0.002", description: "d", tags: [] } }, "chain");

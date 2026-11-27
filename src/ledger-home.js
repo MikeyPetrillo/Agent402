@@ -127,10 +127,13 @@ export function socialCardText(toolCount, opts) {
  *  with payments and trust, as the title does, and the catalog is the
  *  supporting clause. The receipt clause follows receiptsServed() and is scoped
  *  as the lead sentence scopes it; it offers nothing by card, so no card switch
- *  can make it untrue. */
+ *  can make it untrue. It names MPP only when `mpp` is on (the page's own
+ *  switch); the title keeps both wires on every boot. */
 export function homeDescription(opts) {
   const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
-  return `Payments and trust: agents find, pay for and verify paid calls over x402 and MPP${receipts ? "; signed receipts on successful direct calls" : ", with no API key or account"}. 500+ tools on the same rails.`;
+  // MPP is named only on a boot that offers it, as the lead sentence does.
+  const mpp = opts && "mpp" in opts ? Boolean(opts.mpp) : true;
+  return `Payments and trust: agents find, pay for and verify paid calls over x402${mpp ? " and MPP" : ""}${receipts ? "; signed receipts on successful direct calls" : ", with no API key or account"}. 500+ tools on the same rails.`;
 }
 
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
@@ -187,7 +190,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // snippet is written to fit so nothing is cut). Counts stay evergreen.
   const title = `Agent402: payments and trust for AI agents on x402 and MPP`;
   // The exact live count (fmtNum(count)) stays out of the snippet on purpose: marketing counts are evergreen.
-  const description = homeDescription({ receipts });
+  const description = homeDescription({ receipts, mpp });
 
   const orgLd = siteOrgLd(baseUrl);
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "Agent402 - applied layer of Agentic Finance"], url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };

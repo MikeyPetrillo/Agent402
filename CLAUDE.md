@@ -106,6 +106,12 @@ LLC: credit the entity, never a personal name.
   adding, renaming or removing a published package run `node scripts/gen-official-surfaces.js --write`),
   `src/mcp-registry-auth.js` (`/.well-known/mcp-registry-auth`, on while `MCP_REGISTRY_AUTH_PROOF` holds
   a proof record; `scripts/test-official-surfaces.js`).
+- `src/legal-summary.js` (the summary box and jump list that open /privacy and /terms; each page
+  writes its own sentences), `src/skill-page-copy.js` (a skill pack page's short lead, when-to-use
+  line and steps; the pack's full text stays the agent's copy), `src/tools/content-filter.js`
+  (whether a provider's error is a content-filter verdict: the 422 `content_filtered` rule the video
+  and image routes share), `src/funding-runway.js` (an early `low-soon` word for the spending and
+  fee wallets, from the readings the low-water alarms take; `.claude/rules/ops.md`).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),

@@ -7,6 +7,7 @@
 // update the entry here in the same change. Tool links are resolved against
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
+import { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
@@ -744,7 +745,7 @@ const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid 
  *  Strands page names AgentCore too, so it carries AWS's notice as well. */
 export function integrationMarkNotice(i) {
   if (!i?.markOwner) return "";
-  const own = `Product names on this page are trademarks of their owners. ${i.pkg} is an independent package published by Havok Holdings LLC; it is not affiliated with, sponsored by or endorsed by ${i.markOwner}.`;
+  const own = `Product names on this page are trademarks of their owners. ${i.pkg} is an independent package published by ${LEGAL_ENTITY_SENTENCE}; it is not affiliated with, sponsored by or endorsed by ${i.markOwner}.`;
   return i.slug === "strands" ? `${own} ${AWS_MARK_NOTICE}` : own;
 }
 
