@@ -306,25 +306,27 @@ const catalog = {
   ok(claimsLink.includes(`all ${countWord(WHY_POINTS.length)} claims`), `the /docs#why link counts WHY_POINTS (${claimsLink})`);
 }
 
-// --- the title and meta description: what a builder gets, scoped -----------
-// The snippet a search result shows leads with what a builder gets; the
+// --- the title and meta description: payments and trust first, scoped -----
+// The snippet a search result shows leads with payments and trust, the
+// catalog as the supporting clause; the
 // receipt clause follows receiptsServed() and is scoped as the lead sentence
 // scopes it. It offers nothing by card, so no card switch can make it untrue.
 {
   ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && cardPayClause({ credits: false, storefront: true }) === "reports and monitors also by card" && cardPayClause({ credits: false, storefront: false }) === "", "the card clause reads the switches that sell card (the social card uses it)");
   for (const credits of [true, false]) for (const storefront of [true, false]) for (const receipts of [true, false]) {
     const d = homeDescription({ credits, storefront, receipts });
-    ok(!/card/i.test(d) && /^Pay-per-call tools for AI agents over x402 and MPP: /.test(d) && /500\+ tools on the same rails\.$/.test(d), `the description leads with what a builder gets and offers nothing by card (credits ${credits}, storefront ${storefront}, receipts ${receipts})`);
+    ok(!/card/i.test(d) && /^Payments and trust: agents find, pay for and verify paid calls over x402 and MPP[;,] /.test(d) && /\. 500\+ tools on the same rails\.$/.test(d), `the description leads with payments and trust, the catalog supporting, and offers nothing by card (credits ${credits}, storefront ${storefront}, receipts ${receipts})`);
     ok(/signed receipts on successful direct calls/.test(d) === receipts && d.length >= 120 && d.length <= 155, `the description names signed receipts, scoped, only while receipts are signed, in 120 to 155 characters (${receipts ? "on" : "off"}, ${d.length} chars)`);
   }
-  ok(homeDescription({ receipts: true }) === "Pay-per-call tools for AI agents over x402 and MPP: verify, pay and get signed receipts on successful direct calls. 500+ tools on the same rails.", "the meta description, word for word (receipts signed)");
+  ok(homeDescription({ receipts: true }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP; signed receipts on successful direct calls. 500+ tools on the same rails.", "the meta description, word for word (receipts signed)");
+  ok(homeDescription({ receipts: false }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP, with no API key or account. 500+ tools on the same rails.", "the meta description, word for word (no signing key)");
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const page = ledgerHomePage(BASE_URL, catalog, {}, {}, [], { receipts: true });
   const meta = (page.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
   const title = (page.match(/<title>([^<]*)<\/title>/) || [])[1] || "";
   ok(meta === homeDescription({ receipts: true }) && !/card/i.test(meta), `the rendered home description is the scoped one, with no card offer (${meta})`);
-  ok(title === "Agent402: pay-per-call tools for AI agents on x402 and MPP" && title.length <= 60, `the home title says what a builder gets, in 60 characters or fewer (${title.length}: ${title})`);
+  ok(title === "Agent402: payments and trust for AI agents on x402 and MPP" && title.length <= 60, `the home title leads with payments and trust, in 60 characters or fewer (${title.length}: ${title})`);
   for (const [tag, want] of [['property="og:title"', title], ['name="twitter:title"', title], ['property="og:description"', meta], ['name="twitter:description"', meta]]) {
     const got = (page.match(new RegExp(`<meta ${tag} content="([^"]*)"`)) || [])[1];
     ok(got === want, `${tag} matches the page's own title or description (${got})`);
