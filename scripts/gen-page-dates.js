@@ -36,7 +36,7 @@ import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pageSourceFiles, articleSourceFiles } from "../src/page-dates.js";
+import { pageSourceFiles, articleSourceFiles, PACK_PAGE_MODULES } from "../src/page-dates.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src", "generated", "page-dates.json");
@@ -235,10 +235,16 @@ function firstDates(files) {
   return out;
 }
 
+/** The listed modules that are on disk: a module every pack page renders is
+ *  dated when it exists and skipped when it does not (PACK_PAGE_MODULES). */
+export function presentModules(list = PACK_PAGE_MODULES, root = ROOT) {
+  return list.filter((f) => existsSync(join(root, f)));
+}
+
 export function buildTable() {
   const files = {};
   const dirty = dirtyFiles();
-  const all = [...new Set([...pageSourceFiles(), ...toolFiles()])].sort();
+  const all = [...new Set([...pageSourceFiles(), ...toolFiles(), ...presentModules()])].sort();
   const missing = [];
   for (const file of all) {
     if (!existsSync(join(ROOT, file))) { missing.push(file); continue; }
