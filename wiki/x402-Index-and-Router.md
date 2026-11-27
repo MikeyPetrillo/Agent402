@@ -57,7 +57,7 @@ seller is paid. Both are `4xx`, so they cancel settlement and cost nothing.
 
 - **`404` for a task this catalog does not do.** A task that asks for a
   capability on the short list in `src/capability-gaps.js` (today: IP
-  geolocation) and matches no tool named for it is answered `404`, naming the
+  geolocation, and a coin's price on a past date) and matches no tool named for it is answered `404`, naming the
   capability. Nothing is run. When external execution is available the message
   says to retry with `include: "external"`.
 - **`400` for a chat completion without its fields.** When the task routes to
@@ -251,8 +251,9 @@ Returns an **object**, not a bare array. The matches are in `results`:
   back to `all`).
 - `capabilityGap` and `capabilityGapCovered` appear only on a query that asks
   for a capability this host's catalog does not offer. The list is short and
-  named in the source (`src/capability-gaps.js`); today it holds one entry,
-  `ip-geolocation`. Such a query is a miss unless a row is named for the
+  named in the source (`src/capability-gaps.js`); today it holds two entries,
+  `ip-geolocation` and `coin-price-on-date` (the look-back tools answer
+  statistics computed from a coin's history, never a past price). Such a query is a miss unless a row is named for the
   capability in its slug or name (a description does not count), and a row
   that is named for it, an outside seller's included, is ranked first. On a
   miss the answer carries `capabilityGapCovered: false`, `weakMatches: true`,

@@ -214,8 +214,10 @@ Loaded when an index, discovery, router or buyer file is read.
   as Base, so a seller's day and the lane's day are one day across chains.
   `unprovenLaneAtLivePayTo` (`src/dispatch-eligibility.js`) reads the lane's verdict at the
   address the live 402 names on the paying chain. Suite: `scripts/test-evm-unproven-chains.js`.
-- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today one
-  family, `ip-geolocation`, the time zone or local time of an IP included) of tasks this host's catalog does not do, read by `/api/find`,
+- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today two
+  families: `ip-geolocation`, the time zone or local time of an IP included, and `coin-price-on-date`,
+  a coin's price on a past date, which needs a coin word, a price word and a past date or "historical"
+  and never a statistic, forecast or alert word) of tasks this host's catalog does not do, read by `/api/find`,
   `/api/route` and route-and-execute so the three agree. A query is in a family only when it asks
   for the capability in so many words (`asks`); every other query is ranked and served as before.
   A gap query is a miss unless a candidate row is NAMED for the capability in its slug or name
