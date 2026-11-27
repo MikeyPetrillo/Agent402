@@ -133,9 +133,14 @@ function pastDateSpanAt(w, i, at) {
     if (DAY_NUM_RE.test(at(1)) && YEAR_WORD_RE.test(at(2))) return 3;
     return 0;
   }
-  // "last June", "in June", "in June 2021", "in 2021", "during 2021".
+  // "last June", "in June 2021", "in 2021", "during 2021". A month with no
+  // year after "in" or "during" is not past: it can be this month or a later one.
   if (at(0) === "last" || at(0) === "in" || at(0) === "during") {
-    if (MONTH_WORD_RE.test(at(1))) return 1 + (pastDateSpanAt(w, i + 1, (k) => w[i + 1 + k] ?? "") || 1);
+    if (MONTH_WORD_RE.test(at(1))) {
+      const dated = pastDateSpanAt(w, i + 1, (k) => w[i + 1 + k] ?? "");
+      if (dated) return 1 + dated;
+      return at(0) === "last" ? 2 : 0;
+    }
     if (at(0) !== "last" && YEAR_WORD_RE.test(at(1))) return 2;
     // "last year", "last month", "last week".
     if (at(0) === "last" && /^(?:year|month|week)$/.test(at(1))) return 2;

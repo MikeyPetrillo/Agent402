@@ -77,8 +77,9 @@ API:
   two numbers" is answered with the calculator.
 - /api/find, /api/route and route-and-execute read a task that asks only for
   a coin's price on a past date as a miss (`capabilityGap` names it) unless
-  a listed tool is named for it; a task that names anything else, or a date
-  in the current year, is answered as before.
+  a listed tool is named for it; a task that names anything else, a date
+  that names the current year or a later one, or a month with no year, is
+  answered as before.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.

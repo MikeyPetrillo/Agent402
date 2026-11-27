@@ -312,7 +312,7 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
   const COIN_POSITIVE = ["bitcoin price on 2021-01-01", "historical coin price", "coin snapshot on a date", "price of ETH last June", "historical crypto prices", "btc price in 2021",
     "what was the price of bitcoin on 01/02/2021", "ethereum price 3 years ago", "token price on a given date", "solana price yesterday", "price of dogecoin in March 2024",
     "bitcoin price in june 2021", "btc price on january 5 2021", "show me the eth price on a specific date", "coin-price-on-date"];
-  const COIN_NEGATIVE = ["bitcoin price", "current coin price", "coin history statistics", "price change since a date", "fx rate on a date", "stock price history",
+  const COIN_NEGATIVE = ["bitcoin price", "bitcoin price in november", "eth price in december", "what is the btc price in december", "btc price during june", "current coin price", "coin history statistics", "price change since a date", "fx rate on a date", "stock price history",
     "bitcoin price change since 2024-01-01", "token price on solana", "crypto price history", "historical fx rate", "eth price prediction in march", "bitcoin halving date",
     "historical ohlc", "price of gold last june", "weather on a date", "bitcoin price in usd", "eth gas price", "coin change since a date", "bitcoin return since 2021-01-01",
     "historical volatility of bitcoin price", "price alert for eth in december", "treasury yield on a date", "candle statistics for bitcoin", "ip geolocation",
