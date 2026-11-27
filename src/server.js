@@ -87,7 +87,7 @@ import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardRetryAfterSeconds, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
-import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, setPaidBeforeRunAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, setPaidBeforeRunAmbient, scopePaidBeforeRun, markFinalBeforeHandler, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
 import { installSettledFirstBody } from "./settle-first-body.js";
@@ -12868,7 +12868,8 @@ if (!FREE_MODE) {
       if (!req.tempoSettled || !tempoPushHashOf(req)) return next();
       let serve = true;
       try { serve = await tempoPushDebts.claimForServe(req); } catch { serve = true; }
-      if (serve) return next();
+      // Final before the handler: a helper that reads no request sees it here.
+      if (serve) { markFinalBeforeHandler(currentRequestScope()); return next(); }
       req.tempoPushRefunded = true;
       console.warn(`[mpp-tempo] push transfer ${tempoPushHashOf(req)} is refunded or being refunded; not served (${req.method} ${req.path})`);
       return sendMppProblem(res, mppProblem("invalid-challenge", "The transfer this credential names has been refunded (or is being refunded), so it no longer pays for a request.", { status: 402, hint: "Request the resource again and pay the fresh challenge.", details: { reason: "refunded", transferClaimed: true } }));
@@ -14578,9 +14579,10 @@ function exactPaymentRequiredBody(def, kind) {
 // The ambient request of a settle point: the armed request of the scope the
 // call runs in, or null.
 setSettleFirstAmbient(() => currentRequestScope()?.settleFirstRequest || null);
-// A run paid for before its upstream work: its settle point was reached, or
-// it is the resend of a payment settled first (src/tools/sec-rate.js reads it).
-setPaidBeforeRunAmbient(() => { const scope = currentRequestScope(); return !!scope && (scope.settledFirstResend === true || settleFirstStarted(scope.settleFirstRequest)); });
+// A run paid for before its upstream work: its settle point was reached, it
+// is the resend of a payment settled first, or its payment was final before
+// the handler (a claimed Tempo push transfer); src/tools/sec-rate.js reads it.
+setPaidBeforeRunAmbient(() => scopePaidBeforeRun(currentRequestScope()));
 // The settle-first budget meter (src/settle-first-meter.js): every /v1 run
 // served and not paid adds its upstream cost (the upstream's own figure, or
 // the cost table's, noted on the run's scope), or its quoted price when the

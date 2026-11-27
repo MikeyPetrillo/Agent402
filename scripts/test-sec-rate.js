@@ -239,6 +239,27 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   try { await withRunCeiling(120, () => pace.paced(async () => { ran++; })); } catch (x) { err = x; }
   setPaidBeforeRunAmbient(null);
   ok(err?.ceilingCut === true && ran === 0, "its wait still ends at the run's ceiling");
+  // What the server's reader answers from a request's scope: a settle point
+  // reached, a resend, or a payment that was final before the handler ran (a
+  // Tempo push transfer). Such a run is never answered the pace's 503.
+  const sf = await import("../src/settle-first.js");
+  ok(typeof sf.scopePaidBeforeRun === "function" && typeof sf.markFinalBeforeHandler === "function", "settle-first names the runs that are paid before their work from a request's scope");
+  if (typeof sf.scopePaidBeforeRun === "function" && typeof sf.markFinalBeforeHandler === "function") {
+    const pushScope = {}, plain = {};
+    sf.markFinalBeforeHandler(pushScope);
+    ok(sf.scopePaidBeforeRun(pushScope) === true && sf.scopePaidBeforeRun({ settledFirstResend: true }) === true && sf.scopePaidBeforeRun(plain) === false && sf.scopePaidBeforeRun(null) === false && sf.scopePaidBeforeRun({ finalBeforeHandler: "yes" }) === false,
+      "a scope marked final before its handler, or a resend, reads as paid; an unmarked scope and no scope do not");
+    let scope = plain;
+    setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(scope));
+    const tight = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 100, queueMax: 1 });
+    await tight.paced(async () => 1);
+    const unpaid503 = await tight.paced(async () => 1).then(() => null, (e) => e);
+    scope = pushScope;
+    const p0 = performance.now();
+    const served = await tight.paced(async () => performance.now() - p0).then((at) => ({ at }), (e) => ({ e }));
+    setPaidBeforeRunAmbient(null);
+    ok(unpaid503?.secBusy === true && served.at >= 100 && !served.e, `a read of a run whose payment was final before its handler waits past the longest wait and is served, where an unpaid one is answered 503 (${unpaid503?.statusCode}; ${served.e ? `refused ${served.e.statusCode}` : `${Math.round(served.at)} ms`})`);
+  }
 }
 
 // ---- a paid read starts ahead of the unpaid line, at the same pace ----
@@ -410,6 +431,10 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   ok(settled.filter((x) => x?.secBusy).length >= 500 - 2 - pace.lineMax, "the reads past the line are answered at once");
   await Promise.all(jobs);
   ok(pace.status().waiting === 0, "and the line empties");
+  // The bound is what the pace can start inside the longest wait, not a multiple of it.
+  const dflt = createSecPace({ perSecond: 8 }), wide = createSecPace({ perSecond: 4, windowMs: 100, maxWaitMs: 1000 });
+  ok(dflt.lineMax === Math.ceil((8 * SEC_MAX_WAIT_MS) / SEC_WINDOW_MS) && wide.lineMax === 40 && createSecPace({ perSecond: 8, maxWaitMs: 100 }).lineMax === 8 && createSecPace({ perSecond: 2, queueMax: 5 }).lineMax === 5,
+    `the line holds what the pace starts inside the longest wait (${dflt.lineMax} by default, ${wide.lineMax} at four per 100 ms over a second), never under one window's places`);
 }
 
 // ---- the pace is this process's share ----
@@ -466,9 +491,13 @@ ok(SEC_STARTS_PER_SECOND_TOTAL <= 8 && SEC_HOSTS.join() === "sec.gov,www.sec.gov
 // its settle point, and the resend of a payment settled first.
 {
   const server = readFileSync(join(ROOT, "src/server.js"), "utf8");
-  const reader = server.slice(server.indexOf("setPaidBeforeRunAmbient(() =>"), server.indexOf("setPaidBeforeRunAmbient(() =>") + 260);
-  ok(/scope\.settledFirstResend === true/.test(reader) && /settleFirstStarted\(scope\.settleFirstRequest\)/.test(reader) && /markSettledFirstResend\(req,[^\n]+\n[^\n]*\n\s*\{ const scope = currentRequestScope\(\); if \(scope\) scope\.settledFirstResend = true; \}/.test(server),
+  ok(/setPaidBeforeRunAmbient\(\(\) => scopePaidBeforeRun\(currentRequestScope\(\)\)\);/.test(server) && /markSettledFirstResend\(req,[^\n]+\n[^\n]*\n\s*\{ const scope = currentRequestScope\(\); if \(scope\) scope\.settledFirstResend = true; \}/.test(server),
     "the server registers the paid-before-run reader over the armed request and the resend mark");
+  // A Tempo push transfer is final before the handler: the scope is marked
+  // where the claimed credential is let through to the route, after the claim.
+  const claim = server.slice(server.indexOf("try { serve = await tempoPushDebts.claimForServe(req); }"), server.indexOf("req.tempoPushRefunded = true;"));
+  ok(/if \(!req\.tempoSettled \|\| !tempoPushHashOf\(req\)\) return next\(\);\s+let serve = true;\s+try \{ serve = await tempoPushDebts\.claimForServe/.test(server) && /if \(serve\) \{ markFinalBeforeHandler\(currentRequestScope\(\)\); return next\(\); \}/.test(claim),
+    "the server marks a claimed Tempo push credential's run as paid before its handler");
 }
 
 globalThis.fetch = realFetch;

@@ -66,6 +66,16 @@ let paidAmbient = null;
  *  payment was taken before its run (its settle point was reached, or it is
  *  the resend of a payment settled first). */
 export function setPaidBeforeRunAmbient(fn) { paidAmbient = typeof fn === "function" ? fn : null; }
+/** Mark a request's scope: its payment was final before its handler ran (a
+ *  Tempo push transfer, on chain before the request arrived), so a refusal
+ *  of our own making inside the run would be a charged failure. */
+export function markFinalBeforeHandler(scope) { if (scope && typeof scope === "object") scope.finalBeforeHandler = true; }
+/** What the server's reader answers from a request's scope: paid before its
+ *  run when the payment was final before the handler, when it is the resend
+ *  of a payment settled first, or when its settle point was reached. */
+export function scopePaidBeforeRun(scope) {
+  return !!scope && typeof scope === "object" && (scope.finalBeforeHandler === true || scope.settledFirstResend === true || settleFirstStarted(scope.settleFirstRequest));
+}
 /** True when the run this call belongs to is already paid for, so a refusal
  *  of our own making here would be a charged failure (src/tools/sec-rate.js
  *  never refuses such a read for its pace). False with no reader registered. */
