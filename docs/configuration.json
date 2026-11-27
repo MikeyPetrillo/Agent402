@@ -663,6 +663,7 @@
     "OPENROUTER_PROVIDER_SORT": "Openrouter provider sort.",
     "OPENROUTER_TTS_ENABLED": "Openrouter speech enabled (switch).",
     "OPEN_METEO_API_KEY": "Key for the weather data provider; unset uses its public hosts.",
+    "OPEN_METEO_BOOT_READ": "off skips the one keyed weather read made shortly after boot (it sets the openMeteo status word without a buyer's call); never made in FREE_MODE or without the key.",
     "OPEN_METEO_READ_CACHE": "off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js).",
     "OPERATOR_AUTH_FAIL_ALERT": "Failed operator-token attempts per hour before the guessing alarm pages.",
     "OPERATOR_SESSION_IDLE_SECONDS": "Idle lifetime of a browser operator session, in seconds.",

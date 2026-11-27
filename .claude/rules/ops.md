@@ -284,9 +284,20 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: the last keyed
   outcome of an Open-Meteo API in this process was a refusal, two in a row by 401, 403 or a 400
   whose reason names a plan, or one 400 naming the key; `openMeteoStatus` in
-  `src/tools/weather-kit.js`; buyers got an uncharged 503. The word is fed only by buyers' keyed
-  weather calls and changes on the next keyed outcome, never with time: unknown, from boot until
-  the first one, does neither, so after a deploy it reads unknown until a weather tool is called), `mppReconcile.run`
+  `src/tools/weather-kit.js`; buyers got an uncharged 503. The word changes on the next keyed
+  outcome, never with time: unknown, from boot until the first one, does neither. The first
+  outcome after boot is the server's own: `scheduleOpenMeteoBootRead`, started from the listen
+  callback, makes one keyed forecast read `OPEN_METEO_BOOT_READ_DELAY_MS` (15 s) after the server
+  listens, under an 8 s timeout, through the same request builder, fetch guard and refusal rule as
+  a buyer's call, so its outcome moves the word as a buyer's would (ok; refused on a 400 naming the
+  key; one refusal toward two on a 401, 403 or plan 400; no change on a timeout or 5xx). A read
+  that did not succeed is tried once more 30 s later, then nothing until the next boot. Never in
+  FREE_MODE, without the key, or with `OPEN_METEO_BOOT_READ=off`; unref'd timers, off the request
+  path, so boot and /health never wait on it (`scripts/test-open-meteo-boot-read.js`). No pager
+  changed: refused pages as before. `directUpstreamBalance` has no such read: its word turns on a
+  served direct answer or a 402 balance refusal, the only authenticated call the code makes there
+  is the paid chat call, and the model listing the price book already reads at boot takes no key
+  (that read feeds `directUpstream`), so starting still holds until a call takes the direct link), `mppReconcile.run`
   stale (the daily MPP reconciliation has not finished a run for 36 hours, a run that throws not
   counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
   close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first

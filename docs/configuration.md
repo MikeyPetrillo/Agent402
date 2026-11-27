@@ -13,11 +13,11 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1152 variables in 115 groups.
+1153 variables in 116 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNDING](#funding) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [INK](#ink) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNDING](#funding) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [INK](#ink) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPEN](#open) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -798,6 +798,14 @@ holds it.
 | `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word (1 when unset: the first refusal raises it). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds (0 when unset: no span is asked for). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query waits up to the send-slot reach (about 3 s) for a place, then is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
+
+## OPEN
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
+| `OPEN_METEO_BOOT_READ` | off skips the one keyed weather read made shortly after boot (it sets the openMeteo status word without a buyer's call); never made in FREE_MODE or without the key. |  | `src/tools/weather-kit.js` |
+| `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 
 ## OPENROUTER
 
@@ -1690,8 +1698,6 @@ holds it.
 | `OPENAI_API_KEY` | Openai API key (a credential, set on the host). |  | `src/tools/embed-kit.js`, `src/tools/image-gen-kit.js`, `src/tools/judge-kit.js` and 4 more |
 | `OPENAI_DECISIONS_URL` | Openai decisions URL. | `https://api.openai.com/v1/decisions` | `src/tools/judge-kit.js` |
 | `OPENFDA_API_KEY` | Openfda API key (a credential, set on the host). |  | `src/tools/gov-kit.js` |
-| `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
-| `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 | `OPERATOR_AUTH_FAIL_ALERT` | Failed operator-token attempts per hour before the guessing alarm pages. | `100` | `src/server.js` |
 | `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/operator-session-limits.js` |
 | `OWED_ESCALATE_DAYS` | Owed escalate, in days. |  | `src/tempo-push-debts.js` |

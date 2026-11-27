@@ -72,7 +72,9 @@ function logKeyedRefusal(req, status) {
 // whose reason names the API key); ok when every API with an outcome last
 // succeeded. Each API keeps its own outcome and run, so a key that covers some
 // APIs and not others reads refused however many reads succeed on the others.
-// A word changes only on the next keyed outcome, never with time.
+// A word changes only on the next keyed outcome, never with time. The first
+// outcome after boot is this server's own read (the boot read below), so the
+// word does not wait for a buyer.
 const keyedOutcomes = new Map(); // api -> { outcome: null | "ok" | "refused", run }
 const apiState = (api) => { let st = keyedOutcomes.get(api); if (!st) { st = { outcome: null, run: 0 }; keyedOutcomes.set(api, st); } return st; };
 export function openMeteoStatus({ env = process.env } = {}) {
@@ -119,6 +121,51 @@ function openMeteoFailure(err, req) {
   if (!req.keyed || !(err instanceof Error)) return err;
   err.message = redactSecrets(String(err.message).split(req.host).join(req.publicHost));
   return err;
+}
+
+// --- One keyed read after boot -------------------------------------------------
+// The word above is fed by keyed outcomes, so on a quiet server it would read
+// unknown until a buyer's weather call, and a key that stopped working would
+// first show as that buyer's 503. Shortly after the server listens, one keyed
+// forecast read is made here and its outcome feeds the word exactly as a
+// buyer's would (the same request builder, fetch guard, refusal rule and
+// counters; the read cache is not used, so it is always a real read): a
+// success reads ok, a 400 naming the key reads refused, a 401/403 or plan 400
+// counts one refusal, and a timeout or 5xx changes nothing. A read that did
+// not succeed is tried once more, so two refusals in a row read refused; then
+// nothing more until the next boot.
+// Never in FREE_MODE, never without the key, never with
+// OPEN_METEO_BOOT_READ=off. Not on a request path: an unref'd timer started
+// from the listen callback, so boot, /health and shutdown never wait on it.
+export const OPEN_METEO_BOOT_READ_DELAY_MS = 15_000;
+export const OPEN_METEO_BOOT_READ_RETRY_DELAY_MS = 30_000;
+export const OPEN_METEO_BOOT_READ_TIMEOUT_MS = 8_000;
+const BOOT_READ_PARAMS = Object.freeze({ latitude: "40.71", longitude: "-74.01", current: "temperature_2m" });
+/** The one read: "skipped" (no key), "ok", "refused" (our key or plan) or "failed" (anything else). Never rejects. */
+export async function openMeteoBootRead({ env = process.env, timeoutMs = OPEN_METEO_BOOT_READ_TIMEOUT_MS } = {}) {
+  let req;
+  try {
+    req = openMeteoRequest("forecast", "/v1/forecast", BOOT_READ_PARAMS, env);
+    if (!req.keyed) return "skipped";
+    await safeFetch(req.url, { maxBytes: 64 * 1024, ownUpstream: true, errorBodyMaxBytes: 2048, timeoutMs });
+  } catch (err) {
+    try { const e = openMeteoFailure(err, req); return e?.attribution === "ours" && e?.noRetry === true ? "refused" : "failed"; } catch { return "failed"; }
+  }
+  noteKeyedSuccess(req.api);
+  return "ok";
+}
+/** Arms the read (and its one retry). Returns the timer, or null when no read is due. `onDone` gets the last outcome. */
+export function scheduleOpenMeteoBootRead({ freeMode = false, env = process.env, delayMs = OPEN_METEO_BOOT_READ_DELAY_MS, retryDelayMs = OPEN_METEO_BOOT_READ_RETRY_DELAY_MS, timeoutMs = OPEN_METEO_BOOT_READ_TIMEOUT_MS, setTimer = setTimeout, onDone = null } = {}) {
+  if (freeMode || !openMeteoKey(env) || String(env.OPEN_METEO_BOOT_READ ?? "").trim().toLowerCase() === "off") return null;
+  let tries = 0;
+  const arm = (ms) => { const t = setTimer(run, ms); t?.unref?.(); return t; };
+  async function run() {
+    tries += 1;
+    const outcome = await openMeteoBootRead({ env, timeoutMs });
+    if (outcome !== "ok" && outcome !== "skipped" && tries < 2) { arm(retryDelayMs); return; }
+    try { onDone?.(outcome); } catch { /* a reader's callback never reaches the timer */ }
+  }
+  return arm(delayMs);
 }
 
 // --- A short read cache (forecast, archive and ensemble reads) ---------------

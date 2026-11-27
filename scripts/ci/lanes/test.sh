@@ -13,6 +13,8 @@ t node scripts/test-leak-guard.js
 t node scripts/test-tool-error-redaction.js
 # Weather kit: keyed Open-Meteo hosts and apikey only with the key, a keyed 429 is an uncharged 503 with no public-host fallback, no key in errors or logs (offline)
 t node scripts/test-open-meteo-keyed.js
+# Weather kit: one keyed read after boot moves the openMeteo word; none in FREE_MODE or without the key (offline)
+t node scripts/test-open-meteo-boot-read.js
 # Paid-canary verdict (pages on real buying breaks, warns on upstream)
 t node scripts/test-paid-canary.js
 # derivatives kit (offline)

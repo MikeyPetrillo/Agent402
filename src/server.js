@@ -763,7 +763,7 @@ const PREDICTION_MARKET_TOOLS = predictionMarketToolsEnabled();
 import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
-import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
+import { WEATHER_TOOLS, openMeteoStatus, scheduleOpenMeteoBootRead } from "./tools/weather-kit.js";
 import { WEATHER_PROBABILITY_TOOLS } from "./tools/weather-probability-kit.js";
 import { WEATHER_PLAN_TOOLS } from "./tools/weather-plan-kit.js";
 import { BUNDLE_TOOLS } from "./tools/bundle-kit.js";
@@ -15464,6 +15464,9 @@ const httpServer = app.listen(PORT, () => {
   const boundPort = httpServer.address()?.port ?? PORT;
   loopbackPort = boundPort;
   console.log(`Agent402 listening on :${boundPort} with ${Object.keys(CATALOG).length} paid tools`);
+  // One keyed weather read a short while from now, so the openMeteo word
+  // leaves its boot value without a buyer's call (src/tools/weather-kit.js).
+  scheduleOpenMeteoBootRead({ freeMode: FREE_MODE });
 });
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
