@@ -91,6 +91,16 @@ cache.delete("https://geo.example");
   const r = route("where is this IP located", { top: 10 });
   ok(pickOf(r) === "geoip" && r.capabilityGapCovered === true, `"where is this IP located" finds a seller named geoip (got ${r.results[0]?.slug})`);
 }
+// A row that matches more of the query's words but is not named for the
+// capability never outranks the row that is.
+cache.set("https://near.example", seller("https://near.example", { route: "/api/ip-address-lookup", slug: "ip-address-lookup", name: "IP address lookup", description: "Lookup for an ip address." }));
+{
+  const q = "ip address lookup geolocation";
+  const r = route(q, { top: 10 });
+  const near = r.results.find((x) => x.slug === "ip-address-lookup"), named = r.results.find((x) => x.slug === "geoip");
+  ok(near && named && near.score > named.score && pickOf(r) === "geoip" && r.results[0].seller === "https://g2.example", `"${q}": the named row is the pick over a better-scored near name (${r.results[0]?.slug}; scores ${named?.score} vs ${near?.score})`);
+}
+cache.delete("https://near.example");
 cache.set("https://geo.example", seller("https://geo.example", { route: "/api/ip-geolocation", slug: "ip-geolocation", name: "IP geolocation", description: "Country, city and coordinates for an address." }));
 
 // ---- nothing of the verdict is memoized: a memo-hit answer equals a fresh one ----
