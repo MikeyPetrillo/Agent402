@@ -876,6 +876,7 @@
     "ROUTER_QUERY_DEADLINE_MS": "Router query deadline, in milliseconds.",
     "ROUTER_QUEUE_MAX": "Router queue maximum.",
     "ROUTER_WORKERS": "Router worker threads (0 or off keeps queries on the serving thread; unset: 1 while the index crawler runs, else 0; at most 4).",
+    "ROUTE_PROBE_MIN_INTERVAL_DAYS": "Least days between two scheduled unpaid price reads of one seller route, and before a paywall check that the route refused for the shape of the request is repeated (default 7, at most 30; off or 0 removes the interval).",
     "ROUTER_WORKER_TEST_HOOKS": "Router worker test hooks.",
     "ROUTER_WORKER_TEST_WARM_DELAY_MS": "Router worker test warm delay, in milliseconds.",
     "ROUTE_INDEX_WARM_DELAY_MS": "Route index warm delay, in milliseconds.",

@@ -14,7 +14,7 @@
 //      receives none at all;
 //   4. a route that answered 400 or 429 is held: the next crawl inside the
 //      hold sends it nothing, the hold is on the row (persisted), and once it
-//      lapses the route is asked again;
+//      and the per-route interval have lapsed the route is asked again;
 //   5. a route that answered 502, or a redirect, is NOT held: the next crawl
 //      asks it again, and a 402 it then answers is quoted.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -197,11 +197,13 @@ try {
   ok(Number(row(b2, "/v1/capped")?.quoteRefusedUntil) > Date.now(), "the 429 seller's hold is carried too");
 
   // ---------------------------------------------------------- the hold lapses
-  for (const t of _cacheForTests().get(a.origin).tools) if (t.route === "/v1/needs-input") t.quoteRefusedUntil = Date.now() - 1;
+  // The first hold is shorter than the per-route interval (a week), which then
+  // decides: both are put in the past here.
+  for (const t of _cacheForTests().get(a.origin).tools) if (t.route === "/v1/needs-input") { t.quoteRefusedUntil = Date.now() - 1; t.unpaidAskedAt = Date.now() - 8 * 86_400_000; }
   const mid = new Map(hits);
   await crawl(a.origin);
   const asked = count(a.origin, "GET", "/v1/needs-input") - (mid.get(`${a.origin} GET /v1/needs-input`) || 0);
-  ok(asked >= 1, `past its hold the route is asked again (${asked} GET)`);
+  ok(asked >= 1, `past its hold and the route's interval it is asked again (${asked} GET)`);
   const again = row(_cacheForTests().get(a.origin), "/v1/needs-input");
   ok(Number(again?.quoteRefusals) === 2 && Number(again?.quoteRefusedUntil) - Date.now() > QUOTE_REFUSED_BACKOFF_MS * 1.5, `a second refusal holds it longer (${again?.quoteRefusals}, ${Math.round((Number(again?.quoteRefusedUntil) - Date.now()) / 3600000)} h)`);
   ok(countAll(a.origin, "/v1/trial-key") === 0, "after three crawls the free-marked POST has still received nothing");

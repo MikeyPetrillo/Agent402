@@ -305,7 +305,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS, QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS, QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS, ROUTE_PROBE_MIN_INTERVAL_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant, revisitHintMsOf } from "./seller-load.js";
@@ -4966,6 +4966,20 @@ export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_F
   const at = Number(pw.at);
   return !(at > 0) || now - at >= windowMs;
 }
+/** Did this seller's paywall route answer our bare request with a refusal of
+ *  its shape (a 400, 415 or 422: no verdict) inside the per-route interval
+ *  (ROUTE_PROBE_MIN_INTERVAL_MS)? Asking again would read the same answer,
+ *  and until now the re-check window asked it daily. Nothing else is held
+ *  here: a passing verdict stays on the rotation (the reputation record's
+ *  paywall metric needs its samples, src/seller-reputation.js), a failed one
+ *  keeps its re-check window, and a probe of ours that did not complete or
+ *  one taken at a template path is asked again as before. */
+export function paywallShapeRefusalHeld(pw, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0) || !pw || typeof pw !== "object") return false;
+  const at = Number(pw.at);
+  if (!(at > 0) || now - at >= ROUTE_PROBE_MIN_INTERVAL_MS) return false;
+  return pw.unknown === true && Number(pw.status) > 0 && !paywallVerdictOnTemplate(pw);
+}
 /** Does THIS crawl of the origin probe its paywall? `force` is an explicit
  *  re-registration (bounded upstream by the per-origin forced-crawl window);
  *  an expired failure spends the per-cycle re-check budget; otherwise the
@@ -4976,6 +4990,9 @@ function paywallProbeTurn(prev, { force = false, now = Date.now(), tools = null 
   // Read once a week, like its price reads, whatever the rotation or an
   // expired failure would make due (readThisWeekAboveRouterCaps).
   if (tools && paywallReadThisWeekAboveRouterCaps(prev, tools, now)) return false;
+  // A check the route refused for the shape of our request is not repeated
+  // inside the per-route interval, though the re-check window comes round.
+  if (paywallShapeRefusalHeld(prev?.paywall, now)) return false;
   if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
   return paywallProbeDue();
 }
@@ -5655,6 +5672,66 @@ function clearRefusedHold(t) {
   delete t.quoteRefusals;
 }
 
+// ONE ROUTE, ONE UNPAID REQUEST PASS PER INTERVAL (ROUTE_PROBE_MIN_INTERVAL_MS,
+// src/crawl-cadence.js). The rules above each bound one cause of a repeat; a
+// route that never yields a price (a server error every time, a 402 we cannot
+// read, a price that differs from the seller's documents for good) was still
+// asked again on a back-off of hours, counted in process memory, so a restart
+// began it again. Each pass is stamped on the row (unpaidAskedAt, kept across
+// a rebuild and persisted like the hold) and the scheduled crawl asks the
+// route again only once the interval has passed, with two exceptions:
+//   - a pass that got no answer of the route's own (a 5xx, a redirect, a
+//     connection that did not finish) keeps ONE retry (unpaidRetryAt), so a
+//     route that was down for one crawl is priced on the next; a first
+//     "no such route" answer keeps one after MISS_CONFIRM_MS, the read that
+//     confirms the miss;
+//   - a price the seller's documents CHANGED since the pass
+//     (unpaidAskedDeclared) and that now differs from the one held is read
+//     once: the documents moving is the seller telling us to look.
+// A registration (ignoreBudget) asks whatever the stamp says.
+const insideRouteInterval = (t, now) => {
+  const at = Number(t?.unpaidAskedAt);
+  return ROUTE_PROBE_MIN_INTERVAL_MS > 0 && at > 0 && now - at < ROUTE_PROBE_MIN_INTERVAL_MS;
+};
+/** Is this route's next scheduled unpaid request held to the interval? */
+export function routeHeldToInterval(t, now = Date.now()) {
+  if (!insideRouteInterval(t, now)) return false;
+  const retryAt = Number(t.unpaidRetryAt);
+  if (retryAt > 0 && now >= retryAt) return false;
+  if (priceDisagreesWithOrigin(t) && priceToMicroUsd(t.originDeclaredPrice) !== (Number(t.unpaidAskedDeclared) || 0)) return false;
+  return true;
+}
+// The stamp is on the row, and a crawl rebuilds its rows: carried onto the
+// current row of the same verb and route, like the hold above.
+function carryRouteAsks(tools, prevTools, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0) || !Array.isArray(prevTools) || !prevTools.length || prevTools === tools) return;
+  let asked = null;
+  for (const p of prevTools) {
+    if (!p || typeof p.route !== "string" || !insideRouteInterval(p, now)) continue;
+    (asked ||= new Map()).set(`${String(p.method || "GET").toUpperCase()} ${p.route}`, p);
+  }
+  if (!asked) return;
+  for (const t of tools) {
+    if (!t || typeof t.route !== "string") continue;
+    const p = asked.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
+    if (!p || p === t || Number(t.unpaidAskedAt) >= Number(p.unpaidAskedAt)) continue;
+    t.unpaidAskedAt = Number(p.unpaidAskedAt);
+    if (Number(p.unpaidRetryAt) > 0) t.unpaidRetryAt = Number(p.unpaidRetryAt); else delete t.unpaidRetryAt;
+    if (Number(p.unpaidAskedDeclared) > 0) t.unpaidAskedDeclared = Number(p.unpaidAskedDeclared); else delete t.unpaidAskedDeclared;
+  }
+}
+/** Stamp one unpaid request pass on its row. Returns whether the pass may
+ *  leave a retry owed: false when it was itself the retry, or the interval is off. */
+function stampRouteAsk(t, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0)) return false;
+  const wasRetry = insideRouteInterval(t, now) && Number(t.unpaidRetryAt) > 0;
+  t.unpaidAskedAt = now;
+  delete t.unpaidRetryAt;
+  const declared = priceToMicroUsd(t.originDeclaredPrice);
+  if (declared > 0) t.unpaidAskedDeclared = declared; else delete t.unpaidAskedDeclared;
+  return !wasRetry;
+}
+
 export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
@@ -5663,6 +5740,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
   dropGoneRoutes(tools, originUrl);
   if (!tools.length) return tools;
   carryQuoteHolds(tools, cache.get(originUrl)?.tools);
+  carryRouteAsks(tools, cache.get(originUrl)?.tools);
   const postMarks = postMarksOf(tools, x402Listed);
   const declaredFree = (t) => {
     if (!sellerDeclaresFree(t)) return false;
@@ -5679,6 +5757,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // seller's own limit (a daily cap, a validation error) is not asked
       // again on every crawl. An explicit re-registration still re-asks.
       && (ignoreBudget || !quoteProbeHeld(t))
+      // Asked inside the per-route interval, with no retry owed and no change
+      // in the seller's own price since: not asked again by the scheduled crawl.
+      && (ignoreBudget || !routeHeldToInterval(t))
       // Already priced: nothing to learn - UNLESS the amount we hold disagrees
       // with what the origin declared this crawl. That disagreement is exactly
       // how a price CUT used to be invisible: a priced route was never
@@ -5801,6 +5882,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // Did the route answer any attempt itself (routeAnsweredItself), and was
     // any answer a 402?
     let answeredItself = false, answered402 = false;
+    // Did a request of this pass leave for the route (routeHeldToInterval)?
+    let sent = false;
     probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool, { example })) {
       if (pastDeadline()) break;
       if (!verbs.has(method)) continue;
@@ -5823,6 +5906,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // Every other status still falls through to POST, because that is what
         // discovers a POST-only seller: a 404 or 405 on GET is expected there
         // and is the whole reason the second method is tried.
+        sent = true;
         note(method, String(res.status));
         statusByMethod[method] = res.status;
         (answersByMethod[method] ||= []).push(res.status);
@@ -5896,6 +5980,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // Not sent (the host's load controls held it back): nothing was asked,
         // so nothing is noted, and the pass stops for this origin.
         if (err?.sellerLoadSkip) { loadSkipped = true; break probe; }
+        // A name that did not resolve, a refused connection or a URL we do
+        // not send to reached no route; anything else may have.
+        if (!["dns", "refused", "ssrf-blocked"].includes(probeFailureCode(err))) sent = true;
         note(method, probeFailureCode(err));
         (answersByMethod[method] ||= []).push(0);
         // A body that left may have reached the handler: no second one.
@@ -5903,6 +5990,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         /* unreachable, blocked, or malformed - try the next method */
       }
     }
+    // The pass is stamped on the row; `retryOwed` is whether it may leave one
+    // retry (it was not itself the retry).
+    const retryOwed = sent ? stampRouteAsk(tool) : false;
     // The routes not reached stay candidates for the next crawl, as past a deadline.
     if (loadSkipped) break;
     if (gone) {
@@ -5958,6 +6048,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       const prior = goneMark(originUrl, own, tool.route);
       if (!prior || prior.kind !== "pending" || Date.now() - prior.at < MISS_CONFIRM_MS) {
         if (!prior || prior.kind !== "pending") markRouteGone(originUrl, own, tool.route, { kind: "pending" });
+        // The read that confirms the miss is the one retry this pass keeps.
+        if (retryOwed) tool.unpaidRetryAt = Date.now() + MISS_CONFIRM_MS;
         noteProbeOutcome(originUrl, `quote:${tool.route}`, false);
         quoteProbeStats.probed++;
         console.log(`[x402-index] live-miss (first): ${originUrl}${tool.route} answered ${own} ${statusByMethod[own]}; kept until a second miss`);
@@ -5980,6 +6072,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // that learned clears it. A 5xx or a redirect alone starts no hold.
     if (learned || freeObserved) clearRefusedHold(tool);
     else if (answeredItself && !answered402) { holdRefusedRoute(tool); quoteProbeStats.held++; }
+    // No answer of the route's own (a 5xx, a redirect, a connection that did
+    // not finish): the next crawl may ask once more inside the interval.
+    else if (!answered402 && retryOwed) tool.unpaidRetryAt = Date.now();
     quoteProbeStats.probed++;
     if (learned) quoteProbeStats.learned++;
     else if (freeObserved) quoteProbeStats.free++;

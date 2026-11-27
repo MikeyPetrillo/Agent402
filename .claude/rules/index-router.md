@@ -146,6 +146,22 @@ Loaded when an index, discovery, router or buyer file is read.
   (`quoteRefusedUntil`, 3 days doubling to 14, carried across rebuilds, persisted with the row;
   a re-registration lifts it); a 5xx, a redirect, a timeout or a failed connection starts no
   hold, so the next crawl asks again (`scripts/test-quote-probe-free-routes.js`).
+- **One unpaid request pass per route per interval:** whatever makes a route due, the scheduled
+  crawl sends one route at most one unpaid price read per `ROUTE_PROBE_MIN_INTERVAL_DAYS`
+  (default 7, at most 30; `off` or 0 removes the interval; `ROUTE_PROBE_MIN_INTERVAL_MS` in
+  `src/crawl-cadence.js`, printed on /crawler). Each pass is stamped on the row (`unpaidAskedAt`,
+  carried across rebuilds and persisted). Exceptions: a pass that got no answer of the route's own
+  (a 5xx, a redirect, a connection that did not finish) keeps one retry on the next crawl
+  (`unpaidRetryAt`; a first "no such route" keeps the read that confirms the miss); a price the
+  seller's documents changed since the pass (`unpaidAskedDeclared`) is read once; a registration
+  asks at once (`routeHeldToInterval` in `src/x402-index.js`). The paywall check (below) is one
+  more request to the seller's cheapest paid route and keeps its own cadence, because the
+  reputation record's paywall metric needs its samples: a passing verdict stays on the rotation
+  and a failed one keeps `X402_PAYWALL_FAILED_RECHECK_HOURS`; only a no-verdict reading of the
+  route's own 400, 415 or 422 is held to the interval, where the re-check window asked it daily
+  (`paywallShapeRefusalHeld`). The per-path back-off (`CRAWL_BACKOFF_STEPS_MS`, in process
+  memory) still applies under it (`scripts/test-route-probe-interval.js`, a week of crawls on a
+  fake clock).
 - **Sellers the router lists and never buys from (`src/router-listed-only.js`):** a seller on the list keeps its rows in discovery and reads `listed_only` on every chain (first in `REASON_PRECEDENCE`, `src/dispatch-eligibility.js`; the seller's own page says there is nothing to fix on the listing); only route-and-execute, which buys and hands the answer on, refuses it. The list names no one: each entry is a digest of a lowercased registrable domain (the one `scripts/gen-third-party-hashes.js` writes), a host matches by itself or any parent of two labels or more, and `ROUTER_EXCLUDED_SELLER_HASHES` (a comma list of digests) adds entries at runtime (`scripts/test-router-listed-only.js`). Every public surface (the legend, the refusal bodies, `/sell`, the changelog) says only that the router lists the seller and does not buy from it, and that a buyer can pay it directly: no surface gives a reason, and the same suite fails one that does.
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns

@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1151 variables in 115 groups.
+1152 variables in 115 groups.
 
 ## Contents
 
@@ -1107,6 +1107,7 @@ holds it.
 | `ROUTE_JUDGE_REFUSE_CONFIDENCE` | Route judge refuse confidence. | `0.9` | `src/tool-judge.js` |
 | `ROUTE_JUDGE_TIE_MIN` | Route judge tie minimum. | `0.15` | `src/tool-judge.js` |
 | `ROUTE_JUDGE_TIMEOUT_MS` | Route judge timeout, in milliseconds. | `4000` | `src/tool-judge.js` |
+| `ROUTE_PROBE_MIN_INTERVAL_DAYS` | Least days between two scheduled unpaid price reads of one seller route, and before a paywall check that the route refused for the shape of the request is repeated (default 7, at most 30; off or 0 removes the interval). |  | `src/crawl-cadence.js` |
 
 ## ROUTER
 

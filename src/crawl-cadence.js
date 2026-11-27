@@ -48,6 +48,25 @@ export const slowOriginIntervalLabel = () => everyLabel(CRAWL_INTERVAL_MS * SLOW
 // price the seller's own documents declare). A re-registration reads it now.
 export const LIVE_QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
 export const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+// ONE ROUTE, ONE UNPAID PRICE READ PER INTERVAL. Whatever makes a route due
+// (a price it never yielded, a price that keeps differing from the seller's
+// documents, a 402 we could not read), the scheduled crawl sends one route
+// at most one unpaid price read (one pass of requests) per this interval. A
+// read that got no answer of the route's own (a server error, a redirect, a
+// connection that did not finish) keeps one retry; a price the seller's
+// documents changed since the last read is read once; a registration reads
+// at once (src/x402-index.js routeHeldToInterval). The paywall check, one
+// request to a seller's cheapest paid route on a rotation across the index,
+// keeps its own cadence; only its repeat after a refusal of our request's
+// shape is held to this interval (paywallShapeRefusalHeld).
+// ROUTE_PROBE_MIN_INTERVAL_DAYS: days, default 7, at most 30; `off` or 0
+// removes the interval. A value that is not a number reads as the default.
+export const ROUTE_PROBE_MIN_INTERVAL_MS = (() => {
+  const raw = String(process.env.ROUTE_PROBE_MIN_INTERVAL_DAYS ?? "").trim().toLowerCase();
+  if (raw === "off" || raw === "0") return 0;
+  const n = Number(raw);
+  return Math.round(Math.min(30, raw !== "" && Number.isFinite(n) && n > 0 ? n : 7) * 24 * 60 * 60 * 1000);
+})();
 // A route that answered the unpaid quote probe with no 402 at all (the
 // seller's limit, an input check, a free answer) is held this long before it
 // is asked again, doubling on each refusal up to the maximum (src/x402-index.js).
