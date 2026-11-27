@@ -520,8 +520,8 @@ const RESOLVER_FAILURE = new Set(["ESERVFAIL", "ETIMEOUT", "ETIMEDOUT", "ECONNRE
 // One resolver per lookup, so a lookup that lost (or ran out of time) is
 // canceled on its own, never another call's. The host resolver keeps the
 // system's own settings and timeouts; the public one asks each server once.
-function resolverTxt(name, signal, servers) {
-  const r = servers ? new dnsPromises.Resolver({ timeout: 3000, tries: 1 }) : new dnsPromises.Resolver();
+function resolverTxt(name, signal, servers, perServerMs = CYMRU_PUBLIC_SERVER_MS) {
+  const r = servers ? new dnsPromises.Resolver({ timeout: perServerMs, tries: 1 }) : new dnsPromises.Resolver();
   if (servers) r.setServers([...servers]);
   const cancel = () => { try { r.cancel(); } catch { /* ignore */ } };
   if (signal?.aborted) cancel();
@@ -530,6 +530,10 @@ function resolverTxt(name, signal, servers) {
 }
 const hostResolveTxt = (name, signal) => resolverTxt(name, signal, null);
 const publicResolveTxt = (name, signal) => resolverTxt(name, signal, CYMRU_FALLBACK_SERVERS);
+/** A TXT lookup through `servers` in list order, each asked once and given
+ *  `perServerMs` before the next is asked (the public fallback's own rule,
+ *  exported so a test can point it at servers of its own). */
+export const serialResolveTxt = (servers, perServerMs = CYMRU_PUBLIC_SERVER_MS) => (name, signal) => resolverTxt(name, signal, servers, perServerMs);
 // The lookups the handler makes; a test swaps them to prove the handler goes
 // through cymruTxt with the public fallback (setCymruLookups). Each is called
 // as (name, signal) and the signal aborts when the lookup is no longer wanted.
@@ -540,6 +544,13 @@ const publicResolveTxt = (name, signal) => resolverTxt(name, signal, CYMRU_FALLB
 // cannot hold the call or keep the fallback from answering.
 export const ASN_OWNER_LOOKUP_MS = 3_000;
 export const CYMRU_HEDGE_MS = 1_000;
+// How long the public fallback waits on one of its servers before it asks the
+// next. The servers are asked in list order, one at a time, so this is sized
+// for the owner lookup: the fallback starts CYMRU_HEDGE_MS into a deadline of
+// ASN_OWNER_LOOKUP_MS, and every listed server has to fit in what is left. A
+// wait as long as that deadline would let one slow server use it all, and the
+// servers after it would never be asked.
+export const CYMRU_PUBLIC_SERVER_MS = 600;
 const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: hostResolveTxt, fallback: publicResolveTxt, ownerMs: ASN_OWNER_LOOKUP_MS, hedgeMs: CYMRU_HEDGE_MS });
 let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
 export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }

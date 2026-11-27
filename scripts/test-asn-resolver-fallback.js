@@ -3,7 +3,8 @@
 // the lookup is retried once through public resolvers. An authoritative
 // "no such name" (ENOTFOUND, ENODATA) is an answer and is never retried.
 import "./lib/offline-stores.js";
-const { cymruTxt, setCymruLookups, CYMRU_FALLBACK, NETWORK_TOOLS2, ASN_OWNER_LOOKUP_MS, CYMRU_HEDGE_MS } = await import("../src/tools/network-kit2.js");
+import { createSocket } from "node:dgram";
+const { cymruTxt, setCymruLookups, serialResolveTxt, CYMRU_FALLBACK, NETWORK_TOOLS2, ASN_OWNER_LOOKUP_MS, CYMRU_HEDGE_MS, CYMRU_PUBLIC_SERVER_MS } = await import("../src/tools/network-kit2.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok - " + m); } else { fail++; console.error("FAIL - " + m); } };
 const err = (code) => Object.assign(new Error(`query ${code}`), { code });
@@ -150,6 +151,51 @@ for (const code of ["ENOTFOUND", "ENODATA"]) {
   let code = null;
   try { await p; } catch (e) { code = e.code; }
   ok(code === "ECANCELLED" && seen.length === 2 && seen.every((s) => s.aborted), "the caller's signal ends the lookup and cancels both resolvers");
+}
+// The public fallback asks its servers in list order, one at a time. Every
+// listed server has to be reachable inside the owner deadline: the wait on
+// one server, times the servers, fits in what is left after the hedge. Read
+// against real DNS sockets on loopback: the first server never answers, the
+// second does, and the owner comes back inside the deadline.
+{
+  const left = ASN_OWNER_LOOKUP_MS - CYMRU_HEDGE_MS;
+  ok(Number.isFinite(CYMRU_PUBLIC_SERVER_MS) && CYMRU_PUBLIC_SERVER_MS >= 300 && CYMRU_PUBLIC_SERVER_MS * CYMRU_FALLBACK.length <= left, `every public resolver fits in the owner deadline after the hedge (${CYMRU_FALLBACK.length} x ${CYMRU_PUBLIC_SERVER_MS} ms of ${left} ms)`);
+  const OWNER_TXT = "15169 | US | arin | 2000-03-30 | GOOGLE, US";
+  const listen = (onQuery) => new Promise((resolve) => { const s = createSocket("udp4"); s.on("message", (msg, from) => onQuery(s, msg, from)); s.bind(0, "127.0.0.1", () => resolve(s)); });
+  // One TXT answer to the question asked: the query's header and question,
+  // marked as a response, then a record that points back at the name.
+  const answer = (msg, text) => {
+    let end = 12; while (msg[end] !== 0) end += msg[end] + 1; end += 5;
+    const head = Buffer.from(msg.subarray(0, end));
+    head[2] = 0x81; head[3] = 0x80; head.writeUInt16BE(1, 6); head.writeUInt16BE(0, 8); head.writeUInt16BE(0, 10);
+    const txt = Buffer.from(text);
+    const rr = Buffer.concat([Buffer.from([0xc0, 0x0c, 0, 16, 0, 1, 0, 0, 0, 60]), Buffer.from([(txt.length + 1) >> 8, (txt.length + 1) & 255, txt.length]), txt]);
+    return Buffer.concat([head, rr]);
+  };
+  const asked = [];
+  const t0 = Date.now();
+  const silent = await listen(() => { asked.push(["first", Date.now() - t0]); });
+  const second = await listen((s, msg, from) => { asked.push(["second", Date.now() - t0]); s.send(answer(msg, OWNER_TXT), from.port, from.address); });
+  const servers = [`127.0.0.1:${silent.address().port}`, `127.0.0.1:${second.address().port}`];
+  try {
+    // The rule alone: the second server is asked once the first has had its wait.
+    const r = await serialResolveTxt(servers)("AS15169.asn.cymru.com");
+    const ms = Date.now() - t0;
+    ok((r[0] || []).join("") === OWNER_TXT && asked[0]?.[0] === "first" && asked.some(([w]) => w === "second") && ms >= CYMRU_PUBLIC_SERVER_MS - 50 && ms < left, `a first server that never answers: the second is asked after ${CYMRU_PUBLIC_SERVER_MS} ms and answers inside the time left (${ms} ms of ${left})`);
+    // The handler: a host resolver that never answers the owner query, and a
+    // fallback whose first server never answers. The owner is still served.
+    asked.length = 0;
+    setCymruLookups({ primary: (n) => (n.endsWith(".origin.asn.cymru.com") ? Promise.resolve(REC) : new Promise(() => {})), fallback: serialResolveTxt(servers) });
+    const t1 = Date.now();
+    const out = await NETWORK_TOOLS2.find((d) => d.slug === "asn-info").handler({ ip: "8.8.8.8" });
+    const took = Date.now() - t1;
+    ok(out.owner === "GOOGLE, US" && !("ownerUnavailable" in out) && took < ASN_OWNER_LOOKUP_MS, `with the default deadline and hedge, the second public server's owner answer is served (${JSON.stringify(out.owner)}, ${took} ms of ${ASN_OWNER_LOOKUP_MS})`);
+    // Control: a wait as long as the deadline never reaches the second server in time.
+    asked.length = 0;
+    setCymruLookups({ primary: (n) => (n.endsWith(".origin.asn.cymru.com") ? Promise.resolve(REC) : new Promise(() => {})), fallback: serialResolveTxt(servers, ASN_OWNER_LOOKUP_MS) });
+    const slow = await NETWORK_TOOLS2.find((d) => d.slug === "asn-info").handler({ ip: "8.8.8.8" });
+    ok(slow.owner === null && slow.ownerUnavailable === true && !asked.some(([w]) => w === "second"), "control: with a per-server wait as long as the deadline, the second server is never asked and the owner is unavailable");
+  } finally { setCymruLookups(null); silent.close(); second.close(); }
 }
 // An owner that could not be read names the query it could not read, so the
 // corpus runner asks that same query again (and nothing else) to confirm.
