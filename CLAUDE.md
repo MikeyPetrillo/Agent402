@@ -287,6 +287,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   PR opened: the owner re-requests it, or passes `--no-strix`, the owner's explicit override).
 - A merge to `main` is not a package release: check `npm view <pkg> version` against the local
   `package.json`.
+- `[publish]` runs npm (the `publish` job, before the deploy) and then the MCP Registry
+  (`publish-registry`, after the deploy; nothing waits on it): the name `tools.agent402/agent402` is
+  granted on the proof production serves (`MCP_REGISTRY_AUTH_PROOF` on Railway, read first by
+  `scripts/registry-proof-check.js`) and the login reads the environment secret
+  `MCP_REGISTRY_PRIVATE_KEY` (environment `agent402 / production`); the earlier name is marked
+  moved there (`scripts/test-registry-name.js`, `scripts/test-ci-gating.js`).
 - The deploy job's "Bazaar listing validation on the new build" step (after Verify, keys blanked)
   runs `scripts/bazaar-validate.js` against production up to three times a minute apart: a clean
   run passes, an INVALID run with no clean run fails the job, three unreadable runs warn

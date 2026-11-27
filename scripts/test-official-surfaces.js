@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
+import { spawn } from "node:child_process";
 import { bootServer } from "./lib/boot-server.js";
 import { buildList, readList, diffLists, scanPackages, withReadmeSection, README, README_START, README_END } from "./gen-official-surfaces.js";
 import { OFFICIAL_SENTENCE, OFFICIAL_SITE, OFFICIAL_CONNECTOR, OFFICIAL_PAGE_PATH, OFFICIAL_DATA_PATH, officialPackages, officialSurfacesDocument, officialSurfacesMarkdown, officialSurfacesRows } from "../src/official-surfaces.js";
@@ -31,6 +32,13 @@ import { REPO_URL, REPO_SLUG, REPO_NAMESPACE } from "../src/repo-link.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+// The publish jobs' reader of the proof (scripts/registry-proof-check.js), run
+// against a booted server: { code, word, out }.
+const proofCheck = (url, args = []) => new Promise((resolve) => {
+  const c = spawn(process.execPath, [join(ROOT, "scripts/registry-proof-check.js"), ...args, url], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (out += d));
+  c.on("exit", (code) => { let word = null; try { word = JSON.parse(out.split("\n")[0]).word; } catch { /* no verdict line */ } resolve({ code, word, out }); });
+});
 const text = (html) => String(html).replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 
 // --- the publisher is the one the manifests name --------------------------------
@@ -152,6 +160,10 @@ try {
     const r = await get(off, MCP_REGISTRY_AUTH_PATH, { headers: { Accept: "text/plain", "User-Agent": "mcp-registry/1.0" } });
     ok(r.status === 404, `${MCP_REGISTRY_AUTH_PATH} is the ordinary 404 while the setting is unset (${r.status})`);
     ok(r.headers.get("x-content-type-options") === "nosniff", "...with nosniff on the refusal");
+    const chk = await proofCheck(off.url);
+    ok(chk.code === 1 && chk.word === "absent" && /::error::MCP Registry namespace proof is not served/.test(chk.out), `the proof check reads the unset setting as absent and fails (exit ${chk.code}, ${chk.word})`);
+    const warned = await proofCheck(off.url, ["--warn"]);
+    ok(warned.code === 0 && warned.word === "absent" && /::warning::MCP Registry namespace proof is not served/.test(warned.out) && !/::error::/.test(warned.out), `with --warn the same reading is a warning and exit 0 (exit ${warned.code})`);
   }
   await off.stop();
 
@@ -165,6 +177,8 @@ try {
     ok(/^text\/plain\b/.test(r.headers.get("content-type") || "") && Buffer.byteLength(body) <= MCP_REGISTRY_AUTH_MAX_BYTES && !r.headers.get("location"), `...as text/plain, inside the registry's size bound, with no redirect (${r.headers.get("content-type")})`);
     ok(r.headers.get("x-content-type-options") === "nosniff" && !!r.headers.get("strict-transport-security") && !!r.headers.get("referrer-policy"), "...with nosniff, HSTS and a referrer policy");
     ok(/\bpublic\b/.test(r.headers.get("cache-control") || "") && !r.headers.get("set-cookie"), `...publicly cacheable, with no cookie (${r.headers.get("cache-control")})`);
+    const chk = await proofCheck(on.url);
+    ok(chk.code === 0 && chk.word === "ok" && !chk.out.includes(edPub), `control: the proof check passes on the served record and does not print it (exit ${chk.code}, ${chk.word})`);
     const slash = await get(on, `${MCP_REGISTRY_AUTH_PATH}/`);
     ok(slash.status === 200 || slash.status === 404, `a trailing slash is answered in place, never redirected (${slash.status})`);
     ok(/serving the namespace proof/.test(on.log()) && !on.log().includes(edPub), "the boot log says the proof is served and does not print the record");
@@ -178,6 +192,8 @@ try {
   {
     const r = await get(bad, MCP_REGISTRY_AUTH_PATH);
     ok(r.status === 404 && !(await r.text()).includes("not-a-proof-record"), `a setting that is not a proof record leaves the route a 404 (${r.status})`);
+    const chk = await proofCheck(bad.url);
+    ok(chk.code === 1 && chk.word === "absent", `the proof check fails on a setting that is not a proof record (exit ${chk.code}, ${chk.word})`);
     ok(/MCP_REGISTRY_AUTH_PROOF is not a proof record/.test(bad.log()) && !bad.log().includes("not-a-proof-record"), "the boot log names the variable and not its value");
   }
   await bad.stop();

@@ -14,11 +14,20 @@
 //                         of --name still "active" that is not the latest
 //                         (nothing without --name)
 //   --except <version>    leave this version out (the one being published)
+//   --unmoved <message>   print, one per line and oldest first, every version
+//                         of --name not yet "deprecated" with exactly this
+//                         status message (a name that moved: each version
+//                         carries the pointer to the new name); nothing
+//                         without --name
+//   --count               print how many entries of --name the pages hold
+//                         (0 tells an unreadable listing from a finished move)
 const argv = process.argv.slice(2);
 const arg = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
 const NAME = arg("--name");
 const SUPERSEDED = argv.includes("--superseded");
 const EXCEPT = arg("--except");
+const UNMOVED = argv.includes("--unmoved") ? String(arg("--unmoved") ?? "") : null;
+const COUNT = argv.includes("--count");
 const OFFICIAL = "io.modelcontextprotocol.registry/official";
 
 const semverKey = (v) => String(v).split(/[.+-]/).slice(0, 3).map((n) => Number(n) || 0);
@@ -38,6 +47,16 @@ process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   try {
     const rows = rowsOf(input).filter((s) => !NAME || s?.server?.name === NAME);
+    if (COUNT) { process.stdout.write(String(NAME ? rows.length : 0)); return; }
+    if (UNMOVED !== null) {
+      if (!NAME || !UNMOVED) return;
+      const out = [...new Set(rows
+        .filter((s) => !(s?._meta?.[OFFICIAL]?.status === "deprecated" && s?._meta?.[OFFICIAL]?.statusMessage === UNMOVED))
+        .map((s) => s?.server?.version)
+        .filter((v) => typeof v === "string" && /^\d+\.\d+\.\d+/.test(v)))].sort(bySemver);
+      if (out.length) process.stdout.write(`${out.join("\n")}\n`);
+      return;
+    }
     if (SUPERSEDED) {
       if (!NAME) return;
       const out = [...new Set(rows

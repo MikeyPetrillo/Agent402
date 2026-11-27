@@ -433,6 +433,10 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
+# MCP Registry namespace proof check (the publish jobs' reader of /.well-known/mcp-registry-auth, against a stub: offline)
+t node scripts/test-registry-proof-check.js
+# The MCP Registry name is the domain's everywhere; the earlier name stays only on a listed line (offline)
+t node scripts/test-registry-name.js
 # Stripe Link canary (run by hand from the operator's machine on the Link CLI's local session, scripts/link-canary-local.sh): reads every CLI answer shape, says why it stops, never hands a token to the CLI, and the wrapper's flags and refusals (offline)
 t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)

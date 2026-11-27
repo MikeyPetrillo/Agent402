@@ -28,7 +28,9 @@ export const REPO_URL = ((process.env.AGENT402_REPO_URL || "").trim() || DEFAULT
 /** "owner/name", for the surfaces that print the slug rather than the URL. */
 export const REPO_SLUG = REPO_URL.replace(/^https?:\/\/github\.com\//i, "");
 
-/** "io.github.owner/name" - the MCP Registry and Glama connector namespace. */
+/** "io.github.owner" - the repository account's namespace: the Glama connector
+ *  listing and the earlier MCP Registry name. The MCP Registry name itself is
+ *  the domain's (MCP_REGISTRY_NAME, src/org-profiles.js). */
 export const REPO_NAMESPACE = `io.github.${REPO_SLUG.split("/")[0]}`;
 
 /** A path inside the repository: repoUrl("issues"), repoUrl("wiki/Security-Model"). */

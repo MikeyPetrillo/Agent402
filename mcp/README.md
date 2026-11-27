@@ -11,13 +11,13 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.1
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.2
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call. Run setup once:
 
 ```
-npx -y agent402-mcp@0.17.1 setup
+npx -y agent402-mcp@0.17.2 setup
 ```
 
 It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. It sets no daily cap: no daily budget is written or applied by default, and setup prints one line showing how to add `AGENT402_MAX_USD_PER_DAY` if you want one. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
@@ -25,7 +25,7 @@ It asks for the wallet's private key (the input is hidden), stores it in your OS
 No wallet yet? Make one on this computer:
 
 ```
-npx -y agent402-mcp@0.17.1 wallet new
+npx -y agent402-mcp@0.17.2 wallet new
 ```
 
 It makes a new wallet key, stores it the same way (the key is never shown), and prints the wallet's address and the same config. Send a few dollars of USDC on Base to that address, no ETH needed. It never replaces a key already stored.
@@ -37,7 +37,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -48,7 +48,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless your config sets `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts). No daily budget is written or applied by default, for a new setup or an existing one: the config `setup` and `wallet new` print has no cap, they print one line showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily cap says so in one line when it starts.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.1`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.2`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -190,6 +190,10 @@ automatically:
 - `catalog.search` also surfaces matching workflows alongside individual tools,
   so a task-shaped query points the agent at the right plan, not just the
   raw tools.
+
+## MCP Registry
+
+Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402) as `tools.agent402/agent402`, a name the registry verifies against the agent402.tools domain. The earlier name stays resolvable there, marked deprecated with a pointer to this one. Installs are unchanged: `npx agent402-mcp` and the hosted connector read no registry name.
 
 ## Test
 
