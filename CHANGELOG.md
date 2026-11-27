@@ -42,12 +42,13 @@ Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
 - ip-info is named "IP address type and reverse DNS"; its route and answer
-  are unchanged.
+  are unchanged, and /api/find answers a reverse DNS or PTR lookup search
+  with it.
 - An image prompt the provider's content filter stops answers 422 with
   reason `content_filtered`, in place of the earlier 400 or 502; a provider
   outage keeps its 5xx answer, and an overloaded or rate-limited provider is
   read as an outage, not a filtered prompt.
-- Tool pages for the 20 tools with the longest descriptions show a shorter
+- Tool pages for the tools with the longest descriptions show a shorter
   summary, while their listings and API descriptions are unchanged.
 - crypto-history, coin-ohlc and coin-market-chart-range answer look-back
   statistics computed from a coin's history (return, volatility, drawdown
@@ -59,8 +60,10 @@ Tools:
 - token-price-history answers the same look-back statistics for a token and
   no longer returns price points.
 - EDGAR tools, reports and pages share one pace of at most 8 requests a
-  second to the SEC's hosts; an EDGAR tool call whose read cannot get its
-  turn in time answers 503 with Retry-After and is not charged on x402.
+  second to the SEC's hosts, with turns shared across callers; an EDGAR tool
+  call whose read cannot get its turn in time answers 503 with Retry-After
+  at once and is not charged on x402, and a run that was paid before it ran
+  is never refused by the pace.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
@@ -68,8 +71,12 @@ API:
   it) unless a listed tool is named for it; every other query is answered as
   before. route-and-execute, with `include:"external"` as well, answers 404
   for such a task without running or charging anything.
-- /api/route no longer reads the query word "add" inside "address", so a
-  calculator task is not matched to address tools.
+- /api/find and /api/route no longer read the query word "add" inside
+  "address", so a calculator task is not matched to address tools.
+- /api/find, /api/route and route-and-execute read a task that asks for a
+  coin's price on a past date as a miss (`capabilityGap` names it) unless a
+  listed tool is named for it; a task that asks for a statistic, a forecast
+  or an alert is answered as before.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.
