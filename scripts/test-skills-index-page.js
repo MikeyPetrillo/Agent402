@@ -93,7 +93,7 @@ ok(html.includes(">failed<"), "illustrative table shows a real failed-step statu
 // skillPackPage depends on.
 {
   const detail = skillPackPage(BASE_URL, "security-audit", {});
-  ok(typeof detail === "string" && detail.includes('class="sk-tl"'), "skillPackPage still renders with .sk-tl (shared CSS untouched for the detail page)");
+  ok(typeof detail === "string" && detail.includes('class="sk-tt"') && detail.includes('class="sk-wf"'), "skillPackPage renders its tool table (.sk-tt) and workflow (.sk-wf) with the shared CSS");
   ok(detail.includes("Tools in this pack"), "skillPackPage still renders its own sections unchanged");
 }
 // --- "Call it directly" snippet runs against the published SDK (2026-10-02) --

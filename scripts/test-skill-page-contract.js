@@ -1,7 +1,8 @@
-// /skills/<slug> renders a pack's full workflow contract: title, tagline, use
-// case, every workflow step text, every tool in the pack (each linked to its
-// /tools/<slug> page with name + price + route), the installable npx command,
-// and the copy-paste claudePrompt. This is the page an agent maintainer lands
+// /skills/<slug> renders a pack's full workflow contract: title, its page lead,
+// when-to-use line and every workflow step (packPageCopy: the page's short copy,
+// else the pack's tagline, useCase and workflow), every tool in the pack (each
+// linked to its /tools/<slug> page with name + price + route), the installable
+// npx command, and the copy-paste claudePrompt. This is the page an agent maintainer lands
 // on after `/api/find` recommends a pack — if any section is silently dropped
 // in a future refactor (template change, conditional that filters by some
 // flag, accidental slice), the pack becomes unusable from the browser even
@@ -10,8 +11,8 @@
 // This test boots FREE_MODE, walks every SKILL_PACKS entry, fetches
 // /skills/<slug>, and asserts the rendered HTML carries:
 //
-//   1. Title + tagline + useCase strings (from the source pack).
-//   2. Every workflow step text appears (escaped). A future refactor that
+//   1. Title + page lead + when-to-use strings.
+//   2. Every page workflow step text appears (escaped). A future refactor that
 //      truncates the workflow list (e.g. only renders the first 3 steps)
 //      shows here as a missing step.
 //   3. Every toolSlug appears linked to /tools/<slug>.
@@ -27,7 +28,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { SKILL_PACKS } from "../src/skills.js";
+import { SKILL_PACKS, packPageCopy } from "../src/skills.js";
 import { attributionTailOf } from "../src/data-attribution.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,12 +78,13 @@ try {
     const html = await res.text();
 
     if (!html.includes(esc(pack.title))) { fail(`/skills/${pack.slug} missing title (${pack.title})`); break; }
-    if (!html.includes(esc(pack.tagline))) { fail(`/skills/${pack.slug} missing tagline`); break; }
-    if (!html.includes(esc(pack.useCase))) { fail(`/skills/${pack.slug} missing useCase`); break; }
+    const copy = packPageCopy(pack);
+    if (!html.includes(esc(copy.lead))) { fail(`/skills/${pack.slug} missing its lead`); break; }
+    if (!html.includes(esc(copy.use))) { fail(`/skills/${pack.slug} missing its when-to-use line`); break; }
 
-    // Every workflow step text must appear (esc-encoded). The renderer iterates
-    // pack.workflow into <li> entries; a future slice/filter regression surfaces here.
-    for (const step of pack.workflow) {
+    // Every page workflow step must appear (esc-encoded). The renderer iterates
+    // the steps into <li> entries; a future slice/filter regression surfaces here.
+    for (const step of copy.steps) {
       if (!html.includes(esc(step))) { fail(`/skills/${pack.slug} missing workflow step: ${step.slice(0, 80)}`); break; }
     }
 

@@ -1,4 +1,4 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { upstreamKeyEnabled } from "./upstream-key.js";
 import { stockToolServed } from "./tools/stock-provider.js";
@@ -2591,6 +2591,59 @@ ${items}
 </rss>`;
 }
 
+// /changelog shows the most recent entries; every older entry is on
+// /changelog/archive, grouped by month, so no entry leaves the site.
+export const CHANGELOG_RECENT = 30;
+/** The entries /changelog shows and the ones /changelog/archive holds. */
+export function changelogSplit() {
+  const shown = shownEntries();
+  return { recent: shown.slice(0, CHANGELOG_RECENT), older: shown.slice(CHANGELOG_RECENT) };
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthName = (ym) => `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+
+function entryHtml(entry, h) {
+  const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
+  return `
+          <div class="tl-entry">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <span class="tl-date">${esc(entry.date)}</span>
+              <${h}>${esc(entry.title)}</${h}>
+              <ul>
+              ${itemsHtml}
+              </ul>
+            </div>
+          </div>`;
+}
+
+const CHANGELOG_CSS = `
+.cl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
+.cl-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.cl-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
+.cl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.cl-rss{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:32px;}
+.cl-rss:hover{text-decoration:underline;}
+.cl-more{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:8px 0 0;}
+.cl-months{display:flex;flex-wrap:wrap;gap:8px 18px;list-style:none;padding:0;margin:0 0 32px;font-family:var(--font-mono);font-size:var(--fs-sm);}
+.cl-months a{color:var(--accent);white-space:nowrap;}
+.cl-month{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:40px 0 18px;color:var(--ink);}
+.timeline{position:relative;padding-left:28px;}
+.timeline::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1.5px;background:var(--hairline);}
+.tl-entry{position:relative;margin-bottom:24px;}
+.tl-dot{position:absolute;left:-28px;top:8px;width:16px;height:16px;background:var(--accent);border:3px solid var(--paper);}
+.tl-card{background:var(--card);border:1px solid var(--hairline);padding:20px 24px;}
+.tl-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:4px;}
+.tl-card h2,.tl-card h3{font-family:var(--font-body);font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
+.tl-card h2{font-weight:700;}
+.tl-card h3{font-weight:600;}
+.tl-card ul{margin:0;padding-left:20px;color:var(--muted);font-size:var(--fs-base);line-height:1.55;}
+.tl-card li{margin-bottom:5px;}
+.tl-card li:last-child{margin-bottom:0;}
+@media(max-width:600px){.cl-wrap h1{font-size:var(--fs-3xl);}.tl-card{padding:16px 18px;}}
+`;
+
 export function changelogPage(baseUrl) {
   const canonical = `${baseUrl}/changelog`;
   const title = "Changelog - what's new at Agent402";
@@ -2605,40 +2658,11 @@ export function changelogPage(baseUrl) {
     isPartOf: { "@type": "WebSite", url: baseUrl },
   };
 
-  const timelineHtml = shownEntries().map((entry) => {
-    const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
-    return `
-          <div class="tl-entry">
-            <div class="tl-dot"></div>
-            <div class="tl-card">
-              <span class="tl-date">${esc(entry.date)}</span>
-              <h2>${esc(entry.title)}</h2>
-              <ul>
-              ${itemsHtml}
-              </ul>
-            </div>
-          </div>`;
-  }).join("\n");
-
-  const extraCss = `
-.cl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
-.cl-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
-.cl-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
-.cl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
-.cl-rss{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:32px;}
-.cl-rss:hover{text-decoration:underline;}
-.timeline{position:relative;padding-left:28px;}
-.timeline::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1.5px;background:var(--hairline);}
-.tl-entry{position:relative;margin-bottom:24px;}
-.tl-dot{position:absolute;left:-28px;top:8px;width:16px;height:16px;background:var(--accent);border:3px solid var(--paper);}
-.tl-card{background:var(--card);border:1px solid var(--hairline);padding:20px 24px;}
-.tl-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:4px;}
-.tl-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
-.tl-card ul{margin:0;padding-left:20px;color:var(--muted);font-size:var(--fs-base);line-height:1.55;}
-.tl-card li{margin-bottom:5px;}
-.tl-card li:last-child{margin-bottom:0;}
-@media(max-width:600px){.cl-wrap h1{font-size:var(--fs-3xl);}.tl-card{padding:16px 18px;}}
-`;
+  const { recent, older } = changelogSplit();
+  const timelineHtml = recent.map((entry) => entryHtml(entry, "h2")).join("\n");
+  const moreHtml = older.length
+    ? `<p class="cl-more">These are the ${recent.length} most recent entries. The ${older.length} older ones, back to ${esc(older[older.length - 1].date)}, are in the <a href="/changelog/archive">changelog archive</a>.</p>`
+    : "";
 
   const body = `<div class="cl-wrap">
   <section>
@@ -2651,10 +2675,48 @@ export function changelogPage(baseUrl) {
   <div class="timeline">
 ${timelineHtml}
   </div>
+  ${moreHtml}
   </section>
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: CHANGELOG_CSS, body });
+}
+
+/** Every entry older than the ones /changelog shows, by month, newest first. */
+export function changelogArchivePage(baseUrl) {
+  const canonical = `${baseUrl}/changelog/archive`;
+  const title = "Changelog archive - Agent402";
+  const description = "Every earlier Agent402 changelog entry, by month: tools, skill packs, framework adapters, and platform features.";
+  const { older } = changelogSplit();
+  const months = [];
+  for (const e of older) {
+    const ym = e.date.slice(0, 7);
+    let m = months.find((x) => x.ym === ym);
+    if (!m) months.push((m = { ym, entries: [] }));
+    m.entries.push(e);
+  }
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Changelog", "/changelog"], ["Archive", "/changelog/archive"]]);
+  const monthNav = months.length > 1
+    ? `<ul class="cl-months" aria-label="Months">${months.map((m) => `<li><a href="#m-${m.ym}">${monthName(m.ym)}</a></li>`).join("")}</ul>`
+    : "";
+  const sections = months.map((m) => `<section id="m-${m.ym}">
+  <h2 class="cl-month">${monthName(m.ym)}</h2>
+  <div class="timeline">
+${m.entries.map((e) => entryHtml(e, "h3")).join("\n")}
+  </div>
+  </section>`).join("\n");
+  const body = `<div class="cl-wrap">
+  ${crumbs.nav}
+  <section>
+  <h1>Changelog archive</h1>
+  <p class="cl-desc">${older.length ? `Every entry older than the ${CHANGELOG_RECENT} on <a href="/changelog">the changelog</a>, newest first. Each describes the service on its date; current prices are on <a href="/pricing">/pricing</a> and in every 402.` : `Every entry is on <a href="/changelog">the changelog</a>.`}</p>
+  ${monthNav}
+  </section>
+${sections}
+</div>
+${ledgerFooterCompact()}`;
+  const jsonLd = [{ "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: canonical, isPartOf: { "@type": "WebSite", url: baseUrl } }, crumbs.ld];
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: CHANGELOG_CSS, body });
 }
 import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";

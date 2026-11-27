@@ -370,6 +370,7 @@ function pageUrls(baseUrl, catalog) {
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
+    { loc: `${baseUrl}/changelog/archive`, priority: "0.4" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },

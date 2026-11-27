@@ -60,24 +60,29 @@ try {
     await p.close();
   }
   {
-    // /docs/api at 360 px: no part of any tool row is wider than the viewport,
-    // a probe row with a long unbroken slug and word included (no font metric assumed).
+    // /docs/api at 360 px: its reference list and category table stay inside
+    // the page, a probe entry and row with a long unbroken path and word
+    // included (no font metric assumed).
     const p = await open("/docs/api", 360);
     const r = await p.evaluate(() => {
-      const first = document.querySelector(".ml-docs-api-row");
-      if (!first) return null;
-      const probe = first.cloneNode(true);
-      probe.dataset.phoneUxProbe = "1";
-      probe.querySelector(".slug").textContent = "x".repeat(120);
-      probe.querySelector(".desc").textContent = `Reads ${"y".repeat(160)} and answers.`;
-      probe.querySelector(".price").textContent = "$0.010";
-      first.after(probe);
+      const item = document.querySelector(".ml-docs-reflist li");
+      const row = document.querySelector(".ml-docs-main table tbody tr");
+      if (!item || !row) return null;
+      const probeItem = item.cloneNode(true);
+      probeItem.dataset.phoneUxProbe = "1";
+      probeItem.querySelector("code").textContent = "/" + "x".repeat(120);
+      probeItem.querySelector("span").textContent = `Reads ${"y".repeat(160)} and answers.`;
+      item.after(probeItem);
+      const probeRow = row.cloneNode(true);
+      probeRow.dataset.phoneUxProbe = "1";
+      probeRow.cells[0].textContent = `Reads ${"z".repeat(160)} and answers.`;
+      row.after(probeRow);
       const cw = document.documentElement.clientWidth;
-      const rows = [...document.querySelectorAll(".ml-docs-api-row")];
-      const wide = rows.flatMap((row) => [row, ...row.querySelectorAll("*")]).filter((e) => { const b = e.getBoundingClientRect(); return b.width > 0 && (b.right > cw + 1 || b.left < -1); }).map((e) => `${e.className}:${(e.textContent || "").trim().slice(0, 30)}`);
-      return { rows: rows.length, wide, sw: document.documentElement.scrollWidth, cw };
+      const els = [...document.querySelectorAll(".ml-docs-reflist, .ml-docs-reflist li, .ml-docs-reflist li > *, .ml-docs-tw")];
+      const wide = els.filter((e) => { const b = e.getBoundingClientRect(); return b.width > 0 && (b.right > cw + 1 || b.left < -1); }).map((e) => `${e.tagName}.${e.className}:${(e.textContent || "").trim().slice(0, 30)}`);
+      return { items: document.querySelectorAll(".ml-docs-reflist li").length, rows: document.querySelectorAll(".ml-docs-main table tbody tr").length, wide, sw: document.documentElement.scrollWidth, cw };
     });
-    ok(r && r.rows > 100 && r.wide.length === 0 && r.sw <= r.cw + 1, `/docs/api at 360 px: no tool row element is wider than the viewport (${r ? `${r.rows} rows${r.wide.length ? `; past it: ${r.wide.slice(0, 3).join(" | ")}` : ""}` : "no rows"})`);
+    ok(r && r.items >= 6 && r.rows > 10 && r.wide.length === 0 && r.sw <= r.cw + 1, `/docs/api at 360 px: the reference list and category table stay inside the page (${r ? `${r.items} references, ${r.rows} rows${r.wide.length ? `; past it: ${r.wide.slice(0, 3).join(" | ")}` : ""}` : "none"})`);
     await p.close();
   }
   {

@@ -68,6 +68,8 @@ t node scripts/test-no-url-pathname.js
 t node scripts/test-changelog-parity.js
 # A changelog entry about something a switch sells is on /changelog and its feed only while the switch is on.
 t node scripts/test-changelog-switched.js
+# /changelog shows the recent entries and /changelog/archive every older one, by month; the archive is linked, served and in the sitemap with a lastmod (port-0 boot)
+t node scripts/test-changelog-archive.js
 # The release job cuts package.json's version from its changelog section when no release exists; the top heading is that version (offline, stub gh)
 t node scripts/test-github-release.js
 # The wiki mirror publishes from main only (push trigger and job guard)
