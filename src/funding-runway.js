@@ -8,7 +8,7 @@
 // over a trailing window, and says "low-soon" when the projected balance
 // crosses the alarm line within FUNDING_RUNWAY_DAYS (default 3).
 //
-// The fit, in three rules:
+// The fit, in four rules:
 //   1. A top-up starts a new stretch. A rise between two readings larger
 //      than RUNWAY_TOPUP_SHARE of the room above the line is money added, not
 //      negative spend: the trail restarts at that reading. The stretches
@@ -19,10 +19,18 @@
 //      smallest of three least-squares fits: the whole window and each half
 //      of it. One buy sits in one half only, so on its own it projects
 //      nothing; a drain that continues shows in every part.
-//   3. The word holds. A wallet turns low-soon when the days left reach
+//   3. A drain still running is read from its own stretch. The trailing
+//      readings that each sit lower than the one before are a running drain
+//      once they number RUNWAY_MIN_READINGS and span RUNWAY_MIN_SPAN_MS (what
+//      any fit needs). Its spend is the smallest of the same three fits over
+//      that stretch alone, and the wallet's spend is the larger of this and
+//      rule 2's, so a drain that began on a flat trail is read before it
+//      fills half the window. One buy is one lower reading, never a stretch;
+//      a drain that stops (a reading not lower than the last) is rule 2's again.
+//   4. The word holds. A wallet turns low-soon when the days left reach
 //      FUNDING_RUNWAY_DAYS and turns back to ok only once they are past
 //      RUNWAY_CLEAR_FACTOR (1.5) times that, counted on the whole window's
-//      fit alone (a quiet half does not clear it), so a wallet sitting at
+//      fit alone (a quiet half or an ended stretch does not clear it), so a wallet sitting at
 //      the mark does not change word with every reading. The held word is
 //      kept with the trail.
 //
@@ -115,8 +123,20 @@ export function projectRunway(samples, line, {
   const mid = pts[0][0] + span / 2;
   const slopes = [spent, spent.filter((p) => p[0] <= mid), spent.filter((p) => p[0] >= mid)].map(slopeOf);
   if (slopes.some((x) => x === null)) return { status: "unknown", readings, spanHours };
-  // Rule 3: a held word is judged on the whole window's fit, a new one on the smallest.
-  const spendPerDay = Math.max(0, wasSoon ? -slopes[0] : Math.min(...slopes.map((x) => -x))) * DAY_MS;
+  // Rule 3: a drain still running is read from its own stretch, the trailing
+  // readings each lower than the one before, by the same smallest-of-three fit.
+  let k = readings - 1;
+  while (k > 0 && pts[k][1] < pts[k - 1][1]) k--;
+  const run = spent.slice(k);
+  const runSpan = pts[readings - 1][0] - pts[k][0];
+  let running = 0;
+  if (run.length >= minReadings && runSpan >= minSpanMs) {
+    const half = pts[k][0] + runSpan / 2;
+    const fits = [run, run.filter((p) => p[0] <= half), run.filter((p) => p[0] >= half)].map(slopeOf);
+    if (!fits.some((x) => x === null)) running = Math.min(...fits.map((x) => -x));
+  }
+  // Rule 4: a held word is judged on the whole window's fit, a new one on rules 2 and 3.
+  const spendPerDay = Math.max(0, wasSoon ? -slopes[0] : Math.max(running, Math.min(...slopes.map((x) => -x)))) * DAY_MS;
   const base = { readings, spanHours, spendPerDay: round(spendPerDay, 4) };
   if (spendPerDay <= 0) return { status: "ok", ...base, daysLeft: null };
   const daysLeft = (latest - line) / spendPerDay;
@@ -135,7 +155,7 @@ export function worstRunwayWord(words) {
   return "unknown";
 }
 
-// key -> { line, unit, soon, samples: [[t, v], ...] }; `soon` is the held word (rule 3)
+// key -> { line, unit, soon, samples: [[t, v], ...] }; `soon` is the held word (rule 4)
 let trail = new Map();
 let loaded = null; // the one load from the store, in flight or done
 let saveChain = Promise.resolve();

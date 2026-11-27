@@ -6,7 +6,7 @@
 // short a span reads "unknown" (neither healthy nor an alarm); a latest reading
 // under the line reads "low". The word holds: in at the look-ahead, out only
 // past the clear margin, so a wallet at the mark does not flap; one buy alone
-// projects nothing; a top-up starts a new stretch and hides no spend. The
+// projects nothing; a drain still running reads from its own stretch; a top-up starts a new stretch and hides no spend. The
 // low-water readers feed the trail from the
 // read they already make (the Base wallet, a non-Base EVM chain, the Stellar
 // facilitator: the caller path, not a planted call), a reader on every request
@@ -174,6 +174,41 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
     if (r.status !== "unknown") firstFit = { n, status: r.status };
   }
   ok(firstFit && firstFit.status === "low-soon" && firstFit.n <= 8, `a steady drain reads low-soon within a reading of the seven it took before (${firstFit?.n} readings, ${firstFit?.status})`);
+}
+// A drain still running: a young one reads from its own stretch.
+{
+  // Flat at 20, then 1 an hour for 11 hours down to 9, line 6: at 24 a day
+  // the line is 3 hours off, though the first half of the window is flat.
+  const young = (hours) => Array.from({ length: 25 }, (_, i) => [now - (24 - i) * H, i <= 24 - hours ? 20 : 20 - (i - (24 - hours))]);
+  const y = projectRunway(young(11), 6, { now, days: 3 });
+  ok(y.status === "low-soon" && Math.abs(y.spendPerDay - 24) < 0.01 && y.daysLeft <= 0.2, `a drain 11 hours old on a flat trail reads low-soon from its own stretch (${y.status}, ${y.spendPerDay}/day, ${y.daysLeft} days)`);
+  // Through the readers' path, reading by reading: ok while flat, low-soon before the line.
+  __resetFundingRunwayForTest();
+  let firstSoon = null;
+  for (const [t, v] of young(11)) {
+    noteFundingReading("young", v, 6, { now: t });
+    const w = (await fundingRunwayStatus({ now: t, days: 3 })).wallets.young;
+    if (w.status === "low-soon" && firstSoon == null) firstSoon = v;
+    if (v === 20 && w.status === "low-soon") firstSoon = -1;
+  }
+  await flushFundingRunway();
+  ok(firstSoon != null && firstSoon > 9, `the readers' path turns low-soon while the balance is still well over the line (first at ${firstSoon})`);
+  // The same drain with the line further off than the look-ahead stays ok.
+  const farLine = projectRunway(young(11).map(([t, v]) => [t, v + 200]), 6, { now, days: 3 });
+  ok(farLine.status === "ok" && farLine.daysLeft > 3, `the same young drain with the line more than 3 days off reads ok (${farLine.daysLeft} days)`);
+  // Not a drain still running: under the minimum readings, under the minimum
+  // span, or ended (the latest reading is not lower than the one before).
+  const sparse = [...Array.from({ length: 17 }, (_, i) => [now - (24 - i) * H, 20]), [now - 4 * H, 18], [now, 16]]; // three falling readings across eight hours
+  ok(projectRunway(sparse, 6, { now, days: 3 }).status === "ok", "a fall over fewer consecutive readings than a fit needs projects nothing");
+  const burst = Array.from({ length: 49 }, (_, i) => [now - (48 - i) * H / 2, i <= 40 ? 20 : 20 - (i - 40)]); // eight falls in four hours
+  ok(projectRunway(burst, 6, { now, days: 3 }).status === "ok", "a fall over less than the minimum span projects nothing");
+  const ended = [...young(11).slice(1).map(([t, v]) => [t - H, v]), [now, 9]];
+  const e = projectRunway(ended, 6, { now, days: 3 });
+  ok(e.status === "ok" && e.spendPerDay === 0, `a drain that has stopped falls back to the whole-window rule (${e.status}, ${e.spendPerDay}/day)`);
+  // A run that is one large fall and then a trickle projects the trickle, not the fall.
+  const trickle = Array.from({ length: 25 }, (_, i) => [now - (24 - i) * H, i <= 12 ? 40 : i === 13 ? 30 : 30 - 0.01 * (i - 13)]);
+  const tr = projectRunway(trickle, 6, { now, days: 3 });
+  ok(tr.status === "ok" && tr.spendPerDay < 1, `a large fall followed by a trickle projects the trickle (${tr.status}, ${tr.spendPerDay}/day)`);
 }
 // In at the look-ahead, out only past the margin.
 {

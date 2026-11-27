@@ -107,5 +107,91 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   ok(PII_TYPES.join() === "email,card,ssn,phone,ip" && /no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(packPageCopy(text).use || "") && /emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(text.useCase), "text-hygiene names the five patterns redact matches, and redact still matches those five");
 }
 
+// A pack's copy says which of its tools are pure-CPU, free over proof-of-work
+// or wallet-only, and each such claim is read against the pack's tool list:
+// a tool is PoW-eligible when src/free-tier.js lists it and WALLET_ONLY_SLUGS
+// (src/pow.js) does not. Four shapes of claim, sentence by sentence:
+//   "N of M tools are PoW-eligible" (or wallet-only)   N and M are the pack's counts
+//   "four pure-CPU ...", "two egress ..."   the count of eligible (or not) tools
+//   "all N tools are wallet-only / egress"  no tool is eligible
+//   pure-CPU / PoW-eligible / free over PoW / free tier / no egress:
+//     with "only ... is paid" beside it, the pack holds both kinds;
+//     in a clause that names tools and no "all" or "every", those tools are eligible;
+//     said of all or every tool or step, or with no subject ("Pure CPU."),
+//     every tool in the pack is eligible; otherwise at least one is.
+{
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { FREE_TIER_SLUGS } = await import("../src/free-tier.js");
+  const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
+  const eligible = (slug) => FREE_TIER_SLUGS.has(slug) && !WALLET_ONLY_SLUGS.has(slug);
+  const NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+  const num = (w) => (/^\d+$/.test(w) ? Number(w) : NUM[String(w).toLowerCase()]);
+  const CLAIM = /pure[- ]CPU|PoW-eligible|free over (?:PoW|proof-of-work|the proof-of-work tier)|free via proof-of-work|free tier|egress is 0|\b(?:no|zero) egress\b/i;
+  const NO_EGRESS = /egress is 0|\b(?:no|zero) egress\b/i;
+  const UNIVERSAL = /\b(?:all|every|each|whole)\b/i;
+  const SCOPED = /\bonly\b[^.]*\b(?:is|are) paid\b/i;
+  const names = (text, slug) => new RegExp(`(?<![\\w-])${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text);
+  const strings = (p) => {
+    const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])];
+    for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); }
+    return [...new Set(out.filter(Boolean))];
+  };
+  const claimFindings = (packs) => {
+    const out = [];
+    for (const p of packs) {
+      const tools = p.toolSlugs || [];
+      const free = tools.filter(eligible), paid = tools.filter((t) => !eligible(t));
+      const say = (what, sentence) => out.push(`${p.slug} ${what} (${free.length} of ${tools.length} tools are PoW-eligible; not: ${paid.join(", ") || "none"}): "${sentence.trim().slice(0, 90)}"`);
+      for (const text of strings(p)) {
+        for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+          let counted = false;
+          const of = sentence.match(/\b(\w+) of (\w+) tools are PoW-eligible/i);
+          if (of && num(of[1]) != null && num(of[2]) != null) { counted = true; if (num(of[1]) !== free.length || num(of[2]) !== tools.length) say("miscounts its PoW-eligible tools", sentence); }
+          for (const m of sentence.matchAll(/\b(\w+) (pure[- ]CPU|egress)\b/gi)) {
+            const n = num(m[1]);
+            if (n == null) continue;
+            counted = true;
+            const have = /egress/i.test(m[2]) ? paid.length : free.length;
+            if (n !== have) say(`counts ${m[1]} ${m[2]} tools`, sentence);
+          }
+          const ofPaid = sentence.match(/\b(\w+) of (\w+) tools are wallet-only/i);
+          if (ofPaid && num(ofPaid[1]) != null && num(ofPaid[2]) != null) { counted = true; if (num(ofPaid[1]) !== paid.length || num(ofPaid[2]) !== tools.length) say("miscounts its wallet-only tools", sentence); }
+          if (/\ball (?:of (?:these|the) )?(?:\w+ )?tools (?:are (?:wallet-only|egress)|touch external APIs)/i.test(sentence)) { counted = true; if (free.length) say("calls every tool wallet-only", sentence); }
+          if (!CLAIM.test(sentence) || (counted && !/;/.test(sentence))) continue;
+          if (SCOPED.test(sentence)) { if (!free.length || !paid.length) say("splits free steps from paid ones", sentence); continue; }
+          for (const clause of sentence.split(/;\s+/)) {
+            if (!CLAIM.test(clause)) continue;
+            const named = tools.filter((t) => names(clause, t));
+            if (/\b\w+ of \w+ tools are\b/i.test(clause)) continue; // a counted clause, held above
+            const whole = UNIVERSAL.test(clause) || new RegExp(`^\\W*(?:${CLAIM.source})`, "i").test(clause) || (NO_EGRESS.test(clause) && !named.length);
+            if (whole) { if (paid.length) say("calls every tool pure-CPU or free", sentence); }
+            else if (named.length) { if (named.some((t) => !eligible(t))) say(`calls ${named.filter((t) => !eligible(t)).join(", ")} pure-CPU or free`, sentence); }
+            else if (!free.length) say("calls some steps pure-CPU or free", sentence);
+          }
+        }
+      }
+    }
+    return out;
+  };
+  const found = claimFindings(ALL_SKILL_PACKS);
+  ok(found.length === 0, `every pure-CPU, free and wallet-only claim in pack copy matches the pack's tools${found.length ? `:\n  ${found.join("\n  ")}` : ""}`);
+  const claims = ALL_SKILL_PACKS.filter((p) => strings(p).some((t) => CLAIM.test(t))).length;
+  ok(claims >= 8, `the check reads the packs that make such a claim (${claims})`);
+  ok(eligible("hash") && !eligible("email-validate") && !eligible("extract"), "control: hash is PoW-eligible; email-validate and extract are not");
+  const fake = (text, toolSlugs) => [{ slug: "control-pack", tagline: text, toolSlugs }];
+  const mixed = ["email-validate", "uuid", "hash"], pure = ["uuid", "hash"], net = ["email-validate", "extract"];
+  for (const [text, tools] of [
+    ["One pass, every step a pure-CPU call.", mixed], ["All three tools are pure-CPU (PoW-eligible / free tier).", mixed], ["Hashes and mints. Pure CPU.", mixed],
+    ["2 of 3 tools are PoW-eligible (extract is wallet-only).", ["extract", "email-validate", "hash"]], ["all 2 tools are PoW-eligible (pure network I/O).", net],
+    ["Three tools - one pure-CPU, two egress.", mixed], ["Stats steps are free over PoW; only the data fetch is paid.", pure], ["Checks mail; email-validate is pure-CPU.", mixed],
+    ["All three tools are wallet-only (egress).", mixed], ["Budget small; all of these tools are wallet-only (paid per call).", mixed], ["1 of 3 tools are wallet-only; uuid is pure-CPU.", ["email-validate", "extract", "uuid"]], ["1 of 3 tools are wallet-only; email-validate is pure-CPU.", mixed], ["The mint steps are free over PoW.", net], ["Reads bytes - egress is 0, but CPU is meaningful.", mixed],
+  ]) ok(claimFindings(fake(text, tools)).length >= 1, `control: "${text}" on [${tools.join(", ")}] is caught`);
+  for (const [text, tools] of [
+    ["One pass, every step a pure-CPU call.", pure], ["2 of 3 tools are PoW-eligible (email-validate is wallet-only).", mixed], ["Three tools - two pure-CPU, one egress.", mixed],
+    ["Mint steps are free over PoW; only the mail check is paid.", mixed], ["Checks mail; hash is pure-CPU.", mixed], ["1 of 3 tools are wallet-only (a live read); hash is pure-CPU.", mixed], ["All two tools are wallet-only (egress).", net],
+    ["Scores a risk-free rate into free-form objects.", net],
+  ]) ok(claimFindings(fake(text, tools)).length === 0, `control: "${text}" on [${tools.join(", ")}] passes`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -186,11 +186,21 @@ export function toolTitle(tool) {
   return nameIntactWithBrand ? withBrand : noBrand;
 }
 
-/** First sentence of a description (a period followed by a capital or the end). */
-function firstSentence(text) {
+/** First sentence of a description: up to the first period, question mark or
+ *  exclamation mark that ends the text or is followed by a capital, a bracket
+ *  or a quote. A mark inside an open parenthesis, or the period of "e.g.",
+ *  "i.e." or "vs.", ends nothing. */
+export function firstSentence(text) {
   const s = String(text || "").replace(/\s+/g, " ").trim();
-  const m = s.match(/^(.+?[.!?])(?=\s+[A-Z(`"]|$)/);
-  const out = m ? m[1] : s;
+  const end = /[.!?](?=\s+[A-Z(`"]|$)/g;
+  let out = s;
+  for (let m = end.exec(s); m; m = end.exec(s)) {
+    const head = s.slice(0, m.index + 1);
+    const last = m.index + 1 === s.length;
+    if (!last && (/(?:^|[^a-z])(?:e\.g|i\.e|vs)\.$/i.test(head) || head.split("(").length > head.split(")").length)) continue;
+    out = head;
+    break;
+  }
   return /[.!?]$/.test(out) ? out : `${out}.`;
 }
 
@@ -389,7 +399,7 @@ export function paramLimits(v, exampleValue) {
   return out.join(" ");
 }
 
-// The prose word count scripts/lib/tool-page-prose.js budgets (a token with a
+// The prose word count scripts/lib/page-words.js (its "tool" mode) budgets (a token with a
 // letter or a digit; <code> spans and tags left out), so the lead can size its
 // sentence to the room the badge and the meta row leave. A scan, not a pattern:
 // it counts and never sanitizes.
@@ -411,23 +421,55 @@ function proseWordCount(html) {
   return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w.replace(/&[a-z]+;|&#\d+;/gi, ""))).length;
 }
 
-/** The first `n` words of a sentence, ending "..." when it was cut. A cut
- *  lands on the last clause boundary in the back half of the room (a comma,
- *  a colon, a closed parenthesis, with every parenthesis closed), so the lead
- *  never stops inside a phrase ("no API key, no..."); a sentence with no such
- *  boundary is cut at a word, never on a connecting one. */
+// Where a cut lead may not stop: a bare number or price, and a connecting
+// word (article, preposition, conjunction). scripts/lib/tool-page-lead.js
+// holds the same two lists for the served pages.
+const LEAD_END_NUMBER = /^[$€£]?\d[\d.,:/-]*%?$/;
+const LEAD_END_WORD = /^(?:a|an|the|and|or|nor|but|of|on|in|to|for|by|with|from|at|as|via|into|onto|per|than|that|which|its|is|are|plus|over|under|across|between|through|within|without|when|while|if|vs)$/i;
+const LEAD_ABBREVIATION = /(?:^|[^a-z])(?:e\.g|i\.e|vs|etc|approx|incl|dept|inc|corp|co|ltd|no|st|u\.s)\.$/i;
+
+/** A sentence fitted to `n` words. A cut is made, in this order, at:
+ *  the last sentence end inside the room (the lead then ends with its own
+ *  period); the last clause boundary that leaves 8 words or more (a comma,
+ *  semicolon, colon or closing bracket, or the word before a spaced dash or
+ *  an opening parenthesis), ending "." after a semicolon and "..." otherwise; the last word that passes the same checks.
+ *  No cut lands inside an open parenthesis, bracket, brace or quote, on a
+ *  number or price, or on a connecting word. A sentence with no boundary in
+ *  the room is cut at a word, which scripts/test-tool-page-words.js fails:
+ *  that tool sets a `pageSummary` whose first sentence fits. */
 function cutWords(text, n) {
   const words = String(text).trim().split(/\s+/);
   if (words.length <= n) return words.join(" ");
   const room = Math.max(3, n);
-  let depth = 0, at = -1;
+  const minKeep = Math.min(8, room);
+  const bare = (w) => w.replace(/[\s,;:.!?)\]}"'`]+$/g, "").replace(/^[(\[{"'`]+/, "");
+  const clean = (w) => { const b = bare(w); return b !== "" && !LEAD_END_NUMBER.test(b) && !LEAD_END_WORD.test(b); };
+  let depth = 0, quote = false, tick = false;
+  let sentence = -1, clause = -1, clauseEnds = "", word = -1;
   for (let i = 0; i < room; i++) {
-    depth += (words[i].match(/\(/g) || []).length - (words[i].match(/\)/g) || []).length;
-    if (depth === 0 && /[,;:)]$/.test(words[i]) && i + 1 >= Math.ceil(room / 2)) at = i + 1;
+    const w = words[i];
+    for (const ch of w) {
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+      else if (ch === '"') quote = !quote;
+      else if (ch === "`") tick = !tick;
+    }
+    if (depth > 0 || quote || tick || w === "-" || !clean(w)) continue;
+    const kept = i + 1;
+    if (/[.!?]$/.test(w)) { if (kept >= 4 && !LEAD_ABBREVIATION.test(w)) sentence = kept; continue; }
+    if (kept < minKeep) continue;
+    word = kept;
+    const next = words[i + 1] || "";
+    const before = next === "-" || next === "\u2013" || next.startsWith("(");
+    if (/[,;:)\]}]$/.test(w) || before) { clause = kept; clauseEnds = before ? "" : w.at(-1); }
   }
-  if (at > 0) return words.slice(0, at).join(" ").replace(/[\s,;:\-(.]+$/g, "") + "...";
+  const upTo = (k) => words.slice(0, k).join(" ");
+  const trimmed = (k) => upTo(k).replace(/[\s,;:\-.]+$/g, "");
+  if (sentence > 0) return upTo(sentence);
+  if (clause > 0) return trimmed(clause) + (clauseEnds === ";" ? "." : "...");
+  if (word > 0) return trimmed(word) + "...";
   const head = words.slice(0, room);
-  while (head.length > 3 && /^(a|an|the|of|on|in|to|for|by|and|or|with|from|at|as|via|into|its)$/i.test(head.at(-1))) head.pop();
+  while (head.length > 3 && !clean(head.at(-1))) head.pop();
   return head.join(" ").replace(/[\s,;:\-(.]+$/g, "") + "...";
 }
 

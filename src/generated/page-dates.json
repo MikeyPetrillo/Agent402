@@ -495,7 +495,7 @@
     },
     "/skills/any-to-markdown": {
       "published": "2026-06-22",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/api-health": {
       "published": "2026-07-04",
@@ -571,7 +571,7 @@
     },
     "/skills/document-intel": {
       "published": "2026-06-21",
-      "modified": "2026-10-13"
+      "modified": "2026-11-27"
     },
     "/skills/domain-age": {
       "published": "2026-07-04",
@@ -623,7 +623,7 @@
     },
     "/skills/fraud-signals": {
       "published": "2026-06-21",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/skills/fx-monitor": {
       "published": "2026-07-04",
@@ -655,7 +655,7 @@
     },
     "/skills/link-preview": {
       "published": "2026-06-21",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/loan-comparison": {
       "published": "2026-06-21",
@@ -671,7 +671,7 @@
     },
     "/skills/macro-context": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/macro-dashboard": {
       "published": "2026-07-29",
@@ -695,7 +695,7 @@
     },
     "/skills/media-pipeline": {
       "published": "2026-06-21",
-      "modified": "2026-08-31"
+      "modified": "2026-11-27"
     },
     "/skills/nft-portfolio": {
       "published": "2026-07-04",
@@ -727,15 +727,15 @@
     },
     "/skills/price-monitor": {
       "published": "2026-06-23",
-      "modified": "2026-10-14"
+      "modified": "2026-11-27"
     },
     "/skills/regulatory-watch": {
       "published": "2026-06-21",
-      "modified": "2026-11-10"
+      "modified": "2026-11-27"
     },
     "/skills/schema-evolution": {
       "published": "2026-06-21",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/schema-guard": {
       "published": "2026-07-14",
@@ -743,7 +743,7 @@
     },
     "/skills/search-and-cite": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/sec-filings-deep-dive": {
       "published": "2026-06-20",
@@ -763,7 +763,7 @@
     },
     "/skills/status-snapshot": {
       "published": "2026-06-22",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/structured-scrape": {
       "published": "2026-06-20",
@@ -815,11 +815,11 @@
     },
     "/skills/weather-brief": {
       "published": "2026-06-23",
-      "modified": "2026-11-16"
+      "modified": "2026-11-27"
     },
     "/skills/webhook-intake": {
       "published": "2026-07-14",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/world-data": {
       "published": "2026-07-04",

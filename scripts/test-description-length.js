@@ -42,11 +42,13 @@ export { MAX_WORDS, PAGE_MAX_WORDS, FIRST_SENTENCE_MAX_WORDS, PAGE_SUMMARY };
 export const wordCount = (text) => String(text || "").trim().split(/\s+/).filter(Boolean).length;
 // The sentence a tool page leads with (firstSentence in src/pages.js): up to
 // the first period, question mark or exclamation mark that ends the text or
-// is followed by a capital, a bracket or a quote.
+// is followed by a capital, a bracket or a quote, outside a parenthesis and
+// not the period of "e.g.". The page's own reader, so the two never differ.
+import { firstSentence as pageFirstSentence } from "../src/pages.js";
 export function firstSentence(text) {
   const s = String(text || "").replace(/\s+/g, " ").trim();
-  const m = s.match(/^(.+?[.!?])(?=\s+[A-Z(`"]|$)/);
-  return m ? m[1] : s;
+  const first = pageFirstSentence(s); // the page closes a text that has no end mark with a period
+  return first === `${s}.` ? s : first;
 }
 // The credits, disclaimers and markings a description carries, each as the
 // words a shorter text must repeat (compared without case).
