@@ -623,7 +623,7 @@
     },
     "/skills/fraud-signals": {
       "published": "2026-06-21",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/skills/fx-monitor": {
       "published": "2026-07-04",
@@ -671,7 +671,7 @@
     },
     "/skills/macro-context": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/macro-dashboard": {
       "published": "2026-07-29",
@@ -731,11 +731,11 @@
     },
     "/skills/regulatory-watch": {
       "published": "2026-06-21",
-      "modified": "2026-11-10"
+      "modified": "2026-11-27"
     },
     "/skills/schema-evolution": {
       "published": "2026-06-21",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/schema-guard": {
       "published": "2026-07-14",
@@ -743,7 +743,7 @@
     },
     "/skills/search-and-cite": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/sec-filings-deep-dive": {
       "published": "2026-06-20",
@@ -815,11 +815,11 @@
     },
     "/skills/weather-brief": {
       "published": "2026-06-23",
-      "modified": "2026-11-16"
+      "modified": "2026-11-27"
     },
     "/skills/webhook-intake": {
       "published": "2026-07-14",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/world-data": {
       "published": "2026-07-04",
