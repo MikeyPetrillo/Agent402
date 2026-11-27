@@ -216,7 +216,7 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   const MUST = ["test-leak-guard.js", "test-llm-gateway.js", "test-llm-messages.js", "test-llm-responses.js", "test-async-jobs.js"];
   for (const s of MUST) ok(needTable.includes(s), `${s} requires the cost table (fails under CI without it)`);
   const lib = readFileSync(new URL("lib/require-upstream-costs.js", scriptsDir), "utf8");
-  ok(/process\.env\.CI && process\.env\.UPSTREAM_COSTS_OPTIONAL !== "1"/.test(lib) && /process\.exit\(1\)/.test(lib), "require-upstream-costs fails under CI unless the run is marked optional");
+  ok(/upstreamCostsRequired = \(\) => Boolean\(process\.env\.CI\) && process\.env\.UPSTREAM_COSTS_OPTIONAL !== "1"/.test(lib) && /if \(upstreamCostsRequired\(\)\) \{\s+console\.error\([^\n]*\n\s+process\.exit\(1\)/.test(lib), "require-upstream-costs fails under CI unless the run is marked optional");
   const FORK_ONLY = /^\$\{\{ github\.event\.pull_request\.head\.repo\.fork && '1' \|\| '' \}\}$/;
   const runs = new Map();
   for (const [jobName, job] of Object.entries(wf.jobs || {})) {
