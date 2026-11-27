@@ -3,8 +3,10 @@
 // so "add" also read as the opening of "address": a calculator task ("add and
 // multiply") scored every row named or described with an address, and a row
 // whose NAME holds the word (the name counts at slug weight too) ranked beside
-// the calculator. One named exception (src/query-terms.js TERM_FALSE_FRIENDS):
-// "add" is not matched where the text goes on "addr...".
+// the calculator. Named exceptions (src/query-terms.js TERM_FALSE_FRIENDS):
+// "add" is not matched where the text goes on "addr...", and "and" is not
+// matched inside "candle" (a row named for candles outranked the tool a
+// "mean, range and outliers" task asks for).
 //   - "add" scores nothing on a row whose only hit is "address" or "addr";
 //   - controls: "add" still matches add, adds, added, adder, addition and
 //     padding as before; "address" and "addr" queries match address rows as
@@ -23,12 +25,17 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 
 // ---- the matcher ----
-ok(typeof substringMatcher === "function" && TERM_FALSE_FRIENDS && Object.keys(TERM_FALSE_FRIENDS).join() === "add", `the exception list is one named term (${Object.keys(TERM_FALSE_FRIENDS || {}).join(", ")})`);
+ok(typeof substringMatcher === "function" && TERM_FALSE_FRIENDS && Object.keys(TERM_FALSE_FRIENDS).join() === "add,and", `the exception list is two named terms (${Object.keys(TERM_FALSE_FRIENDS || {}).join(", ")})`);
 if (fail) { console.log(`\n${pass} passed, ${fail} failed`); process.exit(1); }
 const add = substringMatcher("add");
 for (const s of ["ip address type", "ip-address", "known-address label lookup", "addr", "wallet addresses", "addressable"]) ok(add(s) === false, `"add" is not read inside "${s}"`);
 for (const s of ["add two numbers", "adds a row", "added", "adder", "addition", "padding", "add-liquidity", "address book: add an address"]) ok(add(s) === true, `"add" still matches "${s}"`);
 for (const [term, s] of [["address", "ip address type"], ["addr", "wallet addr"], ["addr", "address"], ["calc", "calculator"], ["dns", "reverse-dns"]]) ok(substringMatcher(term)(s) === s.includes(term), `"${term}" matches "${s}" as a plain substring`);
+
+// "and" is not read inside "candle" or "candles"; everywhere else it is the plain substring.
+const and = substringMatcher("and");
+for (const s of ["coin ohlc candle statistics", "coin-ohlc-candle-statistics", "candles", "4-hour candles", "candlestick"]) ok(and(s) === false, `"and" is not read inside "${s}"`);
+for (const s of ["heat index and wind chill", "random", "standard", "brand", "scandal", "candid", "candle and wick", "andes"]) ok(and(s) === true, `"and" still matches "${s}"`);
 
 for (const term of ["constructor", "tostring", "hasownproperty", "__proto__"]) ok(substringMatcher(term)(`x ${term} y`) === true && substringMatcher(term)("nothing") === false, `"${term}" is an ordinary term (no inherited key reads as an entry)`);
 
@@ -70,6 +77,30 @@ cache.set("https://s.example", seller("https://s.example", [
   // The slug weight of a match is unchanged: 10 exact-covered, 4 substring, 2 name, 1 text.
   const s = row("add numbers", "add-numbers", "external");
   ok(s?.match?.matchedOn?.slug === 20 || s?.matched?.matchedOn?.slug === 20 || s?.matchedOn?.slug === 20 || s?.score >= 20, `a slug the query covers keeps its full weight (${s?.score})`);
+}
+// The router: a row named for candles scores nothing for the word "and".
+{
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { KIT3 = [] } = await import("../src/tools/kit3.js").catch(() => ({}));
+  const wide = { ...catalog };
+  for (const t of [...CRYPTO_MARKETS_TOOLS, ...KIT3]) wide[t.route] = t;
+  const ctx = { ...CTX, catalog: wide, toolCount: Object.keys(wide).length };
+  const rows = (q) => routeQuery({ query: q, top: 25, include: "local", ...ctx }).results;
+  const ohlc = (q) => rows(q).find((r) => r.slug === "coin-ohlc") || null;
+  ok(/candle/i.test(CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "coin-ohlc").name), "coin-ohlc's name holds the word candle");
+  // (Its description holds the word "and" itself, which scores as text; the slug and name parts do not move.)
+  const parts = (r) => { const m = r?.matchedOn || r?.match?.matchedOn || {}; return `${m.slug}/${m.name}`; };
+  const withAnd = ohlc("candle statistics and"), without = ohlc("candle statistics");
+  ok(withAnd && without && parts(withAnd) === parts(without) && withAnd.score - without.score <= 1, `"and" adds nothing to coin-ohlc's slug or name score (${parts(withAnd)} with, ${parts(without)} without)`);
+  // The task that showed it: the numeric outlier tool is first again, ahead of
+  // the coin routes whose names say statistics (it carries the alias "anomalies").
+  const { STATS_TOOLS } = await import("../src/tools/stats-kit.js");
+  const all = { ...wide };
+  for (const t of STATS_TOOLS) all[t.route] = t;
+  const top = routeQuery({ query: "statistics on numerical data: mean, range, anomalies and outliers", top: 5, include: "local", ...CTX, catalog: all, toolCount: Object.keys(all).length }).results.map((r) => r.slug);
+  ok(top[0] === "outliers", `"statistics on numerical data: mean, range, anomalies and outliers" ranks outliers first (${top.join(", ")})`);
+  const m = ohlc("and")?.matchedOn || ohlc("and")?.match?.matchedOn;
+  ok(!ohlc("and") || !m || (m.slug === 0 && m.name === 0), `a bare "and" scores nothing on coin-ohlc's slug or name (${JSON.stringify(m || null)})`);
 }
 cache.clear();
 console.log(`\n${pass} passed, ${fail} failed`);

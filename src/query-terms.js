@@ -169,6 +169,7 @@ export function termMatcher(term) {
 // the plain substring rule (scripts/test-route-term-false-friends.js).
 export const TERM_FALSE_FRIENDS = Object.freeze({
   add: /add(?!r)/, // not "address", "addresses", "addr"; still "adds", "added", "adder", "addition", "padding"
+  and: /(?<!c)and|and(?!le)/, // not "candle", "candles"; still the word itself, "random", "standard", "scandal", "candid"
 });
 /** The substring predicate for a term of three or more characters. */
 export function substringMatcher(term) {
