@@ -93,7 +93,7 @@ export function paidBeforeRunHere() {
  *  request cannot carry one. */
 export function armSettleFirst(req, { run, reason = null } = {}) {
   if (!req || typeof req !== "object" || typeof run !== "function") return null;
-  const state = { armed: true, reason, run, promise: null, succeeded: false, settled: null, refusal: null, holds: new Map() };
+  const state = { armed: true, reason, run, promise: null, succeeded: false, failed: false, settled: null, refusal: null, holds: new Map() };
   try { Object.defineProperty(req, STATE, { value: state, enumerable: false, configurable: true }); } catch { return null; }
   return state;
 }
@@ -115,6 +115,19 @@ export function settleFirstStarted(req) { return !!stateOf(req)?.promise; }
 /** True only once this request's settle point returned success: false while
  *  the settlement is in flight and after it failed. */
 export function settleFirstSucceeded(req) { return stateOf(req)?.succeeded === true; }
+/** The settlement the run this call belongs to has in flight: a promise that
+ *  ends when its outcome is known and never rejects, or null when the run has
+ *  none (not armed, settle point not reached, or the outcome already known).
+ *  A refusal of our own making is held until it ends: answered while the
+ *  payment is still being taken, it would be a charged failure if the
+ *  settlement then succeeds (src/tools/sec-rate.js waits on it). */
+export function settleInFlightHere() {
+  let r = null;
+  if (ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  if (!s || !s.promise || s.succeeded || s.failed) return null;
+  return s.promise.then(() => {}, () => {});
+}
 
 /** Record the settlement this request's settle point made. */
 export function markSettledFirst(req, info) {
@@ -143,7 +156,7 @@ export function settleBeforeUpstream(req = null) {
   s.promise = (async () => s.run())();
   // The refusal is read by the helper that awaits it; a second reader (a
   // later upstream call) reads the same one. Never an unhandled rejection.
-  s.promise.then(() => { s.succeeded = true; }, (e) => { s.refusal = e; });
+  s.promise.then(() => { s.succeeded = true; }, (e) => { s.refusal = e; s.failed = true; });
   return s.promise;
 }
 

@@ -284,61 +284,122 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   g2.fail(sf.settleFirstRefusal ? sf.settleFirstRefusal({ status: 402, body: {} }) : new Error("refused"));
   await p2.catch(() => {}); await null;
   ok(sf.settleFirstStarted(b.req) === true && sf.scopePaidBeforeRun(b.scope) === false, `a run whose settlement failed reads unpaid (${sf.scopePaidBeforeRun(b.scope)})`);
-  // Through the pace: the second leg's read stands in a line the pace cannot
-  // clear in time. While the settlement is in flight, or after it failed, it
-  // is answered the unpaid 503; once the settlement succeeded it is served.
-  const viaPace = async (settle) => {
+  // Through the pace. A read that comes while its run's settlement is in
+  // flight is never answered the unpaid 503 before the outcome is known: a
+  // settlement that then succeeds would make that a charged failure of our
+  // own pace. It waits for the outcome (to the run's ceiling or its caller's
+  // signal): on success it joins the paid line, on failure it is unpaid.
+  const say = (o) => (o.e ? `refused ${o.e.statusCode || o.e.name}` : `served at ${Math.round(o.at)} ms`);
+  const rigOf = (opts = {}) => {
     const g = gate(), r = armed(() => g.p);
     sf.setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(r.scope));
-    const pace = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 100, queueMax: 1 });
+    sf.setSettleFirstAmbient(() => r.req);
+    const pace = createSecPace({ perSecond: 1, windowMs: 250, maxWaitMs: 100, queueMax: 1, ...opts });
+    const done = () => { sf.setPaidBeforeRunAmbient(null); sf.setSettleFirstAmbient(null); };
+    return { g, r, pace, done };
+  };
+  // The line is already past the read's deadline when it arrives (an unpaid
+  // read is answered 503 at once), and the settlement is in flight.
+  const arrivesInFlight = async (outcome, at = 300) => {
+    const { g, r, pace, done } = rigOf();
     await pace.paced(async () => 1);
     const point = sf.settleBeforeUpstream(r.req); // the first leg reaches the settle point
     point.catch(() => {});
     const t0 = performance.now();
-    const out = await (async () => {
-      if (settle === "success") { g.open(); await point; await null; }
-      if (settle === "failure") { g.fail(new Error("refused")); await point.catch(() => {}); await null; }
-      return pace.paced(async () => performance.now() - t0).then((at) => ({ at }), (e) => ({ e }));
-    })();
-    if (settle === "in-flight") g.open();
-    sf.setPaidBeforeRunAmbient(null);
-    return { ...out, waiting: pace.status().waiting };
+    let early = null;
+    const read = pace.paced(async () => performance.now() - t0).then((v) => ({ at: v }), (e) => ({ e }));
+    read.then((o) => { if (early === null) early = o; });
+    await new Promise((res) => setTimeout(res, at));
+    const before = early; // what the read had been answered while the settlement was still in flight
+    early = false;
+    if (outcome === "success") g.open(); else g.fail(new Error("refused"));
+    const out = await read;
+    done();
+    return { ...out, before, waiting: pace.status().waiting };
   };
-  const flight = await viaPace("in-flight"), failed = await viaPace("failure"), settled = await viaPace("success");
-  // A read admitted to the line while its settlement is in flight, behind two
-  // other callers' reads, so its turn comes after its own deadline. With the
-  // settlement still in flight at that deadline it is answered 503; with the
-  // settlement succeeded by then it moves to the paid line and is served.
-  const waited = async (settleAt) => {
+  const ok1 = await arrivesInFlight("success"), bad1 = await arrivesInFlight("failure");
+  ok(ok1.before === null && bad1.before === null, `a read that arrives while its settlement is in flight, with the line past its deadline, is answered nothing until the outcome is known (${ok1.before ? say(ok1.before) : "waiting"}, ${bad1.before ? say(bad1.before) : "waiting"})`);
+  ok(ok1.at >= 300 && !ok1.e && ok1.waiting === 0, `the settlement then succeeds: the read is served, never the 503 (${say(ok1)})`);
+  ok(bad1.e?.secBusy === true && bad1.waiting === 0, `the settlement then fails: the read is an unpaid one, answered as any unpaid read is (${say(bad1)})`);
+  // CONTROLS: with no settlement in flight nothing changed. Before the settle
+  // point and after a failed one the same read is answered 503 at once; after
+  // a successful one it waits past the longest wait and is served.
+  const noFlight = async (state) => {
+    const { g, r, pace, done } = rigOf();
+    await pace.paced(async () => 1);
+    if (state !== "before") { const point = sf.settleBeforeUpstream(r.req); point.catch(() => {}); if (state === "success") g.open(); else g.fail(new Error("refused")); await point.catch(() => {}); await null; }
+    const t0 = performance.now();
+    const out = await pace.paced(async () => performance.now() - t0).then((v) => ({ at: v }), (e) => ({ e }));
+    done();
+    return { ...out, ms: performance.now() - t0, waiting: pace.status().waiting };
+  };
+  const pre = await noFlight("before"), failed = await noFlight("failure"), settled = await noFlight("success");
+  ok(pre.e?.secBusy === true && pre.ms < 60 && failed.e?.secBusy === true && failed.ms < 60, `CONTROL: a run with no settlement in flight (not started, or failed) is refused at once as before (${say(pre)} in ${Math.round(pre.ms)} ms; ${say(failed)} in ${Math.round(failed.ms)} ms)`);
+  ok(settled.at >= 100 && !settled.e && settled.waiting === 0, `CONTROL: after the settle point returned success the same read waits past the longest wait and is served (${say(settled)})`);
+  // A read ADMITTED to the unpaid line before the settle point was reached,
+  // whose deadline comes while the settlement is in flight: it is not refused
+  // at that deadline either. It waits for the outcome.
+  const deadlineInFlight = async (outcome) => {
     const g = gate(), r = armed(() => g.p);
-    let who = ["ip:first"], mine = false;
-    sf.setPaidBeforeRunAmbient(() => mine && sf.scopePaidBeforeRun(r.scope));
+    let who = ["ip:first"];
+    sf.setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(r.scope));
     const pace = createSecPace({ perSecond: 1, windowMs: 200, maxWaitMs: 2000, queueMax: 8, callerOf: () => who });
     await pace.paced(async () => 1);
     const others = [];
     who = ["ip:a"]; others.push(pace.paced(async () => 1).catch(() => 0));
     who = ["ip:b"]; others.push(pace.paced(async () => 1).catch(() => 0));
-    const point = sf.settleBeforeUpstream(r.req);
-    point.catch(() => {});
-    who = ["ip:mine"]; mine = true;
+    who = ["ip:mine"];
     const t0 = performance.now();
-    const read = pace.paced(async () => performance.now() - t0, { waitMs: 500 }).then((at) => ({ at }), (e) => ({ e }));
-    mine = false;
-    // The reader is asked again from inside the read's own wait.
-    sf.setPaidBeforeRunAmbient(() => sf.scopePaidBeforeRun(r.scope));
-    const timer = settleAt == null ? null : setTimeout(() => g.open(), settleAt);
+    let early = null;
+    const read = pace.paced(async () => performance.now() - t0, { waitMs: 500 }).then((v) => ({ at: v }), (e) => ({ e }));
+    read.then((o) => { if (early === null) early = o; });
+    sf.setSettleFirstAmbient(() => r.req);
+    await new Promise((res) => setTimeout(res, 100));
+    const point = sf.settleBeforeUpstream(r.req); // reached after the read joined the line
+    point.catch(() => {});
+    await new Promise((res) => setTimeout(res, 800)); // the read's deadline (500 ms) passes with the settlement in flight
+    const before = early;
+    early = false;
+    if (outcome === "success") g.open(); else g.fail(new Error("refused"));
     const out = await read;
-    clearTimeout(timer); g.open();
     await Promise.all(others);
-    sf.setPaidBeforeRunAmbient(null);
-    return { ...out, waiting: pace.status().waiting };
+    sf.setPaidBeforeRunAmbient(null); sf.setSettleFirstAmbient(null);
+    return { ...out, before, waiting: pace.status().waiting };
   };
-  const stillFlying = await waited(null), late = await waited(40);
-  const say = (o) => (o.e ? `refused ${o.e.statusCode}` : `served at ${Math.round(o.at)} ms`);
-  ok(flight.e?.secBusy === true && failed.e?.secBusy === true, `a read beside a settlement in flight, or after one that failed, is an unpaid read: the pace answers it 503 (in flight: ${say(flight)}; failed: ${say(failed)})`);
-  ok(settled.at >= 100 && !settled.e && settled.waiting === 0, `CONTROL: after the settle point returned success the same read waits past the longest wait and is served (${say(settled)})`);
-  ok(stillFlying.e?.secBusy === true && stillFlying.waiting === 0, `CONTROL: a waiting read whose settlement is still in flight at its deadline is answered 503 (${say(stillFlying)})`);
-  ok(late.at >= 500 && !late.e && late.waiting === 0, `a read that waited as unpaid while its settlement was in flight is served, not refused, once the settlement succeeded (${say(late)})`);
+  const ok2 = await deadlineInFlight("success"), bad2 = await deadlineInFlight("failure");
+  ok(ok2.before === null && bad2.before === null, `a waiting read whose deadline comes while its settlement is in flight is answered nothing until the outcome is known (${ok2.before ? say(ok2.before) : "waiting"}, ${bad2.before ? say(bad2.before) : "waiting"})`);
+  ok(ok2.at >= 900 && !ok2.e && ok2.waiting === 0, `the settlement then succeeds: it is served (${say(ok2)})`);
+  ok(bad2.e?.secBusy === true && bad2.waiting === 0, `the settlement then fails: it is refused as the unpaid read it is (${say(bad2)})`);
+  // The wait for the outcome ends at the run's ceiling and on the caller's signal.
+  {
+    const { r, pace, done } = rigOf();
+    await pace.paced(async () => 1);
+    const point = sf.settleBeforeUpstream(r.req); point.catch(() => {});
+    let cut = null, ran = 0;
+    try { await withRunCeiling(120, () => pace.paced(async () => { ran++; })); } catch (x) { cut = x; }
+    const ctl = new AbortController();
+    const left = pace.paced(async () => { ran++; }, { signal: ctl.signal }).then(() => null, (e) => e);
+    setTimeout(() => ctl.abort(), 50);
+    const gone = await left;
+    done();
+    ok(cut?.ceilingCut === true && gone?.name === "AbortError" && ran === 0 && pace.status().waiting === 0, `the wait for a settlement's outcome ends at the run's ceiling and on the caller's signal (${cut?.statusCode}, ${gone?.name}, waiting ${pace.status().waiting})`);
+  }
+  // Many reads waiting on one settlement: when it succeeds they all start, at
+  // most the pace's count in any window, with the unpaid reads counted too.
+  {
+    const WINDOW = 400, LIMIT = 8;
+    const { g, r, pace, done } = rigOf({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 4 });
+    const t0 = performance.now(), starts = [];
+    const mark = async () => { starts.push(performance.now() - t0); };
+    await Promise.all(Array.from({ length: LIMIT }, () => pace.paced(mark)));
+    const point = sf.settleBeforeUpstream(r.req); point.catch(() => {});
+    const reads = Array.from({ length: 20 }, () => pace.paced(mark).then(() => "ran", (e) => e));
+    setTimeout(() => g.open(), 60);
+    const outs = await Promise.all(reads);
+    done();
+    const most = mostPerWindow(starts, WINDOW - 60);
+    ok(outs.every((o) => o === "ran") && most <= LIMIT && starts.length === LIMIT + 20, `twenty reads waiting on one settlement are all served once it succeeds, at most ${LIMIT} starts in any window (${outs.filter((o) => o === "ran").length} served, most ${most})`);
+  }
 }
 
 // ---- a paid read starts ahead of the unpaid line, at the same pace ----

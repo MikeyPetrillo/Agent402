@@ -47,10 +47,12 @@
 // line yields it while a paid read waits: each place that opens goes to the
 // paid line first, then to the line, and every start is still counted by the
 // one window, so the pace to the source is the same whoever starts.
-// Paid means the payment is final. A read that came while its run's settlement
-// was still in flight waits as an unpaid one; when its wait would end in the
-// pace's 503 the run is read again, and a read whose payment has settled by
-// then moves to the paid line instead. A settlement that failed is unpaid.
+// Paid means the payment is final, and a settlement that failed is unpaid.
+// While a run's settlement is still in flight its reads are answered no 503
+// of the pace: a read that would be refused (on arrival, or at its deadline in
+// the line) waits for the outcome instead, to the run's ceiling or its
+// caller's signal. On success it joins the paid line; on failure it is an
+// unpaid read from then on. A run with no settlement in flight is unchanged.
 //
 // PER PROCESS. The count lives in this process; with more than one replica
 // each takes its share of the pace (RATE_LIMIT_REPLICAS, as the rate limiter
@@ -63,7 +65,7 @@ import { ceilingLeftMs, ceilingPassed, ceilingCutError } from "../run-ceiling.js
 import { notChargedHere } from "../not-charged.js";
 import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 import { admissionCallerOf, currentCallerLeftSignal } from "../dispatch-caller.js";
-import { paidBeforeRunHere } from "../settle-first.js";
+import { paidBeforeRunHere, settleInFlightHere } from "../settle-first.js";
 
 export const SEC_HOSTS = Object.freeze(["sec.gov", "www.sec.gov", "data.sec.gov", "efts.sec.gov"]);
 /** Whether a URL names one of the SEC's hosts (the ones the pace covers). */
@@ -101,9 +103,11 @@ const LANE = "sec";
 
 /** A pace of its own (the process has one, below; tests build others).
  *  `callerOf()` names the caller a read runs for, `leftSignalOf()` the signal
- *  of a caller that has left, `paidOf()` whether the run is already paid for. */
+ *  of a caller that has left, `paidOf()` whether the run is already paid for,
+ *  `pendingOf()` the run's settlement in flight (a promise that ends with its
+ *  outcome) or null. */
 export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC_WINDOW_MS, maxWaitMs = SEC_MAX_WAIT_MS, queueMax = null, now = () => performance.now(),
-  callerOf = () => admissionCallerOf(null), leftSignalOf = currentCallerLeftSignal, paidOf = paidBeforeRunHere } = {}) {
+  callerOf = () => admissionCallerOf(null), leftSignalOf = currentCallerLeftSignal, paidOf = paidBeforeRunHere, pendingOf = settleInFlightHere } = {}) {
   const limit = Math.max(1, Math.floor(perSecond));
   // What the pace can start inside the longest wait: a place past it is
   // never reached in time.
@@ -172,7 +176,12 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     try { who = callerOf(); } catch { who = null; }
     // A place the pace cannot reach in time: the read holding the next place
     // and this caller's own earlier reads start first, whoever else waits.
-    if (!paid && (!(allowed > 0) || earliest((room.busy ? 1 : 0) + turns.ownAhead(who) + 1) >= allowed)) return Promise.reject(busyRefusal());
+    // With the run's settlement in flight that read is not refused: it waits
+    // for the outcome first (`settling`, below).
+    const inFlight = () => { if (paid) return null; let p = null; try { p = pendingOf(); } catch { p = null; } return p && typeof p.then === "function" ? p : null; };
+    const late = !paid && (!(allowed > 0) || earliest((room.busy ? 1 : 0) + turns.ownAhead(who) + 1) >= allowed);
+    const settling = late ? inFlight() : null;
+    if (late && !settling) return Promise.reject(busyRefusal());
 
     return new Promise((resolve, reject) => {
       const t0 = now();
@@ -199,16 +208,28 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       // The pace's own refusal of a waiting read. The run is read once more
       // first: a payment that became final during the wait makes this a paid
       // read, which leaves the line for the paid one and is never refused.
-      const refuse = () => {
-        let nowPaid = false;
-        if (!paid) { try { nowPaid = paidOf() === true; } catch { nowPaid = false; } }
-        if (!nowPaid) return finish(reject, busyRefusal());
-        paid = true; allowed = Infinity;
+      // Leave the unpaid line (a place held or waited for), still waiting.
+      const leaveLine = () => {
         clearTimeout(timer); timer = null;
         if (yielded === place) yielded = null;
         if (pending && !held) pending.cancel();
         pending = null;
         if (held) { const t = held; held = null; t.release(); }
+      };
+      // A settlement in flight: nothing is answered until its outcome is
+      // known (the ceiling and the caller's signal still end the wait). Then
+      // the run is read once more: paid joins the paid line, unpaid is refused.
+      const awaitOutcome = (p) => { leaveLine(); const again = () => { if (!done) refuse(true); }; p.then(again, again); };
+      const refuse = (known = false) => {
+        let nowPaid = false;
+        if (!paid) { try { nowPaid = paidOf() === true; } catch { nowPaid = false; } }
+        if (!nowPaid) {
+          const p = known ? null : inFlight();
+          if (p) return awaitOutcome(p);
+          return finish(reject, busyRefusal());
+        }
+        paid = true; allowed = Infinity;
+        leaveLine();
         paidLine.push(me);
         if (!paidTimer) servePaid();
       };
@@ -233,6 +254,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       if (left !== Infinity) ceiling = setTimeout(() => finish(reject, ceilingCutError()), Math.max(1, Math.floor(left)));
       signal?.addEventListener?.("abort", onAbort, { once: true });
       if (paid) { paidLine.push(me); if (!paidTimer) servePaid(); return; }
+      if (settling) { awaitOutcome(settling); return; }
       pending = turns.acquire(LANE, who, { waitMs: Math.max(1, Math.floor(allowed)) });
       pending.then((t) => {
         if (done) { t.release(); return; }
