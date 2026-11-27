@@ -88,7 +88,10 @@ ok(chainRouteFor("not-a-verb") === null, "an unknown verb resolves to nothing an
 // --- 6. against the BOOTED server ---------------------------------------
 const res = await fetch(`${TARGET}/api/pricing`).catch(() => null);
 if (!res || !res.ok) {
-  console.error(`SKIP: no server at ${TARGET}`);
+  // The lane boots a server before this suite (test-unit-a4): under CI a
+  // missing one is a failure, never a pass that read no route.
+  if (process.env.CI) ok(false, `a server answers at ${TARGET} for the booted half (CI)`);
+  else console.error(`SKIP: no server at ${TARGET}`);
 } else {
   const pricing = await res.json();
   const live = new Map(pricing.endpoints.map((e) => [e.path, e]));
