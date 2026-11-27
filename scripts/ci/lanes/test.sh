@@ -37,6 +37,8 @@ t node scripts/test-ecosystem-category.js
 t node scripts/test-token-brief-kit.js
 # crypto-markets kit (offline)
 t node scripts/test-crypto-markets-kit.js
+# look-back statistics of the price-history tools: no source value in an answer (offline)
+t node scripts/test-lookback-stats.js
 # CoinGecko host and key header per COINGECKO_API_TIER, every calling kit (offline)
 t node scripts/test-coingecko-endpoint.js
 # Offline suites that stub an upstream pass with every real name lookup refused (the address guard's resolver; booted servers inherit the preload)

@@ -1,7 +1,8 @@
 // Crypto-kit — live market data for crypto, complementing finance-kit's
 // equity coverage. Yahoo serves BTC-USD via /stock-quote but that's a single
 // price point; this kit unlocks the richer crypto-native surface: 24h volume,
-// market cap rank, historical OHLC, trending coins, and global market metrics.
+// market cap rank, look-back statistics computed from a coin's history (the
+// series itself is never returned), trending coins, and global market metrics.
 //
 // Upstream: CoinGecko's API (host and key header from coingecko-endpoint.js). Keyless,
 // generous rate limits (~30 req/min from a single IP, no per-account cap),
@@ -559,7 +560,7 @@ export const CRYPTO_TOOLS = [
     price: "$0.015",
     description:
       "Look-back statistics for a coin over a window of days, computed here from its price, market cap and volume history: period return, annualized volatility, maximum drawdown with its peak, trough and recovery times, best and worst step and day, share of up moves, the last observation against the window's high and low, a trend line, and market-cap change and mean turnover. Computed answers only, not a price feed. Observations are automatic: <=1 day = 5-min, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Every formula is in `method`. bars[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged, and summary.fromHighPct and fromLowPct place the last observation against the window's high and low. Information only, not investment advice.",
-    tags: ["crypto", "history", "statistics", "backtest", "volatility", "drawdown"],
+    tags: ["crypto", "history", "statistics", "returns", "volatility", "drawdown"],
     discovery: {
       input: { coin: "BTC", days: "7", currency: "usd" },
       inputSchema: {

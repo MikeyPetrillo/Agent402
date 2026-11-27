@@ -228,7 +228,6 @@ export const METHOD_ACTIVITY =
 export const METHOD_CANDLES =
   "candleStats reads each candle: upSharePct is the share that closed above their open; bodyPct, upperWickPct and lowerWickPct are the mean body and wicks as a share of the candle's high-to-low range; atrPct is the mean true range (the greatest of high minus low and the gaps from the previous close to the high and to the low) over the previous close.";
 export const METHOD_CLOSE = "Every figure is computed here from the source's series, which is not returned. Information only, not investment advice.";
-export const NOT_ADVICE = "Information only, not investment advice.";
 
 // --- the blocks beside the published sample ----------------------------------------
 // A listing's sample shows the identity fields and the summary; every answer

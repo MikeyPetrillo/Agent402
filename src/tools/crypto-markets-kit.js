@@ -4,8 +4,9 @@
 // stablecoin-peg), coins/{id}/market_chart by days (crypto-history),
 // search/trending (crypto-trending) and /global (crypto-global). This kit adds
 // the rest of the public catalog: token prices by contract address, a coin's
-// profile, a dated snapshot, OHLC candles, an arbitrary unix time window,
-// categories, the DeFi global slice, exchanges + their tickers, BTC-based
+// profile, what changed since a date, candle statistics and the statistics
+// of an arbitrary unix time window (each computed here from the series it
+// reads, which no route returns; src/tools/lookback-stats.js), categories, the DeFi global slice, exchanges + their tickers, BTC-based
 // exchange rates, full-text search and the full coin list with platform
 // contracts. Same slug-style ids as the rest of the catalog.
 //
@@ -769,8 +770,8 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.008",
     description:
-      "A coin's return, volatility and drawdown over an ARBITRARY window, computed here from its price history and answered without the series. The window is `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. The summary carries the period return, annualized volatility (from the spacing of the observations), maximum drawdown and the last observation against the window's high and low, with the drawdown's peak, trough and recovery times, the best and worst step and day, a trend line, and the market-cap and volume change and mean turnover beside it. Computed answers only, not a price feed. Observations are automatic upstream: 5-minute for a window of 1 day or less, hourly up to 90 days, daily beyond. The windowed sibling of crypto-history (which counts days back from now): use it to align with a specific event, a filing date or another series. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds. Every formula is in `method`. points[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged. Information only, not investment advice.",
-    tags: ["crypto", "history", "range", "statistics", "volatility", "backtest", "event-study"],
+      "A coin's return, volatility and drawdown over an ARBITRARY window, computed here from its price history and answered without the series. The window is `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. The summary carries the period return, annualized volatility (from the spacing of the observations), maximum drawdown and the last observation against the window's high and low, with the drawdown's peak, trough and recovery times, the best and worst step and day, a trend line, and the market-cap and volume change and mean turnover beside it. Computed answers only, not a price feed. Observations are automatic upstream: 5-minute for a window of 1 day or less, hourly up to 90 days, daily beyond. The windowed sibling of crypto-history (which counts days back from now): use it to measure the window around a specific event or a filing date, or the same window across coins. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds. Every formula is in `method`. points[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged. Information only, not investment advice.",
+    tags: ["crypto", "history", "range", "statistics", "volatility", "drawdown", "event-study"],
     discovery: {
       input: { coin: "ethereum", lookback: "3d" },
       inputSchema: {

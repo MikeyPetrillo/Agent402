@@ -68,6 +68,8 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (/\/ohlc$/.test(u.pathname)) return json(200, ts.map((t, k) => [t, ...CANDLE(k)]));
   if (/\/market_chart(\/range)?$/.test(u.pathname)) return json(200, { prices: ts.map((t, k) => [t, MARKS[k]]), market_caps: ts.map((t, k) => [t, CAP(k)]), total_volumes: ts.map((t, k) => [t, VOL(k)]) });
+  // The source's dated snapshot (what coin-history once passed through), marked too.
+  if (/\/history$/.test(u.pathname)) return json(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: { current_price: { usd: MARKS[0], eur: MARKS[1] }, market_cap: { usd: CAP(0) }, total_volume: { usd: VOL(0) } } });
   return json(404, { error: "not found" });
 };
 process.env.ALCHEMY_API_KEY = "offline-test-key";
