@@ -1,7 +1,8 @@
 // Crypto-kit — live market data for crypto, complementing finance-kit's
 // equity coverage. Yahoo serves BTC-USD via /stock-quote but that's a single
 // price point; this kit unlocks the richer crypto-native surface: 24h volume,
-// market cap rank, historical OHLC, trending coins, and global market metrics.
+// market cap rank, look-back statistics computed from a coin's history (the
+// series itself is never returned), trending coins, and global market metrics.
 //
 // Upstream: CoinGecko's API (host and key header from coingecko-endpoint.js). Keyless,
 // generous rate limits (~30 req/min from a single IP, no per-account cap),
@@ -25,7 +26,8 @@ import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, addCredit, COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
 import { markResaleBarred, markResaleComputed, MARKET_DATA_RESALE_REASON, markResaleCleared, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
-import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
+import { knownIdsGate, knownIdGate, lookbackAnswer, WITHDRAWN_NOTES } from "./crypto-markets-kit.js";
+import { METHOD_SUMMARY, METHOD_DAILY, METHOD_ACTIVITY, METHOD_CLOSE, lookbackOptional } from "./lookback-stats.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamErrorText } from "./redact.js";
@@ -552,13 +554,13 @@ export const CRYPTO_TOOLS = [
 
   {
     route: "GET /api/crypto-history",
-    name: "Crypto price history",
+    name: "Crypto price history statistics",
     slug: "crypto-history",
     category: "data",
     price: "$0.015",
     description:
-      "Crypto price series over a window of days, led by its summary (return, annualized volatility, max drawdown, first/last/high/low), then bars[] of {time, price, marketCap, volume}. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\".",
-    tags: ["crypto", "history", "chart", "backtest", "timeseries"],
+      "Crypto price history statistics for a coin over the last N days, computed here from its price, market cap and volume history: period return, annualized volatility, maximum drawdown with its peak, trough and recovery times, best and worst step and day, share of up moves, the last observation against the window's high and low, a trend line, and market-cap change and mean turnover. Computed answers only, not a price feed. Observations are automatic: <=1 day = 5-min, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Every formula is in `method`. bars[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged, and summary.fromHighPct and fromLowPct place the last observation against the window's high and low. Information only, not investment advice.",
+    tags: ["crypto", "history", "statistics", "returns", "volatility", "drawdown"],
     discovery: {
       input: { coin: "BTC", days: "7", currency: "usd" },
       inputSchema: {
@@ -570,15 +572,11 @@ export const CRYPTO_TOOLS = [
         required: ["coin"],
       },
       output: {
+        optional: lookbackOptional({ drawdown: null }),
         example: {
-          coin: "bitcoin",
-          currency: "usd",
-          days: "7",
-          summary: { first: 66120.45, last: 67234.12, high: 68010.2, low: 65480.9, changePct: 1.6843, volatilityPct: 38.21, maxDrawdownPct: -3.72 },
-          count: 1,
-          bars: [
-            { time: "2026-06-13T00:00:00Z", price: 66120.45, marketCap: 1298000000000, volume: 27400000000 },
-          ],
+          coin: "bitcoin", currency: "usd", days: "7", count: 169,
+          summary: { changePct: 1.6843, volatilityPct: 38.21, maxDrawdownPct: -3.72, fromHighPct: -1.1412, fromLowPct: 2.6774 },
+          drawdown: { peakAt: "2026-06-14T09:00:00.000Z", troughAt: "2026-06-16T02:00:00.000Z", recoveredAt: "2026-06-18T11:00:00.000Z" },
         },
       },
     },
@@ -595,20 +593,15 @@ export const CRYPTO_TOOLS = [
       const url = `${cgBase()}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=${encodeURIComponent(currency)}&days=${encodeURIComponent(daysRaw)}`;
       const data = await jsonGet(url);
       const prices = Array.isArray(data?.prices) ? data.prices : [];
-      const caps = Array.isArray(data?.market_caps) ? data.market_caps : [];
-      const vols = Array.isArray(data?.total_volumes) ? data.total_volumes : [];
-      // CoinGecko emits the three arrays with the same length and aligned ms
-      // timestamps. Zip them by index — safer than zipping by timestamp since
-      // a single skipped bar would shift the whole series silently.
-      const bars = prices.map(([t, price], idx) => ({
-        time: new Date(t).toISOString(),
-        price,
-        marketCap: caps[idx]?.[1] ?? null,
-        volume: vols[idx]?.[1] ?? null,
-      }));
-      // The series leads with its statistics (crypto-markets-kit seriesSummary).
-      const summary = seriesSummary(prices.map(([t]) => t), prices.map(([, p]) => p));
-      return { coin: id, currency, days: daysRaw, summary, count: bars.length, bars };
+      // The answer is statistics computed from the series (crypto-markets-kit
+      // lookbackAnswer); no price, market cap or volume of the series is in it.
+      const col = (rows) => (Array.isArray(rows) ? rows.map((r) => r?.[1]) : null);
+      return {
+        coin: id, currency, days: daysRaw, count: prices.length,
+        ...lookbackAnswer(prices.map((r) => r?.[0]), prices.map((r) => r?.[1]), { caps: col(data?.market_caps), vols: col(data?.total_volumes) }),
+        method: `${METHOD_SUMMARY} ${METHOD_DAILY} ${METHOD_ACTIVITY} ${METHOD_CLOSE}`,
+        withdrawn: WITHDRAWN_NOTES["crypto-history"],
+      };
     },
   },
 
@@ -783,9 +776,10 @@ export const CRYPTO_TOOLS = [
 for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 // Resale terms (src/resale-terms.js): these answer the source's data as it
 // came, so they are not resold through a third party; stablecoin-peg answers
-// a deviation and a band computed here.
-markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
-markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
+// a deviation and a band computed here, and crypto-history statistics
+// computed here from a series it never returns.
+markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
+markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg", "crypto-history"]);
 // stablecoin-peg answers no source figure per coin (no price, 24h high or
 // low, or market cap), on every surface alike, so the /ref and /aws copies
 // serve the public answer as it is.
@@ -796,4 +790,4 @@ markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
-markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], MARKET_DATA_CLEARANCE);
+markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg", "crypto-history"], MARKET_DATA_CLEARANCE);

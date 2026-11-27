@@ -4,8 +4,9 @@
 // stablecoin-peg), coins/{id}/market_chart by days (crypto-history),
 // search/trending (crypto-trending) and /global (crypto-global). This kit adds
 // the rest of the public catalog: token prices by contract address, a coin's
-// profile, a dated snapshot, OHLC candles, an arbitrary unix time window,
-// categories, the DeFi global slice, exchanges + their tickers, BTC-based
+// profile, what changed since a date, candle statistics and the statistics
+// of an arbitrary unix time window (each computed here from the series it
+// reads, which no route returns; src/tools/lookback-stats.js), categories, the DeFi global slice, exchanges + their tickers, BTC-based
 // exchange rates, full-text search and the full coin list with platform
 // contracts. Same slug-style ids as the rest of the catalog.
 //
@@ -124,9 +125,10 @@ function headers() {
 // one key, one minute budget, whichever kit spends it.
 import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
-import { markResaleBarred, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
+import { markResaleBarred, markResaleComputed, markResaleCleared, MARKET_DATA_RESALE_REASON, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { ratesUrl, latestShape } from "./frankfurter.js";
+import { lookbackStats, dailyStats, activityStats, candleShape, observationsOf, windowOf, METHOD_SUMMARY, METHOD_DAILY, METHOD_ACTIVITY, METHOD_CANDLES, METHOD_CLOSE, lookbackOptional } from "./lookback-stats.js";
 export { resetCgRateLimit };
 
 // `reduce` (optional): { name, fn }. The upstream body is passed through fn
@@ -422,65 +424,59 @@ const trim = (s, n) => (typeof s === "string" ? (s.length > n ? s.slice(0, n - 1
 const upper = (s) => (typeof s === "string" && s ? s.toUpperCase() : null);
 
 // --- series statistics ----------------------------------------------------------
-// A series tool leads with what a buyer would otherwise compute from the
-// points it carries: the window's return (changePct), realized volatility and
-// the largest peak-to-trough fall. Volatility is the sample standard deviation
-// of the log returns between consecutive points, annualized over a 365-day
-// year from the median spacing of the points (crypto trades every day), in
-// percent. maxDrawdownPct is the largest fall from a running high to a later
-// low, as a negative percent (0 when the series never fell). Each is null
+// The history tools answer statistics computed from a series, never the
+// series (src/tools/lookback-stats.js holds the formulas and the `method`
+// sentences): the window's return (changePct), annualized and realized
+// volatility, the largest peak-to-trough fall with its times, best and worst
+// step and day, the last observation against the window's high and low, a
+// trend line, and market-cap and volume changes and ratios. Each is null
 // when the series is too short to say.
-const YEAR_MS = 365 * DAY_MS;
-function medianSpacingMs(timesMs) {
-  const deltas = [];
-  for (let k = 1; k < timesMs.length; k++) {
-    const d = timesMs[k] - timesMs[k - 1];
-    if (Number.isFinite(d) && d > 0) deltas.push(d);
-  }
-  if (!deltas.length) return null;
-  deltas.sort((a, b) => a - b);
-  return deltas[Math.floor(deltas.length / 2)];
-}
 /** Volatility and drawdown of a price series given as parallel arrays of
  *  times (ms) and prices; points with no positive price are skipped. */
 export function riskStats(timesMs, values) {
-  const ts = [], vs = [];
-  for (let k = 0; k < values.length; k++) {
-    const v = num(values[k]);
-    if (v != null && v > 0 && Number.isFinite(timesMs[k])) { ts.push(timesMs[k]); vs.push(v); }
-  }
-  let volatilityPct = null;
-  const spacing = medianSpacingMs(ts);
-  if (vs.length >= 3 && spacing) {
-    const rets = [];
-    for (let k = 1; k < vs.length; k++) rets.push(Math.log(vs[k] / vs[k - 1]));
-    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
-    const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / (rets.length - 1);
-    volatilityPct = pct(Math.sqrt(variance) * Math.sqrt(YEAR_MS / spacing) * 100);
-  }
-  let maxDrawdownPct = null;
-  if (vs.length >= 2) {
-    let peak = vs[0], worst = 0;
-    for (const v of vs) {
-      if (v > peak) peak = v;
-      const dd = (v / peak - 1) * 100;
-      if (dd < worst) worst = dd;
-    }
-    maxDrawdownPct = worst === 0 ? 0 : pct(worst);
-  }
+  const { volatilityPct, maxDrawdownPct } = lookbackStats(timesMs, values).summary;
   return { volatilityPct, maxDrawdownPct };
 }
-/** The summary a price series leads with: first, last, high, low, the
- *  window's return and riskStats, from parallel arrays of times and prices. */
-export function seriesSummary(timesMs, values) {
-  const vals = values.map(num).filter((v) => v != null);
-  const first = vals[0] ?? null, last = vals.length ? vals[vals.length - 1] : null;
-  return {
-    first, last,
-    high: vals.length ? Math.max(...vals) : null, low: vals.length ? Math.min(...vals) : null,
-    changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null,
-    ...riskStats(timesMs, values),
-  };
+/** What a history tool answers for one series: the window it covers (times
+ *  and counts only), the summary, drawdown, extremes and trend blocks, the
+ *  day-over-day block and, when market caps or volumes are given, the
+ *  activity block. No value of the series is in it. */
+export function lookbackAnswer(timesMs, values, { caps = null, vols = null, ...opts } = {}) {
+  const { ts } = observationsOf(timesMs, values);
+  const out = { window: windowOf(ts), ...lookbackStats(timesMs, values, opts), daily: dailyStats(timesMs, values) };
+  if (caps || vols) out.activity = activityStats(caps, vols);
+  return out;
+}
+/** What each history tool stopped returning, in the answer's `withdrawn` field. */
+export const WITHDRAWN_NOTES = Object.freeze({
+  "crypto-history": "bars[] and summary.first, last, high and low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged.",
+  "coin-ohlc": "bars[] and summary.first, last, high and low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged.",
+  "coin-market-chart-range": "points[] and summary.first, last, high and low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged.",
+  "coin-history": "price, marketCap, volume24h and allCurrencies are withdrawn (raw source data), and symbol and name are no longer read; summary.changePct is the return since the date.",
+});
+
+// --- coin-history window ---------------------------------------------------------
+// The since-date read ends at a 5-minute step (one cached read inside it),
+// and a first observation later than this after the date means the source
+// holds nothing for the date itself.
+const SINCE_DATE_STEP_S = 300;
+const SINCE_DATE_MAX_GAP_MS = 36 * 3_600_000;
+
+// --- candles ---------------------------------------------------------------------
+// One candle read for a coin (validated, gated, cached 60 s): the rows as
+// the source gave them, for code in this process only. The public coin-ohlc
+// route answers statistics over them; no route returns them.
+const OHLC_DAYS = [1, 7, 14, 30, 90, 180, 365];
+async function readCandles(i) {
+  const coin = takeId(i.coin, "coin");
+  const currency = takeCurrency(i.currency);
+  const days = takeInt(i.days, "days", { min: 1, max: 365, dflt: 7 });
+  if (!OHLC_DAYS.includes(days)) throw bad(`"days" must be one of ${OHLC_DAYS.join(", ")}`);
+  await knownIdGate("coin", coin);
+  await knownIdGate("currency", currency);
+  const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/ohlc`, { vs_currency: currency, days }, TTL.price);
+  if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
+  return { coin, currency, days, data, fetchedAt, cached };
 }
 
 // --- tools --------------------------------------------------------------------
@@ -642,34 +638,34 @@ export const CRYPTO_MARKETS_TOOLS = [
   },
 
   // ===========================================================================
-  // coin-history: price / market cap / volume snapshot on a given date.
+  // coin-history: what changed since a given date (computed; no snapshot).
   // ===========================================================================
   {
     route: "GET /api/coin-history",
-    name: "Coin snapshot on a date",
+    name: "Coin change since a date",
     slug: "coin-history", aliases: ["coin-snapshot-on-a-date", "coin-snapshot", "historical-coin-price"],
     category: "crypto",
     price: "$0.005",
     description:
-      "Price, market cap and 24h volume of a coin on ONE past date (00:00 UTC snapshot), in every currency at once plus your chosen one called out. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365). The point-in-time sibling of crypto-history (which returns a series): use it to value a position as of a date, compute a since-date return, or check a tax-lot basis. Historical range on this plan is the past 365 days, enforced before the call. Cached in-process for 5 minutes.",
-    tags: ["crypto", "history", "snapshot", "price", "date", "market-cap", "tax"],
+      "What a coin has done since ONE past date, computed here from its price history: the percent return from that date (00:00 UTC) to now, annualized volatility, the largest drawdown with its peak, trough and recovery times, the best and worst day, the distance from the high and the low set since the date, a trend line, and the market-cap and volume change. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365), and the `currency` to measure in. Computed answers only, not a price feed. Use it to mark a position against a date, compute a since-date return or compare entry dates. The date must lie within the past 365 days, enforced before the call; a coin with no data on that date answers 422. Cached in-process for 5 minutes. Every formula is in `method`. The former price, marketCap, volume24h and allCurrencies fields are withdrawn (raw source data), as are symbol and name; summary.changePct is the since-date return. Information only, not investment advice.",
+    tags: ["crypto", "history", "since-date", "return", "date", "drawdown", "volatility"],
     discovery: {
       input: { coin: "bitcoin", daysAgo: 30, currency: "usd" },
       inputSchema: {
         properties: {
           coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
-          date: { type: "string", description: "Snapshot date YYYY-MM-DD (UTC), within the past 365 days. Alternative to daysAgo." },
+          date: { type: "string", description: "Start date YYYY-MM-DD (UTC), within the past 365 days. Alternative to daysAgo." },
           daysAgo: { type: "number", description: "Days before today, 1-365 (used when date is absent; default 30)." },
-          currency: { type: "string", maxLength: 8, description: "Currency to call out (default usd); all currencies are still returned under `allCurrencies`." },
+          currency: { type: "string", maxLength: 8, description: "Currency the figures are measured in (default usd)." },
         },
         required: ["coin"],
       },
       output: {
+        optional: lookbackOptional(),
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          id: "bitcoin", symbol: "BTC", name: "Bitcoin", date: "2026-07-23", currency: "usd",
-          price: 118412.55, marketCap: 2356000000000, volume24h: 41000000000,
-          allCurrencies: { price: { usd: 118412.55, eur: 100812.3, btc: 1 }, marketCap: { usd: 2356000000000 }, volume24h: { usd: 41000000000 } },
+          id: "bitcoin", date: "2026-07-23", currency: "usd",
+          summary: { changePct: -3.9, volatilityPct: 41.3, maxDrawdownPct: -9.9, fromHighPct: -6, fromLowPct: 4.3 },
         },
       },
     },
@@ -689,38 +685,45 @@ export const CRYPTO_MARKETS_TOOLS = [
         const daysAgo = takeInt(i.daysAgo, "daysAgo", { min: 1, max: MAX_HISTORY_DAYS, dflt: 30 });
         dateStr = new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
       }
-      const [y, m, dd] = dateStr.split("-");
       const missKey = `${coin}|${dateStr}`;
       if (historyMissed(missKey)) throw noHistory();
       await knownIdGate("coin", coin);
-      const { data: d, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/history`, { date: `${dd}-${m}-${y}`, localization: "false" }, TTL.list);
-      if (!d || typeof d !== "object" || !d.id) throw bad("Market data upstream returned an unexpected shape", 502);
-      const md = d.market_data;
-      if (!md) { noteHistoryMiss(missKey); throw noHistory(); }
-      const numMap = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, num(v)]).filter(([, v]) => v != null));
+      await knownIdGate("currency", currency);
+      // One read, as before: the series from the date to now. The end is held
+      // to a 5-minute step so the same question inside it is one cached read.
+      const from = Math.floor(Date.parse(dateStr + "T00:00:00Z") / 1000);
+      const to = Math.max(from + 60, Math.floor(Date.now() / 1000 / SINCE_DATE_STEP_S) * SINCE_DATE_STEP_S);
+      const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/market_chart/range`, { vs_currency: currency, from, to }, TTL.list);
+      const prices = Array.isArray(data?.prices) ? data.prices : null;
+      if (!prices) throw bad("Market data upstream returned an unexpected shape", 502);
+      const times = prices.map((r) => num(r?.[0])), values = prices.map((r) => num(r?.[1]));
+      const firstAt = times.find((t, k) => t != null && values[k] != null && values[k] > 0);
+      // Nothing recorded on the date itself (the first observation is later
+      // than the date, or there is none): the free 422, kept for the day.
+      if (firstAt == null || firstAt - from * 1000 > SINCE_DATE_MAX_GAP_MS) { noteHistoryMiss(missKey); throw noHistory(); }
+      const col = (rows) => (Array.isArray(rows) ? rows.map((r) => num(r?.[1])) : null);
+      const look = lookbackAnswer(times, values, { caps: col(data.market_caps), vols: col(data.total_volumes) });
       return {
-        source: SOURCE, fetchedAt, cached,
-        id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency,
-        price: num(md.current_price?.[currency]),
-        marketCap: num(md.market_cap?.[currency]),
-        volume24h: num(md.total_volume?.[currency]),
-        allCurrencies: { price: numMap(md.current_price), marketCap: numMap(md.market_cap), volume24h: numMap(md.total_volume) },
+        source: SOURCE, fetchedAt, cached, id: coin, date: dateStr, currency,
+        ...look,
+        method: `${METHOD_SUMMARY} Here the first observation is the date's (00:00 UTC), so summary.changePct is the return since the date. ${METHOD_DAILY} ${METHOD_ACTIVITY} ${METHOD_CLOSE}`,
+        withdrawn: WITHDRAWN_NOTES["coin-history"],
       };
     },
   },
 
   // ===========================================================================
-  // coin-ohlc: candles.
+  // coin-ohlc: candle statistics (computed; no candles).
   // ===========================================================================
   {
     route: "GET /api/coin-ohlc",
-    name: "Coin OHLC candles",
+    name: "Coin OHLC candle statistics",
     slug: "coin-ohlc",
     category: "crypto",
     price: "$0.003",
     description:
-      "OHLC candles for a coin: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency. Leads with the window's % change, annualized volatility and max drawdown, then aligned {time, open, high, low, close} bars. The candle sibling of crypto-history, which returns close-only points: use OHLC for technical indicators, range/volatility work and charting. Cached in-process for 60 seconds.",
-    tags: ["crypto", "ohlc", "candles", "chart", "technical-analysis", "volatility", "timeseries"],
+      "Candle statistics for a coin, computed here from its OHLC candles and answered without the candles: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency; these are computed answers only, not a price feed. It answers the window's % change, annualized and realized volatility, maximum drawdown with its peak, trough and recovery times, the share of up candles, the average body and wicks as a share of the candle range, the average true range as a share of price, the last close against the window's high and low, and a trend line. Use it for range and volatility work, regime checks and sizing without handling candles. Cached in-process for 60 seconds. Every formula is in `method`. bars[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged and candleStats is new. Information only, not investment advice.",
+    tags: ["crypto", "ohlc", "candles", "statistics", "technical-analysis", "volatility", "drawdown"],
     discovery: {
       input: { coin: "bitcoin", days: 7, currency: "usd" },
       inputSchema: {
@@ -732,58 +735,43 @@ export const CRYPTO_MARKETS_TOOLS = [
         required: ["coin"],
       },
       output: {
+        optional: lookbackOptional({ activity: null }),
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
           coin: "bitcoin", currency: "usd", days: 7, count: 42, granularity: "4h",
-          summary: { first: 66120.4, last: 68210.0, high: 69850.0, low: 64995.9, changePct: 3.16, volatilityPct: 41.2, maxDrawdownPct: -4.1 },
-          bars: [{ time: "2026-08-15T16:00:00.000Z", open: 66120.4, high: 66500.1, low: 65900.0, close: 66210.3 }],
+          summary: { changePct: 3.16, volatilityPct: 41.2, maxDrawdownPct: -4.1, fromHighPct: -2.35, fromLowPct: 4.95 },
+          candleStats: { upSharePct: 55, bodyPct: 47, upperWickPct: 26, lowerWickPct: 27, atrPct: 1.1 },
         },
       },
     },
     handler: async (i) => {
-      const coin = takeId(i.coin, "coin");
-      const currency = takeCurrency(i.currency);
-      const allowed = [1, 7, 14, 30, 90, 180, 365];
-      const days = takeInt(i.days, "days", { min: 1, max: 365, dflt: 7 });
-      if (!allowed.includes(days)) throw bad(`"days" must be one of ${allowed.join(", ")}`);
-      await knownIdGate("coin", coin);
-      await knownIdGate("currency", currency);
-      const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/ohlc`, { vs_currency: currency, days }, TTL.price);
-      if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
-      const bars = data.filter((r) => Array.isArray(r) && r.length >= 5).map(([t, o, h, l, c]) => ({ time: iso(t), open: num(o), high: num(h), low: num(l), close: num(c) }));
-      const closes = bars.map((b) => b.close).filter((v) => v != null);
-      const highs = bars.map((b) => b.high).filter((v) => v != null);
-      const lows = bars.map((b) => b.low).filter((v) => v != null);
-      const first = bars.length ? bars[0].open ?? closes[0] ?? null : null;
-      const last = closes.length ? closes[closes.length - 1] : null;
+      const { coin, currency, days, data, fetchedAt, cached } = await readCandles(i);
+      const whole = data.filter((r) => Array.isArray(r) && r.length >= 5);
+      const times = whole.map((r) => num(r[0]));
+      const look = lookbackAnswer(times, whole.map((r) => num(r[4])), { first: num(whole[0]?.[1]), highs: whole.map((r) => num(r[2])), lows: whole.map((r) => num(r[3])) });
       return {
-        source: SOURCE, fetchedAt, cached, coin, currency, days, count: bars.length,
+        source: SOURCE, fetchedAt, cached, coin, currency, days, count: whole.length,
         granularity: granularityOf(data.map((r) => r?.[0])),
-        summary: {
-          first, last,
-          high: highs.length ? Math.max(...highs) : null,
-          low: lows.length ? Math.min(...lows) : null,
-          changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null,
-          // Volatility and drawdown read the closes.
-          ...riskStats(bars.map((b) => Date.parse(b.time)), bars.map((b) => b.close)),
-        },
-        bars,
+        ...look,
+        candleStats: candleShape(whole),
+        method: `${METHOD_SUMMARY} Here the observations are candle closes, changePct starts at the first candle's open, and the window's high and low are the candles' own. ${METHOD_DAILY} ${METHOD_CANDLES} ${METHOD_CLOSE}`,
+        withdrawn: WITHDRAWN_NOTES["coin-ohlc"],
       };
     },
   },
 
   // ===========================================================================
-  // coin-market-chart-range: price/mcap/volume series over an arbitrary window.
+  // coin-market-chart-range: statistics over an arbitrary window (computed).
   // ===========================================================================
   {
     route: "GET /api/coin-market-chart-range",
-    name: "Coin market chart for a time window",
+    name: "Coin statistics for a time window",
     slug: "coin-market-chart-range",
     category: "crypto",
     price: "$0.008",
     description:
-      "A coin's price, market cap and volume over an ARBITRARY window, led by return, volatility and drawdown. The window is `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. Granularity is automatic upstream: 5-minute points for a window of 1 day or less, hourly up to 90 days, daily beyond. The summary also carries first, last, high and low; volatility is annualized from the spacing of the points. The windowed sibling of crypto-history (which counts days back from now): use it to align with a specific event, a filing date or another series. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds.",
-    tags: ["crypto", "history", "range", "chart", "timeseries", "backtest", "event-study"],
+      "A coin's return, volatility and drawdown over an ARBITRARY window, computed here from its price history and answered without the series. The window is `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. The summary carries the period return, annualized volatility (from the spacing of the observations), maximum drawdown and the last observation against the window's high and low, with the drawdown's peak, trough and recovery times, the best and worst step and day, a trend line, and the market-cap and volume change and mean turnover beside it. Computed answers only, not a price feed. Observations are automatic upstream: 5-minute for a window of 1 day or less, hourly up to 90 days, daily beyond. The windowed sibling of crypto-history (which counts days back from now): use it to measure the window around a specific event or a filing date, or the same window across coins. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds. Every formula is in `method`. points[] and summary.first/last/high/low are withdrawn (raw source series); summary.changePct, volatilityPct and maxDrawdownPct are unchanged. Information only, not investment advice.",
+    tags: ["crypto", "history", "range", "statistics", "volatility", "drawdown", "event-study"],
     discovery: {
       input: { coin: "ethereum", lookback: "3d" },
       inputSchema: {
@@ -797,11 +785,11 @@ export const CRYPTO_MARKETS_TOOLS = [
         required: ["coin"],
       },
       output: {
+        optional: lookbackOptional(),
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
           coin: "ethereum", currency: "usd", from: "2026-08-19T13:20:00.000Z", to: "2026-08-22T13:20:00.000Z", count: 73, granularity: "1h",
-          summary: { first: 2380, last: 2424, high: 2480, low: 2350, changePct: 1.85, volatilityPct: 52.6, maxDrawdownPct: -5.2 },
-          points: [{ time: "2026-08-19T14:00:00.000Z", price: 2380, marketCap: 287000000000, volume: 13800000000 }],
+          summary: { changePct: 1.85, volatilityPct: 52.6, maxDrawdownPct: -5.2, fromHighPct: -2.26, fromLowPct: 3.15 },
         },
       },
     },
@@ -821,15 +809,15 @@ export const CRYPTO_MARKETS_TOOLS = [
       const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/market_chart/range`, { vs_currency: currency, from, to }, TTL.price);
       const prices = Array.isArray(data?.prices) ? data.prices : null;
       if (!prices) throw bad("Market data upstream returned an unexpected shape", 502);
-      const caps = Array.isArray(data.market_caps) ? data.market_caps : [];
-      const vols = Array.isArray(data.total_volumes) ? data.total_volumes : [];
-      const points = prices.map(([t, p], idx) => ({ time: iso(t), price: num(p), marketCap: num(caps[idx]?.[1]), volume: num(vols[idx]?.[1]) }));
+      const col = (rows) => (Array.isArray(rows) ? rows.map((r) => num(r?.[1])) : null);
+      const times = prices.map((r) => num(r?.[0]));
       return {
         source: SOURCE, fetchedAt, cached, coin, currency,
         from: new Date(from * 1000).toISOString(), to: new Date(to * 1000).toISOString(),
-        count: points.length, granularity: granularityOf(prices.map((r) => r?.[0])),
-        summary: seriesSummary(prices.map((r) => num(r?.[0])), points.map((p) => p.price)),
-        points,
+        count: prices.length, granularity: granularityOf(prices.map((r) => r?.[0])),
+        ...lookbackAnswer(times, prices.map((r) => num(r?.[1])), { caps: col(data.market_caps), vols: col(data.total_volumes) }),
+        method: `${METHOD_SUMMARY} ${METHOD_DAILY} ${METHOD_ACTIVITY} ${METHOD_CLOSE}`,
+        withdrawn: WITHDRAWN_NOTES["coin-market-chart-range"],
       };
     },
   },
@@ -1471,10 +1459,31 @@ CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
 // `credit` field of every answer.
 for (const t of CRYPTO_MARKETS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
-// Resale terms (src/resale-terms.js): each answers the source's data as it
-// came (a summary beside a series does not change that), so none is resold
-// through a third party.
-markResaleBarred(CRYPTO_MARKETS_TOOLS, ["coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"], MARKET_DATA_RESALE_REASON);
+// Resale terms (src/resale-terms.js): each of these answers the source's data
+// as it came, so none is resold through a third party.
+markResaleBarred(CRYPTO_MARKETS_TOOLS, ["coin-price-by-contract", "coin-profile", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"], MARKET_DATA_RESALE_REASON);
+// The history tools answer statistics computed here from a series and never
+// the series (src/tools/lookback-stats.js), on every surface alike.
+export const COMPUTED_HISTORY_SLUGS = Object.freeze(["coin-history", "coin-ohlc", "coin-market-chart-range"]);
+markResaleComputed(CRYPTO_MARKETS_TOOLS, COMPUTED_HISTORY_SLUGS);
+markResaleCleared(CRYPTO_MARKETS_TOOLS, COMPUTED_HISTORY_SLUGS, MARKET_DATA_CLEARANCE);
+
+/** The candle leg of a bundle product (src/tools/bundle-kit.js token-diligence):
+ *  one coin's candles for code in this process, at coin-ohlc's price and under
+ *  the same pacing and budget as the public route. It is not a catalog entry
+ *  and no route serves it; the bundle answers figures computed from the
+ *  candles and never the candles. */
+export const COIN_CANDLES_LEG = {
+  slug: "coin-ohlc",
+  get price() { return CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "coin-ohlc").price; },
+  handler: async (i) => {
+    const { days, data } = await readCandles(i);
+    const bars = data.filter((r) => Array.isArray(r) && r.length >= 5).map(([t, o, h, l, c]) => ({ time: iso(t), open: num(o), high: num(h), low: num(l), close: num(c) }));
+    const closes = bars.map((b) => b.close).filter((v) => v != null);
+    const first = bars.length ? bars[0].open ?? closes[0] ?? null : null, last = closes.length ? closes[closes.length - 1] : null;
+    return { days, granularity: granularityOf(data.map((r) => r?.[0])), summary: { changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null }, bars };
+  },
+};
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket, historyMissSize: () => historyMisses.size, clearHistoryMisses: () => historyMisses.clear() };
 
@@ -1483,4 +1492,4 @@ function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").sp
 
 // Every handler runs under one budget (src/upstream-deadline.js), and a call
 // that ends in an error counts its reads on the unsettled share of the day.
-underBudgetAll(cgScopeAll(CRYPTO_MARKETS_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
+underBudgetAll(cgScopeAll([...CRYPTO_MARKETS_TOOLS, COIN_CANDLES_LEG]), PAYMENT_WINDOW_BUDGET_MS);

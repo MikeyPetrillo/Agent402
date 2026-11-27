@@ -26,7 +26,7 @@ import { bad as weatherBad, resolveLocation, WEATHER_TOOLS } from "./weather-kit
 import { WEATHER_PLAN_TOOLS } from "./weather-plan-kit.js";
 import { WEATHER_PROBABILITY_TOOLS } from "./weather-probability-kit.js";
 import { EDGAR_TOOLS } from "./edgar-kit.js";
-import { CRYPTO_MARKETS_TOOLS } from "./crypto-markets-kit.js";
+import { CRYPTO_MARKETS_TOOLS, COIN_CANDLES_LEG } from "./crypto-markets-kit.js";
 import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
@@ -44,6 +44,10 @@ export const BUNDLE_CEILING_MS = 45_000;
 
 const LEG_TOOLS = [...WEATHER_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...EDGAR_TOOLS, ...CRYPTO_MARKETS_TOOLS];
 const legBySlug = new Map(LEG_TOOLS.map((t) => [t.slug, t]));
+// The public coin-ohlc route answers candle statistics, never candles; the
+// candles a brief computes over come from the kit's in-process candle read,
+// at the same price, pacing and budget.
+legBySlug.set(COIN_CANDLES_LEG.slug, COIN_CANDLES_LEG);
 /** A leg tool's catalog entry (its handler and its price). */
 export function legTool(slug) {
   const t = legBySlug.get(slug);

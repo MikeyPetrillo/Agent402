@@ -128,10 +128,17 @@
    },
    "expect": {
     "gte": {
-     "count": 25
+     "count": 25,
+     "window.observations": 25
     },
     "populated": [
-     "bars[0].price"
+     "summary.changePct",
+     "drawdown",
+     "method",
+     "withdrawn"
+    ],
+    "falsy": [
+     "bars"
     ],
     "matches": {
      "coin": "^(SOL|solana)$"
@@ -142,7 +149,7 @@
   },
   {
    "slug": "crypto-history",
-   "name": "90 days of ETH lead with return, volatility and drawdown",
+   "name": "90 days of ETH: return, volatility and drawdown",
    "input": {
     "coin": "ETH",
     "days": "90"
@@ -156,8 +163,12 @@
     },
     "populated": [
      "summary.changePct",
-     "summary.high",
-     "bars[0].price"
+     "summary.fromHighPct",
+     "trend.direction",
+     "daily.days"
+    ],
+    "falsy": [
+     "bars"
     ]
    },
    "paceKey": "coingecko",
