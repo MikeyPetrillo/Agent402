@@ -184,7 +184,11 @@ try {
   ok(at > 0, "heartbeat.yml has the serving health step");
   const step = yml.slice(at, yml.indexOf("\n      - name:", at + 10));
   const bodies = [...step.matchAll(/--(?:body|comment) "([^"]*)"/g)].map((m) => m[1]);
-  ok(bodies.length >= 3, `the step writes ${bodies.length} issue bodies (create, comment, close)`);
+  // The issue is filed by the shared opener (scripts/check-issue.js), whose
+  // text is the fixed opening sentence: the step hands it the title only.
+  const opens = [...step.matchAll(/node scripts\/check-issue\.js([^\n]*)/g)].map((m) => m[1]);
+  ok(opens.length >= 1 && opens.every((a) => /^ --title "\$TITLE"(?: --trust-owner)?(?: |$)/.test(a) && !/--body|\$\{?(SUMMARY|REASONS|CULPRIT)/.test(a)), "the step files its issue through the shared opener with the title alone");
+  ok(bodies.length >= 2, `the step writes ${bodies.length} issue bodies of its own (comment, close)`);
   ok(bodies.every((b) => !/\$\{?SUMMARY/.test(b)), "no issue body quotes the figures line");
   ok(bodies.every((b) => !/\$\{?REASONS/.test(b)), "no issue body carries the reason words");
   ok(/echo "serving health: \$STATUS \(\$SUMMARY\)"/.test(step), "the figures still reach the run log");
