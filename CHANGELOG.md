@@ -4,6 +4,28 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.17.1 - 2026-11-27
+
+### 2026-11-27 (ASN lookups, video filter answers)
+Tools:
+- asn-info is named IP to ASN lookup and no longer answers geolocation
+  searches: its country is the one the regional registry records for the
+  address block, not a location. The fraud-signals pack reads it as
+  `registryCountry`.
+- asn-info asks a public resolver too when this server's own resolver has
+  not answered within one second; when the owner name cannot be read,
+  `ownerLookup` names the query that was asked.
+- /v1/videos answers 422 `content_filtered` when the provider says its
+  content filter may have stopped the clip; a provider outage still answers
+  502.
+API:
+- A Stripe webhook whose signature does not verify is answered a fixed
+  message.
+Site:
+- /privacy is dated 2026-11-27: an asn-info lookup also goes to a public
+  resolver when this server's own resolver has not answered within one
+  second.
+
 ## v2.17.0 - 2026-11-26
 
 ### 2026-11-26 (summaries, receipt checks, token brief)
