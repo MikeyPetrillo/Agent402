@@ -13,7 +13,8 @@
 //     a hyphenated name and a short camelCase field stay whole;
 //   - skill pack step numbers meet AA contrast in both schemes; the home page's
 //     people card ends under its buttons at 1440 px;
-//   - a changed width re-measures the wraps (assets/js/site-chrome.js a402Rebind).
+//   - a changed width re-measures the wraps (assets/js/site-chrome.js a402Rebind),
+//     and the re-measure waits for the web fonts.
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
@@ -243,6 +244,30 @@ try {
       await p.setViewportSize({ width: 400, height: 900 }); await p.waitForTimeout(260);
       await p.setViewportSize({ width: 414, height: 900 }); await p.waitForTimeout(2500);
       ok((await snap(p)) === want2, `${LONG}: a width that changes again while a pass runs ends bound for the last width`);
+      await p.close();
+    }
+    // A re-measure waits for the web fonts as the first binding does: with a
+    // face still loading, the old edits are taken back and nothing is measured
+    // until the fonts are ready (the fallback face measures differently).
+    {
+      const p = await open("/how-to-pay", 375); await p.waitForTimeout(400);
+      const want = await snap(p);
+      const joins = () => p.evaluate(() => (document.querySelector("main").innerHTML.match(/\u2060|\u00A0/g) || []).length);
+      const bound = await joins();
+      await p.evaluate(() => {
+        let ready; const pending = new Promise((r) => { ready = r; });
+        window.__fontsReady = ready;
+        window.__fontState = "loading";
+        Object.defineProperty(document, "fonts", { configurable: true, get: () => ({ get status() { return window.__fontState; }, ready: pending }) });
+        window.a402Rebind();
+      });
+      await p.waitForTimeout(500);
+      const waiting = await joins();
+      await p.evaluate(() => { window.__fontState = "loaded"; window.__fontsReady(); });
+      await p.waitForFunction((n) => (document.querySelector("main").innerHTML.match(/\u2060|\u00A0/g) || []).length >= n, bound, { timeout: 5000 }).catch(() => {});
+      const got = await snap(p);
+      ok(bound >= 5 && waiting < bound, `/how-to-pay: with a web font still loading, a re-measure binds nothing yet (${bound} joins bound, ${waiting} while the font loads)`);
+      ok(got === want, "/how-to-pay: once the fonts are ready the text is bound as a fresh load binds it");
       await p.close();
     }
     const p = await open("/how-to-pay", 1440); await p.waitForTimeout(400);

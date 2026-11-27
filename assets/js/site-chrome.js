@@ -270,13 +270,15 @@ var a402BindPass=function(root,sliced){try{
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
 /* The measure changed: take every edit back, newest first, and bind again. Only a change of width counts (a phone's address bar resizes the height on every scroll).
    A long page holds a thousand edits, so the work runs in turns of about 12 ms with the browser given the thread between them: the edits are taken back, then each
-   pass reads every tail before it writes any (the result is the one a single pass gives). A newer change of width starts over, and takes back what the last run left. */
+   pass reads every tail before it writes any (the result is the one a single pass gives). A newer change of width starts over, and takes back what the last run left.
+   Like the first binding, the measuring waits for the web fonts: once the edits are taken back a layout is forced, and a face still loading then is waited for. */
 var a402Stale=[],a402Run=0;
 window.a402Rebind=function(){var run=++a402Run;a402Stale=a402Stale.concat(a402Undo);a402Undo=[];
   var pass=function(){var p=null,made=false;return [function(u){if(!made){made=true;p=a402BindPass(document,true);}return p?p.read(u):false;},function(u){return p?p.write(u):false;}];};
   var steps=[function(u){while(a402Stale.length){if(performance.now()>=u)return true;try{a402Stale.pop()();}catch(e){}}return false;},
+    function(){void document.documentElement.offsetHeight;return document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready?'fonts':false;},
     function(){a402CellMeasure(document);if(window.a402BreakCode)window.a402BreakCode(document);return false;}].concat(pass(),pass());
-  var k=0;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length)setTimeout(go,0);};go();};
+  var k=0;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(more==='fonts'){k++;document.fonts.ready.then(go,go);return;}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length)setTimeout(go,0);};go();};
 (function(){var w=window.innerWidth,t=null;var later=function(){if(window.innerWidth===w)return;clearTimeout(t);t=setTimeout(function(){if(window.innerWidth===w)return;w=window.innerWidth;window.a402Rebind();},200);};window.addEventListener('resize',later);window.addEventListener('orientationchange',later);})();
 /* A day strip (/status .bars) reads on touch too: a tap or click on the strip writes the nearest bar's title (its date and probe count) into a line under it, read out by a screen reader. */
 document.addEventListener('click',function(e){try{var strip=e.target&&e.target.closest&&e.target.closest('.bars');if(!strip)return;var bars=strip.querySelectorAll('[title]');if(!bars.length)return;var r=strip.getBoundingClientRect();var i=Math.min(bars.length-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*bars.length)));var out=strip.nextElementSibling&&strip.nextElementSibling.classList.contains('bar-read')?strip.nextElementSibling:null;if(!out){out=document.createElement('p');out.className='bar-read';out.setAttribute('aria-live','polite');out.style.cssText='font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:6px 0 0;';strip.parentNode.insertBefore(out,strip.nextSibling);}out.textContent=bars[i].getAttribute('title');}catch(err){}});
