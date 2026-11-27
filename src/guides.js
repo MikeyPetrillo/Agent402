@@ -1206,8 +1206,8 @@ console.log(res.headers.get("payment-response"), await res.json());
 \`\`\`
 
 That call costs {{price:extract}}. Give the buying agent its own wallet with a
-small balance, and a ceiling per call in code, so a quote it did not expect is
-never signed. [Create an agent wallet](/guides/create-agent-wallet) shows how to make one.
+small balance, and a ceiling per call in code, so it signs only a quote at or
+under that ceiling. [Create an agent wallet](/guides/create-agent-wallet) shows how to make one.
 
 ## The selling agent
 

@@ -214,7 +214,7 @@ ${gateway.rows}
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;">
         <div class="ml-ref-row" style="border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide</span><span style="color:var(--faint);">quick $${c.prices.quick} &middot; plan $${c.prices.plan} &middot; full $${c.prices.full}</span></div>
         <div class="ml-ref-row" style="border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/execute</span><span style="color:var(--faint);">plan budget less credit</span></div>
-        <div class="ml-ref-row"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/feedback</span><span style="color:var(--faint);">free</span></div>
+        <div class="ml-ref-row"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/feedback</span><span style="color:var(--faint);">no charge</span></div>
       </div>
       </section>
 
