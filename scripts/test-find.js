@@ -7,6 +7,7 @@ import { MEV_AND_L2_TOOLS } from "../src/tools/mev-and-l2-kit.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { NETWORK_TOOLS2 } from "../src/tools/network-kit2.js";
+import { KIT } from "../src/tools/kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -688,6 +689,31 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     ok(!served, `"${q}" does not resolve to asn-info (top ${top?.slug || "none"} ${Math.round(top?.score ?? 0)}, rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
   }
   ok(findTools(cat, "ip to asn", { k: 3 }).results?.[0]?.slug === "asn-info", "control: an ASN search still finds asn-info first");
+}
+
+// ip-info reads the address and its PTR record, never a location: its name
+// says what it returns, no name, alias, tag or description word offers it for
+// a geolocation search, and such a search does not read it as served (a
+// score at the weak floor /api/find reads, FIND_WEAK_SCORE 3, with the
+// rarest word covered).
+{
+  const cat = {};
+  for (const t of [...KIT, ...NETWORK_TOOLS2]) cat[t.route] = t;
+  const ipInfo = KIT.find((t) => t.slug === "ip-info");
+  ok(ipInfo?.name === "IP address type and reverse DNS" && ipInfo.route === "POST /api/ip-info", `ip-info is named for what it returns (${ipInfo?.name})`);
+  const words = [ipInfo.name, ipInfo.description, ipInfo.category, ...(ipInfo.tags || []), ...(ipInfo.aliases || [])].join(" ");
+  ok(!/geo|locat|city|latitude|longitude/i.test(words.replace(/no country, city or network owner/, "")), "ip-info carries no geolocation word in its name, description, category, tags or aliases");
+  // Longer wordings ("geolocate an ip address") are read against the whole
+  // catalog in the find-misses gaps (scripts/test-find-misses-corpus.js).
+  for (const q of ["ip geolocation", "geoip", "geolocate ip", "ip-geolocation", "ip location"]) {
+    const r = findTools(cat, q, { k: 3 });
+    const top = r.results?.[0];
+    const served = top?.slug === "ip-info" && top.score >= 3 && r.rarestTermCovered !== false;
+    ok(!served, `"${q}" does not resolve to ip-info (top ${top?.slug || "none"} ${Math.round(top?.score ?? 0)}, rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
+  }
+  for (const q of ["reverse dns for an ip", "is this ip address private", "ptr record of an ip"]) {
+    ok(findTools(cat, q, { k: 3 }).results?.[0]?.slug === "ip-info", `control: "${q}" still finds ip-info first`);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

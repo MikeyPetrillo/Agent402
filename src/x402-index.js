@@ -12049,6 +12049,35 @@ const ROUTE_DECORATE_SLICE_MS = 6;
 // whose handler rejects must answer 500 alone and leave the next request whole).
 let routeQueryFaultForTest = null;
 export function _setRouteQueryFaultForTest(err) { routeQueryFaultForTest = err || null; }
+/** The served verdict over one ranked answer (the rule src/find.js reads as
+ *  rarestTermCovered): `terms` the query's words, `termRows[k]` how many
+ *  scored rows cover term k, `n` the scored rows, `cov`/`named` the top row's
+ *  bit masks (term k covered anywhere / in its slug or name). Only a word of
+ *  three letters or more that selects (not a function word) and is not a
+ *  data value (a digit, or 16 characters or more) can define the task. */
+export function routeRarestVerdict(terms, termRows, n, cov, named) {
+  const idx = [];
+  for (let k = 0; k < terms.length && k < 32; k++) {
+    const t = terms[k];
+    if (t.length >= 3 && !ROUTE_NONSELECTING_TERMS.has(t) && !/\d/.test(t) && t.length < 16) idx.push(k);
+  }
+  if (!idx.length) return { rarestTerm: null, covered: true, coverageShare: null };
+  const idf = (k) => Math.log((n + 1) / ((termRows[k] || 0) + 1));
+  let rarest = idx[0];
+  for (const k of idx) if (idf(k) > idf(rarest)) rarest = k;
+  if (cov & (1 << rarest)) return { rarestTerm: terms[rarest], covered: true, coverageShare: null };
+  let coveredW = 0, totalW = 0, coveredN = 0, isNamed = false;
+  for (const k of idx) {
+    const w = idf(k);
+    totalW += w;
+    if (cov & (1 << k)) { coveredW += w; coveredN++; if (named & (1 << k)) isNamed = true; }
+  }
+  const coverageShare = totalW > 0 ? Math.round((coveredW / totalW) * 100) / 100 : 0;
+  // find's two readings: two covered words at half the weight, or three at
+  // a quarter of it (a longer task spreads its weight over incidental words).
+  return { rarestTerm: terms[rarest], covered: isNamed && ((coveredN >= 2 && coverageShare >= 0.5) || (coveredN >= 3 && coverageShare >= 0.25)), coverageShare };
+}
+
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   if (routeQueryFaultForTest) { const e = routeQueryFaultForTest; routeQueryFaultForTest = null; throw e; }
   const q = String(query || "").slice(0, 500);
@@ -12146,6 +12175,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // Rows that matched the query and were left out for their category, counted
   // so the answer says so (categoryExcluded) instead of reading as "no match".
   let categoryExcluded = memoHit ? (scoredMemo.categoryExcluded || 0) : 0;
+  // How many scored rows cover each query term (slug, name or description):
+  // the term's rarity for the served verdict below (routeRarestVerdict).
+  const termRows = memoHit && Array.isArray(scoredMemo.termRows) ? scoredMemo.termRows : new Array(nTerms).fill(0);
   // The four text-match rules, per row. Same rules and weights as before the
   // candidate index; the index only decides which rows are worth asking.
   const scoreRow = (t) => {
@@ -12156,7 +12188,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     if (st.offSeller) return;
     const { name, hay, names, nameToks, nameParts } = st;
     const partsOnly = st.partsOnly ?? -1;
-    let score = 0, mSlug = 0, mName = 0, mText = 0;
+    let score = 0, mSlug = 0, mName = 0, mText = 0, cov = 0, named = 0;
     // A slug (or alias) EVERY token of which appears in the query is an exact
     // match for each of those tokens, not a substring one. Before 2026-09-10 a
     // query "json diff" scored json-diff 4+4 on the slug while a one-token slug
@@ -12187,9 +12219,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         else if (short ? nameToks[i].includes(term) : n.includes(term)) s = 4;
         if (s > slugScore) slugScore = s;
       }
-      if (slugScore) { score += slugScore; mSlug += slugScore; }
-      if (hit(name)) { score += 2; mName += 2; }
-      if (hit(hay)) { score += 1; mText += 1; }
+      if (slugScore) { score += slugScore; mSlug += slugScore; cov |= 1 << k; named |= 1 << k; }
+      if (hit(name)) { score += 2; mName += 2; cov |= 1 << k; named |= 1 << k; }
+      if (hit(hay)) { score += 1; mText += 1; cov |= 1 << k; }
     }
     // Record WHERE the score came from, not just how much. A seller who loses a
     // routing decision learns nothing from silence; "matched on description
@@ -12198,7 +12230,8 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     if (score > 0 && st.excluded) { categoryExcluded++; return; }
     if (score > 0) {
       const isLocal = t.seller === LOCAL_SELLER;
-      scored.push([score, t, { slug: mSlug, name: mName, text: mText }, st.priceRank, isLocal, isLocal ? selfQuality : payersOf(t.seller), isLocal ? selfCurated : curatedOf(t.seller)]);
+      scored.push([score, t, { slug: mSlug, name: mName, text: mText }, st.priceRank, isLocal, isLocal ? selfQuality : payersOf(t.seller), isLocal ? selfCurated : curatedOf(t.seller), cov, named]);
+      for (let k = 0; k < nTerms; k++) if (cov & (1 << k)) termRows[k]++;
     }
   };
   // Local rows first (a few hundred; scanned outright), then the remote pool's
@@ -12355,8 +12388,17 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   if (!memoHit) {
     const sortSteps = timSortSteps(scored, (a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
     for (let r = sortSteps.next(); !r.done; r = sortSteps.next()) { routeSortYields++; yield; }
-    if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef, categoryExcluded });
+    if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef, categoryExcluded, termRows });
   }
+  // DID THE TOP ROW DO THE TASK, or only share its common words? The rule
+  // /api/find reads (src/find.js rarestTermCovered): the query's rarest word
+  // defines the task, and a top row that never mentions it served it only
+  // when it covers two of the query's words with half of their weight (or
+  // three with a quarter), one of them in its slug or name. "ip geolocation" ranked ip-info
+  // first on "ip" alone, and no row here gives a location: the answer reads
+  // as a miss (weakMatches) instead of handing a buyer the wrong tool.
+  // Additive: the ranking and every row are unchanged.
+  const verdict = scored.length ? routeRarestVerdict(terms.slice(0, nTerms), termRows, scored.length, scored[0][7] || 0, scored[0][8] || 0) : null;
 
   // Per-seller diversity cap (M6, "Five Attacks on x402" Attack IV — Sybil /
   // metadata capture). Ranking is already sorted best-first; naively taking the
@@ -12520,11 +12562,14 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       ...(external ? { untrustedContent: true, source: t.seller } : {}),
     };
   });
+  if (verdict && verdict.covered === false) for (const r of results) r.weak = true;
   return {
     query: q, include: inc, count: results.length, sellers: sellersSeen.size, results,
     // `count` and `sellers` keep their exact meaning and their exact values -
     // renaming a live field is a second, worse break. These ride alongside.
     ...partialFields(scored.length, results.length),
+    ...(verdict && verdict.rarestTerm ? { rarestTerm: verdict.rarestTerm, rarestTermCovered: verdict.covered, ...(verdict.coverageShare != null ? { coverageShare: verdict.coverageShare } : {}) } : {}),
+    ...(verdict && verdict.covered === false ? { weakMatches: true, hint: "no row covers the word that defines this task, so none of these results does it" } : {}),
     // Matching routes the router lists but never buys (src/route-category.js),
     // absent when there are none.
     ...(categoryExcluded ? { categoryExcluded } : {}),
