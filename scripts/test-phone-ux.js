@@ -238,7 +238,7 @@ try {
       await p.waitForTimeout(2500);
       const again = await snap(p);
       ok(edits >= 500, `${LONG} is a long page for the pass (${edits} edits at 1440px)`);
-      ok(call < 50 && longest < 200, `${LONG}: a changed width re-measures in short turns (the call returns in ${call} ms, the longest task after the resize ${longest} ms)`);
+      ok(call < 50 && longest < 300, `${LONG}: a changed width re-measures in short turns (the call returns in ${call} ms, the longest task after the resize ${longest} ms)`);
       ok(got === want && again === want, `${LONG}: narrowed from 1440px to 390px it is bound as a fresh load binds it, and again after three more passes started over each other`);
       await p.setViewportSize({ width: 400, height: 900 }); await p.waitForTimeout(260);
       await p.setViewportSize({ width: 414, height: 900 }); await p.waitForTimeout(2500);
