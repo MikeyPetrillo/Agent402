@@ -48,8 +48,8 @@ import "./lib/credits-guards-table.js"; // a random test credits table (src/cred
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-hangup-settlement");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-hangup-settlement");
 import { join } from "node:path";
 import express from "express";
 import { randomBytes } from "node:crypto";
