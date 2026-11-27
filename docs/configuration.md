@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1154 variables in 116 groups.
+1155 variables in 116 groups.
 
 ## Contents
 
@@ -280,6 +280,7 @@ holds it.
 | `CRAWL_GLOBAL_MAX` | Crawl global maximum. | `2` | `src/tools/crawl-kit.js` |
 | `CRAWL_ORIGINS_PER_OPERATOR` | Crawl origins per operator. | `4` | `src/x402-index.js` |
 | `CRAWL_OUR_SIDE_CONTROL_URLS` | Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer. |  | `src/our-side-control.js` |
+| `CRAWL_PARSE_WORKER` | Set to off to parse every crawled document on the serving thread; unset, a document of 256 KB or more is parsed in a worker thread and rebuilt a piece per turn. |  | `src/crawl-parse.js` |
 | `CRAWL_SLOW_ORIGINS` | Crawl slow origins. |  | `src/crawl-cadence.js` |
 
 ## CREDITS

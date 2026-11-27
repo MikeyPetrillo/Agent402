@@ -58,6 +58,19 @@ Loaded when an index, discovery, router or buyer file is read.
   `[x402-index] fallback passes <listed> rows (kept <n>) <origin hash>: pick= copy= vouch= stamp= carry=
   quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
   over 100 ms (`scripts/test-fallback-crawl-turn.js`).
+- **Document parse:** a fetched document of 256 KB or more (`OFF_LOOP_MIN_CHARS`, `src/crawl-parse.js`)
+  is parsed in a worker thread (`src/crawl-parse-thread.js`) and rebuilt on the main thread a piece per
+  crawl-lane turn; the value and the error for invalid JSON are JSON.parse's own, and a shorter document
+  is parsed in place in its lane turn. When the thread cannot start, answers nothing, dies or cannot
+  split a document, the document is parsed in place and `[x402-index] crawl parse <origin hash> <file>
+  <size class>: parsed on the main thread (<reason>)` is logged; three such failures in a row leave the
+  thread alone for ten minutes, and `CRAWL_PARSE_WORKER=off` keeps every parse in place. The thread is
+  started on demand and ended after 20 s idle. A registry list read in one fetch is parsed the same way
+  and folded 1,000 rows per lane turn; a manifest crawl whose list passes 2,000 rows runs its merge,
+  vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk
+  stretch of 100 ms or more logs `[x402-index] crawl parse|walk ... <origin hash> <file or row count>
+  <size class>: longest=` (never the host). A new whole-document walk in the crawl goes through
+  `crawlWalk` or `crawlWalkLaned` (`scripts/test-crawl-parse-off-loop.js`).
 - **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
   seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
   matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
