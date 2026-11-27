@@ -23,6 +23,12 @@
 //     document is parsed in place (never dropped) and a log line says so;
 //   - a long turn's log line names the document by a short hash of its
 //     origin, never the host, with the size class.
+// The thread's memory is bounded by its input: a document whose tree may not
+// fit is refused before it is parsed and takes the in-place path (run in a
+// child process, since the failure this guards ends the process), the exit
+// of a process does not wait on the thread, a document wrapped in tens or
+// thousands of containers is split like any other, and the thread is gone
+// once its queue is empty.
 // Then the rebuild itself: values JSON text cannot carry, an own "__proto__"
 // key, integer-like keys, deep nesting, long strings, in both piece formats.
 // Mutation-checked: the off-loop path disabled, the long-list passes, the
@@ -33,6 +39,9 @@ import "./lib/loopback-only-preload.js"; // nothing here reaches a real host
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ownStoreEnv } from "./lib/own-stores.js";
@@ -172,6 +181,27 @@ sameStored(stored(a.entry, A), stored(b.entry, B), "dense document");
 ok(true, "the entry stored from the pieces equals the entry stored from the in-place parse");
 ok(readCaps.get("/.well-known/x402") === 4 * MB && readCaps.get("/openapi.json") === 12 * MB, "each read is handed its byte cap as before (4 MB manifest, 12 MB OpenAPI)");
 
+// ---- 2b. depth is not a refusal: the same document inside 70 and inside 2,001 arrays ----
+for (const levels of [70, 2001]) {
+  const wrapped = `${"[".repeat(levels)}${dense}${"]".repeat(levels)}`;
+  const W = `https://wrapped-${levels}-w.example`, X = `https://wrapped-${levels}-x.example`;
+  const before = crawlParseStats();
+  const w = await crawl(W, { "/openapi.json": wrapped }, `crawl, document inside ${levels} arrays`);
+  const after = crawlParseStats();
+  ok(after.offLoop === before.offLoop + 1 && after.fallbacks === before.fallbacks, `inside ${levels} arrays the document is still rebuilt from the thread's pieces`);
+  ok(w.worst <= LIMIT.ms, `inside ${levels} arrays no turn of the crawl held the loop past ${LIMIT.ms} ms (longest ${w.worst.toFixed(0)} ms)`);
+  const x = await inPlace(() => crawl(X, { "/openapi.json": wrapped }, "crawl, same wrapped document parsed in place"));
+  sameStored(stored(w.entry, W), stored(x.entry, X), `inside ${levels} arrays`);
+  const got = await within(parseOffLoop(wrapped, { turn: () => new Promise((r) => setImmediate(r)) }), "wrapped document");
+  ok(got.ok && JSON.stringify(got.value) === JSON.stringify(JSON.parse(wrapped)), `inside ${levels} arrays the rebuilt value and the stored entry equal the in-place ones`);
+}
+ok(crawlParseStats().running === false, "the thread is ended once its queue is empty: it keeps no document's tree while idle");
+{
+  const starts = crawlParseStats().starts;
+  const [p, q] = await within(Promise.all([parseOffLoop(dense), parseOffLoop(dense)]), "two documents queued");
+  ok(p.ok && q.ok && crawlParseStats().starts === starts + 1 && crawlParseStats().running === false, "two documents queued together go through one thread, one at a time, and it ends after the second");
+}
+
 // ---- 3. beside a manifest, with a long row list (the passes and the pick take lane slices) ----
 const many = manyOperations(Number(process.env.CRAWL_PARSE_MANY_OPS || 60_000)), manifest = manifestOf(2000);
 const C = "https://many-c.example", D = "https://many-d.example";
@@ -298,6 +328,65 @@ __setCrawlParseForTest(null);
   ok(r.ok === true && !crawlParseStats().paused, "control: with the real thread restored the next document is rebuilt from pieces");
 }
 
+// ---- 7b. bounded by its input, in a child process ----------------------------------
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+/** Run a module script in a child of this tree; resolves { code, signal, out, closedAt }. */
+const child = (script) => within(new Promise((resolve) => {
+  const c = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: ROOT, env: { ...process.env, CRAWL_PARSE_WORKER: "" }, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "", err = "";
+  c.stdout.on("data", (d) => { out += d; });
+  c.stderr.on("data", (d) => { err += d; });
+  c.on("close", (code, signal) => resolve({ code, signal, out, err: err.slice(-300), closedAt: Date.now() }));
+}), "child process");
+{
+  // A list of empty objects costs the heap about 30 times its text. With a
+  // small limit on the thread it is refused unparsed; were it parsed there,
+  // the thread would reach the limit inside JSON.parse.
+  const r = await child(`
+    import "./scripts/lib/offline-stores.js";
+    const { parseOffLoop, __setCrawlParseForTest, crawlParseStats } = await import("./src/crawl-parse.js");
+    __setCrawlParseForTest({ heapMb: 64 });
+    const text = "[" + "{},".repeat(2_000_000) + "{}]";
+    const r = await parseOffLoop(text);
+    const small = await parseOffLoop("[" + "{},".repeat(100_000) + "{}]");
+    console.log(JSON.stringify({ ok: r.ok, reason: r.reason, smallOk: small.ok, inPlace: JSON.parse(text).length, stats: crawlParseStats() }));
+    process.exit(0);
+  `);
+  const got = r.code === 0 ? childJson(r.out) : null;
+  ok(r.code === 0 && got.ok === false && /^unsplit: about \d+ MB parsed, past the thread's 32 MB$/.test(got.reason) && got.inPlace === 2_000_001, `a document whose tree may not fit the thread is refused unparsed and the process lives to parse it in place (exit ${r.code}${r.signal ? ` ${r.signal}` : ""}: ${got?.reason || r.err})`);
+  ok(got.smallOk === true && got.stats.paused === false, "control: under the same limit a smaller list is rebuilt from pieces, and a refusal is not a thread failure");
+}
+{
+  // The exit of a process does not wait on the thread: with a 64 MB list of
+  // empty objects handed to the parse, process.exit comes back at once.
+  const LATE = bound(1000, 40);
+  const r = await child(`
+    import "./scripts/lib/offline-stores.js";
+    const { parseOffLoop, stopCrawlParse, parsesOffLoop, crawlParseStats } = await import("./src/crawl-parse.js");
+    const text = "[" + "{},".repeat(22_000_000) + "{}]";
+    let settled = false;
+    parseOffLoop(text).then(() => { settled = true; }, () => { settled = true; });
+    setTimeout(() => {
+      stopCrawlParse();
+      console.log(JSON.stringify({ exitAt: Date.now(), settledBefore: settled, offLoopAfterStop: parsesOffLoop(text), running: crawlParseStats().running }));
+      process.exit(0);
+    }, 120);
+  `);
+  const got = r.code === 0 ? childJson(r.out) : null;
+  ok(r.code === 0 && r.closedAt - got.exitAt <= LATE.ms, `a process with a 64 MB list handed to the parse exits ${r.code === 0 ? r.closedAt - got.exitAt : "?"} ms after process.exit (exit ${r.code}${r.signal ? ` ${r.signal}` : ""}; ${LATE.note})`);
+  ok(got.offLoopAfterStop === false && got.running === false, "after stopCrawlParse the thread is gone and every later parse stays in place");
+  const server = await (await import("node:fs/promises")).readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const drain = server.slice(server.indexOf("function shutdown(signal"));
+  ok(/try \{ stopCrawlParse\(\); \}/.test(drain.slice(0, drain.indexOf("httpServer.close("))), "the server's drain ends the parse thread before it closes the listener");
+}
+// A refusal for size is the document, not a failing thread: it never pauses the thread.
+{
+  const nineMb = `[${"{},".repeat(3_000_000)}{}]`;
+  const before = crawlParseStats();
+  for (let q = 0; q < 4; q++) { const r = await within(parseOffLoop(nineMb), "refused document"); assert.ok(r.ok === false && /^unsplit: about \d+ MB parsed, past the thread's 256 MB$/.test(r.reason), r.reason); }
+  ok(crawlParseStats().fallbacks === before.fallbacks + 4 && !crawlParseStats().paused, "at the shipped limit a 9 MB list of empty objects is refused unparsed each time, and the thread is not paused for it");
+}
+
 // ---- 8. the rebuild is the value JSON.parse returns ---------------------------------
 ok(OFF_LOOP_MIN_CHARS === 256 * 1024 && !parsesOffLoop("x".repeat(OFF_LOOP_MIN_CHARS - 1)) && parsesOffLoop("x".repeat(OFF_LOOP_MIN_CHARS)) && !parsesOffLoop(undefined), "a document under 256 KB (and a missing body) keeps the in-place path");
 const edge = [
@@ -324,12 +413,25 @@ for (const clone of [false, true]) {
   }
   ok(true, `the rebuilt value equals JSON.parse's for ${edge.length} hard shapes, pieces sent as ${clone ? "structured clones" : "JSON text"}`);
 }
-// A document nested deeper than the thread will split is handed back, not dropped.
+// Depth alone: thousands of levels, each sent as its own step, rebuilt exactly.
 __setCrawlParseForTest({ minChars: 1, pieceBytes: 1024, minPieceBytes: 1024 });
-{
-  const nested = `${'{"a":['.repeat(80)}"${"q".repeat(4000)}"${"]}".repeat(80)}`;
+for (const nested of [
+  `${'{"a":['.repeat(80)}"${"q".repeat(4000)}"${"]}".repeat(80)}`,
+  `${"[".repeat(5000)}1,[2,{"k":[]}]${"]".repeat(5000)}`,
+  `${'{"":'.repeat(3000)}[-0,"${"z".repeat(3000)}"]${"}".repeat(3000)}`,
+]) {
   const r = await within(parseOffLoop(nested, { turn }), "nested document");
-  ok(r.ok === false && /unsplit/.test(r.reason), `a document the thread cannot split is handed back for the in-place parse (${r.reason})`);
+  // Compared level by level with a loop: an assertion that recurses would not reach the bottom.
+  let x = r.value, y = JSON.parse(nested), levels = 0;
+  for (;;) {
+    const kx = Array.isArray(x) ? "array" : typeof x, ky = Array.isArray(y) ? "array" : typeof y;
+    assert.equal(kx, ky);
+    if (x === null || typeof x !== "object" || Object.keys(x).length !== 1) break;
+    assert.deepStrictEqual(Object.keys(x), Object.keys(y));
+    const k = Object.keys(x)[0]; x = x[k]; y = y[k]; levels++;
+  }
+  assert.deepStrictEqual(x, y);
+  ok(r.ok && levels >= 80 && r.pieces > 1, `a document nested ${levels} levels deep is split and rebuilt exactly (${r.pieces} pieces)`);
 }
 __setCrawlParseForTest(null);
 

@@ -620,6 +620,7 @@ import { submissionSlotStatus, NETWORK_VALUE_MAX } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
+import { stopCrawlParse } from "./crawl-parse.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
 import { reputationStatus, startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
 import { setCrawlRecheckSource, setOurSideIssueHook, setOurSideControl } from "./x402-index.js";
@@ -15871,6 +15872,9 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // lease still reads held; flushStateQueues waits on that write, bounded.
   try { boardSaveAtDrain = checkpointSolanaLeaderboard(); } catch { /* never blocks the drain */ }
   try { stopLeases(); } catch { /* never blocks the drain */ }
+  // The crawl's parse thread ends now, so the exit never waits on a document
+  // it is parsing; a document still to be parsed is parsed in place.
+  try { stopCrawlParse(); } catch { /* never blocks the drain */ }
   // The last step, once: release every lease this process holds, then close
   // the pool. Each step is bounded; the exit never waits on the database.
   let exiting = false;

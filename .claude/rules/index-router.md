@@ -61,11 +61,17 @@ Loaded when an index, discovery, router or buyer file is read.
 - **Document parse:** a fetched document of 256 KB or more (`OFF_LOOP_MIN_CHARS`, `src/crawl-parse.js`)
   is parsed in a worker thread (`src/crawl-parse-thread.js`) and rebuilt on the main thread a piece per
   crawl-lane turn; the value and the error for invalid JSON are JSON.parse's own, and a shorter document
-  is parsed in place in its lane turn. When the thread cannot start, answers nothing, dies or cannot
-  split a document, the document is parsed in place and `[x402-index] crawl parse <origin hash> <file>
-  <size class>: parsed on the main thread (<reason>)` is logged; three such failures in a row leave the
-  thread alone for ten minutes, and `CRAWL_PARSE_WORKER=off` keeps every parse in place. The thread is
-  started on demand and ended after 20 s idle. A registry list read in one fetch is parsed the same way
+  is parsed in place in its lane turn. When the thread cannot start, answers nothing, dies or will not
+  take a document, the document is parsed in place and `[x402-index] crawl parse <origin hash> <file>
+  <size class>: parsed on the main thread (<reason>)` is logged; three thread failures in a row leave
+  the thread alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
+  nothing else: the lane-step walks below stay. The thread's memory is bounded by its input, not by
+  its heap limit (a thread that reaches the limit inside JSON.parse can end the process): it measures
+  the text first (`estimateTreeBytes`: containers, separators, keys, strings, nesting depth) and
+  refuses a document whose tree may pass half of `heapMb` (512), which is then parsed in place as
+  before. One document at a time; the thread is started on demand and ended when its queue is empty,
+  and `stopCrawlParse()` ends it at the start of the drain. Depth is never a refusal to split (the
+  splitter and the rebuild use explicit stacks). A registry list read in one fetch is parsed the same way
   and folded 1,000 rows per lane turn; a manifest crawl whose list passes 2,000 rows runs its merge,
   vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk
   stretch of 100 ms or more logs `[x402-index] crawl parse|walk ... <origin hash> <file or row count>

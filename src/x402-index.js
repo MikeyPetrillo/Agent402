@@ -3116,7 +3116,7 @@ function crawlDocLabel(docRef, text = docRef?.chars) {
   const known = typeof text === "string" || Number(text) > 0;
   return `${key} ${docRef?.doc || "document"}${known ? ` ${docSizeClass(text)}` : ""}`;
 }
-// A walk over a parsed document (or the rows read docRef it) that runs in one
+// A walk over a parsed document (or the rows read from it) that runs in one
 // stretch: a named span, and the long-turn line when it passes the threshold.
 function crawlWalk(name, docRef, fn) {
   const t0 = performance.now();
