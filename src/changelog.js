@@ -60,6 +60,34 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the same item to a server that sets the switch).
 const ENTRIES = [
   {
+    date: "2026-11-28",
+    title: "Shorter pages, clearer answers",
+    items: [
+      "Site: Tool pages are shorter: a one-sentence lead, one line per fact under \"Errors and behavior\", and related tools and skill packs as linked names.",
+      "Site: Skill pack pages list their tools in a table with route and price; the full pack text is still served to agents by the API and MCP.",
+      "Site: /changelog shows the 30 most recent entries; older entries moved to /changelog/archive. /docs/api is a short index of the API references.",
+      "Site: The home page, /sell and /docs open with short answers and keep detail one tap away; /status shows rails in a table; the Transactions page (/revenue) leads with its figures.",
+      "Site: /privacy and /terms open with a summary and a jump list and are dated 2026-11-28; their full text is unchanged.",
+      "Site: Two new pages: SEC Form 4 insider trades by API at /insider-trades-api, and a guide to agent-to-agent payments over x402 at /guides/agent-to-agent-payments.",
+      "Site: /company lists the official Agent402.tools packages and endpoints; the same list is in the README and in /.well-known/x402 (field `official`).",
+      "Tools: /v1/videos/generations has a higher list price, shown on /api/pricing and in its 402.",
+      "Tools: ip-info is named \"IP address type and reverse DNS\"; its route and answer are unchanged.",
+      "Tools: An image prompt the provider's content filter stops answers 422 with reason `content_filtered`, in place of the earlier 400 or 502; a provider outage keeps its 5xx answer.",
+      "Tools: The 20 longest tool descriptions are shorter, with the same facts and source credits.",
+      "API: /api/route marks a query whose defining word no tool covers as a miss (`weakMatches`), and route-and-execute answers 404 for it without running or charging anything.",
+      "API: Route-and-execute answers 400 naming the missing fields when a chat call lacks model or messages, before any purchase.",
+      "Operations: The operator view shows a projected-runway word for each funded wallet (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks); it moves no money and refuses nothing.",
+    ],
+  },
+  {
+    date: "2026-11-28",
+    title: "Tool page payment sentence",
+    shownWhen: settleFirstCopyOn,
+    items: [
+      "Site: On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a tool page shows the sentence about calls paid before they run only on the routes that can be paid first.",
+    ],
+  },
+  {
     date: "2026-11-27",
     title: "Stellar refund proof",
     items: [
