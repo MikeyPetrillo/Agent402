@@ -1796,6 +1796,8 @@ const validationTools = [
     price: "$0.001",
     description: "Classify an IP address by type: version (4 or 6), scope (public, private, loopback, link-local or CGNAT), its integer form for IPv4, and its reverse-DNS (PTR) names. It reads the address and its PTR record only, so it reports no country, city or network owner.",
     tags: ["ip", "ip-address", "network", "ptr", "reverse-dns"],
+    // Search-only names (aliases stay out of the 402 listing text).
+    aliases: ["reverse-dns", "ptr-lookup"],
     discovery: {
       bodyType: "json",
       input: { ip: "8.8.8.8" },

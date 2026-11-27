@@ -299,6 +299,10 @@
       "top": "ip-info"
     },
     {
+      "q": "reverse dns for an ip address",
+      "top": "ip-info"
+    },
+    {
       "q": "what is the price of ethereum",
       "top": "crypto-price",
       "lead": 1.2
