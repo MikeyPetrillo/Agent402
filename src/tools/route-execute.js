@@ -1165,7 +1165,16 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         }
 
         // Default: resolve the best in-budget tool from THIS host's catalog.
-        const { results } = findTools(catalog, input.task, { k: 10, baseUrl });
+        const found = findTools(catalog, input.task, { k: 10, baseUrl });
+        const { results } = found;
+        // No tool here mentions the word that defines the task (find's
+        // rarestTermCovered, the reading /api/find and /api/route give):
+        // nothing is run, so a buyer is never sold a tool that shares only
+        // the task's common words ("ip geolocation" is not ip-info's).
+        if (results.length && found.rarestTermCovered === false) {
+          const hasExternal = externalEnabled() && !!resolveExternal;
+          throw bad(`No tool in this catalog does that task: none of them covers "${String(found.rarestTerm).slice(0, 40)}". Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`, 404);
+        }
         // find's eligible candidates, in find's order (top 5 go to the judge).
         const eligible = [];
         for (const r of results) {
