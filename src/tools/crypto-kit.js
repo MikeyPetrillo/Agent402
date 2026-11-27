@@ -402,7 +402,7 @@ export const CRYPTO_TOOLS = [
   {
     route: "GET /api/crypto-price",
     name: "Crypto price",
-    slug: "crypto-price",
+    slug: "crypto-price", aliases: ["current-crypto-price"],
     category: "data",
     price: "$0.001",
     description:
@@ -555,7 +555,7 @@ export const CRYPTO_TOOLS = [
   {
     route: "GET /api/crypto-history",
     name: "Crypto price history statistics",
-    slug: "crypto-history",
+    slug: "crypto-history", aliases: ["crypto-volatility"],
     category: "data",
     price: "$0.015",
     description:
