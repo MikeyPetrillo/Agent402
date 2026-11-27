@@ -77,8 +77,9 @@ Operations:
 - The operator view of /api/gateway-status shows a projected-runway word for
   each spending and fee wallet whose balance a low-balance alarm already
   reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held
-  steady while a wallet sits at the mark; it moves no money and refuses
-  nothing.
+  steady while a wallet sits at the mark; it can also watch wallets the
+  server does not spend from, read by public address
+  (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.
 Packages:
 - agent402-mcp 0.17.2 is listed in the MCP Registry as
   tools.agent402/agent402, a name verified against the agent402.tools

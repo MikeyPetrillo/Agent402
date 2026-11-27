@@ -86,7 +86,7 @@ const ENTRIES = [
       "API: /api/route no longer reads the query word \"add\" inside \"address\", so a calculator task is not matched to address tools.",
       "API: route-and-execute answers 400 naming the missing fields when a call to a chat completion lacks the fields the seller requires and no other candidate can take it, before any purchase.",
       "API: route-and-execute no longer asks a chat-room message route for `model` and `messages`.",
-      "Operations: The operator view of /api/gateway-status shows a projected-runway word for each spending and fee wallet whose balance a low-balance alarm already reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held steady while a wallet sits at the mark; it moves no money and refuses nothing.",
+      "Operations: The operator view of /api/gateway-status shows a projected-runway word for each spending and fee wallet whose balance a low-balance alarm already reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held steady while a wallet sits at the mark; it can also watch wallets the server does not spend from, read by public address (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.",
       "Packages: agent402-mcp 0.17.2 is listed in the MCP Registry as tools.agent402/agent402, a name verified against the agent402.tools domain; the earlier name stays resolvable and is marked deprecated with a pointer to it.",
     ],
   },
