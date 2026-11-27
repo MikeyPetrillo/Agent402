@@ -280,6 +280,94 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
   }
   cache.clear();
 }
+// ---- the second family: a coin's price on a past date ----
+// The look-back tools answer statistics and never a past price, so a task that
+// asks what a coin cost on a date is a miss on all three surfaces unless a row
+// is named for it. Every negative is answered with no gap field.
+{
+  const COIN = CAPABILITY_GAPS.find((g) => g.id === "coin-price-on-date");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+  const { ALCHEMY_DATA_TOOLS } = await import("../src/tools/alchemy-data-kit.js");
+  const coinTools = [...TOOLS, ...CRYPTO_MARKETS_TOOLS, ...CRYPTO_TOOLS, ...ALCHEMY_DATA_TOOLS];
+  const coinCatalog = {};
+  for (const t of coinTools) coinCatalog[t.route] = t;
+  const croute = (q, extra = {}) => route(q, { catalog: coinCatalog, toolCount: coinTools.length, ...extra });
+  const COIN_POSITIVE = ["bitcoin price on 2021-01-01", "historical coin price", "coin snapshot on a date", "price of ETH last June", "historical crypto prices", "btc price in 2021",
+    "what was the price of bitcoin on 01/02/2021", "ethereum price 3 years ago", "token price on a given date", "solana price yesterday", "price of dogecoin in March 2024"];
+  const COIN_NEGATIVE = ["bitcoin price", "current coin price", "coin history statistics", "price change since a date", "fx rate on a date", "stock price history",
+    "bitcoin price change since 2024-01-01", "token price on solana", "crypto price history", "historical fx rate", "eth price prediction in march", "bitcoin halving date",
+    "historical ohlc", "price of gold last june", "weather on a date", "bitcoin price in usd", "eth gas price", "coin change since a date", "bitcoin return since 2021-01-01",
+    "historical volatility of bitcoin price", "price alert for eth in december", "treasury yield on a date", "candle statistics for bitcoin", "ip geolocation"];
+  ok(!!COIN && new Set([...COIN_POSITIVE, ...COIN_NEGATIVE]).size === COIN_POSITIVE.length + COIN_NEGATIVE.length, "the coin table lists each phrasing once");
+  const named = coinTools.filter((t) => gapNamedBy(COIN, t.slug, t.name)).map((t) => t.slug);
+  ok(named.length === 0 && coinTools.some((t) => t.slug === "coin-history") && coinTools.some((t) => t.slug === "crypto-history") && coinTools.some((t) => t.slug === "token-price-history"), `no tool in these kits is named for a coin's price on a past date (${named.join(", ") || "none"})`);
+  // coin-history's search names say what it answers, never the snapshot it once gave.
+  const ch = coinTools.find((t) => t.slug === "coin-history");
+  ok(ch.aliases.length > 0 && ch.aliases.every((a) => !/snapshot|price/.test(a)), `coin-history's aliases name a change since a date (${ch.aliases.join(", ")})`);
+  for (const [slug, name, want] of [["historical-coin-price", "x", true], ["coin-price-on-date", "x", true], ["x", "Historical crypto prices", true], ["coin-history", "Coin change since a date", false],
+    ["crypto-history", "Crypto price history statistics", false], ["token-price-history", "Token price history statistics (USD)", false], ["fx-historical", "Historical FX rate", false], ["crypto-price", "Crypto price", false]]) {
+    ok(gapNamedBy(COIN, slug, name) === want, `a row ${slug} / "${name}" ${want ? "is" : "is not"} named for a coin's price on a past date`);
+  }
+  const ran = [];
+  const REQ = { headers: {} };
+  const cat = {};
+  for (const t of coinTools) cat[t.route] = { ...t, handler: async () => { ran.push(t.slug); return { ok: true, from: t.slug }; } };
+  const own = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute", execPriceUsd: 0.05, underlyingMaxUsd: 0.05 } });
+  const bought = [];
+  const ext = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, externalEnabled: () => true,
+    resolveExternal: async (task) => routeQuery({ query: task, top: 5, include: "external", ...CTX, catalog: coinCatalog }).results.map((r) => ({ seller: r.seller, slug: r.slug, name: r.name, url: r.url, method: "POST", price: "$0.01", priceUsd: 0.01, networks: ["eip155:8453"], wire: "x402" })),
+    payExternal: async (url) => { bought.push(url); return { result: { price: 1 }, quote: { usd: 0.01, network: "eip155:8453" }, receipt: { transaction: "0xTX", network: "eip155:8453" } }; } });
+  const COIN_404 = /none of them offers a coin's price on a past date/;
+  const runOwn = async (q) => { ran.length = 0; try { return { r: await own.handler({ task: q, params: { coin: "bitcoin", date: "2026-01-01" } }, REQ) }; } catch (e) { return { e }; } };
+  cache.clear();
+  for (const q of COIN_POSITIVE) {
+    const f = findTools(coinCatalog, q, { k: 3 }), r = croute(q);
+    const x = await runOwn(q);
+    ok(capabilityGap(q)?.id === "coin-price-on-date" && f.results.length > 0 && f.capabilityGap === "coin-price-on-date" && f.capabilityGapCovered === false && f.rarestTermCovered === false
+      && r.results.length > 0 && r.capabilityGap === "coin-price-on-date" && r.weakMatches === true && pickOf(r) === null
+      && x.e?.statusCode === 404 && ran.length === 0 && COIN_404.test(x.e.message) && /Nothing was run\. Nothing was charged\./.test(x.e.message),
+    `coin positive "${q}": a miss on find, on route, and the uncharged 404 on route-and-execute (find ${f.capabilityGap}/${f.rarestTermCovered}, route ${r.capabilityGap}/${r.weakMatches}, run ${x.e?.statusCode} ${ran.join()})`);
+  }
+  for (const q of COIN_NEGATIVE) {
+    const f = findTools(coinCatalog, q, { k: 3 }), r = croute(q);
+    const x = await runOwn(q);
+    ok(capabilityGap(q)?.id !== "coin-price-on-date" && f.capabilityGap !== "coin-price-on-date" && r.capabilityGap !== "coin-price-on-date" && !(x.e && COIN_404.test(x.e.message)),
+      `coin negative "${q}": no coin gap on find or route, no coin gap refusal on route-and-execute (${capabilityGap(q)?.id || "none"}, ${x.e ? x.e.statusCode : `ran ${ran.join()}`})`);
+  }
+  // The tools that answer the neighbors still do, read as served.
+  for (const [q, want] of [["price change since a date", ["coin-history"]], ["coin history statistics", ["coin-history", "crypto-history", "coin-market-chart-range"]], ["bitcoin price", ["crypto-price", "price-coingecko"]]]) {
+    const f = findTools(coinCatalog, q, { k: 3 }), r = croute(q);
+    ok(want.includes(f.results?.[0]?.slug) && f.rarestTermCovered !== false && want.includes(pickOf(r)) && !("capabilityGap" in f) && !("capabilityGap" in r), `"${q}" is served by ${want.join(" or ")} on find and route (find ${f.results?.[0]?.slug}, route ${pickOf(r)})`);
+  }
+  // A stuffed description clears nothing; a seller NAMED for it is the pick and the one bought.
+  cache.set("https://stuffed.example", seller("https://stuffed.example", { route: "/api/coin-data", slug: "coin-data", name: "Coin data", tags: ["historical"], description: "historical coin price on a date bitcoin price on any past date snapshot last june" }));
+  for (const q of COIN_POSITIVE) {
+    const r = croute(q, { top: 10 });
+    ok(r.weakMatches === true && r.capabilityGapCovered === false && pickOf(r) === null, `coin positive "${q}": a description-only listing does not clear the miss`);
+  }
+  cache.set("https://past.example", seller("https://past.example", { route: "/api/historical-coin-price", slug: "historical-coin-price", name: "Historical coin price", description: "The price of a coin on a past date." }));
+  for (const q of COIN_POSITIVE) {
+    const r = croute(q, { top: 10 });
+    bought.length = 0;
+    let e = null, out = null;
+    try { out = await ext.handler({ task: q, include: "external", params: { coin: "bitcoin", date: "2021-01-01" } }, REQ); } catch (err) { e = err; }
+    ok(pickOf(r) === "historical-coin-price" && r.results[0].seller === "https://past.example" && r.capabilityGapCovered === true
+      && !e && bought.length === 1 && /^https:\/\/past\.example\//.test(bought[0]) && out?.receipt?.seller === "https://past.example",
+    `coin positive "${q}": the seller named for it is the pick on route and the one bought (route ${r.results[0]?.seller}, bought ${bought.join() || (e ? `${e.statusCode} ${String(e.message).slice(0, 80)}` : "none")})`);
+  }
+  for (const q of COIN_NEGATIVE) {
+    const r = croute(q, { top: 10 });
+    ok(r.capabilityGap !== "coin-price-on-date", `coin negative "${q}": no coin gap field with a named seller listed`);
+  }
+  cache.clear();
+  for (const s of [`price of ${"bitcoin ".repeat(60)}on ${"a ".repeat(100)}date`, `${"historical ".repeat(40)}coin price`, `${"2021 01 ".repeat(60)}btc price`, `coin price ${"on the given ".repeat(35)}day`]) {
+    const t0 = performance.now();
+    capabilityGap(s); gapNamedBy(COIN, s, s);
+    ok(performance.now() - t0 < 50, `a ${s.length}-character hostile coin query is read in bounded time`);
+  }
+}
+
 // Row names: a slug or a name alone names the capability; words split across the two, or a near name, do not.
 for (const [slug, name, want] of [["ip-geolocation", "IP geolocation", true], ["geoip", "Lookup", true], ["ip-geo", "x", true], ["ip-country", "x", true], ["ip-to-city", "x", true], ["country-by-ip", "x", true], ["x", "IP locations", true], ["weather", "IP Geolocation", true], ["locate-ip", "x", true],
   ["geo", "IP", false], ["city-ip", "Weather by city", false], ["ip-location-header", "Parse the Location header", false], ["store-locator", "Locate IP cameras", false], ["ip-info", "IP address type and reverse DNS", false], ["asn-info", "IP to ASN lookup", false], ["ip-lookup", "IP lookup", false], ["country-info", "Country info", false]]) {

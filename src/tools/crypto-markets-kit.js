@@ -643,7 +643,7 @@ export const CRYPTO_MARKETS_TOOLS = [
   {
     route: "GET /api/coin-history",
     name: "Coin change since a date",
-    slug: "coin-history", aliases: ["coin-snapshot-on-a-date", "coin-snapshot", "historical-coin-price"],
+    slug: "coin-history", aliases: ["coin-change-since-date", "historical-change"],
     category: "crypto",
     price: "$0.005",
     description:

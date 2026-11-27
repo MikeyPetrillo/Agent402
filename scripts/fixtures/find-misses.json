@@ -501,6 +501,9 @@
     "ip geolocation for an address",
     "geolocate an ip address",
     "ip geolocation",
-    "geolocate ip"
+    "geolocate ip",
+    "historical coin price",
+    "coin snapshot on a date",
+    "bitcoin price on 2021-01-01"
   ]
 }

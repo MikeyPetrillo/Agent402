@@ -80,6 +80,32 @@ const NAMED_RES = [
 ];
 const asksIpGeolocation = (n) => GEOIP_RE.test(n) || (GEOLOCATE_RE.test(n) && ANY_IP_RE.test(n)) || ASK_RES.some((re) => re.test(n));
 
+// ---- a coin's price on a past date ----
+// The look-back tools here answer computed statistics (a return, a drawdown,
+// a volatility) and never a past price itself, so a task that asks what a
+// coin cost on a date has no tool. Three things must all hold: a coin word,
+// a price word, and a past date (or "historical"). A query that names a
+// statistic, a forecast or an alert asks for another job and is never in the
+// family, and neither is a price with no date or a date with no coin.
+const COIN = "(?:coins?|crypto|cryptos|cryptocurrency|cryptocurrencies|altcoins?|tokens?|bitcoin|btc|ethereum|eth|ether|solana|sol|dogecoin|doge|litecoin|ltc|xrp|cardano|ada|bnb|usdc|usdt)";
+const COIN_RE = new RegExp(` ${COIN} `);
+const COIN_PRICE_RE = / (?:price|prices|priced|snapshot|snapshots) /;
+const OTHER_JOB_RE = / (?:statistic|statistics|stats|volatility|drawdown|change|changes|changed|return|returns|performance|trend|trends|since|gain|gains|loss|losses|average|indicator|indicators|prediction|predictions|predict|forecast|forecasts|target|targets|alert|alerts|webhook|convert|conversion) /;
+const MONTH = "(?:january|february|march|april|may|june|july|august|september|october|november|december)";
+const YEAR = "(?:19|20)\\d\\d";
+const PAST_RES = [
+  // "on a date", "at a given date", "as of a specific day", "on date" (a slug).
+  / (?:on|at|of|for) (?:(?:a|an|the|any|given|specific|certain|particular|past|that) ){0,3}(?:date|day) /,
+  // A written date: 2021-01-01, 01/02/2021.
+  new RegExp(` (?:${YEAR} \\d{1,2} \\d{1,2}|\\d{1,2} \\d{1,2} ${YEAR}) `),
+  // "last June", "in June", "back in June", "June 2021", "in 2021".
+  new RegExp(` (?:last|in|during) ${MONTH} | ${MONTH} (?:\\d{1,2} )?${YEAR} | (?:in|during) ${YEAR} `),
+  // "last year", "3 months ago", "yesterday".
+  / (?:last (?:year|month|week)|\d{1,4} (?:days?|weeks?|months?|years?) ago|yesterday) /,
+];
+const HISTORICAL_RE = / (?:historical|historic) /;
+const asksPastCoinPrice = (n) => COIN_RE.test(n) && COIN_PRICE_RE.test(n) && !OTHER_JOB_RE.test(n) && (HISTORICAL_RE.test(n) || PAST_RES.some((re) => re.test(n)));
+
 export const CAPABILITY_GAPS = Object.freeze([
   Object.freeze({
     id: "ip-geolocation",
@@ -92,6 +118,15 @@ export const CAPABILITY_GAPS = Object.freeze([
     covers(n) {
       return asksIpGeolocation(n) || NAMED_RES.some((re) => re.test(n));
     },
+  }),
+  Object.freeze({
+    id: "coin-price-on-date",
+    label: "a coin's price on a past date",
+    terms: Object.freeze(["historical", "price"]),
+    asks: asksPastCoinPrice,
+    // A row's slug or name is read by the same rule ("historical-coin-price",
+    // "Coin price on a date"); a row named for statistics never covers it.
+    covers: asksPastCoinPrice,
   }),
 ]);
 
