@@ -1095,7 +1095,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/tools/cdp-kit.js": "a081d5aac2f7",
     "src/tools/decide-kit.js": "c75892754664",
     "src/tools/dub-kit.js": "1dd69d7461ab",
-    "src/tools/image-gen-kit.js": "6880524cbf4f",
+    "src/tools/image-gen-kit.js": "d0ff399c2a56",
     "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
     "src/tools/llm-images-fast-kit.js": "afc664fa4d2a",
     "src/tools/price-webhook-kit.js": "80b132972db7",

@@ -57,6 +57,7 @@ import { payerFromRequest } from "../payer.js";
 import { reportProgress } from "../job-progress.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { notChargedHere } from "../not-charged.js";
+import { providerContentFiltered, providerBodyContentFiltered } from "./content-filter.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -368,6 +369,7 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimp
   const tier = IMAGE_TIERS[tierSlug];
   const { prompt, refs } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
+  let filtered = null;
   let started = 0;
   for (const link of jimpDecodable ? tier.chain.filter((l) => JIMP_DECODABLE_OUTPUTS.has(l.output)) : tier.chain) {
     // Through the CDN proxy the answer must start inside the proxy's wait
@@ -389,11 +391,19 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimp
     try {
       started++;
       const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: linkTimeoutMs });
-      if (!res.ok) await throwUpstreamError(res);
+      if (!res.ok) {
+        // A provider 4xx about the request whose error names its content
+        // filter (the video rule, src/tools/content-filter.js). The chain
+        // still walks on: another provider may draw it.
+        const errText = await res.text().catch(() => "");
+        if (res.status >= 400 && res.status < 500 && ![401, 402, 403, 429].includes(res.status) && providerBodyContentFiltered(errText)) filtered = errText;
+        await throwUpstreamError({ status: res.status, text: async () => errText });
+      }
       const text = await readUpstreamBody(res, { req });
       let parsed;
       try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-        assertUpstreamBody(parsed);
+      if (parsed?.error && !(Array.isArray(parsed.data) && parsed.data.length) && providerContentFiltered(parsed.error)) filtered = JSON.stringify({ error: parsed.error });
+      assertUpstreamBody(parsed);
       const first = Array.isArray(parsed?.data) ? parsed.data[0] : null;
       if (!first || typeof first.b64_json !== "string" || !first.b64_json) throw bad("Upstream returned no image - retry, or rephrase the prompt", 502);
 
@@ -419,7 +429,18 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimp
       lastErr = e;
     }
   }
+  // A link's provider said its content filter stopped the prompt and no link
+  // drew it: the prompt is what has to change, so the answer is a 422 the
+  // caller can branch on (reason content_filtered), not a 502.
+  if (filtered != null) throw imageFilteredError(filtered);
   throw lastErr || bad("No image link available", 503);
+}
+
+function imageFilteredError(bodyText) {
+  let why = "";
+  try { const e = JSON.parse(bodyText)?.error; why = typeof e === "string" ? e : (e?.message || ""); } catch { why = ""; }
+  const quoted = why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : "";
+  return Object.assign(bad(`The provider returned no image and says its content filter stopped this prompt${quoted}.${notChargedHere()} Rephrase the prompt and try again.`, 422), { contentFiltered: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -474,22 +495,10 @@ async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A failed video job whose error names the provider's content filter: the
 // error text ("Video generation completed with no output (content may have
-// been filtered)"), or a moderation code on the error object. Bounded
-// patterns only: the text is the upstream's and can quote the prompt.
-const VIDEO_FILTER_CODES = new Set(["content_filter", "content_filtered", "content_policy_violation", "moderation_blocked", "safety_violation", "safety_violations", "responsible_ai_policy_violation"]);
-// Only wording that says an OUTPUT was filtered counts: a bare "content
-// filter" or "safety system" also names the service in an outage ("Content
-// moderation service is temporarily unavailable"), and any text that carries
-// an outage marker is never a filtered verdict, whatever else it says.
-const VIDEO_FILTER_TEXT_RE = /\bcontent (?:may have been |was |has been )?(?:filtered|moderated)\b|\bcontent[ _-]polic(?:y|ies) violation\b|\bmoderation[ _-]blocked\b|\bsafety violations?\b|\b(?:blocked|flagged|rejected|refused) by (?:the |our |its )?(?:safety|moderation|content) (?:filter|system|check|policy)\b/i;
-const VIDEO_OUTAGE_TEXT_RE = /\b(?:unavailable|timed? ?out|internal error|retry|5\d\d)\b/i;
+// been filtered)"), or a moderation code on the error object
+// (src/tools/content-filter.js, the rule the image routes share).
 export function videoFailureFiltered(st) {
-  const e = st?.error;
-  const codes = e && typeof e === "object" ? [e.code, e.type] : [];
-  const text = (typeof e === "string" ? e : (e && typeof e.message === "string" ? e.message : "")).slice(0, 2_000);
-  if (VIDEO_OUTAGE_TEXT_RE.test(text)) return false;
-  if (codes.some((c) => typeof c === "string" && VIDEO_FILTER_CODES.has(c.toLowerCase()))) return true;
-  return VIDEO_FILTER_TEXT_RE.test(text);
+  return providerContentFiltered(st?.error);
 }
 const VIDEOS_MAX_POLL_FAILURES = 5;
 const VIDEOS_CONTENT_RETRIES = 2;

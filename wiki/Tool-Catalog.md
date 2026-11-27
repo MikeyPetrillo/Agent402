@@ -60,7 +60,7 @@ Market structure an agent can read directly, as deterministic reads at per-call 
 
 ## Images and video (flat per call)
 
-Generation priced per picture or per clip rather than per token, on the OpenAI wire, so the cost of a call is known before it is made. Point any OpenAI SDK at base_url `https://agent402.tools/v1`.
+Generation priced per picture or per clip rather than per token, on the OpenAI wire, so the cost of a call is known before it is made. Point any OpenAI SDK at base_url `https://agent402.tools/v1`. A prompt the provider's content filter stops answers 422 with reason content_filtered, on the image routes and the video route alike.
 
 | Endpoint | Price | What you get |
 |---|---|---|

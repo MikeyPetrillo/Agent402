@@ -28,8 +28,8 @@
 // Moderation: every tier asks the images API for its "low" moderation level
 // (less restrictive filtering; the provider's usage policies still apply)
 // unless the caller sends `moderation: "auto"`, the provider's stricter
-// default. A refusal by the provider's content check is a 400 (never charged)
-// and is never sent to another model or provider. Should the API answer 400
+// default. A refusal by the provider's content check is a 422 with reason
+// content_filtered and is never sent to another model or provider. Should the API answer 400
 // naming the `moderation` parameter (a model that does not take it), the same
 // request goes once more without the field, and that fallback is counted.
 
@@ -41,12 +41,14 @@ import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 import { settleBeforeUpstreamHolding } from "../settle-first.js";
 import { hardCapHold } from "../upstream-hard-caps.js";
 import { notChargedHere } from "../not-charged.js";
+import { providerContentFiltered } from "./content-filter.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
+const markFiltered = (err) => Object.assign(err, { contentFiltered: true });
 
 // sizes: orientation -> size; the first entry is the default. A render whose
 // billed image tokens pass outputTokenBound is logged (the answer is still
@@ -149,11 +151,13 @@ export function isParamError(status, error, param) {
     && typeof error.message === "string" && error.message.includes(`'${param}'`);
 }
 
-/** The provider's content check refused the prompt: code moderation_blocked,
- *  or (older answers) a message naming the safety system. */
+/** The provider's content check refused the prompt: a moderation code
+ *  (moderation_blocked) or wording that says the request was refused by the
+ *  safety system, read with the rule the video and image routes share
+ *  (src/tools/content-filter.js): text with an outage marker never counts. */
 export function isSafetyRefusal(error, message) {
-  if (error?.code === "moderation_blocked") return true;
-  return /safety system/i.test(String(message || "").slice(0, 400));
+  const text = String((typeof error?.message === "string" && error.message) || message || "");
+  return providerContentFiltered(error && typeof error === "object" ? { code: error.code, type: error.type, message: text } : text);
 }
 
 // The categories the provider lists on a refusal ("safety_violations=[violence]"),
@@ -246,14 +250,15 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
     const { msg, error, code } = parseError(text);
     // An account-level billing or account state is the upstream's, not the request's.
     if (["billing_hard_limit_reached", "billing_not_active", "account_deactivated"].includes(code)) throw bad("OpenAI upstream unavailable", 502);
-    // The model's own content check refused the prompt. It stays a 400 (not
-    // charged) and is never handed to another model or provider.
+    // The model's own content check refused the prompt: a 422 with reason
+    // content_filtered (the prompt is what has to change), never handed to
+    // another model or provider.
     if (isSafetyRefusal(error, msg)) {
       moderationStats.refusals[sentLevel]++;
       const cats = refusalCategories(msg);
-      throw bad(`The model's content check refused this prompt.${notChargedHere()} Rephrase the prompt and try again.`
+      throw markFiltered(bad(`The model's content check refused this prompt.${notChargedHere()} Rephrase the prompt and try again.`
         + (cats ? ` Flagged: ${cats}.` : "")
-        + (moderation === "auto" && !fellBack ? ' This call chose moderation "auto", the stricter level; "low" is the default level.' : ""), 400);
+        + (moderation === "auto" && !fellBack ? ' This call chose moderation "auto", the stricter level; "low" is the default level.' : ""), 422));
     }
     // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
     // temperature, unknown language code, oversized input), not the upstream.
@@ -311,8 +316,8 @@ function makeHandler(tierSlug) {
 
 const SHARED_TAGS = ["image", "ai", "generation", "openai", "text-to-image"];
 
-const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 400 and is not charged on x402.' };
-const MODERATION_COPY = ` The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 400, not charged on x402. ${SETTLE_FIRST_SENTENCE}`;
+const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 422 with reason content_filtered and is not charged on x402.' };
+const MODERATION_COPY = ` The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 422 with reason content_filtered, not charged on x402. ${SETTLE_FIRST_SENTENCE}`;
 
 export const IMAGE_GEN_TOOLS = [
   {

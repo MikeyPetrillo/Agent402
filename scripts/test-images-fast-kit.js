@@ -175,6 +175,51 @@ process.env.OPENROUTER_API_KEY = "test-key";
   calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), [RECRAFT]: () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), [KLEIN3]: () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }) };
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "Upstream error: prompt rejected", "upstream 4xx on every link -> 502 carrying the upstream message");
   ok(e?.statusCode === 502 && calls.length === 3, "…every link tried, 502 (settlement cancelled)");
+  // The provider's content filter stopped the prompt on every link (its code
+  // on the error object, or wording that says the content was refused by the
+  // filter): a 422 with reason content_filtered, the rule the video route uses.
+  {
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const { refusalReason } = await import("../src/refusal-reason.js");
+    const allLinks = (err, status = 400) => ({ "black-forest-labs/flux.2-pro": () => ({ status, json: { error: err } }), "black-forest-labs/flux.2-klein-4b": () => ({ status, json: { error: err } }), [KLEIN3]: () => ({ status, json: { error: err } }), [RECRAFT]: () => ({ status, json: { error: err } }) });
+    for (const [err, label] of [[{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code"],
+      [{ message: "Your request was rejected by the safety system.", code: 400 }, "safety-system refusal wording"],
+      [{ message: "x", type: "content_policy_violation" }, "a content-policy type"]]) {
+      calls = []; perModel = allLinks(err);
+      const f = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "content filter stopped this prompt", `image filtered (${label}) on every link -> 422`);
+      ok(f?.statusCode === 422 && f.contentFiltered === true && calls.length === 3, `…${label}: 422 marked contentFiltered, every link tried`);
+      ok(toolErrorFields(f).reason === "content_filtered" && refusalReason(f.message, 422, f) === "content_filtered", `…${label}: reason and telemetry class content_filtered`);
+      ok(String(f.message).includes(" Nothing was charged. Rephrase the prompt"), `…${label}: the shared not-charged sentence, then what to change`);
+    }
+    // A 200 body that carries the filter's error and no image is the same verdict.
+    calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 200, json: { error: { message: "blocked", code: "content_filter" } } }), [KLEIN3]: () => ({ status: 502, json: {} }), [RECRAFT]: () => ({ status: 502, json: {} }) };
+    const f2 = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "content filter stopped", "a 200 error body naming the filter, then outages -> 422");
+    ok(f2?.statusCode === 422, "…422");
+    // One link filtered, another drew it: served, no refusal.
+    calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "no", code: "moderation_blocked" } } }) };
+    const served = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
+    ok(served?.model === KLEIN3 && calls.length === 2, "a link's filter refusal still walks the chain, and the next link's image is served");
+    calls = []; perModel = allLinks({ message: "blocked", code: "moderation_blocked" });
+    const fp = await throws(() => bySlug("v1-images-pro").handler({ prompt: "a desk" }), "content filter stopped", "pro tier: filtered on every link -> 422");
+    ok(fp?.statusCode === 422 && fp.contentFiltered === true, "…pro 422 contentFiltered");
+    // The image tiers settle first for some payers (SETTLE_FIRST_SLUGS): the
+    // same 422 then goes out through the settled-first body, charged with the
+    // same-payment retry and the refund status, its reason kept.
+    {
+      const { settledFirstFailureBody } = await import("../src/settle-first-body.js");
+      const body = JSON.parse(settledFirstFailureBody(JSON.stringify({ error: fp.message, ...toolErrorFields(fp) }), { transaction: "0x" + "ab".repeat(32), origin: "https://agent402.tools" }));
+      ok(body.reason === "content_filtered" && body.charged === true && body.refundOwed === true && body.retry === "same-payment" && typeof body.refundStatusUrl === "string" && !/Nothing was charged/.test(body.error), "settled first: the 422 keeps content_filtered and reads charged, same-payment retry, refund status");
+    }
+    // Outage wording that names the filter service is not a filtered prompt:
+    // it keeps today's 502, so a working prompt is never sent back to be rephrased.
+    for (const [err, status] of [[{ message: "Content moderation service is temporarily unavailable" }, 400], [{ message: "Safety system timed out, please retry" }, 400],
+      [{ message: "upstream content-filter returned 500", code: "content_filter" }, 400], [{ message: "Safety system overloaded" }, 400], [{ message: "prompt rejected by safety" }, 400],
+      [{ message: "blocked", code: "moderation_blocked" }, 503], [{ message: "blocked", code: "moderation_blocked" }, 429]]) {
+      calls = []; perModel = allLinks(err, status);
+      let x = null; try { await bySlug("v1-images-fast").handler({ prompt: "a fox" }); } catch (y) { x = y; }
+      ok(x && x.statusCode !== 422 && !x.contentFiltered && toolErrorFields(x).reason === undefined && [502, 503].includes(x.statusCode), `not a filter verdict keeps its status (${status} ${JSON.stringify(err).slice(0, 50)} -> ${x?.statusCode})`);
+    }
+  }
   calls = []; perModel = { "black-forest-labs/flux.2-pro": () => ({ status: 503, json: {} }) };
   const out3 = await bySlug("v1-images-pro").handler({ prompt: "a desk" });
   ok(calls.length === 2 && calls[1].body.model === KLEIN3 && calls[1].body.resolution === "1K" && calls[1].body.aspect_ratio === "1:1" && calls[1].body.provider.only[0] === "black-forest-labs" && out3.model === KLEIN3, "pro failover pins FLUX 3 Image Klein at 1K square on its provider");
