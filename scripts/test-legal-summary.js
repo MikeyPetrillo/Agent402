@@ -53,6 +53,7 @@ for (const variant of ["off", "on"]) {
     ok(f.words > 40 && f.words <= SUMMARY_MAX, `${page} (${variant}): the summary is ${f.words} words (at most ${SUMMARY_MAX})`);
     ok(f.governs, `${page} (${variant}): the summary closes by saying the full text governs`);
     ok(f.figures.length >= 2 && f.unbacked.length === 0, `${page} (${variant}): every figure in the summary is in the full text (${f.figures.join(", ")})${f.unbacked.length ? ` (not in the text: ${f.unbacked.join(", ")})` : ""}`);
+    ok(!/<a [^>]*>[^<]*\([^<]*<\/a>/.test(f.nav), `${page} (${variant}): no jump-list label carries a parenthetical (a label keeps to one line on a phone)`);
     ok(f.links.length >= 8, `${page} (${variant}): the jump list has ${f.links.length} links`);
     ok(f.missing.length === 0, `${page} (${variant}): every jump-list link lands on an id on the page${f.missing.length ? ` (missing: ${f.missing.join(", ")})` : ""}`);
     ok(f.unlisted.length === 0, `${page} (${variant}): every section heading has an id and is in the jump list${f.unlisted.length ? ` (${f.unlisted.join(", ")})` : ""}`);

@@ -30,7 +30,10 @@ export function legalSummaryBox(sentences) {
 
 /** The jump list of the body's sections. */
 export function legalJumpList(bodyHtml) {
-  const items = sectionHeadings(bodyHtml).map((h) => `<li><a href="#${esc(h.id)}">${h.text}</a></li>`).join("");
+  // A heading's closing parenthetical (an address, an alternate name) stays
+  // with the heading: the link is a label and keeps to one line on a phone.
+  const label = (t) => t.replace(/\s*\([^()]*\)\s*$/, "") || t;
+  const items = sectionHeadings(bodyHtml).map((h) => `<li><a href="#${esc(h.id)}">${label(h.text)}</a></li>`).join("");
   return `<nav class="lg-toc" aria-label="On this page">
 <p class="lg-toc-h">On this page</p>
 <ol>${items}</ol>
