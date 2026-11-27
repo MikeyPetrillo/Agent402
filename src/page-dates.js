@@ -58,6 +58,7 @@ export const PAGE_SOURCES = {
   "/integrations/claude-managed-agents": ["src/managed-agents-page.js"],
   "/pricing": ["src/ledger-pricing.js"],
   "/changelog": ["src/changelog.js"],
+  "/changelog/archive": ["src/changelog.js"],
   "/quickstart": ["src/quickstart.js"],
   "/what-is-x402": ["src/what-is-x402.js"],
   "/what-is-mpp": ["src/what-is-mpp.js"],

@@ -871,7 +871,7 @@ import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDES } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, packServedInFull, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES, docsSlugs } from "./docs.js";
-import { changelogPage, changelogRss } from "./changelog.js";
+import { changelogPage, changelogArchivePage, changelogRss } from "./changelog.js";
 import { playgroundPage, playgroundToolEntry, PLAYGROUND_TOOL_PATH } from "./playground.js";
 import { payPerCallApiPage, paidMcpToolsPage, comparePage, insiderTradesApiPage, INSIDER_TRADES_PATH } from "./search-landings.js";
 import { categoryMarkdown, categoriesMarkdownIndex } from "./category-markdown.js";
@@ -6796,6 +6796,7 @@ app.get("/x402-economy", (_req, res) => {
   res.redirect(301, "/marketplace#economy");
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
+app.get("/changelog/archive", (_req, res) => htmlCache(res, 300, 900).send(changelogArchivePage(BASE_URL)));
 // The use cases page became the Examples section of /docs (same live prices).
 app.get("/use-cases", (_req, res) => res.redirect(301, "/docs#examples"));
 app.get("/playground", (req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG, { variant: Object.keys(req.query || {}).length > 0, slug: typeof req.query?.slug === "string" ? req.query.slug.slice(0, 80) : null })));
@@ -8481,7 +8482,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
 // parameterized /docs/:slug so the literal "api" path doesn't get captured
 // as a wiki slug lookup.
 app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(ledgerDocsPage(BASE_URL, CATALOG)));
-app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG))));
+app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG), CATEGORIES)));
 app.get("/docs/:slug", (req, res) => {
   const html = docsPage(BASE_URL, req.params.slug);
   if (!html) return notFoundPage(res, { what: "Doc", href: "/docs", label: "All docs" });

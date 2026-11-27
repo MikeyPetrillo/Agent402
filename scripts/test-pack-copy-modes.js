@@ -4,7 +4,9 @@
 // reads a token the wallet holds, never the wallet address, and refuses with a
 // 422 when the wallet holds no tokens. Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
-const { SKILL_PACKS } = await import("../src/skills.js");
+const { SKILL_PACKS, packPageCopy } = await import("../src/skills.js");
+// The page's short copy (src/skill-page-copy.js) is read beside the pack's own.
+const pageText = (p) => { const c = packPageCopy(p); return [c.lead, c.use, ...(c.steps || [])]; };
 const { PACK_STEPS } = await import("../src/tools/skill-runner.js");
 
 let pass = 0, fail = 0;
@@ -18,7 +20,7 @@ for (const p of SKILL_PACKS) {
   const steps = PACK_STEPS[p.slug];
   if (!steps) continue;
   checked++;
-  const txt = [p.tagline, p.useCase, ...(p.workflow || [])].filter(Boolean).join(" ");
+  const txt = [p.tagline, p.useCase, ...(p.workflow || []), ...pageText(p)].filter(Boolean).join(" ");
   if (steps.mode === "chain" && PARALLEL.test(txt)) wrong.push(`${p.slug} (chain) reads "${txt.match(PARALLEL)[0]}"`);
   if (steps.mode === "fanout" && SEQUENCE.test(txt)) wrong.push(`${p.slug} (fanout) reads "${txt.match(SEQUENCE)[0]}"`);
 }
@@ -39,7 +41,7 @@ let err = null;
 try { meta?.mapInput({ address: wallet }, { "wallet-balance": { tokens: [] } }); } catch (e) { err = e; }
 ok(err?.statusCode === 422, "a wallet holding no tokens gets a 422 on the metadata step, not a lookup of its own address");
 const pack = SKILL_PACKS.find((p) => p.slug === "wallet-audit");
-ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|contracts the wallet interacts with/.test([pack?.tagline, ...(pack?.workflow || [])].join(" ")), "wallet-audit's copy says it reads a token the wallet holds");
+ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|contracts the wallet interacts with/.test([pack?.tagline, ...(pack?.workflow || []), ...(pack ? pageText(pack) : [])].join(" ")), "wallet-audit's copy says it reads a token the wallet holds");
 
 // Pack copy, the macro tool descriptions and the storefront's fund card say
 // what the data is and where it comes from: no signal, prediction or advice
@@ -48,7 +50,7 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   const ADVICE = /recession[- ]signal|recession lead indicator|recession-priced|recession territory|are we in (or near )?a recession|smart money|before any investment decision|recommend a savings|inflation-sensitive recommendation/i;
   const hits = [];
   for (const p of SKILL_PACKS) {
-    const txt = [p.title, p.tagline, p.useCase, ...(p.workflow || []), p.claudePrompt].filter(Boolean).join(" ");
+    const txt = [p.title, p.tagline, p.useCase, ...(p.workflow || []), p.claudePrompt, ...pageText(p)].filter(Boolean).join(" ");
     const m = txt.match(ADVICE);
     if (m) hits.push(`${p.slug}: "${m[0]}"`);
   }
@@ -62,6 +64,8 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   }
   const macro = SKILL_PACKS.find((p) => p.slug === "macro-context");
   ok(/each figure with its as-of date and source/.test(macro?.tagline || "") && /makes no forecast/.test(macro?.useCase || ""), "macro-context says its figures are dated and sourced, and that it makes no forecast");
+  const macroPage = macro ? packPageCopy(macro) : {};
+  ok(/each figure with its as-of date and source/.test(macroPage.lead || "") && /makes no forecast/.test(macroPage.use || ""), "macro-context's page copy says the same");
   ok(/<h3>A fund's 13F holdings<\/h3>/.test(src("src/human-reports-page.js")), "the fund card is headed by what it reports: a fund's 13F holdings");
 }
 

@@ -22,7 +22,7 @@ t node scripts/test-bespoke-call-log.js
 # Large-body routes: no compressed body, no unpaid body over 100 KB read unless priced from it, one in-flight byte budget (boots paid-mode on port 0)
 t node scripts/test-large-body-gate.js
 
-# @step 2: Offline suites (4 scripts, one process each)
+# @step 2: Offline suites (5 scripts, one process each)
 # /.well-known/glama.json maintainer email env pass-through (with + without override)
 t node scripts/test-glama-manifest.js
 # Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
@@ -31,3 +31,5 @@ t node scripts/test-skill-packs.js
 t node scripts/test-health-flags.js
 # /skills/<slug> contract (every pack renders workflow + tools + claudePrompt + JSON-LD)
 t node scripts/test-skill-page-contract.js
+# /skills/<slug> reading budget: lead at most 40 prose words, body at most 250, steps at most 20; price, derivation, proof-of-work fact, tool table and attribution kept (port-0 boot)
+t node scripts/test-pack-page-words.js
