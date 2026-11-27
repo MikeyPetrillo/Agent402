@@ -495,6 +495,8 @@
     "check a pgp signature on a file",
     "transpose a midi file up two semitones",
     "ip geolocation for an address",
-    "geolocate an ip address"
+    "geolocate an ip address",
+    "ip geolocation",
+    "geolocate ip"
   ]
 }

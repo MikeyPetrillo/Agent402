@@ -1788,12 +1788,14 @@ const validationTools = [
   },
   {
     route: "POST /api/ip-info",
-    name: "IP info",
+    // It reads the address itself and its PTR record, never a location: no
+    // name, tag or description word offers it as a geolocation tool.
+    name: "IP address type and reverse DNS",
     slug: "ip-info",
     category: "validation",
     price: "$0.001",
-    description: "Classify an IP address: version, public/private/loopback/link-local, integer form, and reverse-DNS (PTR) lookup.",
-    tags: ["ip", "network", "ptr", "reverse-dns"],
+    description: "Classify an IP address by type: version (4 or 6), scope (public, private, loopback, link-local or CGNAT), its integer form for IPv4, and its reverse-DNS (PTR) names. It reads the address and its PTR record only, so it reports no country, city or network owner.",
+    tags: ["ip", "ip-address", "network", "ptr", "reverse-dns"],
     discovery: {
       bodyType: "json",
       input: { ip: "8.8.8.8" },
