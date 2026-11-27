@@ -342,6 +342,10 @@ t node scripts/test-legal-entity-name.js
 t node scripts/test-terms-links.js
 # Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
+# /privacy and /terms open with a summary of at most 150 words and a jump list whose every link lands on a section id (offline)
+t node scripts/test-legal-summary.js
+# /status and /revenue: at most 50 prose words above the first h2 and 700 in the body with detail closed (offline)
+t node scripts/test-ops-page-words.js
 # /trust and the /company contact block state only what the code runs (offline)
 t node scripts/test-trust-page.js
 # The refund terms document follows each switch it reads and the refund run's own families (offline)
