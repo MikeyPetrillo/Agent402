@@ -15,9 +15,9 @@ Tools:
 - asn-info asks a public resolver too when this server's own resolver has
   not answered within one second; when the owner name cannot be read,
   `ownerLookup` names the query that was asked.
-- /v1/videos answers 422 `content_filtered` when the provider says its
-  content filter may have stopped the clip; a provider outage still answers
-  502.
+- /v1/videos/generations answers 422 with reason `content_filtered` when the
+  provider says its content filter may have stopped the clip; a provider
+  outage still answers 502.
 API:
 - A Stripe webhook whose signature does not verify is answered a fixed
   message.
