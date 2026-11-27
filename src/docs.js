@@ -303,6 +303,10 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main td > code { overflow-wrap:break-word; }
   @media (max-width:640px){ .ml-docs-main .ml-docs-reflist li { grid-template-columns:minmax(0,1fr); } }
   .ml-docs-main td.ml-docs-api-n { text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums; }
+  /* The category table fits a phone: a long category name wraps and its key sits on the line under it. Its name cells carry the first-cell floor inline, so the chrome's reading-width pass (site-chrome.js, for prose cells) leaves these short labels alone. */
+  .ml-docs-main .ml-docs-api-t td:first-child > a { white-space:normal; }
+  .ml-docs-main .ml-docs-api-t th { white-space:normal; }
+  @media (max-width:640px){ .ml-docs-main .ml-docs-api-t td:first-child > code { display:table;margin-top:4px; } }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
@@ -437,7 +441,7 @@ export function docsApi(baseUrl, catalog, categories = {}) {
   const catRows = cats.map((cat) => {
     const label = categories[cat]?.label;
     const name = label ? `<a href="/tools/category/${esc(cat)}">${esc(label)}</a>` : esc(cat);
-    return `<tr><td>${name} <code>${esc(cat)}</code></td><td class="ml-docs-api-n">${byCat.get(cat)}</td></tr>`;
+    return `<tr><td style="min-width:8em;">${name} <code>${esc(cat)}</code></td><td class="ml-docs-api-n">${byCat.get(cat)}</td></tr>`;
   }).join("");
 
   const body = `<h1>API Reference</h1>
@@ -445,7 +449,7 @@ export function docsApi(baseUrl, catalog, categories = {}) {
 <ul class="ml-docs-reflist">${refRows}</ul>
 <h2>Categories</h2>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>
-<div class="ml-docs-tw"><table><thead><tr><th>Category and key</th><th style="text-align:right;">Tools</th></tr></thead><tbody>${catRows}</tbody></table></div>`;
+<div class="ml-docs-tw"><table class="ml-docs-api-t"><thead><tr><th>Category and key</th><th style="text-align:right;">Tools</th></tr></thead><tbody>${catRows}</tbody></table></div>`;
   return shell(
     baseUrl,
     "API Reference",
