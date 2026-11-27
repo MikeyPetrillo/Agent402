@@ -10,18 +10,12 @@
 //
 //   node scripts/test-new-guides-2026-11.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { stripTags } from "./lib/html-text.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = "https://agent402.tools";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 const titleOf = (html) => decode((html.match(/<title>([^<]*)<\/title>/) || [])[1] || "");
 const canonOf = (html) => (html.match(/<link rel="canonical" href="([^"]*)"/) || [])[1] || null;
@@ -37,19 +31,16 @@ function proseOf(html, wrapClass) {
 const words = (s) => s.split(/\s+/).filter(Boolean).length;
 const leadOf = (html, re) => decode(stripTags((html.match(re) || [])[1] || "", " ")).replace(/\s+/g, " ").trim();
 
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, ...ownStoreEnv("new-guides-2026-11"), FREE_MODE: "true", PORT: String(PORT), BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
-  stdio: "ignore",
+// PORT=0, the bound port read back: no port is picked before the server binds it.
+const srv = await bootServer({
+  stores: "new-guides-2026-11",
+  env: { FREE_MODE: "true", BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
 });
+const BASE = srv.url;
 const get = async (p) => { const r = await fetch(`${BASE}${p}`, { redirect: "manual" }); return { status: r.status, text: await r.text() }; };
 
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  ok(srv.port > 0, `server booted on the port it bound (${srv.port})`);
 
   const pricing = JSON.parse((await get("/api/pricing")).text);
   const price = new Map(pricing.endpoints.map((e) => [e.slug, e.price]));
@@ -117,7 +108,7 @@ try {
     ok((await get("/guides/sell-your-api-over-x402")).text.includes(`href="${path}"`), `the selling guide links ${path}`);
   }
 } finally {
-  proc.kill("SIGTERM");
+  await srv.stop();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
