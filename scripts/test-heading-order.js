@@ -16,7 +16,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const PAGES = ["/", "/reports", "/monitors", "/quickstart", "/pricing", "/docs", "/marketplace",
   "/leaderboard", "/revenue", "/sell", "/tools", "/proof", "/company", "/security",
   "/transparency", "/privacy", "/terms", "/faq", "/credits", "/markets", "/skills",
-  "/insider-trades-api", "/guides/agent-to-agent-payments"];
+  "/insider-trades-api", "/crypto-history-stats-api", "/guides/agent-to-agent-payments"];
 
 // Ranges of raw-text elements, found by SCANNING rather than by pattern.
 //

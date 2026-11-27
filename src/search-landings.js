@@ -6,7 +6,13 @@
 // sources the 402 and the catalog read, never typed here. A fourth,
 // /insider-trades-api, answers the searches for SEC Form 4 insider trades by
 // API: its routes, example input, answer fields and prices are read from the
-// catalog entries that serve them.
+// catalog entries that serve them. A fifth, /crypto-history-stats-api, answers
+// the searches for a crypto history API with the two routes whose answers are
+// computed here from a coin's past prices (statistics, never the series): the
+// market-data source's terms allow a product that incorporates its data and
+// bar passing its own figures on, so the page names no route that returns a
+// series, prints field names and formulas but no figure, and carries the
+// source's credit with its link beside the routes.
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { articleDates } from "./page-dates.js";
 import { toolList } from "./pages.js";
@@ -24,9 +30,11 @@ import { siteOrgRef, mppOffered } from "./site-org.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
+import { COINGECKO_API_URL } from "./data-attribution.js";
 
 export const INSIDER_TRADES_PATH = "/insider-trades-api";
-export const SEARCH_LANDING_PATHS = ["/pay-per-call-api", "/paid-mcp-tools", "/compare", INSIDER_TRADES_PATH];
+export const CRYPTO_HISTORY_STATS_PATH = "/crypto-history-stats-api";
+export const SEARCH_LANDING_PATHS = ["/pay-per-call-api", "/paid-mcp-tools", "/compare", INSIDER_TRADES_PATH, CRYPTO_HISTORY_STATS_PATH];
 
 const CSS = `
 .sl-wrap{max-width:900px;margin:0 auto;padding:50px 30px 64px}
@@ -39,6 +47,7 @@ const CSS = `
 .sl-wrap ol,.sl-wrap ul{padding-left:22px;margin:0 0 14px}
 .sl-wrap a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent)}
 .sl-wrap code{font-family:var(--font-mono);font-size:var(--fs-code-inline)}
+.sl-wrap p.sl-credit{color:var(--ink);font-size:var(--fs-base)}
 .sl-links{display:flex;flex-wrap:wrap;gap:8px 20px;list-style:none;padding:0;margin:0}
 .sl-links li{margin:0;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .sl-table{width:100%;border-collapse:collapse;font-size:var(--fs-md);margin:0 0 14px}
@@ -223,13 +232,78 @@ ${reportBlock}
 <p>Form 4 filings are public records published by the U.S. Securities and Exchange Commission on EDGAR; each row of a live answer links the filing itself, so every figure can be checked at the source. Agent402 reads them with a declared User-Agent, as SEC's access rules ask. Agent402 is not affiliated with or endorsed by the SEC.</p>
 <p>Information only, not investment advice. A Form 4 reports a trade after it happened, and says nothing about why it was made.</p>
 <h2>More</h2>
-${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/${report.slug}`, "Insider flow report"]] : []), ...(byCard ? [["/reports", "Reports by card"]] : []), ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
+${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/${report.slug}`, "Insider flow report"]] : []), ...(byCard ? [["/reports", "Reports by card"]] : []), [CRYPTO_HISTORY_STATS_PATH, "Crypto history statistics"], ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
   return page(baseUrl, {
     path: INSIDER_TRADES_PATH,
     title: "Insider trades API: SEC Form 4 data for agents | Agent402",
     description: "SEC Form 4 insider trades by API: the filings against any US ticker, paid per call with no account or key, plus a cited report. Information only.",
     h1: "Insider trades by API: SEC Form 4 data",
     crumb: "Insider trades API",
+    body: bodyHtml,
+  });
+}
+
+/** /crypto-history-stats-api: a coin's past year as computed statistics
+ *  (return, largest drawdown, volatility) and a stablecoin's worst distance
+ *  from its peg over a day and a week. Both routes answer figures computed
+ *  here; neither returns a price series, and the page says so. */
+export function cryptoHistoryStatsApiPage(baseUrl, catalog) {
+  const year = defOf(catalog, "token-diligence");
+  const peg = defOf(catalog, "stablecoin-depeg-watch");
+  if (!year) throw new Error("crypto-history-stats-api: token-diligence is not in the catalog");
+  const c = (s) => `<code>${esc(s)}</code>`;
+  const or = (arr) => arr.length > 1 ? `${arr.slice(0, -1).map(c).join(", ")} and ${c(arr[arr.length - 1])}` : arr.map(c).join("");
+  const y = routeParts(year);
+  const yBody = JSON.stringify(year.discovery?.input || {});
+  const yExample = year.discovery?.output?.example || {};
+  // The look-back fields of a row's `computed` block, as the published example names them.
+  const yFields = Object.keys(yExample.rows?.[0]?.computed || {}).filter((k) => /1y|Annualized|candles/.test(k));
+  const yRanks = Object.keys(yExample.comparison || {}).filter((k) => /Return|Volatility/.test(k));
+  const credit = `<p class="sl-credit">Powered by <a href="${esc(COINGECKO_API_URL)}" rel="noopener">CoinGecko</a>.</p>`;
+  let pegBlock = "";
+  if (peg) {
+    const p = routeParts(peg);
+    const query = new URLSearchParams(Object.entries(peg.discovery?.input || {}).map(([k, v]) => [k, String(v)])).toString();
+    const pFields = Object.keys(peg.discovery?.output?.example?.coins?.[0] || {}).filter((k) => /deviation/i.test(k));
+    pegBlock = `
+<h2>A stablecoin's worst day and week against its peg</h2>
+<p>${c(`${p.method} ${p.path}`)} costs ${esc(peg.price)} a call. For every large USD stablecoin it answers the distance from the peg now and the widest distance over the past 24 hours and 7 days, in basis points${pFields.length ? ` (${or(pFields)})` : ""}, with a status and flags for the ones that left it.</p>
+${pre(`curl -i "${baseUrl}${p.path}${query ? `?${query}` : ""}"`)}`;
+  }
+  const bodyHtml = `
+<p class="sl-lead">Agent402 answers questions about a coin's past year with statistics computed here: one-year return, largest drawdown and annualized volatility. The routes return those figures, not the price series behind them, paid per call from an agent's wallet with no account or key.</p>
+${credit}
+<h2>One-year return, drawdown and volatility for a list of coins</h2>
+<p>${c(`${y.method} ${y.path}`)} costs ${esc(year.price)} a coin, quoted in the 402 for the coins you send. It reads a year of price candles for each coin and reduces them to the figures below, then ranks the list.</p>
+${pre(`curl -i -X POST ${baseUrl}${y.path} \\
+  -H 'Content-Type: application/json' \\
+  -d '${yBody}'`)}
+<p>The first answer is HTTP 402 with the price and the ways to pay. An x402 client signs the payment and sends the same request again.</p>
+<h2>What comes back</h2>
+<p>Each row's ${c("computed")} block carries ${or(yFields)}:</p>
+<ul>
+  <li>${c("return1yPct")}: the change from the first to the last candle close of the year.</li>
+  <li>${c("maxDrawdown1yPct")}: the largest fall from a running high to a later candle's low.</li>
+  <li>${c("volatilityAnnualizedPct")}: the standard deviation of close-to-close log returns, scaled to a year.</li>
+  <li>${c("candles")}: how many candles the figures were computed from, and their width.</li>
+</ul>
+<p>${yRanks.length ? `${c("comparison")} ranks the coins you sent (${or(yRanks)}), and ` : ""}${c("flags")} names measured conditions such as a deep drawdown or high volatility. The ${c("method")} field of every answer states each formula, so a figure can be recomputed. The <a href="/tools/${esc(year.slug)}">tool page</a> shows the full answer shape.</p>
+${pegBlock}
+<h2>What these routes are</h2>
+<p>They are computed answers: ratios, ranks, deviations and flags worked out by deterministic code, with no model in either route. They do not return candles, a price series or a coin's price on a past date, so they suit a question such as "how far did this coin fall in the past year" and not a chart or a backtest that needs every point.</p>
+<h2>From an agent</h2>
+<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "one-year drawdown for a coin" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=one-year%20drawdown%20for%20a%20coin">/api/find</a> answers the same question.</p>
+<h2>Source and use</h2>
+<p>The figures are computed from market data. Powered by <a href="${esc(COINGECKO_API_URL)}" rel="noopener">CoinGecko</a>; every answer carries the same credit. Agent402 is not affiliated with or endorsed by CoinGecko.</p>
+<p>Information only, not investment advice. A past return, drawdown or volatility describes what happened, and says nothing about what happens next.</p>
+<h2>More</h2>
+${links([[`/tools/${year.slug}`, "Token diligence tool"], ...(peg ? [[`/tools/${peg.slug}`, "Stablecoin depeg watch"]] : []), [INSIDER_TRADES_PATH, "Insider trades by API"], ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
+  return page(baseUrl, {
+    path: CRYPTO_HISTORY_STATS_PATH,
+    title: "Crypto history stats API: return and drawdown | Agent402",
+    description: "Crypto history statistics by API: one-year return, drawdown and volatility per coin, computed from a year of candles. Not a price feed. Information only.",
+    h1: "Crypto history statistics by API",
+    crumb: "Crypto history statistics",
     body: bodyHtml,
   });
 }

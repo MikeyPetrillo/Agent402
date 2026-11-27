@@ -29,6 +29,8 @@ t node scripts/test-robots-policy.js
 t node scripts/test-crawl-signals.js
 # Search landings for Form 4 insider trades and agent-to-agent payments: 200, title, canonical, source and not-advice lines, catalog prices, sitemap and llms.txt (boots FREE_MODE)
 t node scripts/test-new-guides-2026-11.js
+# Search landing for crypto history statistics: only routes whose answers are computed here, the source's credit and link, not-advice line, catalog prices, no figure and no series route named (boots FREE_MODE)
+t node scripts/test-crypto-history-stats-page.js
 # Machine catalogs in parts: /openapi.json?category= and ?tag= subsets, /tools/<category>.md within its size budget
 t node scripts/test-agent-catalogs.js
 # /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
