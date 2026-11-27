@@ -1230,7 +1230,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         // every other task goes on exactly as before.
         if (results.length && found.capabilityGap && found.capabilityGapCovered === false) {
           const hasExternal = externalEnabled() && !!resolveExternal;
-          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`, 404);
+          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? `With include:"external" an outside x402 seller is bought for it only when one is named for ${capabilityGapLabel(found.capabilityGap)}: /api/route?q=<task>&include=external lists them.` : "Try /api/find?q=<task>."}`, 404);
         }
         // find's eligible candidates, in find's order (top 5 go to the judge).
         const eligible = [];

@@ -132,10 +132,10 @@ const RULES = [
   [/\bno tool under this endpoint'?s .{0,24}cap does that task\b/i, "underlying_over_cap"],
   [/\bdoes that task \((?:judged|matched too few)/i, "judged_no_match"],
   [/\bno external (x402|MPP|x402 or MPP) seller matched\b/i, "no_seller_matched"],
-  // A task on the capability-gap list with outside matches, none of them
-  // named for the capability (gapNamedCandidates, src/tools/route-execute.js):
-  // supply for the task is what is missing.
-  [/\bNo outside seller here does that task\b.*\bnone of them is named for\b/i, "no_seller_matched"],
+  // A task on the capability-gap list (src/capability-gaps.js) with matches,
+  // none of them named for the capability: our own catalog's refusal and
+  // the external leg's (gapNamedCandidates, src/tools/route-execute.js).
+  [/\bdoes that task: (?:\S+ matched those words and )?none of them (?:offers|is named for)\b/i, "judged_no_match"],
   // NOT \$[0-9.]+ : the real template is `above this endpoint's $${cap}
   // underlying cap`, so the amount is an interpolation and a digit class here
   // matched the string I typed into the test and never the one we emit. The

@@ -126,6 +126,12 @@ cache.delete("https://geo.example"); cache.delete("https://g2.example");
 cache.clear();
 
 // ---- /api/find agrees on the family and keeps its own readings elsewhere ----
+// The gap alone makes these a miss: every word of the query is covered by a
+// tool's own text, so nothing else in find would mark them.
+for (const q of ["ip address location", "country of an ip", "ip to city", "where is 8.8.8.8"]) {
+  const r = findTools(catalog, q, { k: 3 });
+  ok(r.results.length > 0 && r.capabilityGap === "ip-geolocation" && r.capabilityGapCovered === false && r.rarestTermCovered === false, `find: "${q}" is a miss on the gap alone (rarest "${r.rarestTerm}", covered ${r.rarestTermCovered})`);
+}
 for (const q of GAP_QUERIES) {
   const r = findTools(catalog, q, { k: 3 });
   ok(r.capabilityGap === "ip-geolocation" && r.capabilityGapCovered === false && r.rarestTermCovered === false, `find: "${q}" is a miss (${r.results?.[0]?.slug}, covered ${r.rarestTermCovered})`);
@@ -193,6 +199,7 @@ const NEGATIVE = [
   "is this ip a tor exit", "ip reputation", "version 1.2.3.4 of the store locator package", "where are ip addresses allocated from", "where is ip-info documented",
   "dns a record ip for a host located in germany", "holidays in germany", "ip to asn lookup", "country info for brazil", "city population lookup",
   "timezone for a city", "subnet calculator for 10.0.0.0/8", "cidr contains ip", "latitude and longitude of a street address",
+  "cidr math: is ip 10.1.2.3 in the subnet for our second location", "reverse dns for the ip of our colo location", "ping the ip at our warehouse location",
 ];
 ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NEGATIVE]).size === POSITIVE.length + NEGATIVE.length, `the table holds ${POSITIVE.length} positive and ${NEGATIVE.length} negative phrasings`);
 {
@@ -228,6 +235,26 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
     const x = await runOwn(q);
     ok(capabilityGap(q) === null && !("capabilityGap" in f) && !("capabilityGapCovered" in f) && !("capabilityGap" in r) && !("capabilityGapCovered" in r) && !(x.e && GAP_404.test(x.e.message)),
       `negative "${q}": no gap field on find or route, no gap refusal on route-and-execute (${capabilityGap(q)?.id || "none"}, ${x.e ? x.e.statusCode : `ran ${ran.join()}`})`);
+  }
+  // A place word that is not about the IP: the task runs the tool it always ran.
+  // (Read over the kits that hold dns and cidr as well.)
+  const { NETWORK_TOOLS } = await import("../src/tools/network-kit.js");
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const wideCatalog = { ...catalog };
+  for (const t of [...NETWORK_TOOLS, ...KIT2]) wideCatalog[t.route] = t;
+  const wideCat = {};
+  for (const t of Object.values(wideCatalog)) wideCat[t.route] = { ...t, handler: async () => { ran.push(t.slug); return { ok: true, from: t.slug }; } };
+  const wide = buildRouteExecuteTool({ getCatalog: () => wideCat, tier: { slug: "route-execute", execPriceUsd: 0.01, underlyingMaxUsd: 0.01 } });
+  for (const [q, params, want] of [["dns a record ip for a host located in germany", { name: "example.com", type: "A" }, ["dns"]],
+    ["cidr math: is ip 10.1.2.3 in the subnet for our second location", { cidr: "10.1.0.0/16", ip: "10.1.2.3" }, ["cidr"]],
+    ["reverse dns for the ip of our colo location", { ip: "8.8.8.8" }, ["dns", "ip-info"]]]) {
+    ran.length = 0;
+    let e = null, out = null;
+    try { out = await wide.handler({ task: q, params }, REQ); } catch (err) { e = err; }
+    const f = findTools(wideCatalog, q, { k: 3 }), r = route(q, { catalog: wideCatalog, toolCount: Object.keys(wideCatalog).length });
+    // (find and route each rank by their own weights; either pick is a tool that does it.)
+    ok(!e && want.includes(out?.receipt?.slug) && ran.join() === out?.receipt?.slug && r.weakMatches !== true && want.includes(pickOf(r)) && want.includes(f.results?.[0]?.slug) && !("capabilityGap" in r) && !("capabilityGap" in f),
+      `"${q}" runs ${want.join(" or ")} and reads as served on find and route (${e ? `${e.statusCode} ${String(e.message).slice(0, 80)}` : ran.join()}; route ${pickOf(r)}, find ${f.results?.[0]?.slug})`);
   }
   // A stuffed near name beside a seller NAMED for it: the named one is picked on every positive.
   cache.set("https://stuffed.example", seller("https://stuffed.example", { route: "/api/ip-lookup", slug: "ip-lookup", name: "IP lookup", tags: ["geolocation"], description: "ip geolocation geolocate geoip ip location where is this ip located country city coordinates latitude longitude" }));
