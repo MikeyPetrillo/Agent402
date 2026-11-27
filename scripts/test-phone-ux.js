@@ -222,14 +222,45 @@ try {
       ok(wide !== want, `${path}: the wraps bound at 1440px differ from those at 375px (control)`);
       ok(got === want, `${path}: narrowed from 1440px to 375px, the text is bound as a fresh load at 375px binds it`);
     }
+    // The first binding of a long page runs in short turns too: no task holds
+    // the thread for the whole pass (one unbroken pass over this page is a
+    // task of several hundred ms), and the text ends bound as that unbroken
+    // pass binds it. The unbroken pass is the one a part of the page drawn
+    // after load still gets: every edit is taken back and <body> bound at once.
+    const settled = async (p) => {
+      let last = null, same = 0;
+      for (let i = 0; i < 100 && same < 4; i++) {
+        const now = await p.evaluate(() => { const h = document.querySelector("main").innerHTML; return `${h.length}:${(h.match(/\u2060|\u00A0|<wbr>/g) || []).length}`; });
+        same = now === last ? same + 1 : 0; last = now;
+        await p.waitForTimeout(100);
+      }
+    };
+    for (const width of [390, 1440]) {
+      const p = await browser.newPage({ viewport: { width, height: 900 }, hasTouch: true });
+      await p.addInitScript(() => { window.__first = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__first.push(e.duration); }).observe({ type: "longtask", buffered: true }); });
+      await p.goto(`${BASE}/changelog/archive`, { waitUntil: "load" });
+      await settled(p);
+      const longest = await p.evaluate(() => Math.round(Math.max(0, ...window.__first)));
+      const edits = await p.evaluate(() => (document.querySelector("main").innerHTML.match(/\u2060|\u00A0|<wbr>/g) || []).length);
+      const inTurns = await snap(p);
+      const atOnce = await p.evaluate(() => {
+        if (typeof a402Undo === "undefined" || typeof a402BindNow !== "function") return null;
+        while (a402Undo.length) { try { a402Undo.pop()(); } catch (e) { /* a node the page rewrote */ } }
+        a402BindNow(document.body);
+        return document.querySelector("main").innerHTML.replace(/\s(?:tabindex|style|class|data-wbr)="[^"]*"/g, "");
+      });
+      ok(edits >= 500 && longest < 150, `/changelog/archive at ${width}px: the first binding of a long page runs in short turns (${edits} edits, the longest task on load ${longest} ms)`);
+      ok(atOnce !== null && inTurns === atOnce, `/changelog/archive at ${width}px: bound in turns, the text is bound as one unbroken pass binds it`);
+      await p.close();
+    }
     // A long page (a thousand bound tails) re-measures in short turns: the
     // call returns at once, no turn holds the thread, and the text ends bound
     // as a fresh load binds it, also when the width changes again mid-way.
     {
       const LONG = "/changelog/archive";
-      const fresh = await open(LONG, 390); await fresh.waitForTimeout(600); const want = await snap(fresh); await fresh.close();
-      const fresh2 = await open(LONG, 414); await fresh2.waitForTimeout(600); const want2 = await snap(fresh2); await fresh2.close();
-      const p = await open(LONG, 1440); await p.waitForTimeout(600);
+      const fresh = await open(LONG, 390); await settled(fresh); const want = await snap(fresh); await fresh.close();
+      const fresh2 = await open(LONG, 414); await settled(fresh2); const want2 = await snap(fresh2); await fresh2.close();
+      const p = await open(LONG, 1440); await settled(p);
       const edits = await p.evaluate(() => (document.querySelector("main").innerHTML.match(/\u2060|\u00A0|<wbr>/g) || []).length);
       await p.evaluate(() => { window.__long = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long.push(e.duration); }).observe({ entryTypes: ["longtask"] }); });
       await p.setViewportSize({ width: 390, height: 900 }); await p.waitForTimeout(2500);
