@@ -548,7 +548,8 @@ export const CRYPTO_MARKETS_TOOLS = [
   {
     route: "GET /api/coin-profile",
     name: "Coin profile",
-    slug: "coin-profile",
+    // A search-only name: the profile carries the coin's current market snapshot.
+    slug: "coin-profile", aliases: ["coin-snapshot"],
     category: "crypto",
     price: "$0.008",
     description:
