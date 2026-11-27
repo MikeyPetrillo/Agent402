@@ -54,6 +54,14 @@
 // caller's signal. On success it joins the paid line; on failure it is an
 // unpaid read from then on. A run with no settlement in flight is unchanged.
 //
+// EACH READ IS JUDGED IN ITS OWN REQUEST'S SCOPE. Whether a run is paid, and
+// whether its settlement is in flight, are read from the request scope the
+// call runs in (an AsyncLocalStorage). The pace wakes one read from another's
+// turn (the paid line hands the next place back to the unpaid holder), and a
+// timer set there would inherit the waker's scope. So a read keeps the scope
+// it arrived in (AsyncLocalStorage.snapshot) and everything done for it
+// later, by whoever wakes it, runs inside that scope.
+//
 // PER PROCESS. The count lives in this process; with more than one replica
 // each takes its share of the pace (RATE_LIMIT_REPLICAS, as the rate limiter
 // and the unpaid-quote budget do), so the replicas together stay under it.
@@ -65,6 +73,7 @@ import { ceilingLeftMs, ceilingPassed, ceilingCutError } from "../run-ceiling.js
 import { notChargedHere } from "../not-charged.js";
 import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 import { admissionCallerOf, currentCallerLeftSignal } from "../dispatch-caller.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { paidBeforeRunHere, settleInFlightHere } from "../settle-first.js";
 
 export const SEC_HOSTS = Object.freeze(["sec.gov", "www.sec.gov", "data.sec.gov", "efts.sec.gov"]);
@@ -164,6 +173,8 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     if (signal?.aborted) return Promise.reject(abortReason(signal));
     const room = turns.state(LANE);
     if (!room.busy && !room.waitingAll && !active.size && take() === 0) return Promise.resolve();
+    // This read's own scope: every later step for it runs inside it.
+    const mine = AsyncLocalStorage.snapshot();
     let paid = false;
     try { paid = paidOf() === true; } catch { paid = false; }
     // The deadline: the handler budget less what the read needs, the longest
@@ -178,7 +189,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     // and this caller's own earlier reads start first, whoever else waits.
     // With the run's settlement in flight that read is not refused: it waits
     // for the outcome first (`settling`, below).
-    const inFlight = () => { if (paid) return null; let p = null; try { p = pendingOf(); } catch { p = null; } return p && typeof p.then === "function" ? p : null; };
+    const inFlight = () => { if (paid) return null; let p = null; try { p = mine(pendingOf); } catch { p = null; } return p && typeof p.then === "function" ? p : null; };
     const late = !paid && (!(allowed > 0) || earliest((room.busy ? 1 : 0) + turns.ownAhead(who) + 1) >= allowed);
     const settling = late ? inFlight() : null;
     if (late && !settling) return Promise.reject(busyRefusal());
@@ -219,10 +230,10 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       // A settlement in flight: nothing is answered until its outcome is
       // known (the ceiling and the caller's signal still end the wait). Then
       // the run is read once more: paid joins the paid line, unpaid is refused.
-      const awaitOutcome = (p) => { leaveLine(); const again = () => { if (!done) refuse(true); }; p.then(again, again); };
+      const awaitOutcome = (p) => { leaveLine(); const again = () => mine(() => { if (!done) refuse(true); }); p.then(again, again); };
       const refuse = (known = false) => {
         let nowPaid = false;
-        if (!paid) { try { nowPaid = paidOf() === true; } catch { nowPaid = false; } }
+        if (!paid) { try { nowPaid = mine(paidOf) === true; } catch { nowPaid = false; } }
         if (!nowPaid) {
           const p = known ? null : inFlight();
           if (p) return awaitOutcome(p);
@@ -235,7 +246,11 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       };
       // The next place to open is this read's, unless a paid read waits: take
       // it, or wait for it (to its own deadline, as ever).
-      const place = () => {
+      // Called from this read's own turn, from its timer, or by the paid
+      // line's pump in another read's turn: always run in this read's scope,
+      // so the timers it sets are this read's too.
+      const place = () => mine(placeNow);
+      const placeNow = () => {
         if (done) return;
         clearTimeout(timer);
         if (Number.isFinite(allowed) && now() - t0 >= allowed) return refuse();

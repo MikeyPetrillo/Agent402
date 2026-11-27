@@ -110,7 +110,8 @@ try {
   const pulls = await Promise.all(sat);
   const served = pulls.filter((r) => r.status === 200).length, refused = pulls.filter(busy).length;
   const paidFor = served + [own, sameSocket].filter((r) => r.status === 200).length;
-  await sleep(600);
+  // A settle call follows its answer: read the count once it has reached what was served, or at the deadline.
+  for (const end = Date.now() + 10_000; rig.outcomesOf(w).settled < paidFor && Date.now() < end;) await sleep(50);
   const out = rig.outcomesOf(w);
   ok(refused >= 1 && served + refused === BURST && served >= 1, `the same number of pull requests sent together are not all served: the ones the pace could not start in time are answered 503 (${say(pulls)})`);
   ok(out.settled === paidFor && pulls.filter(busy).every((r) => r.json?.charged !== true), `and only the served ones were charged (${out.settled} settled, ${paidFor} served)`);

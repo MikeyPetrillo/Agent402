@@ -402,6 +402,79 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   }
 }
 
+// ---- each read is judged in its own request's scope ----
+// The server's readers answer from the request scope an AsyncLocalStorage
+// holds. The pace wakes one read from another's turn (the paid line's pump
+// hands the next place back to the unpaid holder), and a timer set there
+// inherits the waker's scope: every later read of "is this run paid" and "is
+// its settlement in flight" must still be made in the read's OWN scope.
+{
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const als = new AsyncLocalStorage();
+  const gateOf = () => { let open, fail; const p = new Promise((res, rej) => { open = res; fail = rej; }); p.catch(() => {}); return { p, open, fail }; };
+  const paceOf = (opts = {}) => createSecPace({ perSecond: 1, windowMs: 200, maxWaitMs: 650, callerOf: () => als.getStore()?.who || "none", leftSignalOf: () => null,
+    paidOf: () => als.getStore()?.paid === true,
+    pendingOf: () => { const st = als.getStore(); return st?.settling && !st.settled ? st.settling.then(() => {}, () => {}) : null; }, ...opts });
+  const t0 = performance.now();
+  const run = (pace, scope) => als.run(scope, () => { const s = performance.now(); return pace.turn().then(() => ({ at: performance.now() - s }), (e) => ({ e, at: performance.now() - s })); });
+  const say = (o) => (o.e ? `refused ${o.e.statusCode} at ${Math.round(o.at)} ms` : `started at ${Math.round(o.at)} ms`);
+  void t0;
+  // An unpaid read holding the next place yields to three paid reads that
+  // arrive behind it; its deadline comes while they are served.
+  {
+    const pace = paceOf();
+    const first = run(pace, { who: "w0" });
+    const unpaid = run(pace, { who: "u" });
+    const paid = [1, 2, 3].map((i) => run(pace, { who: `p${i}`, paid: true }));
+    const [u, ...ps] = await Promise.all([unpaid, ...paid, first]);
+    ok(u.e?.secBusy === true && u.at >= 600 && u.at < 800 && ps.slice(0, 3).every((o) => !o.e), `an unpaid read woken by the paid line is refused at its own deadline, never read as paid in a paid read's scope (${say(u)}; paid ${ps.slice(0, 3).map(say).join(", ")})`);
+  }
+  // The same unpaid read, its payment become final while it waited: it is
+  // read in its own scope when the scope that woke it no longer reads paid.
+  {
+    const pace = paceOf();
+    const mine = { who: "u" }, waker = { who: "p1", paid: true };
+    const first = run(pace, { who: "w0" });
+    const waited = run(pace, mine);
+    const p1 = run(pace, waker);
+    const others = [2, 3].map((i) => run(pace, { who: `p${i}`, paid: true }));
+    await p1;                 // the waker is served: the place went back to the waiting read from the waker's turn
+    waker.paid = false;       // a scope that does not read paid
+    mine.paid = true;         // this run's own payment is final
+    const [w] = await Promise.all([waited, first, ...others]);
+    ok(!w.e && w.at >= 650, `a read whose own payment became final is served past its deadline, whatever the scope that woke it reads (${say(w)})`);
+  }
+  // A read whose own run's settlement is in flight at its deadline waits for
+  // THAT settlement, and is judged on its outcome, not on the waker's run.
+  const settleCase = async (outcome) => {
+    const pace = paceOf();
+    const g = gateOf();
+    const mine = { who: "u", settling: g.p };
+    const first = run(pace, { who: "w0" });
+    const waited = run(pace, mine);
+    const paid = [1, 2, 3].map((i) => run(pace, { who: `p${i}`, paid: true }));
+    let early = null;
+    waited.then((o) => { if (early === null) early = o; });
+    await new Promise((res) => setTimeout(res, 900)); // past the 650 ms deadline, the settlement in flight
+    const before = early; early = false;
+    mine.settled = true;
+    if (outcome === "success") { mine.paid = true; g.open(); } else g.fail(new Error("refused"));
+    const [w] = await Promise.all([waited, first, ...paid]);
+    return { w, before, waiting: pace.status().waiting };
+  };
+  const won = await settleCase("success"), lost = await settleCase("failure");
+  ok(won.before === null && lost.before === null, `a read woken by the paid line, its own settlement in flight at its deadline, is answered nothing until that settlement ends (${won.before ? say(won.before) : "waiting"}, ${lost.before ? say(lost.before) : "waiting"})`);
+  ok(!won.w.e && won.waiting === 0 && lost.w.e?.secBusy === true && lost.waiting === 0, `and is judged on its own run's outcome: served when it succeeded, refused when it failed (${say(won.w)}; ${say(lost.w)})`);
+  // CONTROL: with no paid read anywhere, unpaid reads are refused as before.
+  {
+    const pace = paceOf();
+    const first = run(pace, { who: "w0" });
+    const same = await Promise.all([1, 2, 3, 4, 5].map(() => run(pace, { who: "c" })));
+    await first;
+    ok(same.filter((o) => o.e?.secBusy === true).length >= 2 && same.filter((o) => !o.e).length >= 2, `CONTROL: one caller's unpaid reads past the deadline are refused and the rest served (${same.map(say).join("; ")})`);
+  }
+}
+
 // ---- a paid read starts ahead of the unpaid line, at the same pace ----
 // Unpaid reads keep arriving from distinct callers faster than the pace starts
 // them, so the line always has a holder. A paid read must not wait behind it.
