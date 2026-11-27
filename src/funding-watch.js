@@ -34,6 +34,9 @@
 // watched wallet with no reading yet, or whose reads fail, reads "unknown"
 // there; no other wallet's word changes. Nothing is public and nothing pages.
 import { noteFundingReading, RUNWAY_SAMPLE_MS } from "./funding-runway.js";
+// A named import of the balance read only: the paying functions stay with
+// server.js (scripts/test-buyer-callers.js).
+import { tempoUsdcBalanceOf } from "./tempo-buyer.js";
 
 export const FUNDING_WATCH_VAR = "FUNDING_WATCH_ADDRESSES";
 export const FUNDING_WATCH_MAX = 8;
@@ -42,7 +45,7 @@ export const FUNDING_WATCH_READ_MS = 15_000;
 
 const READERS = {
   base: async (address) => (await import("./upstream-buyer-status.js")).baseUsdcBalanceOf(address),
-  tempo: async (address) => (await import("./tempo-buyer.js")).tempoUsdcBalanceOf(address),
+  tempo: async (address) => tempoUsdcBalanceOf(address),
 };
 export const FUNDING_WATCH_CHAINS = Object.keys(READERS);
 
