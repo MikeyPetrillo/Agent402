@@ -198,6 +198,32 @@ Loaded when an index, discovery, router or buyer file is read.
   as Base, so a seller's day and the lane's day are one day across chains.
   `unprovenLaneAtLivePayTo` (`src/dispatch-eligibility.js`) reads the lane's verdict at the
   address the live 402 names on the paying chain. Suite: `scripts/test-evm-unproven-chains.js`.
+- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today one
+  family, `ip-geolocation`) of tasks this host's catalog does not do, read by `/api/find`,
+  `/api/route` and route-and-execute so the three agree. A query is in a family only when it asks
+  for the capability in so many words (`asks`); every other query is ranked and served as before.
+  A gap query is a miss unless a candidate row is NAMED for the capability in its slug or name
+  (`gapNamedBy`; a description never clears it), and a named row, an outside seller's included,
+  is the pick over a better-scored near name. The family's `terms` join the scored terms so a
+  named row is a candidate however the query was worded. Fields: `capabilityGap` (the family id)
+  and `capabilityGapCovered` on any answer to a gap query that scored a row; on a miss
+  `/api/route` and `/api/find` add `weakMatches: true`, `weak: true` on every row and a `hint`
+  (`/api/find` gets there through `rarestTermCovered: false`, which its weak-match marking
+  reads). A new
+  family adds `asks`, `covers`, `terms` and a case with controls in
+  `scripts/test-capability-gaps.js`.
+- **Route-and-execute refusals before any purchase:** a gap task with no named row answers 404
+  ("No tool in this catalog does that task"), nothing run and nothing charged, with the
+  `include:"external"` retry named only when external dispatch is on. A candidate that is a
+  chat completion (`chatFieldsMissing`: its route ends `/chat/completions`, or ends `/messages`
+  AND its category, tags or declared request contract say chat; a bare `/messages` route is
+  never asked) is skipped when the call lacks the chat fields it needs: the ones its request
+  contract requires among `model`, `messages`, `prompt` and `input`, or `model` and `messages`
+  when it declares none. The next candidate is tried first (trace step `chat_fields_missing`);
+  with none left the answer is 400 naming each field as `params.<field>` (the error carries
+  `missing`), before any booking or signature. `contractFieldsMissing` is the after-the-fact
+  twin: it names the contract's required body fields the call lacked when the seller's paid
+  answer was a 400 or 422.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
 - **Per-minute spend ceilings:** `SOR_SPEND_CAP_ATOMIC` (atomic USDC, default 2000000) is the
   alarm on what `payX402` holds for outside sellers in one minute, summed across buyers

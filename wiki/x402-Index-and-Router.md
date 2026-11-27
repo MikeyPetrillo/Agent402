@@ -50,6 +50,25 @@ something above its cap returns a self-correcting `409` naming the exact tier
 that covers it, or the tool's direct route. A `409` is a `4xx`, so it cancels
 settlement: an under-budget attempt costs nothing.
 
+### Refusals before anything is bought
+
+Two refusals are decided from the request alone, before any tool runs or any
+seller is paid. Both are `4xx`, so they cancel settlement and cost nothing.
+
+- **`404` for a task this catalog does not do.** A task that asks for a
+  capability on the short list in `src/capability-gaps.js` (today: IP
+  geolocation) and matches no tool named for it is answered `404`, naming the
+  capability. Nothing is run. When external execution is available the message
+  says to retry with `include: "external"`.
+- **`400` for a chat completion without its fields.** When the task routes to
+  an outside seller that is a chat completion (its route ends
+  `/chat/completions`, or ends `/messages` and its listing says chat) and
+  `params` lacks the fields that seller needs, the router tries the next
+  candidate first. With none left it answers `400` naming each missing field
+  as `params.<field>`. The fields are the ones the seller's published request
+  contract requires among `model`, `messages`, `prompt` and `input`; a seller
+  that declares none is asked for `model` and `messages`.
+
 ### External execution: run any proven x402 or MPP seller in one call
 
 With `include: "external"`, route-execute goes beyond this host's catalog: it resolves the best **external** seller for the task - an x402 seller from the open index, or an **MPP seller on Tempo** from the live-verified [MPP marketplace](https://agent402.tools/mpp-marketplace) - buys the result from them with Agent402's own spending wallet over the seller's wire (x402 or MPP), and sells it to you. One payment from you, one request, cross-vendor and cross-protocol settlement underneath.
@@ -230,6 +249,16 @@ Returns an **object**, not a bare array. The matches are in `results`:
   sellers they came from.
 - The response echoes back the resolved `include` value (invalid values fall
   back to `all`).
+- `capabilityGap` and `capabilityGapCovered` appear only on a query that asks
+  for a capability this host's catalog does not offer. The list is short and
+  named in the source (`src/capability-gaps.js`); today it holds one entry,
+  `ip-geolocation`. Such a query is a miss unless a row is named for the
+  capability in its slug or name (a description does not count), and a row
+  that is named for it, an outside seller's included, is ranked first. On a
+  miss the answer carries `capabilityGapCovered: false`, `weakMatches: true`,
+  `weak: true` on every row and a `hint` saying none of the rows does the
+  task: treat the rows as near word matches, not as answers. Every other
+  query is ranked and answered as before.
 
 ## What the router adds
 
