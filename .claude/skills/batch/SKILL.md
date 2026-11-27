@@ -95,9 +95,14 @@ Alongside them:
 - Mutation re-checks of every fix in the batch, on copies.
 - Docker image build and smoke: `docker build` then boot the image as
   `.github/workflows/docker-build-check.yml` does and wait for `/health` 200.
+- A local secret scan of the batch's commits with the CI job's config
+  (`.github/workflows/secret-scan.yml`):
+  `gitleaks git --config .gitleaks.toml --redact --log-opts="-m origin/main..HEAD" --verbose`
+  exits 0, then `gitleaks dir --config .gitleaks.toml --redact .` for the working tree.
 
 Fix every finding with a test that fails without the fix, then re-run the reviewer and suites
-the fix touches. Result: every reviewer verdict is SHIP, every suite and the image smoke exit 0,
+the fix touches. A change made after the full suite ran, however small, means the full suite
+runs again on the final head before the PR is marked ready. Result: every reviewer verdict is SHIP, every suite and the image smoke exit 0,
 and every mutation makes a test fail.
 
 ## 6. Push and merge
