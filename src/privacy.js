@@ -138,7 +138,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-27.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-28.</p>
 <!--lg-top-->
 </section>
 

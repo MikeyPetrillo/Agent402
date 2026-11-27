@@ -500,7 +500,7 @@ ok(files.length > 0 && leaks(stored).length === 0, `no stored record carries it 
     const named = Object.entries(surfaces).filter(([, t]) => WORDS.test(t)).map(([p]) => p);
     ok(surfaces["/llms.txt"].length > 500 && surfaces["/openapi.json"].length > 500 && surfaces["/terms"].length > 500 && surfaces["/changelog"].length > 500 && surfaces["/tools/github-repo"].length > 500 && named.length === 0, `off: no surface mentions the feature (${named.map((p) => `${p}: ${(surfaces[p].match(WORDS) || [])[0]} @ ${surfaces[p].slice(Math.max(0, surfaces[p].search(WORDS) - 70), surfaces[p].search(WORDS) + 50).replace(/\s+/g, " ")}`).join(" || ") || "none"})`);
     ok(!WORDS.test(row?.description || "x") && /Unknown repos return 404\.$/.test(row?.description || ""), "off: the github-repo description ends where it did before the feature");
-    ok(/last updated 2026-11-25\./.test(surfaces["/terms"]), "off: /terms keeps its own date");
+    ok(/last updated 2026-11-28\./.test(surfaces["/terms"]), "off: /terms keeps its own date");
     const view = await fetch(`${B}/__operator/upstream-key.json`, { headers: { "X-Operator-Token": OP } }).then((r) => r.json());
     ok(view.enabled === false && view.counts?.removedWhileOff >= 5 && view.counts?.applied === 0 && view.counts?.malformed === 0 && view.counts?.tooLong === 0 && view.counts?.inClear === 0, `off: the operator view says off, and only removals are counted (${JSON.stringify(view.counts)})`);
   } finally {
