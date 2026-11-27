@@ -1,4 +1,4 @@
-import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { SETTLE_FIRST_SENTENCE, settleFirstClause } from "./settle-first-copy.js";
 // The one sentence a page says about a paid call that fails, shared by every
 // tool page and every integration page so the copies cannot drift apart.
 //
@@ -21,4 +21,16 @@ export const TEMPO_PUSH_EXCEPTION = "The exception is a Tempo push credential, a
 export function failedCallFootnote({ rails = ["x402"], tempoPush = false } = {}) {
   const list = (Array.isArray(rails) && rails.length ? rails : ["x402"]);
   return `A paid call that ends in any status of 400 or above is not charged over ${listWords(list)}: settlement runs after the tool and only on a successful response.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""}${tempoPush ? ` ${TEMPO_PUSH_EXCEPTION}` : ""}`;
+}
+
+/** The short Tempo push exception a tool page's one-line rule carries. */
+export const TEMPO_PUSH_SHORT = "A Tempo push credential pays before the call; a failure is a refund owed.";
+
+/** The same rule stated for one route (a /tools/<slug> page): the settle-first
+ *  sentence only where that route may settle first (`settlesFirst`, which
+ *  server.js sets from the settle-first slugs), the push exception only where
+ *  a Tempo push credential is offered. Plain text, safe to escape. */
+export function routeFailedCallLine({ rails = ["x402"], tempoPush = false, settlesFirst = false } = {}) {
+  const list = (Array.isArray(rails) && rails.length ? rails : ["x402"]);
+  return `On this route, a call ending in any status of 400 or above is not charged over ${listWords(list)}.${settleFirstClause({ settlesFirst })}${tempoPush ? ` ${TEMPO_PUSH_SHORT}` : ""}`;
 }
