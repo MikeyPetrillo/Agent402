@@ -790,8 +790,8 @@ export function surfaceClause(text) {
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];
-  // The short index says each fact once: the explainer link and /api/pricing
-  // are in the paragraph under the summary, access (no account or key, the
+  // The short index says each fact once: the explainer link is in the paragraph
+  // under the summary, /api/pricing in the machine surfaces, access (no account or key, the
   // quote in the 402, what proof-of-work skips) in the front door's lines, the
   // card method in the MPP methods, and the per-request quote and the metered
   // routes in the metered section below. /llms-full.txt keeps the summary whole.
@@ -810,7 +810,7 @@ export function llmsTxt(baseUrl, catalog) {
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
   // The npm server's own Claude Code line is in /llms-full.txt (the hosted one-liner above stays).
-  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
+  const shortHosts = (text) => text.replace(/flagship-first remote MCP \([^)]*\)\. Install one-liners:/, "remote MCP: flagship tools, with catalog.find and catalog.call for the rest. Install:").replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
   const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
   const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
@@ -822,11 +822,14 @@ export function llmsTxt(baseUrl, catalog) {
   // (surfaceClause), so a surface added later stays short here too.
   const brief = [
     // The short form keeps what the page is (computed figures, not a series) and its source's credit.
-    [`- [/crypto-history-stats-api](`, `- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's past year as computed statistics by API, not a price series. Powered by CoinGecko (https://www.coingecko.com/en/api)`],
-    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
-    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
+    [`- [/crypto-history-stats-api](`, `- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's history as computed statistics, not a price series. Powered by CoinGecko (https://www.coingecko.com/en/api)`],
+    // The Form 4 page keeps its model-backed marking; the guide keeps what is paid and how.
+    [`- [/insider-trades-api](`, `- [/insider-trades-api](${baseUrl}/insider-trades-api): SEC Form 4 filings by ticker, and the model-backed insider flow report`],
+    [`- [/guides/agent-to-agent-payments](`, `- [/guides/agent-to-agent-payments](${baseUrl}/guides/agent-to-agent-payments): one agent paying another's endpoint over x402`],
+    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search`],
+    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer from live web search`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
-    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example), also at \`/.well-known/search\` (GET or QUERY)`],
+    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools, also at \`/.well-known/search\` (GET or QUERY)`],
     [`- [/api/search-news](`, `- [/api/search-news](${baseUrl}/api/search-news): live news search`],
     [`- [/api/mpp-leaderboard](`, `- [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): MPP sellers ranked by USDC.e received on Tempo`],
     [`- [/api/reliability](`, `- [/api/reliability](${baseUrl}/api/reliability): reliability report, a verification URL per claim`],
@@ -850,7 +853,7 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), top 25 (\`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`; \`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
   ];
   const surfaceBrief = (line) => {
     const hit = brief.find(([prefix]) => line.startsWith(prefix));
@@ -863,7 +866,15 @@ export function llmsTxt(baseUrl, catalog) {
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
-    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
+    // What the gateway does (one list sentence), how the quote is estimated and
+    // how long a call usually takes are in /llms-full.txt; the short index keeps
+    // the routes, the model-backed marking, the settlement bound and the timeout.
+    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n")
+      .replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "")
+      .replace(` ${gatewayProductSentence({ receipts: receiptsServed() })}`, "")
+      .replace(" (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee)", "")
+      .replace(", which takes a few seconds on most calls and longer for long answers", "")
+      .trimEnd();
     if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
     if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
     // A platform page keeps its link here; its setup clause is in /llms-full.txt.
@@ -887,7 +898,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP explained, for people: ${GUIDE_SITE}.
+The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. x402 and MPP explained, for people: ${GUIDE_SITE}.
 
 ${[
     // The Tempo currencies are named in the MPP methods line just below.
