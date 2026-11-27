@@ -190,6 +190,9 @@ const POSITIVE = [
   "locate an ip address", "locate 8.8.8.8", "geolocate 8.8.8.8", "geo-locate ipv6 address", "where is 8.8.8.8", "where is this ip", "where's this ip address",
   "where is this ip located", "ip lookup location", "ip based location", "ip address location", "location of an ip address", "ip country lookup",
   "IP-Geolokalisierung", "geolocalizacion de ip", "city and region for ip 203.0.113.9",
+  // The time zone or local time of an IP is the same lookup: no tool here does it.
+  "timezone of an IP address", "time zone for an ip", "local time for ip 8.8.8.8", "local time of an ip address", "what timezone is this ip in",
+  "ip to timezone", "ip timezone lookup", "time zone of 1.1.1.1",
 ];
 const NEGATIVE = [
   "weather for my location", "place lookup", "ip address validation", "is this ip private", "geolocation of a photo exif", "locate a store near an address",
@@ -200,6 +203,8 @@ const NEGATIVE = [
   "dns a record ip for a host located in germany", "holidays in germany", "ip to asn lookup", "country info for brazil", "city population lookup",
   "timezone for a city", "subnet calculator for 10.0.0.0/8", "cidr contains ip", "latitude and longitude of a street address",
   "cidr math: is ip 10.1.2.3 in the subnet for our second location", "reverse dns for the ip of our colo location", "ping the ip at our warehouse location",
+  // A time zone asked of a place, or converted, is a job the catalog does.
+  "convert time zones", "local time in Tokyo", "time zone of new york", "what time zone is berlin in", "local time for a meeting across time zones",
 ];
 ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NEGATIVE]).size === POSITIVE.length + NEGATIVE.length, `the table holds ${POSITIVE.length} positive and ${NEGATIVE.length} negative phrasings`);
 {

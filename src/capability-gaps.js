@@ -35,9 +35,12 @@ const DET = "(?:(?:an?|the|this|that|these|those|any|given|some|my|your|its) )?"
 const IP_NOUN = `(?:${IP_WORD} (?:(?:address|addresses|addr) )?(?:${LIT} )?|${LIT} )`;
 const AFTER = `(?=$|(?:${LIT}|lookup|lookups|is|are|was|in|on|by|with|using|via|from|and|or|to|located|location|geolocation|api|tool|service|please|now|come|comes|originate|originates|belong|belongs|based|geographically|physically|country|city|region|coordinates) )`;
 const TARGET = `${DET}${IP_NOUN}${AFTER}`;
-// What IP geolocation answers with.
+// What IP geolocation answers with (and, below, the time zone it implies).
 const ATTR = "(?:country|countries|city|cities|region|continent|coordinates|coords|latitude|longitude|lat|latlong|latlng|lat long|lat lon|lat lng)";
 const LOCATE = "(?:location|locations|locate|locating|locator|whereabouts)";
+// The time zone or local time of an IP is read off its location: the same
+// lookup. Asked of a place ("local time in Tokyo") or converted, it is not.
+const TZ = "(?:time ?zones?|local time)";
 
 // One word says both halves: geoip, geo ip, ip geo, ipgeo, ip2location.
 const GEOIP_RE = / (?:geo ?ips?|geoip2|ip ?geo|ip2location|ip2geo|ip2country|ip2city) /;
@@ -61,6 +64,12 @@ const ASK_RES = [
   new RegExp(` (?:which|what) ${ATTR} (?:is|are|s|does|do|did) ${TARGET}`),
   // "ip country lookup", "ip city".
   new RegExp(` ${IP_NOUN}${ATTR} (?=$|(?:lookup|lookups|code|codes|name|finder|detection|check|api|and|or) )`),
+  // "timezone of an ip address", "local time for ip 8.8.8.8", "time zone of 1.1.1.1".
+  new RegExp(` ${TZ} (?:of|for|from|by|at) ${TARGET}`),
+  // "what timezone is this ip in".
+  new RegExp(` (?:which|what) ${TZ} (?:is|are|s|does|do|did) ${TARGET}`),
+  // "ip to timezone", "ip timezone lookup".
+  new RegExp(` ${IP_NOUN}(?:(?:to|into|2) (?:(?:a|the|its) )?)?${TZ} (?=$|(?:lookup|lookups|finder|detection|check|api|and|or) )`),
 ];
 // A row named for it, slug or name each read alone: any wording above, or
 // the short forms a slug takes ("ip-geo", "ip-to-country", "country-by-ip").
