@@ -58,7 +58,7 @@
     "src/tools/a2a-card.js": "2026-11-24",
     "src/tools/action-gate-kit.js": "2026-08-11",
     "src/tools/agent-kit.js": "2026-10-06",
-    "src/tools/alchemy-data-kit.js": "2026-11-24",
+    "src/tools/alchemy-data-kit.js": "2026-11-27",
     "src/tools/answer-cap.js": "2026-11-19",
     "src/tools/api-kit.js": "2026-11-13",
     "src/tools/attest-kit.js": "2026-11-27",
@@ -67,7 +67,7 @@
     "src/tools/b2b-enrich-kit.js": "2026-11-21",
     "src/tools/barcode-kit.js": "2026-11-09",
     "src/tools/browser-measure-kit.js": "2026-11-27",
-    "src/tools/bundle-kit.js": "2026-11-24",
+    "src/tools/bundle-kit.js": "2026-11-27",
     "src/tools/calendar-kit.js": "2026-11-09",
     "src/tools/captcha-kit.js": "2026-10-14",
     "src/tools/cdp-kit.js": "2026-11-27",
@@ -83,8 +83,8 @@
     "src/tools/convert-gen.js": "2026-09-25",
     "src/tools/crawl-kit.js": "2026-11-24",
     "src/tools/crypto-hash-kit.js": "2026-10-29",
-    "src/tools/crypto-kit.js": "2026-11-24",
-    "src/tools/crypto-markets-kit.js": "2026-11-24",
+    "src/tools/crypto-kit.js": "2026-11-27",
+    "src/tools/crypto-markets-kit.js": "2026-11-27",
     "src/tools/crypto-screens-kit.js": "2026-11-27",
     "src/tools/crypto-signals-kit.js": "2026-11-23",
     "src/tools/cve-kit.js": "2026-11-24",
@@ -153,6 +153,7 @@
     "src/tools/llm-kit.js": "2026-11-26",
     "src/tools/llm-messages-kit.js": "2026-11-24",
     "src/tools/llm-responses-kit.js": "2026-11-24",
+    "src/tools/lookback-stats.js": "2026-11-27",
     "src/tools/loop-gate-kit.js": "2026-11-27",
     "src/tools/macro-kit.js": "2026-11-24",
     "src/tools/mailbox-provider.js": "2026-11-21",
@@ -543,11 +544,11 @@
     },
     "/skills/crypto-dossier": {
       "published": "2026-07-04",
-      "modified": "2026-07-24"
+      "modified": "2026-11-27"
     },
     "/skills/crypto-research": {
       "published": "2026-06-20",
-      "modified": "2026-10-11"
+      "modified": "2026-11-27"
     },
     "/skills/decode-blob": {
       "published": "2026-06-20",
@@ -727,7 +728,7 @@
     },
     "/skills/price-monitor": {
       "published": "2026-06-23",
-      "modified": "2026-10-14"
+      "modified": "2026-11-27"
     },
     "/skills/regulatory-watch": {
       "published": "2026-06-21",
