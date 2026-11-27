@@ -209,7 +209,7 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
+import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns, substringMatcher } from "./query-terms.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -12235,7 +12235,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // unbounded loop bound (CodeQL js/loop-bound-injection, 2026-09-18).
   const nTerms = Math.min(terms.length, 32);
   const shortTerm = Array.from({ length: nTerms }, (_, k) => !(terms[k].length >= 3 || isCjkTerm(terms[k])));
-  const hitTerm = Array.from({ length: nTerms }, (_, k) => (shortTerm[k] ? wholeTokenMatcher(terms[k]) : (str) => str.includes(terms[k])));
+  const hitTerm = Array.from({ length: nTerms }, (_, k) => (shortTerm[k] ? wholeTokenMatcher(terms[k]) : substringMatcher(terms[k])));
   // Coinbase-measured 30-day unique payers per seller, read once per seller per
   // query instead of once per sort COMPARISON: on a pool where a common term
   // matches tens of thousands of rows, the comparator ran bazaarQualityFor()
@@ -12301,7 +12301,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         if (i === partsOnly) {
           if (covered[i] && nameParts[i][0].includes(term)) s = 10;
         } else if (n === term || (covered[i] && (nameToks[i].includes(term) || (nameParts[i] && nameParts[i].some((p) => p !== null && p.includes(term)))))) s = 10;
-        else if (short ? nameToks[i].includes(term) : n.includes(term)) s = 4;
+        else if (short ? nameToks[i].includes(term) : hit(n)) s = 4;
         if (s > slugScore) slugScore = s;
       }
       if (slugScore) { score += slugScore; mSlug += slugScore; }

@@ -19,6 +19,8 @@ t node scripts/test-tempo-transfers.js
 t node scripts/test-route-execute.js
 # Capability gaps (one list for find, the router and route-execute: an IP geolocation task is a miss unless a row is named for it; every other task ranks and runs as before - offline)
 t node scripts/test-capability-gaps.js
+# Router terms: "add" is not read inside "address"; every other term keeps the substring rule (offline)
+t node scripts/test-route-term-false-friends.js
 # Status page store (unobserved days are never uptime; stale is never operational — offline)
 t node scripts/test-status-store.js
 # Status page reads at scale (two million rows: the page is byte-identical to the whole-table reads, every history-independent read is an index search, the kept count equals
