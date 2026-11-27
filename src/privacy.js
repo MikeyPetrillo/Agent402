@@ -614,6 +614,7 @@ ${ledgerFooterCompact()}`;
     "Everything we keep, and for how long, is listed under Retention.",
     `In the EEA, the UK and Switzerland you can ask for access, correction or erasure at <a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month.`,
     "The service is for people 18 and older.",
+    "This summary does not replace the full text below, which governs.",
   ]);
   const page = body.replace("<!--lg-top-->", `${summary}\n${legalJumpList(body)}`);
 
