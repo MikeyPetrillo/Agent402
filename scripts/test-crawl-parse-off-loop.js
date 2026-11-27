@@ -25,9 +25,9 @@
 //     origin, never the host, with the size class.
 // Then the rebuild itself: values JSON text cannot carry, an own "__proto__"
 // key, integer-like keys, deep nesting, long strings, in both piece formats.
-// Mutation-checked: the off-loop path disabled, the long-list passes and the
-// registry fold taken off the lane, and the in-place fallback removed each
-// fail it. Offline.
+// Mutation-checked: the off-loop path disabled, the long-list passes, the
+// quote pick and the registry fold taken off the lane, the registry parse
+// left in place, and the in-place fallback removed each fail it. Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/loopback-only-preload.js"; // nothing here reaches a real host
 import assert from "node:assert/strict";
@@ -173,19 +173,20 @@ ok(c.worst <= LIMIT.ms, `no turn of the manifest crawl held the loop past ${LIMI
 const d = await inPlace(() => crawl(D, { "/.well-known/x402": manifest, "/openapi.json": many }, "crawl, same documents parsed in place"));
 assert.deepStrictEqual(stored(c.entry, C), stored(d.entry, D));
 ok(true, "the manifest crawl stores the same entry on both paths");
-// Counted, so the machine's speed does not decide it: the quote pick over the
-// long list ran as lane slices (an iteration counter beside the filter).
+// Counted, so the machine's speed does not decide it: each whole-list walk of
+// the long list ran as crawl-lane steps (an iteration counter beside the
+// walk observer), and the quote pick, the longest of them, over several turns.
+let iteration = 0, counting = true;
+const tick = () => { iteration++; if (counting) setImmediate(tick); };
+setImmediate(tick);
+const walkTurns = new Map(); // walk name -> the loop iterations a stretch of it ended in
+idx.__setCrawlWalkObserverForTest((name) => { if (!walkTurns.has(name)) walkTurns.set(name, new Set()); walkTurns.get(name).add(iteration); });
 {
   const E = "https://many-e.example";
-  let iteration = 0, counting = true;
-  const tick = () => { iteration++; if (counting) setImmediate(tick); };
-  setImmediate(tick);
-  const seenIn = new Set();
-  idx.__setQuotePickObserverForTest((origin) => { if (origin === E) seenIn.add(iteration); });
-  await crawl(E, { "/.well-known/x402": manifest, "/openapi.json": many }, "crawl, counted");
-  counting = false;
-  idx.__setQuotePickObserverForTest(null);
-  ok(seenIn.size >= 3, `the quote pick over the long list ran in ${seenIn.size} loop iterations, not one`);
+  await crawl(E, { "/.well-known/x402": manifest, "/openapi.json": many }, "crawl, walks counted");
+  const ran = (name) => walkTurns.get(name)?.size || 0;
+  ok(["routes", "merge", "vouch", "stamp", "carry", "quote-pick"].every((w) => ran(w) >= 1), `the long list's route list, merge, vouch, stamp, carry and quote pick ran as crawl-lane steps (${[...walkTurns].map(([k, v]) => `${k}:${v.size}`).join(" ")})`);
+  ok(ran("quote-pick") >= 2, `the quote pick over the long list took ${ran("quote-pick")} loop iterations, not one`);
 }
 
 // ---- 4. a document that is not JSON, and a read refused for its size ---------------
@@ -223,7 +224,13 @@ const discover = async (label) => {
   realLog(`# ${label}: longest turn ${worst.toFixed(0)} ms`);
   return { worst, tools: JSON.stringify([...st.bazaarTools].filter(([o]) => /\/\/reg\d+\.example$/.test(o)).sort(([x], [y]) => (x < y ? -1 : 1))), status: [...st.status.values()].find((s) => s.url === source.url) };
 };
+walkTurns.clear();
+const rebuiltBefore = crawlParseStats().offLoop;
 const r1 = await discover(`discovery, ${(list.length / MB).toFixed(1)} MB list parsed off the loop`);
+ok((walkTurns.get("registry-fold")?.size || 0) === 40, `the 40,000 listings were folded 1,000 per loop iteration (${walkTurns.get("registry-fold")?.size} iterations)`);
+ok(crawlParseStats().offLoop === rebuiltBefore + 1, "the registry list was parsed in the thread and rebuilt from its pieces");
+counting = false;
+idx.__setCrawlWalkObserverForTest(null);
 ok(r1.status?.resources === 40_000 && r1.status.origins === 400 && !r1.status.error && discoveryCap === 64 * MB, `control: the pass read the whole list (${r1.status?.resources} listings, ${r1.status?.origins} origins) under its 64 MB cap`);
 ok(r1.worst <= LIMIT.ms, `no turn of the discovery pass held the loop past ${LIMIT.ms} ms (longest ${r1.worst.toFixed(0)} ms)`);
 const r2 = await inPlace(() => discover("discovery, same list parsed in place"));

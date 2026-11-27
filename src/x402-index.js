@@ -3119,8 +3119,11 @@ function crawlDocLabel(from, text = from?.chars) {
 function crawlWalk(name, from, fn) {
   const t0 = performance.now();
   try { return laneSpan(`crawl-walk ${name}`, fn); }
-  finally { noteCrawlWalk(name, from, performance.now() - t0); }
+  finally { if (crawlWalkObserver) crawlWalkObserver(name, from); noteCrawlWalk(name, from, performance.now() - t0); }
 }
+let crawlWalkObserver = null;
+/** Test hook: called with (name, from) as each walk stretch ends (a laned walk: each slice). */
+export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof fn === "function" ? fn : null; }
 function noteCrawlWalk(name, from, ms) {
   if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(from)}: longest=${Math.round(ms)}ms`);
 }
@@ -3128,7 +3131,7 @@ function noteCrawlWalk(name, from, ms) {
  *  time, its longest slice read against the threshold. */
 async function crawlWalkLaned(name, from, gen) {
   let longest = 0;
-  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; }); }
+  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
   finally { noteCrawlWalk(name, from, longest); }
 }
 // A crawl's synchronous stretch, timed under its name for the [loop-lag]
@@ -5818,9 +5821,6 @@ function stampRouteAsk(t, now = Date.now()) {
   return !wasRetry;
 }
 
-let quotePickObserver = null;
-/** Test hook: called with the origin for each row the candidate pick reads. */
-export function __setQuotePickObserverForTest(fn) { quotePickObserver = typeof fn === "function" ? fn : null; }
 export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
@@ -5897,8 +5897,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       && probeDue(originUrl, `quote:${t.route}`);
   // The registry fallback hands its pass runner in (`candidatePass`), so a
   // long list is picked over in the crawl lane; every other caller filters here.
-  const keep = quotePickObserver ? (t) => { quotePickObserver(originUrl); return isCandidate(t); } : isCandidate;
-  const picked = candidatePass ? candidatePass(filterSteps(tools, keep)) : tools.filter(keep);
+  const picked = candidatePass ? candidatePass(filterSteps(tools, isCandidate)) : tools.filter(isCandidate);
   const candidates = picked && typeof picked.then === "function" ? await picked : picked;
   // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
   // into a list that SHRINKS as rows price, so some rows landed in skipped
