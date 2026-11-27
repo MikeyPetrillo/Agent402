@@ -231,8 +231,8 @@ LLC: credit the entity, never a personal name.
 - A list answer that is a page or a capped sample says so in fields (`src/partial-answer.js`),
   not only in a prose note.
 - Before adding a data source, read its terms.
-- A read of an SEC host goes through `src/tools/sec-rate.js` (`SEC_STARTS_PER_SECOND` starts in any
-  rolling second, process-wide): it paces our outbound reads and never counts callers; a read that
+- A read of an SEC host goes through `src/tools/sec-rate.js` (`SEC_STARTS_PER_SECOND_TOTAL` starts in any
+  rolling second, shared across replicas): it paces our outbound reads and never counts callers; a read that
   cannot get its turn inside its bounded wait answers 503 with Retry-After
   (`scripts/test-sec-rate.js`).
 - A new refusal or miss rule is a narrow named list with controls that prove every other request
