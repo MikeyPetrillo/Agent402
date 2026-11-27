@@ -66,6 +66,8 @@ API:
   it) unless a listed tool is named for it; every other query is answered as
   before. route-and-execute, with `include:"external"` as well, answers 404
   for such a task without running or charging anything.
+- /api/route no longer reads the query word "add" inside "address", so a
+  calculator task is not matched to address tools.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.

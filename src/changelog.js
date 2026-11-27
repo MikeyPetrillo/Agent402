@@ -83,6 +83,7 @@ const ENTRIES = [
       "Tools: token-price-history answers the same look-back statistics for a token and no longer returns price points.",
       "Tools: EDGAR tools, reports and pages share one pace of at most 8 requests a second to the SEC's hosts; an EDGAR tool call whose read cannot get its turn in time answers 503 with Retry-After and is not charged on x402.",
       "API: /api/find, /api/route and route-and-execute read a task that asks for IP geolocation, in phrasings such as \"which country is this IP in\" and for the time zone or local time of an IP too, as a miss (`capabilityGap` names it) unless a listed tool is named for it; every other query is answered as before. route-and-execute, with `include:\"external\"` as well, answers 404 for such a task without running or charging anything.",
+      "API: /api/route no longer reads the query word \"add\" inside \"address\", so a calculator task is not matched to address tools.",
       "API: route-and-execute answers 400 naming the missing fields when a call to a chat completion lacks the fields the seller requires and no other candidate can take it, before any purchase.",
       "API: route-and-execute no longer asks a chat-room message route for `model` and `messages`.",
       "Operations: The operator view of /api/gateway-status shows a projected-runway word for each spending and fee wallet whose balance a low-balance alarm already reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held steady while a wallet sits at the mark; it moves no money and refuses nothing.",
