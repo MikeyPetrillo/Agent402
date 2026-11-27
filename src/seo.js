@@ -388,6 +388,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/paid-mcp-tools`, priority: "0.9" },
     { loc: `${baseUrl}/compare`, priority: "0.8" },
     { loc: `${baseUrl}/insider-trades-api`, priority: "0.8" },
+    { loc: `${baseUrl}/crypto-history-stats-api`, priority: "0.8" },
     ...docsUrls(baseUrl),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
@@ -664,6 +665,7 @@ ${flatTiersLine()}
 - [/guides/content-pipeline](${baseUrl}/guides/content-pipeline): a content pipeline from paid calls - research, script, voiceover, images, transcription, subtitles, dubbing and media checks from one wallet, with the stages that run as jobs and the rail to pay on
 - [/guides/agent-to-agent-payments](${baseUrl}/guides/agent-to-agent-payments): one agent paying another agent's HTTP endpoint over x402 - the 402 quote, the signed payment header, settlement, the receipt and how to verify it
 - [/insider-trades-api](${baseUrl}/insider-trades-api): SEC Form 4 filings against a US ticker by API, and the model-backed insider flow report; public SEC data, information only, not investment advice
+- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's past year as computed statistics by API (one-year return, largest drawdown, annualized volatility) and a stablecoin's worst distance from its peg over 24 hours and 7 days; computed figures, not a price series; Powered by CoinGecko (https://www.coingecko.com/en/api); information only, not investment advice
 - [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines
@@ -819,6 +821,8 @@ export function llmsTxt(baseUrl, catalog) {
   // surface's own brief; any other line keeps its first clause
   // (surfaceClause), so a surface added later stays short here too.
   const brief = [
+    // The short form keeps what the page is (computed figures, not a series) and its source's credit.
+    [`- [/crypto-history-stats-api](`, `- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's past year as computed statistics by API, not a price series. Powered by CoinGecko (https://www.coingecko.com/en/api)`],
     [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
     [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
