@@ -380,9 +380,11 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
     let release; const gate = new Promise((r) => { release = r; });
     const slow = { ...readers, base: async (a) => { calls.push(`base:${a}`); await gate; return 20; } };
     const first = W.noteWatchedFunding({ now: t1, readers: slow, env: { FUNDING_WATCH_ADDRESSES: `burner:base:${A1}:6` } });
-    const second = await W.noteWatchedFunding({ now: t1 + 1, readers: slow, env: { FUNDING_WATCH_ADDRESSES: `burner:base:${A1}:6` } });
+    const second = W.noteWatchedFunding({ now: t1 + 1, readers: slow, env: { FUNDING_WATCH_ADDRESSES: `burner:base:${A1}:6` } });
+    await new Promise((r) => setImmediate(r));
+    const out = calls.length;
     release(); await first;
-    ok(second === 0 && calls.length === 1, `a status read while a wallet's read is out starts no second one (${calls.length})`);
+    ok(await second === 0 && out === 1 && calls.length === 1, `a status read while a wallet's read is out starts no second one (${calls.length})`);
   }
 
   // A reader failure: that wallet reads unknown, the other reads as before,
@@ -394,6 +396,11 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
     for (let i = 0; i <= 16; i++) await W.noteWatchedFunding({ now: now - (16 - i) * RUNWAY_SAMPLE_MS, readers, env });
     s = await status(now);
     ok(s.wallets["watch:canary-tempo"]?.status === "unknown" && s.wallets["watch:canary-tempo"].readings === 0, `a wallet whose reader throws reads unknown (${JSON.stringify(s.wallets["watch:canary-tempo"])})`);
+    {
+      const thrown = calls.filter((c) => c.startsWith("tempo:")).length;
+      await W.noteWatchedFunding({ now: now + M, readers, env });
+      ok(thrown === 17 && calls.filter((c) => c.startsWith("tempo:")).length === 17, `a reader that throws is retried on the retry interval too, not on the next status read (${thrown} then ${calls.filter((c) => c.startsWith("tempo:")).length})`);
+    }
     ok(s.wallets["watch:burner"].status === "ok" && s.wallets.base.status === "ok", `every other wallet's word is its own (${s.wallets["watch:burner"].status}, ${s.wallets.base.status})`);
     fail = new Set(["base"]); calls.length = 0;
     const t2 = now + RUNWAY_SAMPLE_MS;
