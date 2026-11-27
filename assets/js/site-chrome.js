@@ -196,14 +196,19 @@ var a402CellMeasure=function(root){try{var cells=(root||document).querySelectorA
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */
 /* The whole document is bound in turns of about 12 ms, the browser given the thread between them (a402Turns), so a long page never holds it for the
    whole pass: each pass still reads every tail before it writes any, so the text ends bound as one unbroken pass binds it. A part of the page drawn
-   after load (a report, an account panel) is short and is bound at once, as before. A change of width while the turns run starts over (a402Rebind). */
-var a402BindNow=function(root){if(root&&root!==document){a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);return;}
+   after load (a report, an account panel) is bound at once, as before, unless a pass over the document is running (the first binding or a
+   re-measure): it then waits in a402Queue and is bound when that pass ends, so it never edits text the pass has read and not yet written.
+   A change of width while the turns run starts over (a402Rebind). */
+var a402Busy=false,a402Queue=[];
+var a402BindNow=function(root){if(root&&root!==document){if(a402Busy){if(a402Queue.indexOf(root)<0)a402Queue.push(root);return;}a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);return;}
   var run=++a402Run;var pass=function(){var p=null,made=false;return [function(u){if(!made){made=true;p=a402BindPass(document,true);}return p?p.read(u):false;},function(u){return p?p.write(u):false;}];};
   a402Turns(run,[function(){a402CellMeasure(document);return false;},function(){if(window.a402BreakCode)window.a402BreakCode(document);return false;}].concat(pass(),pass()));};
 /* Run `steps` in order in short turns. A step is called with the turn's end (a clock time) and says whether it has more to do; 'fonts' waits for
-   the web fonts before the next step. A newer run (a402Run) ends this one where it stands. */
+   the web fonts before the next step. A newer run (a402Run) ends this one where it stands. When the last step ends, the parts that waited
+   for the pass are bound (one no longer in the page is dropped). */
 var a402Run=0;
-var a402Turns=function(run,steps){var k=0;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(more==='fonts'){k++;document.fonts.ready.then(go,go);return;}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length)setTimeout(go,0);};go();};
+var a402Turns=function(run,steps){var k=0;a402Busy=true;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(more==='fonts'){k++;document.fonts.ready.then(go,go);return;}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length){setTimeout(go,0);return;}
+  a402Busy=false;var waited=a402Queue;a402Queue=[];for(var q=0;q<waited.length;q++){try{if(waited[q].isConnected)a402BindNow(waited[q]);}catch(e){}}};go();};
 var a402BindPass=function(root,sliced){try{
   var SEL='p,li,h1,h2,h3,h4,dd,dt,td,th,figcaption,blockquote,label,[class*="lede"],[class*="intro"],[class*="meta"]';
   var OPAQUE=/^(CODE|PRE|KBD|SAMP|SCRIPT|STYLE|TEXTAREA|BUTTON|SELECT|svg|SVG|IMG|BR)$/;
@@ -272,7 +277,16 @@ var a402BindPass=function(root,sliced){try{
     edits.forEach(function(e){var d=e.node.data;if(e.op==='wbr'){var rest=e.node.splitText(e.off);var wb=document.createElement('wbr');rest.parentNode.insertBefore(wb,rest);made.push(wb,rest);return;}if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
     before.forEach(function(b){b[2]=b[0].data;});
   };
-  var j=0;var writes=function(until){for(;j<plans.length;j++){if(until&&performance.now()>=until)return true;write(plans[j]);}return false;};
+  /* A plan is written only onto the text it was read from: its block and every node it measured still in the page, each text node holding the
+     characters the read saw. Between a read and its write the page may change under a pass in turns (a part drawn and bound, a redraw, another
+     script's edit); offsets into the old text would then cut the new one. Such a block is read once more after the writes and bound then, or left
+     as it wraps when it has changed again. */
+  var fresh=function(p){if(!p.el.isConnected)return false;for(var q=0;q<p.map.length;q++){var g=p.map[q];if(g.node){if(!g.node.isConnected||g.node.data!==p.s.substr(g.start,g.len))return false;}else if(g.el&&!g.el.isConnected)return false;}return true;};
+  var j=0,redo=[],again=0;var writes=function(until){
+    if(again===1){if(read(until))return true;again=2;}
+    for(;j<plans.length;j++){if(until&&performance.now()>=until)return true;var p=plans[j];if(!fresh(p)){if(!again&&p.el.isConnected)redo.push(p.el);continue;}write(p);}
+    if(!again&&redo.length){els=redo;redo=[];i=0;plans=[];j=0;again=1;return true;}
+    return false;};
   if(sliced)return {read:read,write:writes};
   read(0);writes(0);
 }catch(e){}};

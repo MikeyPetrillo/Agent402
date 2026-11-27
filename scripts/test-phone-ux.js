@@ -19,6 +19,7 @@
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
 import { chromium } from "playwright";
+import { readFileSync } from "node:fs";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
 let pass = 0, fail = 0;
@@ -235,6 +236,80 @@ try {
         await p.waitForTimeout(100);
       }
     };
+    // A pass in turns reads every tail before it writes any, and the page can
+    // change in between: a part drawn after load and bound (a report), a
+    // redraw, another call for the document, a change of width. Whatever
+    // interleaves, every paragraph's visible text is its source text, letter
+    // for letter (the joiners and no-break spaces the pass adds read as
+    // nothing and as a space). The script is the shipped one, on a page of its
+    // own; "fonts" is a report drawn while the web fonts still load, so the
+    // document's first binding and the part's both wait for them.
+    {
+      const chromeJs = readFileSync(new URL("../assets/js/site-chrome.js", import.meta.url), "utf8");
+      const para = (i, v = "") => `Paragraph ${i}${v} explains a pay-per-call route and its proof-of-work tier, then names the well-known x402 file, a first-party read/write store and a ten-minute look-back window.`;
+      const pageOf = (n, mode) => `<!doctype html><html><head><meta charset="utf-8"><style>
+${mode === "fonts" ? '@font-face{font-family:"Slow";src:url("/slow.woff2") format("woff2");font-display:swap}' : ""}
+body{font-family:${mode === "fonts" ? '"Slow",' : ""}Georgia,serif;font-size:16px} main{max-width:640px;margin:0 auto} p{margin:0 0 12px}
+</style></head><body><main><div id="app">${mode === "fonts" ? "<p>Loading the report.</p>" : Array.from({ length: n }, (_, i) => `<p>${para(i)}</p>`).join("")}</div></main><footer><p>Footer text of a few plain words here.</p></footer>
+<script src="/site-chrome.js"></script>
+<script>
+var para=${para.toString()};
+window.__want=[];for(var i=0;i<${n};i++)window.__want.push(para(i));
+window.__draw=function(v){var app=document.getElementById('app'),h='';window.__want=[];for(var i=0;i<${n};i++){var t=para(i,v);window.__want.push(t);h+='<p>'+t+'</p>';}app.innerHTML=h;};
+document.addEventListener('DOMContentLoaded',function(){
+  var app=document.getElementById('app');
+  ${mode === "fonts" ? "setTimeout(function(){window.__draw('');if(window.a402BindWidows)window.a402BindWidows(app);},30);" : ""}
+  ${mode === "mutate" ? `/* after the pass's first turn: other scripts rewrite, replace and remove text it has read */
+  var ps=app.querySelectorAll('p');for(var i=0;i<ps.length;i++){var t=null;if(i%4===1){t='Short text '+i+' now ends here.';ps[i].firstChild.data=t;}else if(i%4===2){t=para(i,' redrawn');ps[i].innerHTML=t;}else if(i%4===3){t='A new block '+i+' put in place of the old one, with a hyphenated-word and a look-back window.';var np=document.createElement('p');np.textContent=t;ps[i].parentNode.replaceChild(np,ps[i]);}if(t!==null)window.__want[i]=t;}` : ""}
+  ${mode === "again" ? "window.a402BindWidows(document);window.a402BindWidows(app);setTimeout(function(){window.a402BindWidows(document);window.a402BindWidows(app);},5);" : ""}
+});
+</script></body></html>`;
+      const openProbe = async (n, mode) => {
+        const p = await browser.newPage({ viewport: { width: 390, height: 900 } });
+        await p.route("**/*", async (route) => {
+          const u = new URL(route.request().url());
+          if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: pageOf(n, mode) });
+          if (u.pathname === "/site-chrome.js") return route.fulfill({ contentType: "text/javascript", body: chromeJs });
+          if (u.pathname === "/slow.woff2") { await new Promise((r) => setTimeout(r, 900)); return route.fulfill({ status: 404, body: "" }); }
+          return route.fulfill({ status: 404, body: "" });
+        });
+        await p.goto("http://probe.invalid/", { waitUntil: "load" });
+        return p;
+      };
+      const quiet = async (p) => { let last = null, same = 0; for (let i = 0; i < 120 && same < 5; i++) { const now = await p.evaluate(() => document.getElementById("app").innerHTML.length); same = now === last ? same + 1 : 0; last = now; await p.waitForTimeout(100); } };
+      const textOf = (p) => p.evaluate(() => {
+        const ps = [...document.querySelectorAll("#app p")];
+        const clean = (t) => t.replace(/\u2060/g, "").replace(/\u00A0/g, " ");
+        const bad = [];
+        ps.forEach((el, i) => { const got = clean(el.textContent); if (got !== window.__want[i]) bad.push(`#${i} "${got.slice(-48)}" for "${window.__want[i].slice(-48)}"`); });
+        return { paragraphs: ps.length, changed: bad.length, first: bad[0] || "", bound: (document.getElementById("app").textContent.match(/\u00A0/g) || []).length };
+      });
+      for (const n of [40, 100, 400]) {
+        const p = await openProbe(n, "fonts"); await p.waitForTimeout(1200); await quiet(p);
+        const r = await textOf(p); await p.close();
+        ok(r.paragraphs === n && r.changed === 0 && r.bound >= n, `a report of ${n} paragraphs drawn and bound while the fonts load keeps every paragraph's text (${r.changed} changed${r.first ? `: ${r.first}` : ""}; ${r.bound} bound spaces)`);
+      }
+      for (const [mode, what] of [["mutate", "text rewritten, replaced and removed under the first pass"], ["again", "the document and a part bound again while the first pass runs"]]) {
+        const p = await openProbe(400, mode); await quiet(p);
+        const r = await textOf(p); await p.close();
+        ok(r.paragraphs === 400 && r.changed === 0 && r.bound >= 200, `${what}: every paragraph keeps its text (${r.changed} changed${r.first ? `: ${r.first}` : ""}; ${r.bound} bound spaces)`);
+      }
+      // The re-measure after a change of width is a pass in turns too: a part
+      // redrawn and bound while it runs waits for it (nothing is bound in it
+      // at the call), then is bound, with its text whole.
+      {
+        const p = await openProbe(400, "plain"); await quiet(p);
+        const atCall = await p.evaluate(() => { window.a402Rebind(); window.__draw(" again"); window.a402BindWidows(document.getElementById("app")); return (document.getElementById("app").textContent.match(/\u00A0|\u2060/g) || []).length; });
+        await quiet(p);
+        const r = await textOf(p);
+        await p.setViewportSize({ width: 520, height: 900 }); await p.waitForTimeout(230);
+        await p.evaluate(() => { window.__draw(" resized"); window.a402BindWidows(document.getElementById("app")); });
+        await quiet(p);
+        const r2 = await textOf(p); await p.close();
+        ok(atCall === 0 && r.changed === 0 && r.bound >= 200, `a part redrawn and bound while a re-measure runs waits for the pass and keeps its text (${atCall} edits at the call, ${r.changed} changed${r.first ? `: ${r.first}` : ""}; ${r.bound} bound spaces after)`);
+        ok(r2.changed === 0 && r2.bound >= 200, `and the same after a change of width (${r2.changed} changed${r2.first ? `: ${r2.first}` : ""}; ${r2.bound} bound spaces)`);
+      }
+    }
     for (const width of [390, 1440]) {
       const p = await browser.newPage({ viewport: { width, height: 900 }, hasTouch: true });
       await p.addInitScript(() => { window.__first = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__first.push(e.duration); }).observe({ type: "longtask", buffered: true }); });
