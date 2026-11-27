@@ -184,7 +184,10 @@ process.env.OPENROUTER_API_KEY = "test-key";
     const allLinks = (err, status = 400) => ({ "black-forest-labs/flux.2-pro": () => ({ status, json: { error: err } }), "black-forest-labs/flux.2-klein-4b": () => ({ status, json: { error: err } }), [KLEIN3]: () => ({ status, json: { error: err } }), [RECRAFT]: () => ({ status, json: { error: err } }) });
     for (const [err, label] of [[{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code"],
       [{ message: "Your request was rejected by the safety system.", code: 400 }, "safety-system refusal wording"],
-      [{ message: "x", type: "content_policy_violation" }, "a content-policy type"]]) {
+      [{ message: "x", type: "content_policy_violation" }, "a content-policy type"],
+      // No moderation code: only the "rejected as a result of our safety system" wording decides.
+      [{ message: "Your request was rejected as a result of our safety system." }, "only the as-a-result-of wording, no code"],
+      [{ message: "Content was filtered. Rephrase the prompt and try again." }, "a filter message that says try again"]]) {
       calls = []; perModel = allLinks(err);
       const f = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "content filter stopped this prompt", `image filtered (${label}) on every link -> 422`);
       ok(f?.statusCode === 422 && f.contentFiltered === true && calls.length === 3, `…${label}: 422 marked contentFiltered, every link tried`);
@@ -214,6 +217,9 @@ process.env.OPENROUTER_API_KEY = "test-key";
     // it keeps today's 502, so a working prompt is never sent back to be rephrased.
     for (const [err, status] of [[{ message: "Content moderation service is temporarily unavailable" }, 400], [{ message: "Safety system timed out, please retry" }, 400],
       [{ message: "upstream content-filter returned 500", code: "content_filter" }, 400], [{ message: "Safety system overloaded" }, 400], [{ message: "prompt rejected by safety" }, 400],
+      // An outage worded as a rejection, with and without a moderation code: an outage marker wins.
+      [{ message: "Request rejected by the moderation system: service overloaded" }, 400], [{ message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" }, 400],
+      [{ message: "Rejected by our safety system: at capacity, try again later" }, 400], [{ message: "Blocked by the moderation system: rate limit exceeded" }, 400],
       [{ message: "blocked", code: "moderation_blocked" }, 503], [{ message: "blocked", code: "moderation_blocked" }, 429]]) {
       calls = []; perModel = allLinks(err, status);
       let x = null; try { await bySlug("v1-images-fast").handler({ prompt: "a fox" }); } catch (y) { x = y; }
@@ -380,6 +386,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
     [{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code on the error object"],
     [{ message: "Your prompt was flagged by the safety filter", code: "invalid_request" }, "a safety-filter message"],
     [{ message: "x", type: "content_policy_violation" }, "a content-policy type"],
+    [{ message: "Your request was rejected as a result of our safety system." }, "only the as-a-result-of wording, no code"],
   ];
   for (const [failError, label] of filtered) {
     installVideoFetch({ statuses: ["failed"], failError });
@@ -398,7 +405,10 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   // it stays a 502, so the buyer is never told to rephrase a working prompt.
   for (const failError of [{ message: "blocked by policy" }, "Internal error while rendering", { message: "quota", code: "server_error" },
     "Content moderation service is temporarily unavailable", "Safety system timed out, please retry", { message: "Internal error in content filter" }, { message: "upstream content-filter returned 500", code: "content_filter" },
-    "Content moderation service degraded", "Safety system overloaded"]) {
+    "Content moderation service degraded", "Safety system overloaded",
+    // An outage worded as a rejection: an outage marker wins over the rejection wording, code or no code.
+    "Request rejected by the moderation system: service overloaded", { message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" },
+    "Rejected by our safety system: at capacity, try again later", "Request rejected by the moderation system: timeout"]) {
     installVideoFetch({ statuses: ["failed"], failError });
     const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", `a failure that names no filter stays 502 (${JSON.stringify(failError).slice(0, 40)})`);
     ok(e?.statusCode === 502 && !e.contentFiltered && toolErrorFields(e).reason === undefined, "…502, no content_filtered reason");

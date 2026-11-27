@@ -29,6 +29,7 @@ import { FILLER_TERMS } from "../query-terms.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
+import { capabilityGapLabel } from "../capability-gaps.js";
 import { judgeTool, decide, orderByJudgment, CRITERION_NAME_MAX, CRITERION_DESC_MAX, CRITERION_TAG_MAX, CRITERION_TAGS_MAX } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
@@ -167,23 +168,45 @@ export function contractFieldsMissing(ext, params, err) {
 }
 
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
-// A chat completion seller (its route ends /chat/completions, or /messages on
-// the Messages wire) cannot answer without `model` and `messages`: a call that
-// leaves either out is the caller's input, named before any seller is paid.
-// `model` is asked for unless the seller's published contract lists the body
-// fields it requires without it (a seller with a default model). Null when
-// nothing is missing or the route is not chat-shaped.
-const CHAT_SELLER_PATH_RE = /\/(?:chat\/completions|messages)\/?$/i;
+// A chat completion seller cannot answer without its chat fields: a call that
+// leaves one out is the caller's input, known before any seller is paid.
+//
+// A seller is a chat completion only by a real signal: its route ends
+// /chat/completions; or it ends /messages AND its listing says chat (its
+// category, or a declared request contract that names `messages` or
+// `model`). A bare /messages suffix is also a mailbox or an SMS route, which
+// takes other fields and is never asked for these.
+//
+// The fields asked for are the seller's own when it declares them: the chat
+// fields (model, messages, prompt, input) its request contract requires, so
+// a seller that requires only `prompt` is not asked for `messages`, and one
+// with a default model is not asked for `model`. With no declared body
+// fields, an OpenAI-shaped route needs `model` and `messages`. Null when
+// nothing is missing or the route is not a chat completion.
+const CHAT_COMPLETIONS_PATH_RE = /\/chat\/completions\/?$/i;
+const MESSAGES_PATH_RE = /\/messages\/?$/i;
+const CHAT_CATEGORY_RE = /^(?:llm|llms|chat|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
+const CHAT_FIELDS = ["model", "messages", "prompt", "input"];
+const topField = (k) => (typeof k === "string" ? k.split(/[.[]/)[0] : "");
 export function chatFieldsMissing(ext, params) {
   let path = "";
   try { path = new URL(String(ext?.url || "")).pathname; } catch { return null; }
-  if (!CHAT_SELLER_PATH_RE.test(path)) return null;
+  const contract = ext?.requestContract;
+  const requiredBody = Array.isArray(contract?.required?.body) ? contract.required.body.map(topField).filter(Boolean) : [];
+  const optionalBody = Array.isArray(contract?.optional?.body) ? contract.optional.body.map(topField).filter(Boolean) : [];
+  let chat = CHAT_COMPLETIONS_PATH_RE.test(path);
+  if (!chat && MESSAGES_PATH_RE.test(path)) {
+    chat = CHAT_CATEGORY_RE.test(String(ext?.category || "").trim())
+      || (Array.isArray(ext?.tags) && ext.tags.some((t) => typeof t === "string" && CHAT_CATEGORY_RE.test(t.trim())))
+      || [...requiredBody, ...optionalBody].some((k) => k === "messages" || k === "model");
+  }
+  if (!chat) return null;
   const have = params && typeof params === "object" && !Array.isArray(params) ? params : {};
-  const required = ext?.requestContract?.required?.body;
-  const modelOptional = Array.isArray(required) && required.length > 0 && !required.includes("model");
-  const missing = [];
-  if (!modelOptional && !(typeof have.model === "string" && have.model.trim())) missing.push("model");
-  if (!(Array.isArray(have.messages) && have.messages.length)) missing.push("messages");
+  const present = (f) => (f === "messages" ? Array.isArray(have.messages) && have.messages.length > 0
+    : f === "model" ? typeof have.model === "string" && !!have.model.trim()
+    : Object.hasOwn(have, f) && have[f] != null && have[f] !== "");
+  const wanted = requiredBody.length ? CHAT_FIELDS.filter((f) => requiredBody.includes(f)) : ["model", "messages"];
+  const missing = wanted.filter((f) => !present(f));
   return missing.length ? missing : null;
 }
 
@@ -814,13 +837,15 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent.${notChargedOn(req)}`, 409);
             if (hasNext) continue; throw lastErr;
           }
-          // A chat completion seller asked without model or messages: the
-          // caller's input, answered 400 naming the fields, before any
-          // booking or signature (nothing bought, nothing charged).
+          // A chat completion seller asked without the chat fields it needs
+          // (chatFieldsMissing): the caller's input, known before any booking
+          // or signature. The next candidate is tried; with none left the
+          // answer is 400 naming the fields (nothing bought, nothing charged).
           const chatMissing = chatFieldsMissing(ext, params);
           if (chatMissing) {
             traceStep(req, "skip", { origin: ext.seller, reason: "chat_fields_missing" });
-            throw Object.assign(bad(`That task routes to a chat completion, which needs ${chatMissing.map((f) => `params.${f}`).join(" and ")}; this call did not send ${chatMissing.length > 1 ? "them" : "it"}. Nothing was spent.${notChargedOn(req)} Add ${chatMissing.length > 1 ? "them" : "it"} and retry.`, 400), { missing: chatMissing });
+            lastErr = Object.assign(bad(`That task routes to a chat completion, which needs ${chatMissing.map((f) => `params.${f}`).join(" and ")}; this call did not send ${chatMissing.length > 1 ? "them" : "it"}. Nothing was spent.${notChargedOn(req)} Add ${chatMissing.length > 1 ? "them" : "it"} and retry.`, 400), { missing: chatMissing });
+            if (hasNext) continue; throw lastErr;
           }
           const extWire = ext.wire || "x402";
           // GET sellers take their input as query params — an HTTP GET cannot
@@ -1167,13 +1192,15 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         // Default: resolve the best in-budget tool from THIS host's catalog.
         const found = findTools(catalog, input.task, { k: 10, baseUrl });
         const { results } = found;
-        // No tool here mentions the word that defines the task (find's
-        // rarestTermCovered, the reading /api/find and /api/route give):
-        // nothing is run, so a buyer is never sold a tool that shares only
-        // the task's common words ("ip geolocation" is not ip-info's).
-        if (results.length && found.rarestTermCovered === false) {
+        // A capability this catalog does not offer (src/capability-gaps.js,
+        // the list /api/find and /api/route read) and no matching tool is
+        // named for: nothing is run, so a buyer is never sold a tool that
+        // only shares the task's common words ("ip geolocation" is not
+        // ip-info's). The same uncharged 404 as the judged refusal below;
+        // every other task goes on exactly as before.
+        if (results.length && found.capabilityGap && found.capabilityGapCovered === false) {
           const hasExternal = externalEnabled() && !!resolveExternal;
-          throw bad(`No tool in this catalog does that task: none of them covers "${String(found.rarestTerm).slice(0, 40)}". Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`, 404);
+          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`, 404);
         }
         // find's eligible candidates, in find's order (top 5 go to the judge).
         const eligible = [];

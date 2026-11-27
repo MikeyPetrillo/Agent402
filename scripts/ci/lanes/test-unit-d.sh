@@ -17,8 +17,8 @@ t node scripts/test-monitor-scheduler.js
 t node scripts/test-tempo-transfers.js
 # Route-and-execute (SOR executing surface — resolution, caps, receipts — offline)
 t node scripts/test-route-execute.js
-# The router and route-execute read find's served verdict: a task whose defining word no row covers is a miss, not a pick (offline)
-t node scripts/test-route-rarest-term.js
+# Capability gaps (one list for find, the router and route-execute: an IP geolocation task is a miss unless a row is named for it; every other task ranks and runs as before - offline)
+t node scripts/test-capability-gaps.js
 # Status page store (unobserved days are never uptime; stale is never operational — offline)
 t node scripts/test-status-store.js
 # Status page reads at scale (two million rows: the page is byte-identical to the whole-table reads, every history-independent read is an index search, the kept count equals

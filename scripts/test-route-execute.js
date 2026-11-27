@@ -546,29 +546,65 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     try { await mk(pay, async () => [C]).handler({ task: "t", include: "external", params: { messages: [] } }, {}); } catch (e) { threw = e; }
     ok(threw?.statusCode === 502, "an input refusal with every contract field present stays 502 (not the caller's input)");
   }
-  // A task routed to a chat completion (a seller whose route is chat-shaped)
-  // whose params leave out model or messages is answered 400 naming them in
-  // `missing`, BEFORE any seller is paid: nothing bought, nothing charged.
-  // A seller whose published contract does not require model is asked only
-  // for messages.
+  // A task routed to a chat completion whose params leave out a chat field
+  // the seller needs is answered 400 naming them in `missing`, BEFORE any
+  // seller is paid, when no other candidate can take the call. A seller is a
+  // chat completion by a real signal only (its route ends /chat/completions,
+  // or it ends /messages and its category or declared contract says chat),
+  // and the fields asked for are its declared ones when it declares any.
   {
     const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const { chatFieldsMissing } = await import("../src/tools/route-execute.js");
     const CHAT = { ...A, url: "https://a.example/v1/chat/completions", slug: "chat" };
-    const MSG = { ...A, url: "https://a.example/v1/messages", slug: "messages" };
+    // The Messages wire, said by the listing: a category, or a declared contract.
+    const MSG_CAT = { ...A, url: "https://a.example/v1/messages", slug: "messages", category: "llm" };
+    const MSG_CONTRACT = { ...A, url: "https://a.example/v1/messages", slug: "messages", requestContract: { state: "declared", required: { body: ["model", "messages", "max_tokens"] } } };
     for (const [params, want, ext] of [[{}, ["model", "messages"], CHAT], [{ model: "m1" }, ["messages"], CHAT], [{ messages: [{ role: "user", content: "hi" }] }, ["model"], CHAT],
-      [{ model: " ", messages: [] }, ["model", "messages"], CHAT], [{ prompt: "hi" }, ["model", "messages"], MSG]]) {
+      [{ model: " ", messages: [] }, ["model", "messages"], CHAT], [{ prompt: "hi" }, ["model", "messages"], MSG_CAT], [{ model: "m1" }, ["messages"], MSG_CONTRACT]]) {
       let calls = 0;
       let threw = null;
-      try { await mk(async () => { calls++; return good; }, async () => [ext, B]).handler({ task: "chat completion", include: "external", params }, {}); } catch (e) { threw = e; }
+      try { await mk(async () => { calls++; return good; }, async () => [ext]).handler({ task: "chat completion", include: "external", params }, {}); } catch (e) { threw = e; }
       const f = threw ? toolErrorFields(threw) : {};
       ok(threw?.statusCode === 400 && calls === 0 && JSON.stringify(f.missing) === JSON.stringify(want) && want.every((w) => threw.message.includes(`params.${w}`)) && /Nothing was spent/.test(threw.message),
         `a chat task missing ${want.join(" and ")} answers 400 naming them before any purchase (${threw?.statusCode}, ${calls} buys, missing ${JSON.stringify(f.missing)})`);
+    }
+    // A bare /messages suffix is also a mailbox or an SMS route: it is called
+    // with the caller's own fields, never asked for model and messages.
+    for (const [ext, label] of [[{ ...A, url: "https://a.example/v1/messages", slug: "send-message" }, "no contract"],
+      [{ ...A, url: "https://a.example/v1/messages", slug: "send-sms", category: "messaging", requestContract: { state: "declared", required: { body: ["to", "text"] } } }, "a contract requiring to and text"]]) {
+      const bodies = [];
+      const r = await mk(async (_url, opts) => { bodies.push(opts?.body); return good; }, async () => [ext]).handler({ task: "send a text message", include: "external", params: { to: "+15550100", text: "hi" } }, {});
+      ok(bodies.length === 1 && r.receipt.seller === A.seller && bodies[0]?.to === "+15550100" && bodies[0]?.text === "hi" && chatFieldsMissing(ext, { to: "+15550100", text: "hi" }) === null,
+        `a seller at POST /v1/messages taking {to, text} is called, not refused (${label}; ${bodies.length} buys)`);
+    }
+    // The seller's own declared fields decide: one that requires only
+    // `prompt` is bought with a prompt, and is asked for `prompt` (never
+    // `messages`) when it is missing.
+    {
+      const PROMPT = { ...CHAT, requestContract: { state: "declared", required: { body: ["prompt"] } } };
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [PROMPT]).handler({ task: "chat completion", include: "external", params: { prompt: "hi" } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "a chat seller whose contract requires only prompt is bought with a prompt alone");
+      let threw = null;
+      try { await mk(async () => { calls++; return good; }, async () => [PROMPT]).handler({ task: "chat completion", include: "external", params: {} }, {}); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 400 && calls === 1 && JSON.stringify(toolErrorFields(threw).missing) === '["prompt"]' && !/params\.messages|params\.model/.test(threw.message), `...and without one it is asked for prompt only (${JSON.stringify(toolErrorFields(threw || {}).missing)})`);
     }
     {
       const NOMODEL = { ...CHAT, requestContract: { state: "declared", required: { body: ["messages"] } } };
       let calls = 0;
       const r = await mk(async () => { calls++; return good; }, async () => [NOMODEL]).handler({ task: "chat completion", include: "external", params: { messages: [{ role: "user", content: "hi" }] } }, {});
       ok(calls === 1 && r.receipt.seller === A.seller, "a chat seller whose contract does not require model is bought with messages alone");
+    }
+    // Another candidate can take the call: the chat seller is skipped and the
+    // next one is bought. The 400 is the answer only when none can.
+    {
+      const urls = [];
+      const r = await mk(async (url) => { urls.push(url); return good; }, async () => [CHAT, B]).handler({ task: "t", include: "external", params: { q: "x" } }, {});
+      ok(urls.length === 1 && urls[0] === B.url && r.receipt.seller === B.seller, `a chat candidate missing its fields is skipped and the next candidate is bought (${urls.join(", ")})`);
+      urls.length = 0;
+      let threw = null;
+      try { await mk(async (url) => { urls.push(url); return good; }, async () => [CHAT, MSG_CAT]).handler({ task: "t", include: "external", params: { q: "x" } }, {}); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 400 && urls.length === 0 && JSON.stringify(toolErrorFields(threw).missing) === '["model","messages"]', "with no candidate that can take the call, the answer is the 400 and nothing is bought");
     }
     {
       let calls = 0;
@@ -578,6 +614,31 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       await mk(async () => { calls++; return good; }, async () => [A]).handler({ task: "t", include: "external", params: {} }, {});
       ok(calls === 1, "control: a seller whose route is not chat-shaped is not asked for model or messages");
     }
+  }
+  // A capability gap (src/capability-gaps.js) on the own-catalog path: an IP
+  // geolocation task with no tool named for it runs nothing and answers the
+  // uncharged 404, while a task that only names a country runs its tool.
+  {
+    const ran = [];
+    const cat = {
+      "POST /api/ip-info": { route: "POST /api/ip-info", slug: "ip-info", name: "IP address type and reverse DNS", category: "network", price: "$0.001", description: "Address type and PTR record of an IP address", tags: ["ip", "dns"], discovery: { bodyType: "json", input: { ip: "8.8.8.8" } }, handler: async () => { ran.push("ip-info"); return { ok: true }; } },
+      "POST /api/bank-holidays": { route: "POST /api/bank-holidays", slug: "bank-holidays", name: "Bank holidays", category: "data", price: "$0.001", description: "Bank holidays of a country for a year", tags: ["holidays", "holiday"], discovery: { bodyType: "json", input: { country: "DE" } }, handler: async () => { ran.push("bank-holidays"); return { ok: true }; } },
+    };
+    const tool = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute", execPriceUsd: 0.01, underlyingMaxUsd: 0.01 } });
+    for (const task of ["ip geolocation", "geolocate ip address", "where is this IP located"]) {
+      let threw = null;
+      try { await tool.handler({ task, params: { ip: "8.8.8.8" } }, { headers: {} }); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 404 && ran.length === 0 && /offers IP geolocation\. Nothing was run\. Nothing was charged\./.test(threw.message), `"${task}" on the own catalog: uncharged 404, nothing run (${threw?.statusCode}, ran ${ran.length})`);
+    }
+    for (const task of ["holidays in germany", "holidays in canada", "is today a holiday in germany"]) {
+      ran.length = 0;
+      let threw = null, r = null;
+      try { r = await tool.handler({ task, params: { country: "DE" } }, { headers: {} }); } catch (e) { threw = e; }
+      ok(!threw && ran.join() === "bank-holidays" && r?.receipt?.slug === "bank-holidays", `"${task}" runs bank-holidays: a country is a value, never a miss (${threw ? threw.statusCode : r?.receipt?.slug})`);
+    }
+    ran.length = 0;
+    const r = await tool.handler({ task: "reverse dns for an ip", params: { ip: "8.8.8.8" } }, { headers: {} });
+    ok(ran.join() === "ip-info" && r?.receipt?.slug === "ip-info", "control: an IP task that is not geolocation still runs ip-info");
   }
   // A REFUSES the payment and the buyer proved on chain it was not charged
   // (committed:false + refused) -> falls through; B was admitted UNPROVEN, so

@@ -169,11 +169,17 @@ try {
       ok(toolErrorFields(e).reason === "content_filtered", "the refusal carries reason content_filtered");
       // Wording that names the safety system in an outage is not a refusal of
       // the prompt (the narrowed rule the video route uses): no 422.
-      for (const message of ["Safety system timed out, please retry", "Safety system overloaded", "Content moderation service is temporarily unavailable"]) {
+      for (const message of ["Safety system timed out, please retry", "Safety system overloaded", "Content moderation service is temporarily unavailable",
+        // An outage worded as a rejection: an outage marker wins over the rejection wording.
+        "Request rejected by the moderation system: service overloaded", "Rejected by our safety system: at capacity, try again later"]) {
         upstream = [openAIError(400, { message, type: "invalid_request_error", param: null, code: null })];
         const o = await thrown("image-gen", { prompt: "a" });
         ok(o?.statusCode === 400 && !o.contentFiltered && /OpenAI rejected the request/.test(o.message), `outage wording on a 400 is not a content refusal (${message} -> ${o?.statusCode})`);
       }
+      // No moderation code: only the "rejected as a result of our safety system" wording decides.
+      upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: null })];
+      const w = await thrown("image-gen", { prompt: "a" });
+      ok(w?.statusCode === 422 && w.contentFiltered === true, `the as-a-result-of wording alone, with no code, is a 422 content_filtered (${w?.statusCode})`);
       upstream = [openAIError(503, { message: "Your request was rejected by the safety system.", code: "moderation_blocked" })];
       const o5 = await thrown("image-gen", { prompt: "a" });
       ok(o5?.statusCode === 502 && !o5.contentFiltered, `a 5xx stays a 502 whatever it says (${o5?.statusCode})`);
@@ -186,7 +192,7 @@ try {
     ok(sent.every((x) => new URL(x.url).pathname === "/v1/images/generations" && [TIERS["image-gen-premium"].model, TIERS["image-gen"].model].includes(x.body.model)), "a refused prompt goes to no other model or endpoint");
     upstream = [];
     const after = imageModerationStats().sinceBoot;
-    ok(after.refusals.low - before.refusals.low === 1 && after.refusals.auto - before.refusals.auto === 1, `refusals are counted by level (${JSON.stringify(after.refusals)})`);
+    ok(after.refusals.low - before.refusals.low === 2 && after.refusals.auto - before.refusals.auto === 1, `refusals are counted by level (${JSON.stringify(after.refusals)})`);
     ok(JSON.stringify(imageModerationStats()).length < 200 && !/apple|violence/.test(JSON.stringify(imageModerationStats())), "the counters hold counts only, no prompt or category text");
   }
 

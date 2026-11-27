@@ -4,6 +4,7 @@
 // to call them directly: route, price, input schema, and a ready example.
 // Deterministic lexical ranking (no LLM, no tokens), consistent with the MCP
 // connector's search_tools weighting.
+import { capabilityGap, gapNamedBy } from "./capability-gaps.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
 import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
@@ -787,6 +788,13 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     if (!served) rarestTermCovered = false;
   }
 
+  // A capability this catalog does not offer (src/capability-gaps.js, the
+  // list /api/route and route-and-execute read too): a query that asks for
+  // one is a miss unless a matching tool is NAMED for it (slug or name).
+  const gap = results.length ? capabilityGap(query) : null;
+  const gapCovered = !!gap && scored.some((x) => gapNamedBy(gap, x[1].slug, x[1].name));
+  if (gap && !gapCovered) rarestTermCovered = false;
+
   return {
     query: String(query),
     // `count` is what this answer CARRIES. It read as "this is how many tools
@@ -805,6 +813,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     ...(coverageShare != null ? { coverageShare: Math.round(coverageShare * 100) / 100 } : {}),
     ...(Object.keys(corrected).length ? { corrected } : {}),
     ...(direction ? { direction } : {}),
+    ...(gap ? { capabilityGap: gap.id, capabilityGapCovered: gapCovered } : {}),
   };
 }
 
