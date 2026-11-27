@@ -10,7 +10,7 @@ carries its own version on npm.
 Site:
 - Tool pages are shorter: a one-sentence lead, one line per fact under
   "Errors and behavior", and related tools and skill packs as linked names.
-- Skill pack pages list their tools in a table with route and price; the
+- Skill pack pages list their tools in a table with each tool's route; the
   full pack text is still served to agents by the API and MCP.
 - /changelog shows the 30 most recent entries; older entries moved to
   /changelog/archive. /docs/api is a short index of the API references.
@@ -18,7 +18,7 @@ Site:
   tap away; /status shows rails in a table; the Transactions page (/revenue)
   leads with its figures.
 - /privacy and /terms open with a summary and a jump list and are dated
-  2026-11-28; their full text is unchanged.
+  2026-11-28; the full text below them is unchanged and governs.
 - Two new pages: SEC Form 4 insider trades by API at /insider-trades-api,
   and a guide to agent-to-agent payments over x402 at
   /guides/agent-to-agent-payments.
@@ -31,19 +31,23 @@ Tools:
   are unchanged.
 - An image prompt the provider's content filter stops answers 422 with
   reason `content_filtered`, in place of the earlier 400 or 502; a provider
-  outage keeps its 5xx answer.
-- The 20 longest tool descriptions are shorter, with the same facts and
-  source credits.
+  outage keeps its 5xx answer, and an overloaded or rate-limited provider is
+  read as an outage, not a filtered prompt.
+- Tool pages for the 20 tools with the longest descriptions show a shorter
+  summary, while their listings and API descriptions are unchanged.
 API:
-- /api/route marks a query whose defining word no tool covers as a miss
-  (`weakMatches`), and route-and-execute answers 404 for it without running
-  or charging anything.
-- Route-and-execute answers 400 naming the missing fields when a chat call
-  lacks model or messages, before any purchase.
+- /api/route reads a query that asks for IP geolocation as a miss
+  (`weakMatches`, with `capabilityGap`) unless a listed tool is named for
+  it; every other query is answered as before. route-and-execute answers 404
+  for such a task without running or charging anything.
+- route-and-execute answers 400 naming the missing fields when a call to a
+  chat completion lacks the fields the seller requires and no other
+  candidate can take it, before any purchase.
 Operations:
-- The operator view shows a projected-runway word for each funded wallet
-  (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks); it moves no
-  money and refuses nothing.
+- The operator view of /api/gateway-status shows a projected-runway word for
+  each spending and fee wallet whose balance a low-balance alarm already
+  reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks); it moves
+  no money and refuses nothing.
 
 ### 2026-11-28 (Tool page payment sentence)
 Site:
