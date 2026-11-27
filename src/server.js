@@ -709,6 +709,7 @@ import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
 import { upstreamBuyerStatus, upstreamBuyerEvmStatus, acknowledgeBuyerTrend } from "./upstream-buyer-status.js";
 import { fundingRunwayStatus } from "./funding-runway.js";
+import { noteWatchedFunding, watchedFundingWallets } from "./funding-watch.js";
 import { enabledEvmBuyerChains, evmBuyerChain, isEvmBuyerChain, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -4832,6 +4833,9 @@ function publicBudgets(b) {
 
 app.get("/api/gateway-status", async (req, res) => {
   const _req = req;
+  // The watched wallets' balance reads that are due (src/funding-watch.js):
+  // started here, never awaited, a no-op with FUNDING_WATCH_ADDRESSES unset.
+  noteWatchedFunding();
   // Top-level fields stay the OpenRouter gateway status (heartbeat reads
   // .status); upstreamBuyer adds the x402 spending wallet's bucketed status
   // (src/upstream-buyer-status.js) - same alarm pattern, same
@@ -5110,7 +5114,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // the low-water words above already took (src/funding-runway.js): ok /
     // low-soon / low / unknown, with the fitted spend. A warning only: it
     // moves nothing, refuses nothing and leaves every alarm word as it is.
-    ...(full ? { fundingRunway: await fundingRunwayStatus().catch(() => ({ status: "unknown", warningOnly: true })) } : {}),
+    ...(full ? { fundingRunway: await fundingRunwayStatus({ expect: watchedFundingWallets() }).catch(() => ({ status: "unknown", warningOnly: true })) } : {}),
     // unsettledReports reads ok / burst: COMPOSITE_GUARD_GLOBAL_MAX_FAILS
     // report or media runs spent upstream and then did not settle inside one
     // guard window (src/composite-spend-guard.js); burst holds for

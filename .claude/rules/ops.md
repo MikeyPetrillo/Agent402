@@ -28,6 +28,7 @@ paths:
   - "src/board-refresh-slots.js"
   - "src/upstream-budgets.js"
   - "src/funding-runway.js"
+  - "src/funding-watch.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
   - "src/upstream-cap-refusals.js"
@@ -246,6 +247,16 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   facilitator's line is `FACILITATOR_LOW_BALANCE_XLM` (default 1), the facilitator's own. Operator view only
   (`fundingRunway` on `/api/gateway-status`, with the figures); it makes no chain read, pages
   nothing, moves no money and leaves every alarm word as it was (`scripts/test-funding-runway.js`).
+  `FUNDING_WATCH_ADDRESSES` (`src/funding-watch.js`; unset = no reads) adds wallets the server does
+  not spend from, the ones the scheduled paid checks spend from and only CI reads: a comma list of
+  `label:chain:address:lineUsd` (chain `base` or `tempo`, at most 8), read by public address
+  through the server's own Base and Tempo balance readers, never with a key. A read of
+  `/api/gateway-status` starts the reads that are due and awaits none; each wallet is read at
+  most once per 30 minutes (a failed read retries after 5), and reads `watch:<label>` on the
+  operator runway (`unknown` until read, with its own `line`). The line is the operator's copy of
+  that wallet's CI mark, so a changed mark is a variable edit. A malformed entry is ignored with
+  one boot line that names the variable and the entry's position only. CI cannot do this itself:
+  a run sees one balance and keeps no trail between runs.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. A rail card on `/status` whose newest reading is more
   than `RAIL_PEER_LAG_MS` (6 hours) behind the newest rail reading (left out of the latest paid
