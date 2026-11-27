@@ -19,6 +19,9 @@ Site:
   tool's proof-of-work eligibility as listed.
 - /changelog shows the 30 most recent entries; older entries moved to
   /changelog/archive. /docs/api is a short index of the API references.
+- Long pages such as the changelog archive bind their line wraps in short
+  turns, on first load and on resize, so the page stays responsive while it
+  finishes.
 - The home page, /sell and /docs open with short answers and keep detail one
   tap away; /status shows rails in a table; the Transactions page (/revenue)
   leads with its figures.
@@ -38,6 +41,9 @@ Index:
   seller's documents do not list, or when the price those documents state
   has changed; registering again still reads at once, and /crawler says the
   same.
+- A large document read from a seller or a registry is parsed off the
+  serving thread and rebuilt in short steps, so a crawl of a multi-megabyte
+  catalog no longer delays other requests.
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
@@ -63,8 +69,9 @@ Tools:
   second to the SEC's hosts, with turns shared across callers; an EDGAR tool
   call whose read cannot get its turn in time answers 503 with Retry-After,
   at once when its place cannot be reached, and is not charged on x402; a
-  run that was paid before it ran starts ahead of the line and is never
-  refused by the pace.
+  run whose payment is final before it runs starts ahead of the line and is
+  never refused by the pace, and a read that arrives while its payment is
+  settling waits for that outcome first.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
