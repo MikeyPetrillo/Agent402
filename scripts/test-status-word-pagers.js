@@ -955,6 +955,7 @@ await rm(dir, { recursive: true, force: true });
     loopLag: "a flag ({ watching }), not a status word; event-loop stalls page through the heartbeat's serving health check on the operator surface",
     mppEvmDomainFallback: "a flag ({ enabled }), not a status word; its hold schedule stays on the operator view",
     inflightCover: "operator view only: the in-flight coverage counts behind coverageReads, which pages",
+    fundingRunway: "operator view only: a forecast from readings the low-water words already take, each of which pages on its own word (src/funding-runway.js)",
   };
   const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const start = server.indexOf('app.get("/api/gateway-status"');
