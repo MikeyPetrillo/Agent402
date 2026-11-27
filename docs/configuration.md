@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1148 variables in 114 groups.
+1149 variables in 114 groups.
 
 ## Contents
 
@@ -702,6 +702,7 @@ holds it.
 | `MCP_OAUTH_EMAIL_CODE_TTL_SECONDS` | Life of an emailed connector sign-in code, in seconds. | `600` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REFRESH_TTL_DAYS` | Life of a connector refresh token, in days (each use rotates it). | `30` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REQUEST_TTL_MINUTES` | Life of a started connector sign-in, in minutes (a card purchase in the middle included). | `60` | `src/mcp-oauth.js` |
+| `MCP_REGISTRY_AUTH_PROOF` | The MCP Registry proof record for this domain's server namespace (one line: v=MCPv1; k=ed25519; p=<base64 public key>), served as text at /.well-known/mcp-registry-auth. A public key, not a secret. Unset, or not a proof record, the route answers 404. |  | `src/mcp-registry-auth.js` |
 | `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 
 ## MEMORY

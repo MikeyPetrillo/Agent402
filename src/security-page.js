@@ -11,6 +11,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { backupKeepDays } from "./backup.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { OFFICIAL_PAGE_PATH } from "./official-surfaces.js";
 // Built at each render: the credits sentences read the sales switch as it is
 // now (scripts/test-credits-sales-gate.js reads the page in both states).
 const sections = () => [
@@ -18,7 +19,7 @@ const sections = () => [
     h: "Report a vulnerability",
     p: [
       `Open a private advisory on GitHub or email <a href="mailto:security@agent402.tools">security@agent402.tools</a>. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the changelog once it has shipped.`,
-      `Good-faith research inside the scope below will not be met with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not degrade the service for others, and report to us promptly and before any disclosure. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate${creditsSalesEnabled() ? "" : " (for keys already issued)"}, the card front door (/reports, /monitors, the Stripe webhook) and the published packages. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
+      `Good-faith research inside the scope below will not be met with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not degrade the service for others, and report to us promptly and before any disclosure. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate${creditsSalesEnabled() ? "" : " (for keys already issued)"}, the card front door (/reports, /monitors, the Stripe webhook) and the <a href="${OFFICIAL_PAGE_PATH}">published packages</a>. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
     ],
     links: [[repoUrl("security/advisories/new"), "Private advisory"], ["/.well-known/security.txt", "security.txt"], [repoUrl("blob/main/SECURITY.md"), "SECURITY.md"]],
   },

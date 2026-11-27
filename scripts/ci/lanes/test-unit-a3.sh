@@ -96,6 +96,8 @@ t node scripts/test-reputation-wording.js
 t node scripts/test-listing-screen-hints.js
 # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
 t node scripts/test-well-known-store.js
+# Official packages and endpoints: the list equals the repository's published packages, /company, /.well-known/x402 and README carry it; the MCP Registry proof route follows its setting (boots free-mode)
+t node scripts/test-official-surfaces.js
 # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
 t node scripts/test-reliability-envelope.js
 # PostHog analytics proxy abuse controls (R-17 — method allowlist + per-IP cap before the upstream call — spawns child)

@@ -25,6 +25,7 @@ import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 import { articleDates } from "./page-dates.js";
 import { RAILS_OR } from "./rails.js";
+import { OFFICIAL_PAGE_PATH } from "./official-surfaces.js";
 
 // A link in the docs page's own style (the get-a-wallet step).
 const DOC_LINK = (href, label) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">${esc(label)}</a>`;
@@ -150,7 +151,7 @@ node demo.js
   }
 }`, { name: "the MCP setup", html: true, wrap: true, style: "margin-bottom:22px" })}
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:-12px 0 22px;">${getWalletHtml({ link: DOC_LINK })}</p>
-      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>. <a href="${OFFICIAL_PAGE_PATH}" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Official packages and endpoints</a>.</p>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>B / x402 client</span><span>pay in code</span></div>
       ${codeBlock(`<span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem
