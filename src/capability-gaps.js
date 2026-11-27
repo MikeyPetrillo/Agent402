@@ -83,28 +83,98 @@ const asksIpGeolocation = (n) => GEOIP_RE.test(n) || (GEOLOCATE_RE.test(n) && AN
 // ---- a coin's price on a past date ----
 // The look-back tools here answer computed statistics (a return, a drawdown,
 // a volatility) and never a past price itself, so a task that asks what a
-// coin cost on a date has no tool. Three things must all hold: a coin word,
-// a price word, and a past date (or "historical"). A query that names a
-// statistic, a forecast or an alert asks for another job and is never in the
-// family, and neither is a price with no date or a date with no coin.
+// coin cost on a date has no tool.
+//
+// THE QUERY IS READ AS A POSITIVE SHAPE, word by word: one coin word, a price
+// word, a past date (or "historical"), and the few function words in
+// ASK_WORDS. ANY other word means the task is another job (a gas price, a
+// peg, a chart, candles, a price history, a search, filings, news, SQL, a
+// comparison, a token on a named chain) and it is ranked and served exactly
+// as before. A missed gap is acceptable; a served task read as a gap is not,
+// so a word is added to these lists only with controls in
+// scripts/test-capability-gaps.js.
 const COIN = "(?:coins?|crypto|cryptos|cryptocurrency|cryptocurrencies|altcoins?|tokens?|bitcoin|btc|ethereum|eth|ether|solana|sol|dogecoin|doge|litecoin|ltc|xrp|cardano|ada|bnb|usdc|usdt)";
 const COIN_RE = new RegExp(` ${COIN} `);
 const COIN_PRICE_RE = / (?:price|prices|priced|snapshot|snapshots) /;
-const OTHER_JOB_RE = / (?:statistic|statistics|stats|volatility|drawdown|change|changes|changed|return|returns|performance|trend|trends|since|gain|gains|loss|losses|average|indicator|indicators|prediction|predictions|predict|forecast|forecasts|target|targets|alert|alerts|webhook|convert|conversion) /;
 const MONTH = "(?:january|february|march|april|may|june|july|august|september|october|november|december)";
 const YEAR = "(?:19|20)\\d\\d";
-const PAST_RES = [
-  // "on a date", "at a given date", "as of a specific day", "on date" (a slug).
-  / (?:on|at|of|for) (?:(?:a|an|the|any|given|specific|certain|particular|past|that) ){0,3}(?:date|day) /,
+const COIN_WORD_RE = new RegExp(`^${COIN}$`);
+const PRICE_WORD_RE = /^(?:price|prices|priced|snapshot|snapshots)$/;
+const HISTORICAL_WORD_RE = /^(?:historical|historic)$/;
+const MONTH_WORD_RE = new RegExp(`^${MONTH}$`);
+const YEAR_WORD_RE = new RegExp(`^${YEAR}$`);
+const DAY_NUM_RE = /^\d{1,2}$/;
+const COUNT_RE = /^\d{1,4}$/;
+const SPAN_RE = /^(?:days?|weeks?|months?|years?)$/;
+// "on a date", "at a given date", "of a specific day", "on date" (a slug).
+// "the" is not one of these: "price of the day" is today's price.
+const DATE_PREP = new Set(["on", "at", "of", "for"]);
+const DATE_DET = new Set(["a", "an", "any", "given", "specific", "certain", "particular", "past", "that"]);
+// The function words a past-price question is written with. Nothing else.
+const ASK_WORDS = new Set(["a", "an", "the", "of", "for", "on", "at", "in", "as", "what", "was", "is", "were", "s", "did", "back", "get", "give", "me", "show", "find", "lookup", "usd"]);
+const ASK_MAX_WORDS = 16;
+/** How many words a past date takes at `i`, or 0 when none starts there. */
+function pastDateAt(w, i) {
+  const at = (k) => w[i + k] ?? "";
   // A written date: 2021-01-01, 01/02/2021.
+  if (YEAR_WORD_RE.test(at(0)) && DAY_NUM_RE.test(at(1)) && DAY_NUM_RE.test(at(2))) return 3;
+  if (DAY_NUM_RE.test(at(0)) && DAY_NUM_RE.test(at(1)) && YEAR_WORD_RE.test(at(2))) return 3;
+  // "June 2021", "June 5 2021".
+  if (MONTH_WORD_RE.test(at(0))) {
+    if (YEAR_WORD_RE.test(at(1))) return 2;
+    if (DAY_NUM_RE.test(at(1)) && YEAR_WORD_RE.test(at(2))) return 3;
+    return 0;
+  }
+  // "last June", "in June", "in June 2021", "in 2021", "during 2021".
+  if (at(0) === "last" || at(0) === "in" || at(0) === "during") {
+    if (MONTH_WORD_RE.test(at(1))) return 1 + (pastDateAt(w, i + 1) || 1);
+    if (at(0) !== "last" && YEAR_WORD_RE.test(at(1))) return 2;
+    // "last year", "last month", "last week".
+    if (at(0) === "last" && /^(?:year|month|week)$/.test(at(1))) return 2;
+    return 0;
+  }
+  // "3 months ago", "yesterday".
+  if (COUNT_RE.test(at(0)) && SPAN_RE.test(at(1)) && at(2) === "ago") return 3;
+  if (at(0) === "yesterday") return 1;
+  // "on a date", "at a given date", "for a specific day".
+  if (DATE_PREP.has(at(0))) {
+    let k = 1;
+    while (k <= 3 && DATE_DET.has(at(k))) k++;
+    if (at(k) === "date" || at(k) === "day") return k + 1;
+  }
+  return 0;
+}
+function asksPastCoinPrice(n) {
+  const w = n.trim().split(" ");
+  if (w.length < 2 || w.length > ASK_MAX_WORDS) return false;
+  let coins = 0, prices = 0, past = 0;
+  for (let i = 0; i < w.length;) {
+    const span = pastDateAt(w, i);
+    if (span) { past++; i += span; continue; }
+    const t = w[i++];
+    if (COIN_WORD_RE.test(t)) coins++;
+    else if (PRICE_WORD_RE.test(t)) prices++;
+    else if (HISTORICAL_WORD_RE.test(t)) past++;
+    else if (!ASK_WORDS.has(t)) return false; // any other word: another job
+  }
+  // One coin word: "token price on solana yesterday" names a token on a chain.
+  return coins === 1 && prices >= 1 && past >= 1;
+}
+
+// A ROW'S NAME IS READ LOOSELY, the other way round: a row clears the miss
+// when its slug or its name holds a coin word, a price word and a past date
+// (or "historical") and names no statistic, forecast or alert, whatever
+// other words it carries ("Historical coin price API"). Reading a name
+// loosely can only serve a task; it never makes one a miss.
+const OTHER_JOB_RE = / (?:statistic|statistics|stats|volatility|drawdown|change|changes|changed|return|returns|performance|trend|trends|since|gain|gains|loss|losses|average|indicator|indicators|prediction|predictions|predict|forecast|forecasts|target|targets|alert|alerts|webhook|convert|conversion) /;
+const PAST_RES = [
+  / (?:on|at|of|for) (?:(?:a|an|any|given|specific|certain|particular|past|that) ){0,3}(?:date|day) /,
   new RegExp(` (?:${YEAR} \\d{1,2} \\d{1,2}|\\d{1,2} \\d{1,2} ${YEAR}) `),
-  // "last June", "in June", "back in June", "June 2021", "in 2021".
   new RegExp(` (?:last|in|during) ${MONTH} | ${MONTH} (?:\\d{1,2} )?${YEAR} | (?:in|during) ${YEAR} `),
-  // "last year", "3 months ago", "yesterday".
   / (?:last (?:year|month|week)|\d{1,4} (?:days?|weeks?|months?|years?) ago|yesterday) /,
 ];
 const HISTORICAL_RE = / (?:historical|historic) /;
-const asksPastCoinPrice = (n) => COIN_RE.test(n) && COIN_PRICE_RE.test(n) && !OTHER_JOB_RE.test(n) && (HISTORICAL_RE.test(n) || PAST_RES.some((re) => re.test(n)));
+const namedForPastCoinPrice = (n) => COIN_RE.test(n) && COIN_PRICE_RE.test(n) && !OTHER_JOB_RE.test(n) && (HISTORICAL_RE.test(n) || PAST_RES.some((re) => re.test(n)));
 
 export const CAPABILITY_GAPS = Object.freeze([
   Object.freeze({
@@ -124,9 +194,9 @@ export const CAPABILITY_GAPS = Object.freeze([
     label: "a coin's price on a past date",
     terms: Object.freeze(["historical", "price"]),
     asks: asksPastCoinPrice,
-    // A row's slug or name is read by the same rule ("historical-coin-price",
-    // "Coin price on a date"); a row named for statistics never covers it.
-    covers: asksPastCoinPrice,
+    // A row's slug or name ("historical-coin-price", "Coin price on a date");
+    // a row named for statistics never covers it.
+    covers: namedForPastCoinPrice,
   }),
 ]);
 

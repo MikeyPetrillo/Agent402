@@ -293,19 +293,35 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
   const coinCatalog = {};
   for (const t of coinTools) coinCatalog[t.route] = t;
   const croute = (q, extra = {}) => route(q, { catalog: coinCatalog, toolCount: coinTools.length, ...extra });
+  // Tasks the catalog serves that hold a coin word, a price word and a date.
+  const COIN_OTHER_JOBS = ["web search bitcoin price in 2017", "sec filings mentioning bitcoin price in 2021", "onchain sql token prices in 2024", "erc20 token price history last week",
+    "price history of a token on base in 2024", "crypto price history last year", "eth gas price last week", "gas price yesterday on ethereum", "historical gas prices on ethereum",
+    "historical stablecoin peg usdt price", "usdc price depeg in march 2023", "news about ethereum price last week", "tweets about bitcoin price yesterday", "eth price for the day",
+    "btc price of the day", "eth price chart in 2023", "bitcoin price chart last month", "bitcoin price candles last year", "bitcoin price percent move during 2022",
+    "compare bitcoin price today with last year",
+    "bitcoin price chart yesterday", "token price on solana yesterday", "token price on ethereum last week", "bitcoin price news in 2021", "historical bitcoin price candles",
+    "btc price ohlc on 2021-01-01", "bitcoin price history in 2021", "historical nft floor price", "eth price feed on base yesterday", "wrapped bitcoin price on arbitrum in 2023",
+    "average bitcoin price in 2021", "bitcoin price range last month", "bitcoin price vs ethereum price last year", "eth price in gwei yesterday", "bitcoin price next year",
+    "bitcoin price this week", "search for bitcoin price in 2020", "stablecoin price deviation last week", "bitcoin etf price yesterday", "price of the day for bitcoin",
+    "historical token holders and price", "dex pool price last week for a token", "bitcoin dominance and price in 2021", "price of bitcoin on the day", "bitcoin price today",
+    "historical price of gold in bitcoin", "bitcoin price tweet from last week", "eth price high and low in 2021", "token price history statistics in 2024", "bitcoin market cap and price yesterday"];
   const COIN_POSITIVE = ["bitcoin price on 2021-01-01", "historical coin price", "coin snapshot on a date", "price of ETH last June", "historical crypto prices", "btc price in 2021",
-    "what was the price of bitcoin on 01/02/2021", "ethereum price 3 years ago", "token price on a given date", "solana price yesterday", "price of dogecoin in March 2024"];
+    "what was the price of bitcoin on 01/02/2021", "ethereum price 3 years ago", "token price on a given date", "solana price yesterday", "price of dogecoin in March 2024",
+    "bitcoin price in june 2021", "btc price on january 5 2021", "show me the eth price on a specific date", "coin-price-on-date"];
   const COIN_NEGATIVE = ["bitcoin price", "current coin price", "coin history statistics", "price change since a date", "fx rate on a date", "stock price history",
     "bitcoin price change since 2024-01-01", "token price on solana", "crypto price history", "historical fx rate", "eth price prediction in march", "bitcoin halving date",
     "historical ohlc", "price of gold last june", "weather on a date", "bitcoin price in usd", "eth gas price", "coin change since a date", "bitcoin return since 2021-01-01",
-    "historical volatility of bitcoin price", "price alert for eth in december", "treasury yield on a date", "candle statistics for bitcoin", "ip geolocation"];
+    "historical volatility of bitcoin price", "price alert for eth in december", "treasury yield on a date", "candle statistics for bitcoin", "ip geolocation",
+    // A coin word, a price word and a past date, and one more word that makes it
+    // another job: each of these is ranked and served as it was before the family.
+    ...COIN_OTHER_JOBS];
   ok(!!COIN && new Set([...COIN_POSITIVE, ...COIN_NEGATIVE]).size === COIN_POSITIVE.length + COIN_NEGATIVE.length, "the coin table lists each phrasing once");
   const named = coinTools.filter((t) => gapNamedBy(COIN, t.slug, t.name)).map((t) => t.slug);
   ok(named.length === 0 && coinTools.some((t) => t.slug === "coin-history") && coinTools.some((t) => t.slug === "crypto-history") && coinTools.some((t) => t.slug === "token-price-history"), `no tool in these kits is named for a coin's price on a past date (${named.join(", ") || "none"})`);
   // coin-history's search names say what it answers, never the snapshot it once gave.
   const ch = coinTools.find((t) => t.slug === "coin-history");
   ok(ch.aliases.length > 0 && ch.aliases.every((a) => !/snapshot|price/.test(a)), `coin-history's aliases name a change since a date (${ch.aliases.join(", ")})`);
-  for (const [slug, name, want] of [["historical-coin-price", "x", true], ["coin-price-on-date", "x", true], ["x", "Historical crypto prices", true], ["coin-history", "Coin change since a date", false],
+  for (const [slug, name, want] of [["historical-coin-price", "x", true], ["coin-price-on-date", "x", true], ["x", "Historical crypto prices", true], ["historical-coin-price-api", "x", true], ["x", "Historical bitcoin price lookup API", true], ["coin-history", "Coin change since a date", false],
     ["crypto-history", "Crypto price history statistics", false], ["token-price-history", "Token price history statistics (USD)", false], ["fx-historical", "Historical FX rate", false], ["crypto-price", "Crypto price", false]]) {
     ok(gapNamedBy(COIN, slug, name) === want, `a row ${slug} / "${name}" ${want ? "is" : "is not"} named for a coin's price on a past date`);
   }
@@ -335,6 +351,13 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
     ok(capabilityGap(q)?.id !== "coin-price-on-date" && f.capabilityGap !== "coin-price-on-date" && r.capabilityGap !== "coin-price-on-date" && !(x.e && COIN_404.test(x.e.message)),
       `coin negative "${q}": no coin gap on find or route, no coin gap refusal on route-and-execute (${capabilityGap(q)?.id || "none"}, ${x.e ? x.e.statusCode : `ran ${ran.join()}`})`);
   }
+  // The shape is positive: any positive with one more content word is another job.
+  for (const q of COIN_POSITIVE.filter((p) => p !== "coin-price-on-date")) {
+    for (const extra of ["chart", "gas", "history", "candles", "news", "peg", "compare", "search"]) {
+      ok(capabilityGap(`${q} ${extra}`) === null && capabilityGap(`${extra} ${q}`) === null, `"${q}" with the word "${extra}" is in no gap family`);
+    }
+  }
+  ok(capabilityGap("token price on solana yesterday") === null && capabilityGap("price of the day for eth") === null && capabilityGap("eth price for the day") === null, "a token on a named chain and the price of the day are not a past price");
   // The tools that answer the neighbors still do, read as served.
   for (const [q, want] of [["price change since a date", ["coin-history"]], ["coin history statistics", ["coin-history", "crypto-history", "coin-market-chart-range"]], ["bitcoin price", ["crypto-price", "price-coingecko"]]]) {
     const f = findTools(coinCatalog, q, { k: 3 }), r = croute(q);
