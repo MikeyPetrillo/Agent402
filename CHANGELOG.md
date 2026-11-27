@@ -61,9 +61,10 @@ Tools:
   no longer returns price points.
 - EDGAR tools, reports and pages share one pace of at most 8 requests a
   second to the SEC's hosts, with turns shared across callers; an EDGAR tool
-  call whose read cannot get its turn in time answers 503 with Retry-After
-  at once and is not charged on x402, and a run that was paid before it ran
-  is never refused by the pace.
+  call whose read cannot get its turn in time answers 503 with Retry-After,
+  at once when its place cannot be reached, and is not charged on x402; a
+  run that was paid before it ran starts ahead of the line and is never
+  refused by the pace.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
@@ -72,11 +73,12 @@ API:
   before. route-and-execute, with `include:"external"` as well, answers 404
   for such a task without running or charging anything.
 - /api/find and /api/route no longer read the query word "add" inside
-  "address", so a calculator task is not matched to address tools.
-- /api/find, /api/route and route-and-execute read a task that asks for a
-  coin's price on a past date as a miss (`capabilityGap` names it) unless a
-  listed tool is named for it; a task that asks for a statistic, a forecast
-  or an alert is answered as before.
+  "address", so a calculator task is not matched to address tools, and "add
+  two numbers" is answered with the calculator.
+- /api/find, /api/route and route-and-execute read a task that asks only for
+  a coin's price on a past date as a miss (`capabilityGap` names it) unless
+  a listed tool is named for it; a task that names anything else, or a date
+  in the current year, is answered as before.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.
