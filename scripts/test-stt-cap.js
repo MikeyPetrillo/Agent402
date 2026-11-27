@@ -15,10 +15,10 @@ import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandInFromCatalog } from "./lib/stand-in-costs.js";
 import { withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
-requireUpstreamCosts("test-stt-cap");
+const COSTS = await costsOrStandInFromCatalog("test-stt-cap");
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -26,9 +26,9 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } el
 // ---- the cap is a margin bound, derived from the model's rate ----
 for (const [slug, tier] of Object.entries(STT_TIERS)) {
   const rate = upstreamUsdPerMinute(tier.model);
-  ok(Number.isFinite(rate) && rate > 0, `${slug}: the model it sends (${tier.model}) has a known per-minute rate`);
+  COSTS.rate(`${slug}: the private per-minute row for ${tier.model}`, () => ok(Number.isFinite(rate) && rate > 0, `${slug}: the model it sends (${tier.model}) has a known per-minute rate`));
   const worst = tier.maxMinutes * rate;
-  ok(worst <= STT_MARGIN * tier.priceUsd + 1e-12, `${slug}: worst case at the ${tier.maxMinutes}-min cap is under ${STT_MARGIN * 100}% of $${tier.priceUsd}`);
+  COSTS.rate(`${slug}: the worst case at the cap within the margin share`, () => ok(worst <= STT_MARGIN * tier.priceUsd + 1e-12, `${slug}: worst case at the ${tier.maxMinutes}-min cap is under ${STT_MARGIN * 100}% of $${tier.priceUsd}`));
   const tool = [...STT_TOOLS, STT_LONG_TOOL].find((t) => t.slug === slug);
   ok(Math.abs(Number(tool.price.replace("$", "")) - tier.priceUsd) < 1e-9, `${slug}: the catalog price string matches the tier price the margin is computed on`);
   ok(new RegExp(`Max ${tier.maxMinutes} minutes`).test(tool.description) && tool.description.includes(tier.model) && tool.discovery.output.example.model === tier.model, `${slug}: description states the ${tier.maxMinutes}-minute cap and the model; the example names the model actually sent`);
@@ -628,7 +628,7 @@ const reject = (p) => p.then(() => null, (e) => e);
   // Its price is the margin rule's: the cent at or above 30 minutes at the dearer model's rate over STT_MARGIN.
   const dearest = Math.max(upstreamUsdPerMinute(L.model), upstreamUsdPerMinute(L.diarizeModel));
   const rulePrice = Math.ceil((L.maxMinutes * dearest / STT_MARGIN) * 100 - 1e-9) / 100;
-  ok(L.maxMinutes === 30 && Math.abs(L.priceUsd - rulePrice) < 1e-9, `transcribe-long: 30 minutes at the price the margin rule derives ($${L.priceUsd})`);
+  COSTS.rate("transcribe-long: its price is the one the margin rule derives from the dearer rate", () => ok(L.maxMinutes === 30 && Math.abs(L.priceUsd - rulePrice) < 1e-9, `transcribe-long: 30 minutes at the price the margin rule derives ($${L.priceUsd})`));
   ok(STT_LONG_TOOL.price === `$${L.priceUsd.toFixed(3)}` && STT_LONG_TOOL.route === "POST /api/transcribe-long" && STT_LONG_TOOL.discovery.bodyType === "json", "transcribe-long: a JSON URL route at the tier's price");
   // Off by default: not listed, and no other route names it.
   const saved = process.env.TRANSCRIBE_LONG;
