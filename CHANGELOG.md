@@ -8,10 +8,15 @@ carries its own version on npm.
 
 ### 2026-11-28 (Shorter pages, clearer answers)
 Site:
-- Tool pages are shorter: a one-sentence lead, one line per fact under
-  "Errors and behavior", and related tools and skill packs as linked names.
+- Tool pages are shorter: a short lead, one line per fact under "Errors and
+  behavior", and related tools and skill packs as linked names.
+- A tool page's lead ends at a sentence or clause boundary; on a phone an
+  address or hash in its parameter table breaks at the line's end, and the
+  price badge never starts a wrapped line with its separator dot.
 - Skill pack pages list their tools in a table with each tool's route; the
   full pack text is still served to agents by the API and MCP.
+- Skill pack prompts state each pack's budget as its listed price and each
+  tool's proof-of-work eligibility as listed.
 - /changelog shows the 30 most recent entries; older entries moved to
   /changelog/archive. /docs/api is a short index of the API references.
 - The home page, /sell and /docs open with short answers and keep detail one
@@ -21,9 +26,16 @@ Site:
   2026-11-28; the full text below them is unchanged and governs.
 - Two new pages: SEC Form 4 insider trades by API at /insider-trades-api,
   and a guide to agent-to-agent payments over x402 at
-  /guides/agent-to-agent-payments.
+  /guides/agent-to-agent-payments, whose sample sets a per-call ceiling.
+- A new page at /crypto-history-stats-api covers the routes that answer a
+  coin's history as computed figures, not a price series.
 - /company lists the official Agent402.tools packages and endpoints; the
   same list is in the README and in /.well-known/x402 (field `official`).
+Index:
+- The index crawler sends one seller route an unpaid price request at most
+  once a week, with one more try on the next crawl after a server error, a
+  redirect or no answer; registering again still reads at once, and /crawler
+  says the same.
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
@@ -35,19 +47,41 @@ Tools:
   read as an outage, not a filtered prompt.
 - Tool pages for the 20 tools with the longest descriptions show a shorter
   summary, while their listings and API descriptions are unchanged.
+- crypto-history, coin-ohlc and coin-market-chart-range answer look-back
+  statistics computed from a coin's history (return, volatility, drawdown
+  with its dates, best and worst day, distance from the window's high and
+  low, trend, candle statistics) and no longer return the price series or
+  candles.
+- coin-history answers what changed since a date in place of the dated price
+  snapshot.
+- token-price-history answers the same look-back statistics for a token and
+  no longer returns price points.
+- EDGAR tools, reports and pages share one pace of at most 8 requests a
+  second to the SEC's hosts; an EDGAR tool call whose read cannot get its
+  turn in time answers 503 with Retry-After and is not charged on x402.
 API:
-- /api/route reads a query that asks for IP geolocation as a miss
-  (`weakMatches`, with `capabilityGap`) unless a listed tool is named for
-  it; every other query is answered as before. route-and-execute answers 404
-  for such a task without running or charging anything.
+- /api/find, /api/route and route-and-execute read a task that asks for IP
+  geolocation, in phrasings such as "which country is this IP in" too, as a
+  miss (`capabilityGap` names it) unless a listed tool is named for it;
+  every other query is answered as before. route-and-execute, with
+  `include:"external"` as well, answers 404 for such a task without running
+  or charging anything.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.
+- route-and-execute no longer asks a chat-room message route for `model` and
+  `messages`.
 Operations:
 - The operator view of /api/gateway-status shows a projected-runway word for
   each spending and fee wallet whose balance a low-balance alarm already
-  reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks); it moves
-  no money and refuses nothing.
+  reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held
+  steady while a wallet sits at the mark; it moves no money and refuses
+  nothing.
+Packages:
+- agent402-mcp 0.17.2 is listed in the MCP Registry as
+  tools.agent402/agent402, a name verified against the agent402.tools
+  domain; the earlier name stays resolvable and is marked deprecated with a
+  pointer to it.
 
 ### 2026-11-28 (Tool page payment sentence)
 Site:
