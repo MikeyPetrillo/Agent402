@@ -23,6 +23,7 @@ import { WHY_COMPARE, WHY_POINTS } from "./why.js";
 import { siteOrgRef, mppOffered } from "./site-org.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 
 export const INSIDER_TRADES_PATH = "/insider-trades-api";
 export const SEARCH_LANDING_PATHS = ["/pay-per-call-api", "/paid-mcp-tools", "/compare", INSIDER_TRADES_PATH];
@@ -175,7 +176,7 @@ const routeParts = (def) => { const [method, path] = String(def.route).split(" "
 
 /** /insider-trades-api: SEC Form 4 insider trades by API, with the cheapest
  *  route that lists them and the report product that reads them. */
-export function insiderTradesApiPage(baseUrl, catalog) {
+export function insiderTradesApiPage(baseUrl, catalog, { storefront = humanCheckoutEnabled() } = {}) {
   const list = defOf(catalog, "edgar-insider-trades");
   const report = defOf(catalog, "insider-report");
   if (!list) throw new Error("insider-trades-api: edgar-insider-trades is not in the catalog");
@@ -190,6 +191,9 @@ export function insiderTradesApiPage(baseUrl, catalog) {
   const topFields = example ? [...new Set([...Object.keys(example).filter((k) => k !== "trades"), "startDate", "endDate", "source"])] : [];
   const inputFields = Object.keys(list.discovery?.inputSchema?.properties || {});
   const or = (arr) => arr.length > 1 ? `${arr.slice(0, -1).map(c).join(", ")} and ${c(arr[arr.length - 1])}` : arr.map(c).join("");
+  // The card sentences are an offer: printed only while the storefront is on
+  // and sells this report.
+  const byCard = Boolean(storefront && report && HUMAN_PRODUCTS[report.slug]);
   let reportBlock = "";
   if (report) {
     const r = routeParts(report);
@@ -201,7 +205,7 @@ export function insiderTradesApiPage(baseUrl, catalog) {
 ${pre(`curl -i -X POST ${baseUrl}${r.path} \\
   -H 'Content-Type: application/json'${job ? " \\\n  -H 'Prefer: respond-async'" : ""} \\
   -d '${body}'`)}
-<p>People can buy the same report by card at <a href="/reports/insider">Insider flow reports</a>.</p>`;
+${byCard ? `<p>People can buy the same report by card at <a href="/reports">Reports</a>.</p>` : ""}`;
   }
   const bodyHtml = `
 <p class="sl-lead">Form 4 is the filing an officer, director or 10% holder makes after trading the company's stock. Agent402 reads those filings from SEC EDGAR and serves them by API, paid per call from an agent's wallet with no account or key.</p>
@@ -210,16 +214,16 @@ ${pre(`curl -i -X POST ${baseUrl}${r.path} \\
 ${pre(`curl -i "${baseUrl}${l.path}?${query}"`)}
 <p>The first answer is HTTP 402 with the price and the ways to pay. An x402 client signs the payment and sends the same request again; the answer is the list below.</p>
 ${example ? `<h2>What comes back</h2>
-<p>The top-level fields, ${or(topFields)}, name the company, the window and the source. Each row in ${c("trades")} carries ${or(rowFields)}: ${c("url")} is the filing on sec.gov, and ${c("cik")} there is the insider's own filer number. ${example.trades && Number(example.returned) > example.trades.length ? `The published example, shortened to ${example.trades.length === 1 ? "one row" : `${example.trades.length} rows`}:` : "The published example:"}</p>
+<p>The top-level fields, ${or(topFields)}, name the company, the window and the source. Each row in ${c("trades")} carries ${or(rowFields)}: ${c("url")} is the filing on sec.gov, and ${c("cik")} there is the insider's own filer number. ${example.trades && Number(example.returned) > example.trades.length ? `The published example, shortened to ${example.trades.length === 1 ? "one row" : `${example.trades.length} rows`}, uses a made-up issuer, filer and accession number; a live answer names the company asked for:` : "The published example uses a made-up issuer, filer and accession number; a live answer names the company asked for:"}</p>
 ${pre(JSON.stringify(example, null, 2))}` : ""}
 ${reportBlock}
 <h2>From an agent</h2>
 <p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "insider trades for a ticker" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=insider%20trades">/api/find</a> answers the same question.</p>
 <h2>Source and use</h2>
-<p>Form 4 filings are public records published by the U.S. Securities and Exchange Commission on EDGAR; each row links the filing itself, so every figure can be checked at the source. Agent402 reads them with a declared User-Agent, as SEC's access rules ask. Agent402 is not affiliated with or endorsed by the SEC.</p>
+<p>Form 4 filings are public records published by the U.S. Securities and Exchange Commission on EDGAR; each row of a live answer links the filing itself, so every figure can be checked at the source. Agent402 reads them with a declared User-Agent, as SEC's access rules ask. Agent402 is not affiliated with or endorsed by the SEC.</p>
 <p>Information only, not investment advice. A Form 4 reports a trade after it happened, and says nothing about why it was made.</p>
 <h2>More</h2>
-${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/${report.slug}`, "Insider flow report"]] : []), ["/reports/insider", "Reports by card"], ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
+${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/${report.slug}`, "Insider flow report"]] : []), ...(byCard ? [["/reports", "Reports by card"]] : []), ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
   return page(baseUrl, {
     path: INSIDER_TRADES_PATH,
     title: "Insider trades API: SEC Form 4 data for agents | Agent402",
