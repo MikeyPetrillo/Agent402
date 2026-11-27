@@ -1704,7 +1704,7 @@ holds it.
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |
 | `RATE_LIMIT_MAX_KEYS` | Rate limit maximum keys. |  | `src/rate-limit.js` |
-| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 3 more |
+| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 4 more |
 | `RDAP_REGISTRY_DAILY_MAX` | Lookups whois and domain-availability send to one registry's RDAP service per UTC day, per process (default 1000; off lifts it). A lookup past it answers a retryable 503 and is not sent. |  | `src/tools/rdap-registry-limits.js` |
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |
