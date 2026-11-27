@@ -269,7 +269,15 @@ async function readBaseBuyerBalance(pk) {
     const { privateKeyToAccount } = await import("viem/accounts");
     const address = privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`).address;
     if (balanceReaderForTest) { const v = await balanceReaderForTest(address); return Number.isFinite(v) ? v : null; }
-    const data = "0x70a08231" + address.slice(2).toLowerCase().padStart(64, "0");
+    return await baseUsdcBalanceOf(address);
+  } catch {
+    return null;
+  }
+}
+/** The Base USDC balance of one address, in USD, or null when no RPC answers: a public read, no key. */
+export async function baseUsdcBalanceOf(address) {
+  try {
+    const data = "0x70a08231" + String(address).slice(2).toLowerCase().padStart(64, "0");
     for (const rpc of BASE_RPCS) {
       try {
         const res = await fetch(rpc, {

@@ -526,3 +526,6 @@ The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_A
 refuses, caps or reroutes a call.
 `FUNDING_RUNWAY_DAYS` (default 3; `src/funding-runway.js`) is how far ahead the operator view's
 `fundingRunway` word looks: `low-soon` when a wallet's fitted spend reaches its low-water line in that time.
+`FUNDING_WATCH_ADDRESSES` (Railway; unset = off; `src/funding-watch.js`) adds wallets the server does not
+spend from (the scheduled paid checks' wallets) to that runway, read by public address only: a comma list
+of `label:chain:address:lineUsd` (chain `base` or `tempo`). No key for a watched wallet is ever set on the server.

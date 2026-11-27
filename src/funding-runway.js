@@ -37,7 +37,9 @@
 // A warning only. It never moves money, never tops anything up, never refuses
 // or slows a buyer, and never changes the existing alarm's word. It makes no
 // chain read of its own: a reader hands it the number it already has
-// (noteFundingReading), at that reader's own cadence. The words ride the
+// (noteFundingReading), at that reader's own cadence. Wallets the server does
+// not spend from are read by address in src/funding-watch.js and handed over
+// the same way (`watch:<label>`). The words ride the
 // operator view of /api/gateway-status only (`fundingRunway`), with the
 // figures; nothing here reaches a public surface.
 //
@@ -268,12 +270,17 @@ export function noteFundingReading(key, balance, line, { unit = "USD", now = Dat
 }
 
 /** The operator view: one word and each wallet's runway with its figures. */
-export async function fundingRunwayStatus({ now = Date.now(), days = runwayDays() } = {}) {
+export async function fundingRunwayStatus({ now = Date.now(), days = runwayDays(), expect = [] } = {}) {
   await bounded(ensureLoaded(now));
   const wallets = {};
   for (const [k, e] of trail) {
     if (isStale(e.samples, now)) { trail.delete(k); continue; } // no longer read: off the report
-    wallets[k] = { ...judge(e, now, days), unit: e.unit };
+    wallets[k] = { ...judge(e, now, days), line: e.line, unit: e.unit };
+  }
+  // A wallet a reader is set to read (`expect`: { key, line, unit }) and has
+  // no reading of inside the window is on the report as unknown, not absent.
+  for (const x of Array.isArray(expect) ? expect : []) {
+    if (x && typeof x.key === "string" && !(x.key in wallets)) wallets[x.key] = { status: "unknown", readings: 0, line: Number.isFinite(x.line) ? x.line : null, unit: x.unit || "USD" };
   }
   return { status: worstRunwayWord(Object.values(wallets).map((w) => w.status)), days, clearDays: days * RUNWAY_CLEAR_FACTOR, warningOnly: true, wallets };
 }

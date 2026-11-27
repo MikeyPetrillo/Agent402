@@ -17,6 +17,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.log(`FAIL - ${m}`); } };
@@ -324,8 +326,119 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
     ok(src(f).includes(`noteFundingReading(${key}`), `${f} hands its ${key} reading to the runway`);
   }
   const server = src("server.js");
-  ok(/\.\.\.\(full \? \{ fundingRunway: await fundingRunwayStatus\(\)/.test(server) && (server.match(/fundingRunway:/g) || []).length === 1, "/api/gateway-status carries fundingRunway on the operator view only");
+  ok(/\.\.\.\(full \? \{ fundingRunway: await fundingRunwayStatus\(\{ expect: watchedFundingWallets\(\) \}\)/.test(server) && (server.match(/fundingRunway:/g) || []).length === 1, "/api/gateway-status carries fundingRunway on the operator view only");
   ok(!/fetch\(|rpc\(/.test(src("funding-runway.js")), "the runway makes no chain read of its own");
+}
+
+// Watched wallets (src/funding-watch.js): wallets the server does not spend
+// from, read by public address on the status read's cadence and reported
+// like any other wallet. Example addresses only.
+{
+  const W = await import("../src/funding-watch.js");
+  const A1 = "0x000000000000000000000000000000000000dEaD", A2 = "0x00000000000000000000000000000000DeaDBeef";
+  const VAR = `burner:base:${A1}:6,canary-tempo:tempo:${A2}:5`;
+  const M = 60_000;
+  const calls = [];
+  let fail = new Set(), bal = { base: 20, tempo: 9 };
+  const readers = {
+    base: async (a) => { calls.push(`base:${a}`); if (fail.has("base")) return null; return bal.base; },
+    tempo: async (a) => { calls.push(`tempo:${a}`); if (fail.has("tempo")) throw new Error("rpc down"); return bal.tempo; },
+  };
+  const status = (t) => fundingRunwayStatus({ now: t, days: 3, expect: W.watchedFundingWallets(env) });
+  let env = {};
+  __resetFundingRunwayForTest(); W.__resetFundingWatchForTest();
+
+  // Unset: no reads, nothing on the report.
+  ok(await W.noteWatchedFunding({ now, readers, env }) === 0 && calls.length === 0, `with the variable unset nothing is read (${calls.length} reads)`);
+  ok(await W.noteWatchedFunding({ now, readers, env: { FUNDING_WATCH_ADDRESSES: "  " } }) === 0 && calls.length === 0, "a blank variable reads nothing");
+  ok(Object.keys((await status(now)).wallets).length === 0 && W.watchedFundingWallets(env).length === 0, "and no watched wallet is on the report");
+
+  // Set: each wallet is read by its address through its chain's reader.
+  env = { FUNDING_WATCH_ADDRESSES: VAR };
+  const before = await status(now);
+  ok(before.wallets["watch:burner"]?.status === "unknown" && before.wallets["watch:burner"].readings === 0 && before.wallets["watch:burner"].line === 6 && before.wallets["watch:canary-tempo"]?.line === 5, `a watched wallet not read yet is on the report as unknown with its own line (${JSON.stringify(before.wallets["watch:burner"])})`);
+  ok(await W.noteWatchedFunding({ now, readers, env }) === 2 && calls.join() === `base:${A1},tempo:${A2}`, `a status read starts one read per watched wallet, by address (${calls.join()})`);
+  let s = await status(now);
+  ok(s.wallets["watch:burner"]?.readings === 1 && s.wallets["watch:burner"].line === 6 && s.wallets["watch:burner"].unit === "USD" && s.wallets["watch:canary-tempo"]?.readings === 1 && s.wallets["watch:canary-tempo"].line === 5, `each reading lands on the runway under watch:<label> with that wallet's line (${Object.keys(s.wallets).join(", ")})`);
+  ok(!JSON.stringify(s).toLowerCase().includes(A1.toLowerCase()) && !JSON.stringify(W.watchedFundingWallets(env)).toLowerCase().includes("dead"), "the report names the label, never the address");
+
+  // Cadence: a status read every minute reads each wallet once per sample interval.
+  calls.length = 0;
+  for (let i = 1; i < RUNWAY_SAMPLE_MS / M; i++) await W.noteWatchedFunding({ now: now + i * M, readers, env });
+  ok(calls.length === 0, `status reads inside the sample interval start no read (${calls.length})`);
+  for (let i = 0; i <= 24 * 60; i++) { bal.base = 20 - 6 * (i / 1440); await W.noteWatchedFunding({ now: now + RUNWAY_SAMPLE_MS + i * M, readers, env }); }
+  const perWallet = calls.filter((c) => c.startsWith("base:")).length;
+  ok(perWallet === 48 || perWallet === 49, `a day of status reads a minute apart reads a wallet once per 30 minutes (${perWallet} reads)`);
+  const t1 = now + RUNWAY_SAMPLE_MS + 24 * 60 * M;
+  s = await status(t1);
+  // 6 a day from 20 over a line of 6: 14 left is 2.3 days.
+  ok(s.wallets["watch:burner"].status === "low-soon" && s.wallets["watch:canary-tempo"].status === "ok" && s.status === "low-soon", `a watched wallet draining toward its line reads low-soon before its alarm would (${s.wallets["watch:burner"].status}, ${s.wallets["watch:burner"].daysLeft} days)`);
+
+  // One read in flight per wallet.
+  {
+    W.__resetFundingWatchForTest(); calls.length = 0;
+    let release; const gate = new Promise((r) => { release = r; });
+    const slow = { ...readers, base: async (a) => { calls.push(`base:${a}`); await gate; return 20; } };
+    const first = W.noteWatchedFunding({ now: t1, readers: slow, env: { FUNDING_WATCH_ADDRESSES: `burner:base:${A1}:6` } });
+    const second = await W.noteWatchedFunding({ now: t1 + 1, readers: slow, env: { FUNDING_WATCH_ADDRESSES: `burner:base:${A1}:6` } });
+    release(); await first;
+    ok(second === 0 && calls.length === 1, `a status read while a wallet's read is out starts no second one (${calls.length})`);
+  }
+
+  // A reader failure: that wallet reads unknown, the other reads as before,
+  // and the failed read is retried after the retry interval, not at once.
+  {
+    __resetFundingRunwayForTest(); W.__resetFundingWatchForTest(); calls.length = 0;
+    fail = new Set(["tempo"]); bal = { base: 20, tempo: 9 };
+    for (let i = 0; i <= 24; i++) noteFundingReading("base", 40, 6, { now: now - (24 - i) * H });
+    for (let i = 0; i <= 16; i++) await W.noteWatchedFunding({ now: now - (16 - i) * RUNWAY_SAMPLE_MS, readers, env });
+    s = await status(now);
+    ok(s.wallets["watch:canary-tempo"]?.status === "unknown" && s.wallets["watch:canary-tempo"].readings === 0, `a wallet whose reader throws reads unknown (${JSON.stringify(s.wallets["watch:canary-tempo"])})`);
+    ok(s.wallets["watch:burner"].status === "ok" && s.wallets.base.status === "ok", `every other wallet's word is its own (${s.wallets["watch:burner"].status}, ${s.wallets.base.status})`);
+    fail = new Set(["base"]); calls.length = 0;
+    const t2 = now + RUNWAY_SAMPLE_MS;
+    await W.noteWatchedFunding({ now: t2, readers, env });
+    await W.noteWatchedFunding({ now: t2 + M, readers, env });
+    const soon = calls.filter((c) => c.startsWith("base:")).length;
+    await W.noteWatchedFunding({ now: t2 + W.FUNDING_WATCH_RETRY_MS, readers, env });
+    ok(soon === 1 && calls.filter((c) => c.startsWith("base:")).length === 2, `a read that answers nothing is retried after the retry interval, not on the next status read (${soon} then ${calls.filter((c) => c.startsWith("base:")).length})`);
+    ok((await status(t2)).wallets["watch:burner"].status === "ok", "one missed read leaves the wallet's word on the readings it has");
+    // A reader that never answers does not hold the caller past its bound.
+    ok(W.FUNDING_WATCH_READ_MS <= 30_000 && W.FUNDING_WATCH_MAX <= 16, `a read and the list are bounded (${W.FUNDING_WATCH_READ_MS} ms, ${W.FUNDING_WATCH_MAX} wallets)`);
+    fail = new Set();
+  }
+
+  // Malformed entries are ignored, each by position; the good ones are kept.
+  {
+    const bad = [`ok1:base:${A1}:6`, `two:solana:${A1}:6`, `three:base:0x1234:6`, `four:base:${A1}`, `Five:base:${A1}:6`, `six:base:${A1}:-1`, `ok1:tempo:${A2}:5`, `seven:base:${A1}:x`, `ok2:tempo:${A2}:0.5`].join(", ");
+    const p = W.parseFundingWatch(bad);
+    ok(p.wallets.map((w) => w.key).join() === "watch:ok1,watch:ok2" && p.ignored.join() === "2,3,4,5,6,7,8", `a malformed entry is ignored and the others are kept (${p.wallets.map((w) => w.key).join()}; ignored ${p.ignored.join()})`);
+    const many = Array.from({ length: W.FUNDING_WATCH_MAX + 2 }, (_, i) => `w${i}:base:${A1}:6`).join(",");
+    ok(W.parseFundingWatch(many).wallets.length === W.FUNDING_WATCH_MAX && W.parseFundingWatch(many).ignored.length === 2, "entries past the maximum are ignored");
+    ok(W.fundingWatchBootLine(VAR) === null && W.fundingWatchBootLine("") === null && W.fundingWatchBootLine(undefined) === null, "a well-formed or unset variable logs nothing");
+    // The boot line, from a real import of the module with the variable set.
+    const mod = fileURLToPath(new URL("../src/funding-watch.js", import.meta.url));
+    const boot = (value) => spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(mod)});`], { env: { ...process.env, FUNDING_WATCH_ADDRESSES: value }, encoding: "utf8" });
+    const r = boot(bad);
+    const lines = (r.stderr + r.stdout).split("\n").filter(Boolean);
+    ok(r.status === 0 && lines.length === 1 && lines[0].includes("FUNDING_WATCH_ADDRESSES") && /7 of 9 entries ignored/.test(lines[0]), `a boot with malformed entries logs one line naming the variable (${lines.length} line(s): ${lines[0]?.slice(0, 80)})`);
+    ok(!/0x[0-9a-f]{4}/i.test(lines.join()) && !/dead|beef|solana|three|Five/i.test(lines.join()), "the line echoes no address and no entry text");
+    const clean = boot(VAR);
+    ok(clean.status === 0 && (clean.stderr + clean.stdout).trim() === "", "a boot with a well-formed variable logs nothing");
+  }
+
+  // The caller path: the status route starts the reads and awaits none; the
+  // module holds no key and names no fetch of its own.
+  {
+    const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    const server = src("server.js");
+    const route = server.slice(server.indexOf('app.get("/api/gateway-status"'), server.indexOf('app.get("/api/gateway-status"') + 600);
+    ok(/\n  noteWatchedFunding\(\);/.test(route) && !/await noteWatchedFunding/.test(server) && (server.match(/noteWatchedFunding\(/g) || []).length === 1, "/api/gateway-status starts the watched reads and does not await them; no other route does");
+    const watch = src("funding-watch.js").replace(/^\s*\/\/.*$/gm, "");
+    ok(!/fetch\(/.test(watch) && !/_KEY\b|privateKey|mnemonic/i.test(watch), "the watch module makes its reads through the server's own readers and names no key");
+    ok(/baseUsdcBalanceOf\(address\)/.test(src("upstream-buyer-status.js").split("async function readBaseBuyerBalance")[1].split("\n}")[0]) && /tempoUsdcBalanceOf\(acct\.address\)/.test(src("tempo-buyer.js")), "the server's own Base and Tempo wallets are read through the same two readers");
+  }
+  __resetFundingRunwayForTest(); W.__resetFundingWatchForTest();
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);

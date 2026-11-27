@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1153 variables in 116 groups.
+1154 variables in 116 groups.
 
 ## Contents
 
@@ -482,6 +482,7 @@ holds it.
 | `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
 | `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
 | `FUNDING_RUNWAY_DAYS` | How many days ahead the operator view's fundingRunway word looks: a wallet whose fitted spend reaches its low-water line within it reads low-soon (default 3). A warning only. |  | `src/changelog.js`, `src/funding-runway.js` |
+| `FUNDING_WATCH_ADDRESSES` | Wallets the server does not spend from whose public balance the funding runway also reads (the wallets the scheduled paid checks spend from): a comma list of label:chain:address:lineUsd, chain base or tempo, at most 8 entries. Read by address only, at most once per wallet per 30 minutes; shown on the operator view's fundingRunway as watch:<label>. Unset: nothing is read. A malformed entry is ignored with one boot line. A warning only. |  | `src/funding-watch.js` |
 
 ## FUNNEL
 
