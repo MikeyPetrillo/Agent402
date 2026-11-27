@@ -60,7 +60,7 @@ export const PACK_PAGE_COPY = {
     lead: "Run a signup form through the full onboarding workup: validate the email, score the password, mint an ID, derive a handle, generate a secret, fingerprint with a hash and verify the 2FA code.",
     use: "An account-provisioning agent gets a signup payload and needs every field validated, every identifier minted and a storable record, or a clear reason to reject the signup.",
     steps: [
-      "Validate the address with email-validate; reject malformed ones and surface likely typos.",
+      "Validate the address with email-validate; reject malformed ones and domains with no mail servers.",
       "Score the password with password-strength and name the specific weakness when it is too weak.",
       "Mint the stable internal ID once with uuid.",
       "Derive a URL-safe handle from the display name with slugify.",
@@ -175,7 +175,7 @@ export const PACK_PAGE_COPY = {
     steps: [
       "Pull the live Treasury yield curve, 1M to 30Y, with treasury-yield-curve.",
       "Get the 10Y-2Y and 10Y-3M spreads from yield-curve-spread.",
-      "Read headline and core CPI year over year with cpi-yoy.",
+      "Read headline CPI year over year with cpi-yoy.",
       "Read the headline U-3 unemployment rate with unemployment-rate.",
       "Get the effective fed funds rate with fed-funds.",
       "Compute the Sahm rule recession indicator with sahm-rule.",
@@ -192,10 +192,10 @@ export const PACK_PAGE_COPY = {
     ],
   },
   "trend-analysis": {
-    lead: "Run any numeric time series, such as a US stock's daily closes (venue bars at least 24 hours old) or a US economic indicator, through descriptives, trend, outliers and a forecast with a 95% interval.",
+    lead: "Run any numeric time series, such as a US stock's daily closes (venue bars at least 24 hours old, not consolidated) or a US economic indicator, through descriptives, trend, outliers and a forecast with a 95% interval.",
     use: "For a numerical answer to \"is this trending, and what comes next?\": slope, r², outlier dates and a forecast with its interval. Stats and forecast steps are free over PoW.",
     steps: [
-      "Fetch the series: stock-history closes (at least 24 hours old) or us-macro-series values.",
+      "Fetch the series: stock-history closes (at least 24 hours old, not consolidated) or us-macro-series values.",
       "Run stats-summary for mean, median, spread and quartiles.",
       "Smooth the series with moving-average, comparing SMA and EMA.",
       "Fit linear-regression on the index for slope and r².",
@@ -287,9 +287,9 @@ export const PACK_PAGE_COPY = {
     ],
   },
   "contact-verify": {
-    use: "Before storing or emailing an address: check its syntax, that its domain has mail servers and publishes SPF. Catches typos, disposable domains and dead mailboxes.",
+    use: "Before storing or emailing an address: check its syntax, that its domain has mail servers and publishes SPF. Catches malformed addresses, disposable domains and domains with no mail servers.",
     steps: [
-      "Check syntax, domain and mailbox reachability with email-validate.",
+      "Check syntax and the domain's MX records with email-validate.",
       "Confirm the domain's MX records with dns-lookup.",
       "Check the domain's SPF record with spf-check.",
     ],
@@ -351,7 +351,7 @@ export const PACK_PAGE_COPY = {
   "forecasting-bake-off": {
     use: "Let the data pick the method: every method runs the same holdout backtest, the lowest RMSE wins and forecasts forward. Pure CPU; only the data fetch is paid.",
     steps: [
-      "Fetch up to 250 venue closes, at least 24 hours old, with stock-history.",
+      "Fetch up to 250 venue closes, at least 24 hours old and not consolidated, with stock-history.",
       "Or fetch a macro series, such as unemployment or CPI, with us-macro-series.",
       "Backtest naive or drift, SES, Holt and Holt-Winters with forecast-eval; lowest RMSE wins.",
       "If naive or drift won, forecast with forecast-naive; the interval widens with the horizon.",
@@ -484,7 +484,7 @@ export const PACK_PAGE_COPY = {
       "Read the DMARC policy with dmarc-check; p=none means receivers ignore failures.",
       "Probe 14 common DKIM selectors with dkim-lookup; warn on weak keys and testing mode.",
       "Score SPF, DMARC, DKIM and MX together, 0 to 100, with email-deliverability.",
-      "Confirm one recipient address and its reachable MX with email-validate.",
+      "Confirm one recipient address's syntax and its domain's MX records with email-validate.",
       "Read the MX records with dns-lookup type=MX against the sending setup.",
     ],
   },
@@ -621,8 +621,8 @@ export const PACK_PAGE_COPY = {
     ],
   },
   "text-hygiene": {
-    lead: "Turn dirty text such as chat logs, scraped pages or log dumps into something safe to store: measure, redact PII first, then dedupe, sort, extract entities, find keywords and grade readability.",
-    use: "Preparing a text dump for analysis or storage. Redaction runs before any other step, so no intermediate result holds PII.",
+    lead: "Clean dirty text such as chat logs, scraped pages or log dumps: measure, redact matched PII first, then dedupe, sort, extract entities, find keywords and grade readability.",
+    use: "Preparing a text dump for analysis or storage. Redaction runs before any other step, so no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched.",
     steps: [
       "Measure characters, words, sentences and tokens with text-stats.",
       "Redact emails, phones, card numbers, SSNs and IPv4s with redact, before anything else.",

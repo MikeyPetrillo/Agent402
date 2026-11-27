@@ -69,5 +69,43 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   ok(/<h3>A fund's 13F holdings<\/h3>/.test(src("src/human-reports-page.js")), "the fund card is headed by what it reports: a fund's 13F holdings");
 }
 
+// A pack's copy names only what its tools do. Each rule is a claim the copy
+// once made past its tools: email-validate reads syntax and the domain's MX
+// records (it probes no mailbox and suggests no correction), cpi-yoy answers
+// headline CPI only, redact masks the patterns it matches (the text is not
+// thereby safe to store), a certificate transparency read needs the tool that
+// makes it, no pack reads a page's links, and a stock-history close is a
+// venue close. Read on every pack in full and on its page copy, stock on and off.
+{
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const RULES = [
+    ["a mailbox probe or a typo suggestion", /mailbox reachab|dead mailbox|likely[- ]typos?|reachable MX|MX is actually reachable|typo of a major provider/i, () => false],
+    ["core CPI from cpi-yoy", /headline and core|core (CPI|inflation)/i, () => false],
+    ["text that is safe to store, or free of PII", /safe to store|holds PII|sloppy with retention/i, () => false],
+    ["certificate transparency", /certificate transparency|\bCT logs?\b/i, (p) => (p.toolSlugs || []).includes("cert-transparency")],
+    ["a page's link graph as something the pack reads", /on-page link graph|where do its links point/i, () => false],
+  ];
+  const strings = (p) => {
+    const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])];
+    for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); }
+    return out.filter(Boolean);
+  };
+  const findings = (packs, rules = RULES) => packs.flatMap((p) => strings(p).flatMap((t) => rules.filter(([, re, allowed]) => re.test(t) && !allowed(p)).map(([what]) => `${p.slug} claims ${what}: "${t.slice(0, 70)}"`)));
+  const found = findings(ALL_SKILL_PACKS);
+  ok(ALL_SKILL_PACKS.length > 40 && found.length === 0, `no pack's copy claims what its tools do not do${found.length ? `: ${found.join("; ")}` : ""}`);
+  const fake = (text, toolSlugs = ["email-validate"]) => [{ slug: "control-pack", tagline: text, toolSlugs }];
+  for (const [text, tools] of [["Catches typos, disposable domains and dead mailboxes."], ["Read headline and core CPI year over year with cpi-yoy."], ["into something safe to store"], ["robots policy, and certificate transparency.", ["whois"]], ["and the on-page link graph."]]) {
+    ok(findings(fake(text, tools)).length >= 1, `control: "${text}" is caught`);
+  }
+  ok(findings(fake("Pull the certificate transparency log.", ["cert-transparency"])).length === 0, "control: a pack that holds cert-transparency may name it");
+  // A stock-history close in page copy is a venue close, said where it is named.
+  const venue = ALL_SKILL_PACKS.flatMap((p) => { const c = packPageCopy(p, { stock: true }); return [c.lead, c.use, ...(c.steps || [])].filter((t) => t && /24 hours old/.test(t) && !/not (the )?consolidated/.test(t)).map((t) => `${p.slug}: "${t.slice(0, 70)}"`); });
+  const named = ALL_SKILL_PACKS.flatMap((p) => { const c = packPageCopy(p, { stock: true }); return [c.lead, c.use, ...(c.steps || [])].filter((t) => t && /24 hours old/.test(t)); });
+  ok(named.length >= 3 && venue.length === 0, `page copy that names delayed stock closes says they are not consolidated (${named.length} lines)${venue.length ? `: ${venue.join("; ")}` : ""}`);
+  const text = SKILL_PACKS.find((p) => p.slug === "text-hygiene");
+  const { PII_TYPES } = await import("../src/tools/pii-redact.js");
+  ok(PII_TYPES.join() === "email,card,ssn,phone,ip" && /no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(packPageCopy(text).use || "") && /emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(text.useCase), "text-hygiene names the five patterns redact matches, and redact still matches those five");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
