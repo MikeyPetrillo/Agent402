@@ -233,8 +233,8 @@ names first); `WRAP_ALL=1` runs all of them.
   least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2; punctuation alone
   is not a word). Widow control in `assets/js/site-chrome.js` measures each block's tail
   and binds its last words to about a third of its measure (two words that fit stay
-  together; a short cell of a scrolling table stays whole; a URL or code token too wide to
-  join a short tail joins it and breaks at its own seams; a block of four or five words gives a word
+  together; a short cell of a scrolling table stays whole; a URL, code token or hyphenated name half the
+  measure or wider, too wide to join a short tail, joins it and breaks at its own seams; a block of four or five words gives a word
   back so it never opens on one word alone); if a block still rags, the copy
   or the measure is wrong, so shorten the words or widen the column. Text rendered after
   load calls `window.a402BindWidows(root)`. Every edit is measured at one width and records

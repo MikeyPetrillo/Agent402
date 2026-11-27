@@ -209,8 +209,8 @@ var a402BindPass=function(root){try{
     /* The tail of j words, measured, for the last few runs. */
     var widths=[],wc=[],nw=0;for(var j=1;j<=Math.min(runs.length,24);j++){var rb=runs[runs.length-j].b,re2=j===1?last+1:runs[runs.length-j+1].a;widths.push(tailW(map,rb,last));/* an arrow or a lone dash is not a word; words a first pass already joined still count one by one */nw+=s.slice(rb,re2).split(/[\s\u00A0]+/).filter(function(t){return /[\p{L}\p{N}]/u.test(t);}).length;wc.push(nw);}
     var whole=(runs.length===1||cell)?tailW(map,first,last):0;
-    /* A long token (60%+ of the measure) before the tail (a URL, a host name, inline code) too wide to join it: when the tail alone is short, the token joins it and breaks at its own seams, so its last piece rides on the last line ("protection." / "outlook.com, max_age: 86400."). */
-    var ext=(function(){var lo=w*0.33,hi=w*0.97,jb=0;for(var j=1;j<=widths.length;j++){if(widths[j-1]>hi){jb=j;break;}if(wc[j-1]>=3&&widths[j-1]>=lo)return null;}if(jb<2||cell||widths[jb-1]-widths[jb-2]<w*0.6)return null;
+    /* A long token (half the measure or more) before the tail (a URL, a host name, inline code) too wide to join it: when the tail alone is short, the token joins it and breaks at its own seams, so its last piece rides on the last line ("protection." / "outlook.com, max_age: 86400."). */
+    var ext=(function(){var lo=w*0.33,hi=w*0.97,jb=0;for(var j=1;j<=widths.length;j++){if(widths[j-1]>hi){jb=j;break;}if(wc[j-1]>=3&&widths[j-1]>=lo)return null;}if(jb<2||cell||widths[jb-1]-widths[jb-2]<w*0.5)return null;
       var R=runs.length,ta=runs[R-jb].b,te=runs[R-jb+1].a,seams=[],piece=-1;
       for(var x=ta+1;x<te;x++){var g=segAt(x);if(g&&g.node&&segAt(x-1)===g&&/[_.\/:?&=,-]/.test(s.charAt(x-1))&&/[^\s_.\/:?&=,\-⁠ ]/.test(s.charAt(x)))seams.push(x);}
       if(seams.length)piece=tailW(map,seams[seams.length-1],last);
