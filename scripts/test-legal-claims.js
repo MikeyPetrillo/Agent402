@@ -46,7 +46,9 @@ ok(/Nightly backups of the state database go to separate object storage/.test(se
 {
   const { companyPage } = await import("../src/company.js");
   const legalName = (companyPage("https://agent402.tools").match(/"legalName":"([^"]+)"/) || [])[1];
-  const rights = privacy.slice(privacy.indexOf("Your rights (EU, UK and Switzerland)"), privacy.indexOf("Children"));
+  // The section itself: the jump list at the top names its heading first.
+  const rightsAt = privacy.lastIndexOf("Your rights (EU, UK and Switzerland)");
+  const rights = privacy.slice(rightsAt, privacy.indexOf("Children", rightsAt));
   ok(legalName && rights.includes(`${legalName} , doing business as Havok Holdings LLC`), `the controller is the legal entity /company names (${legalName})`);
   for (const r of ["access", "corrected or erased", "portable form", "object to processing", "withdraw consent", "supervisory authority"]) ok(rights.includes(r), `/privacy lists the right to ${r}`);
   for (const basis of ["contract", "legitimate interest", "consent"]) ok(rights.includes(basis), `/privacy names the ${basis} legal basis`);
