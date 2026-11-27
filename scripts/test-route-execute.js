@@ -546,6 +546,39 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     try { await mk(pay, async () => [C]).handler({ task: "t", include: "external", params: { messages: [] } }, {}); } catch (e) { threw = e; }
     ok(threw?.statusCode === 502, "an input refusal with every contract field present stays 502 (not the caller's input)");
   }
+  // A task routed to a chat completion (a seller whose route is chat-shaped)
+  // whose params leave out model or messages is answered 400 naming them in
+  // `missing`, BEFORE any seller is paid: nothing bought, nothing charged.
+  // A seller whose published contract does not require model is asked only
+  // for messages.
+  {
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const CHAT = { ...A, url: "https://a.example/v1/chat/completions", slug: "chat" };
+    const MSG = { ...A, url: "https://a.example/v1/messages", slug: "messages" };
+    for (const [params, want, ext] of [[{}, ["model", "messages"], CHAT], [{ model: "m1" }, ["messages"], CHAT], [{ messages: [{ role: "user", content: "hi" }] }, ["model"], CHAT],
+      [{ model: " ", messages: [] }, ["model", "messages"], CHAT], [{ prompt: "hi" }, ["model", "messages"], MSG]]) {
+      let calls = 0;
+      let threw = null;
+      try { await mk(async () => { calls++; return good; }, async () => [ext, B]).handler({ task: "chat completion", include: "external", params }, {}); } catch (e) { threw = e; }
+      const f = threw ? toolErrorFields(threw) : {};
+      ok(threw?.statusCode === 400 && calls === 0 && JSON.stringify(f.missing) === JSON.stringify(want) && want.every((w) => threw.message.includes(`params.${w}`)) && /Nothing was spent/.test(threw.message),
+        `a chat task missing ${want.join(" and ")} answers 400 naming them before any purchase (${threw?.statusCode}, ${calls} buys, missing ${JSON.stringify(f.missing)})`);
+    }
+    {
+      const NOMODEL = { ...CHAT, requestContract: { state: "declared", required: { body: ["messages"] } } };
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [NOMODEL]).handler({ task: "chat completion", include: "external", params: { messages: [{ role: "user", content: "hi" }] } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "a chat seller whose contract does not require model is bought with messages alone");
+    }
+    {
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [CHAT]).handler({ task: "chat completion", include: "external", params: { model: "m1", messages: [{ role: "user", content: "hi" }] } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "control: a chat task carrying model and messages is bought");
+      calls = 0;
+      await mk(async () => { calls++; return good; }, async () => [A]).handler({ task: "t", include: "external", params: {} }, {});
+      ok(calls === 1, "control: a seller whose route is not chat-shaped is not asked for model or messages");
+    }
+  }
   // A REFUSES the payment and the buyer proved on chain it was not charged
   // (committed:false + refused) -> falls through; B was admitted UNPROVEN, so
   // the buyer is told to allow it and the receipt says so (2026-09-02).

@@ -167,6 +167,25 @@ export function contractFieldsMissing(ext, params, err) {
 }
 
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
+// A chat completion seller (its route ends /chat/completions, or /messages on
+// the Messages wire) cannot answer without `model` and `messages`: a call that
+// leaves either out is the caller's input, named before any seller is paid.
+// `model` is asked for unless the seller's published contract lists the body
+// fields it requires without it (a seller with a default model). Null when
+// nothing is missing or the route is not chat-shaped.
+const CHAT_SELLER_PATH_RE = /\/(?:chat\/completions|messages)\/?$/i;
+export function chatFieldsMissing(ext, params) {
+  let path = "";
+  try { path = new URL(String(ext?.url || "")).pathname; } catch { return null; }
+  if (!CHAT_SELLER_PATH_RE.test(path)) return null;
+  const have = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+  const required = ext?.requestContract?.required?.body;
+  const modelOptional = Array.isArray(required) && required.length > 0 && !required.includes("model");
+  const missing = [];
+  if (!modelOptional && !(typeof have.model === "string" && have.model.trim())) missing.push("model");
+  if (!(Array.isArray(have.messages) && have.messages.length)) missing.push("messages");
+  return missing.length ? missing : null;
+}
 
 // Tools the executor refuses to dispatch regardless of price:
 // - identity-bound (memory* AND my-usage): wallet-keyed — the tool reads the
@@ -794,6 +813,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             traceStep(req, "skip", { origin: ext.seller, reason: "own_wallet" });
             lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent.${notChargedOn(req)}`, 409);
             if (hasNext) continue; throw lastErr;
+          }
+          // A chat completion seller asked without model or messages: the
+          // caller's input, answered 400 naming the fields, before any
+          // booking or signature (nothing bought, nothing charged).
+          const chatMissing = chatFieldsMissing(ext, params);
+          if (chatMissing) {
+            traceStep(req, "skip", { origin: ext.seller, reason: "chat_fields_missing" });
+            throw Object.assign(bad(`That task routes to a chat completion, which needs ${chatMissing.map((f) => `params.${f}`).join(" and ")}; this call did not send ${chatMissing.length > 1 ? "them" : "it"}. Nothing was spent.${notChargedOn(req)} Add ${chatMissing.length > 1 ? "them" : "it"} and retry.`, 400), { missing: chatMissing });
           }
           const extWire = ext.wire || "x402";
           // GET sellers take their input as query params — an HTTP GET cannot

@@ -68,11 +68,20 @@ export function toolErrorFields(err) {
     ...(err?.contentFiltered === true && Number(err?.statusCode) === 422 ? { reason: "content_filtered" } : {}),
     // A buyer's own upstream key the upstream refused (src/upstream-key.js).
     ...(err?.upstreamKeyRefused === true && [401, 403].includes(Number(err?.statusCode)) ? { reason: "upstream_key_refused" } : {}),
+    // The request fields a caller left out (route-execute's chat completion
+    // check): at most eight field names.
+    ...(missingFieldsOf(err) ? { missing: missingFieldsOf(err) } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };
 }
 
+const FIELD_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function missingFieldsOf(err) {
+  const m = err?.missing;
+  if (Number(err?.statusCode) !== 400 || !Array.isArray(m) || !m.length || m.length > 8) return null;
+  return m.every((f) => typeof f === "string" && FIELD_NAME_RE.test(f)) ? [...m] : null;
+}
 const ROBOTS_RULE_RE = /^(Allow|Disallow): [\x20-\x7e]{0,190}$/;
 const ROBOTS_URL_RE = /^https?:\/\/[\x21-\x7e]{1,300}\/robots\.txt$/;
 function robotsFieldsOf(err) {
