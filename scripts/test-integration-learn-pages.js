@@ -17,40 +17,27 @@
 //   - /llms-full.txt lists every route /api/pricing publishes and every learn
 //     summary, and /llms.txt links /llms-full.txt.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { connectorEnvOf } from "../src/connector-pay.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = await getFreePort();
 // The page modules write per-boot copy (the wires the connector takes), read
 // once at import. The expected text is derived from the SAME environment the
 // server boots with: the variables that copy reads are set here exactly as
 // the child gets them, before the page modules load.
-const SERVER_ENV = { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", BASE_URL: "https://agent402.tools" };
+const SERVER_ENV = { ...process.env, FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", BASE_URL: "https://agent402.tools" };
 for (const [k, v] of Object.entries(connectorEnvOf(SERVER_ENV))) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 const { INTEGRATIONS } = await import("../src/integration-pages.js");
 const { LEARN } = await import("../src/learn.js");
-const B = `http://127.0.0.1:${PORT}`;
 const BASE_URL = "https://agent402.tools";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: SERVER_ENV,
-  stdio: "ignore",
-});
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+const srv = await bootServer({ stores: "integration-learn", env: SERVER_ENV });
+const B = srv.url;
 
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  if (!up) throw new Error("server did not come up within 60 s");
-
   const text = async (p) => { const r = await fetch(B + p); return { status: r.status, type: r.headers.get("content-type") || "", body: await r.text() }; };
   const sub = await text("/sitemap-learn.xml");
   const mono = await text("/sitemap.xml");
@@ -130,7 +117,7 @@ try {
   fail++;
   console.error("FAIL -", e.message);
 } finally {
-  proc.kill("SIGKILL");
+  await srv.stop();
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -22,19 +22,16 @@
 //
 //   node scripts/test-agent-redteam.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { isIP } from "node:net";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
 
 const t0 = Date.now();
 const CORPUS = JSON.parse(readFileSync(new URL("./redteam-corpus.json", import.meta.url), "utf8"));
@@ -771,28 +768,23 @@ section("5. payments: what the router signs");
 section("1. MCP connector, 402 challenge and 404 on a booted server");
 {
   const DECIDE_TOKEN = randomBytes(24).toString("hex");
-  const [port, facPort] = await getFreePorts(2);
-  const base = `http://127.0.0.1:${port}`;
   const BASE_URL = "https://agent402.example";
   const fac = createServer((req, res) => { req.on("data", () => {}); req.on("end", () => {
     if (req.url === "/supported") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} })); }
     res.writeHead(404); res.end();
   }); });
-  await new Promise((r) => fac.listen(facPort, "127.0.0.1", r));
-  let log = "";
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, ...ownStoreEnv("redteam"), PORT: String(port), BASE_URL, FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base",
+  await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+  const facPort = fac.address().port;
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  const srv = await bootServer({ stores: "redteam", timeoutMs: 60_000,
+    env: { BASE_URL, FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base",
       WALLET_ADDRESS: OWN, FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", TYPESAFE_API_KEY: "", X402_UPSTREAM_BUYER_KEY: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true", DECIDE_INTERNAL_TOKEN: DECIDE_TOKEN,
       AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999", AGENT402_MCP_REQ_PER_MIN: "999999", AGENT402_MCP_REQ_PER_HOUR: "9999999" },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
+  const child = srv.child;
+  const base = srv.url;
   try {
-    let up = false;
-    for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { /* booting */ } if (!up) await new Promise((r) => setTimeout(r, 250)); }
-    if (!up) throw new Error(`server did not boot: ${log.slice(-800)}`);
     let id = 1;
     const rpc = async (method, params, headers = {}) => {
       const r = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers }, body: JSON.stringify({ jsonrpc: "2.0", id: id++, method, params }) });

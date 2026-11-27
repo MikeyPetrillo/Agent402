@@ -27,7 +27,6 @@
 // stub OpenRouter (scripts/lib/openrouter-stub-preload.js; the preload refuses
 // to load without the stub, so this never spends upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +39,7 @@ import { coverTermsOf, admitCoveredRun, inflightCoverStatus, markCoveredRunSettl
 import { registerInflightCoverSettleHook, registerFacilitatorFailureHooks } from "../src/payments.js";
 import { x402ResourceServer } from "@x402/core/server";
 import { buildRouteExecuteTool, SVM_BUDGET_MS_DEFAULT } from "../src/tools/route-execute.js";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, proc = null, facilitator = null, orStub = null;
 const serverLog = [];
@@ -643,8 +642,8 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 
 // ---------------------------------------------------------------- part 2
 
-const [PORT, FAC_PORT, OR_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+// The server's address, set at boot (port 0, read back: scripts/lib/boot-server.js).
+let B = null;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const OP = "test-paytime-operator-token-0123456789";
 
@@ -677,7 +676,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const or = { chat: 0, chatDelayMs: 0, images: 0, imagesDelayMs: 0, videos: 0, other: 0 };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -702,7 +702,8 @@ orStub = createServer((req, res) => {
     send(404, { error: { message: "not stubbed" } });
   });
 });
-await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
+await new Promise((r) => orStub.listen(0, "127.0.0.1", r));
+const OR_PORT = orStub.address().port;
 
 // Forgiveness ON with a per-wallet (and per-IP) budget that fits exactly one
 // nano run ($0.003 of $0.005): a wallet's first nano hang-up is forgiven (not
@@ -720,10 +721,11 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
   const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
   requireUpstreamCosts("test-paytime-bounds (booted half)");
 }
-proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
+// Ready is the health poll below, so the helper waits for the listening line only.
+const srv = await bootServer({ stores: "paytime-bounds", readyPath: null, args: ["--import", "./scripts/lib/openrouter-stub-preload.js"],
   // The slow-route sync window (src/slow-sync-window.js) is off: this suite
   // drives slow routes synchronously; test-slow-sync-window.js covers the window.
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
@@ -736,9 +738,11 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-prelo
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.005", HANGUP_FORGIVE_GLOBAL_USD: "1", HANGUP_FORGIVE_FILE: "off", EVM_VALIDITY_FLOOR: "enforce", INFLIGHT_COVER: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db") },
-  stdio: ["ignore", "pipe", "pipe"],
 });
+proc = srv.child;
+B = srv.url;
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 500)); } };
+keepLog(srv.log());
 proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
 // Per-run nonces: with REDIS_URL the settlement claims and the replay guard

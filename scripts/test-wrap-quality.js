@@ -37,13 +37,12 @@
 //   WRAP_COLOR_SCHEME=dark ...                        (lay out under the dark scheme; default light)
 //   WRAP_COOKIE="a402_acct=<sid>;/credits/account" ...  (a signed-in page; with TARGET_URL and WRAP_PAGES)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -111,16 +110,15 @@ const RAG_MIN_WORDS = 3;
 let srv = null;
 let BASE = process.env.TARGET_URL;
 const SCHEME = process.env.WRAP_COLOR_SCHEME === "dark" ? "dark" : "light";
+const PRINTED_ORIGIN = "http://127.0.0.1:10402";
 async function boot() {
-  const PORT = await getFreePort();
-  srv = spawn(process.execPath, ["src/server.js"], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
-    stdio: "ignore",
-  });
-  BASE = `http://127.0.0.1:${PORT}`;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) return; } catch {} await new Promise((r) => setTimeout(r, 500)); }
-  throw new Error("server did not boot");
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Pages print the origin they are told they are served at (a heading on
+  // /privacy names the connector's address), so its length is part of what
+  // wraps: a loopback origin as long as production's, never dialed.
+  const booted = await bootServer({ stores: "wrap-quality", env: { BASE_URL: PRINTED_ORIGIN, FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" } });
+  srv = booted.child;
+  BASE = booted.url;
 }
 const stop = () => { if (srv) { try { srv.kill("SIGTERM"); } catch {} srv = null; } };
 process.on("exit", stop);

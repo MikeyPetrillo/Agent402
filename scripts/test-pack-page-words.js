@@ -15,7 +15,7 @@
 //   node scripts/test-pack-page-words.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { proseWords, packPageProse } from "./lib/page-prose.js";
+import { fragmentProseWords as proseWords, packPageProse } from "./lib/page-words.js";
 import { ALL_SKILL_PACKS, SKILL_PACKS, packAsListed, packPageCopy } from "../src/skills.js";
 import { attributionTailOf } from "../src/data-attribution.js";
 

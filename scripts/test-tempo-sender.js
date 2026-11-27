@@ -29,7 +29,6 @@
 //      access key carrying the account's authorization) reaches the relay; an
 //      ordinary route still reaches the relay.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import express from "express";
 import { Challenge, Credential } from "mppx";
@@ -38,7 +37,7 @@ import { encodeFunctionResult, decodeFunctionData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { P256, Secp256k1, Hash, Hex } from "ox";
 import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, AccountConfig } from "ox/tempo";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -941,14 +940,16 @@ async function listen(app) {
 // D. The real server.
 // ---------------------------------------------------------------------------
 {
-  const [PORT, FAC_PORT] = await getFreePorts(2);
-  const B = `http://127.0.0.1:${PORT}`;
+  // The origin the server is told it is served at (BASE_URL): its host is the
+  // realm a credential names. The requests go to the port the server bound.
+  const SITE_HOST = "tempo-sender.test";
   const REAL_SECRET = "tempo-sender-server-secret";
   const facilitator = createServer((req, res) => {
     if (req.url === "/supported") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} })); }
     res.writeHead(404); res.end();
   });
-  await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const FAC_PORT = facilitator.address().port;
   const relayHits = [];
   const relay = createServer((req, res) => {
     let b = ""; req.on("data", (c) => { b += c; });
@@ -973,19 +974,24 @@ async function listen(app) {
   });
   await new Promise((r) => rpc.listen(0, "127.0.0.1", r));
 
-  const proc = spawn(process.execPath, ["src/server.js"], {
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "tempo-sender", readyPath: null,
     env: {
-      ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+      BASE_URL: `http://${SITE_HOST}`, FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, MPP_SECRET_KEY: REAL_SECRET, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",
       TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, TEMPO_CURRENCY: CURRENCY,
       TEMPO_API_BASE_URL: `http://127.0.0.1:${relay.address().port}`, TEMPO_RPC_URL: `http://127.0.0.1:${rpc.address().port}`,
       X402_INDEX_CRAWL: "off", MPP_LEADERBOARD: "off", MPP_INDEX_CRAWL: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   // Keep the server's last lines: printed if an assertion below fails.
   const serverLog = [];
   const keep = (b) => { for (const line of String(b).split("\n")) if (line.trim()) { serverLog.push(line); if (serverLog.length > 60) serverLog.shift(); } };
+  keep(srv.log());
   proc.stdout.on("data", keep);
   proc.stderr.on("data", keep);
   process.on("exit", (code) => { if (code) console.error(`--- server log (last ${serverLog.length} lines) ---\n${serverLog.join("\n")}`); try { proc.kill("SIGKILL"); } catch { /* gone */ } });
@@ -993,7 +999,7 @@ async function listen(app) {
     let healthy = false;
     for (let i = 0; i < 120 && !healthy; i++) { try { healthy = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!healthy) await sleep(500); }
     ok(healthy, "D: the server booted");
-    const realm = `127.0.0.1:${PORT}`;
+    const realm = SITE_HOST;
     const cred = (raw, amount = "10000") => credential(raw, { amount, realm, secretKey: REAL_SECRET });
     const post = async (path, raw, amount, body) => {
       const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred(raw, amount) }, body: JSON.stringify(body) });

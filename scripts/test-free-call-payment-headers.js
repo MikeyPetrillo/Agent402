@@ -17,12 +17,11 @@
 //     lane is observable and an own-wallet payer does move it.
 // Requires REDIS_URL (under CI a missing one fails).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { OUR_EVM_WALLETS } from "../src/revenue-live.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -55,8 +54,6 @@ if (!REDIS) {
 }
 const { createServer } = await import("node:http");
 const { createClient } = await import("redis");
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const BASE = `http://127.0.0.1:${PORT}`;
 const PREFIX = `fcph${process.pid}${Date.now().toString(36)}`;
 // Stub facilitator: accepts every verify and settle, so the control call
 // really settles; nothing leaves loopback.
@@ -73,11 +70,13 @@ const facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+// Ready is /api/pow answering below, so the helper waits for the listening line only.
+const srv = await bootServer({
+  stores: "free-call-headers", readyPath: null,
   env: {
-    ...process.env,
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     PAYMENT_NETWORKS: "base",
@@ -92,12 +91,12 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     TOOL_FAILURE_PUBLISH_MS: "200",
     LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
     POW_DIFFICULTY: "12",
-    PORT: String(PORT),
     FREE_MODE: "",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const serverLog = [];
+const proc = srv.child;
+const BASE = srv.url;
+const serverLog = srv.log().split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 300));
 for (const st of [proc.stdout, proc.stderr]) st.on("data", (d) => { for (const l of String(d).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 300)); });
 function solve(challenge, difficulty) {
   for (let n = 0; n < 5_000_000; n++) {
@@ -160,7 +159,7 @@ try {
   ok(l2.synthetic === 1 && l2.free === 1 && l2.outside === 0, `an own-wallet paid call lands on the synthetic lane (synthetic ${l2.synthetic}, free ${l2.free}, outside ${l2.outside})`);
 } finally {
   if (fail) for (const l of serverLog.slice(-30)) console.error("  server:", l);
-  proc.kill();
+  await srv.stop();
   facilitator.close();
   try { const keys = await redis.keys(`*${PREFIX}*`); if (keys.length) await redis.del(keys); } catch { /* best effort */ }
   await redis.quit().catch(() => {});

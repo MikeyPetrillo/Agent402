@@ -7,6 +7,14 @@
 // 502, filtered -> 422 content_filtered, timeout -> 504, off-host polling URL never followed), and parking:
 // keyed on the EVM payer, claimed once, released on every terminal error.
 //
+// Two halves. The rate checks (every link has a bound in the private table,
+// each bound within the margin share of its tier price, the video worst case)
+// read real rates and need the private table: without it they fail under CI
+// and are the only part skipped locally. Every other check needs A bound, not
+// the real one: without the table they run on stand-in bounds derived from
+// each tier's own listed price, so the 422 content_filtered answers, the
+// outage answers and the price constants are checked on every run.
+//
 //   node scripts/test-images-fast-kit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
@@ -21,10 +29,22 @@ const {
 } = await import("../src/tools/llm-images-fast-kit.js");
 const { MARGIN, IMAGES_MODEL, LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-images-fast-kit");
+const { upstreamCostsMissing, rateChecksWithoutTable } = await import("./lib/require-upstream-costs.js");
+const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
 // Bounds come from the private table; mocked upstream bills are derived from
 // them so no real rate is typed here.
+const NO_TABLE = upstreamCostsMissing(); // null, or why the rate checks cannot run
+if (NO_TABLE) {
+  // Stand-in bounds: a share of the cheapest tier price each model is sold
+  // at, under the margin and different for every model, so a check that tells
+  // two links apart by their bill still does. Derived, never a rate.
+  const floor = new Map();
+  for (const t of Object.values(IMAGE_TIERS)) for (const l of t.chain) floor.set(l.model, Math.min(floor.get(l.model) ?? Infinity, t.price));
+  floor.set(VIDEOS_MODEL, VIDEOS_PRICE);
+  const media = {};
+  [...floor].forEach(([model, price], i) => { const usd = +(price * MARGIN * (0.5 + 0.04 * i)).toFixed(6); media[model] = { worstCaseUsd: usd, listedMaxUsd: usd }; });
+  setUpstreamCostsForTest({ models: [["stand-in/", { prompt: 1, completion: 2 }]], media });
+}
 const KLEIN3 = "black-forest-labs/flux-3-image-klein";
 const RECRAFT = "recraft/recraft-v4.1-flash", MAI = "microsoft/mai-image-2.6-flash";
 const linkOf = (tier, model) => IMAGE_TIERS[tier].chain.find((l) => l.model === model);
@@ -50,6 +70,8 @@ ok(IMAGES_FAST_TOOLS.every((t) => t.discovery?.bodyType === "json" && t.discover
 ok(IMAGES_FAST_TOOLS.every((t) => !/\u2014/.test(t.description + t.name)), "no em dashes in tool copy");
 for (const [tier, t] of Object.entries(IMAGE_TIERS)) {
   ok(t.chain.length >= 1 && t.chain.every((l) => l.model && l.provider && linkBounds(l) && l.listed?.unit), `${tier}: every link has a provider pin, a bound and a listed-price check`);
+  // The same bound read from the private table: a link with no row there cannot be sold.
+  if (!NO_TABLE) ok(t.chain.every((l) => linkBounds(l)), `${tier}: every link has its row in the private table`);
   // Compare NUMBERS, not trimmed strings: a chain of trailing-zero replaces is
   // both fragile ("$10" would become "$1") and reads as a sanitizer.
   // v1-images is the flagship /v1/images/generations route, whose tool lives in the gateway kit.
@@ -70,9 +92,11 @@ for (const tier of ["v1-images-fast", "v1-images-pro"]) {
 }
 ok(IMAGE_TIERS["v1-images-edit"].chain[0].params.resolution === "1K" && IMAGE_TIERS["v1-images-edit"].chain[0].params.aspect_ratio === undefined, "edit link pinned to 1K, aspect left to the reference");
 const table = mediaMarginTable();
-ok(table.length === 9 && table.every((r) => withinMargin(r.price, r.worst)), `margin: every link's bound is within the margin share of its tier price (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+ok(table.length === 9, `the margin table lists every link and the video tier (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+// Rate check: the table's own bounds against the prices. Stand-in bounds are within the margin by construction and prove nothing here.
+if (!NO_TABLE) ok(table.every((r) => withinMargin(r.price, r.worst)), "margin: every link's bound is within the margin share of its tier price");
 ok(!withinMargin(1, MARGIN + 0.000001) && withinMargin(1, MARGIN), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");
-ok(VW > 0 && VW <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
+if (!NO_TABLE) ok(VW > 0 && VW <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
 
 // ---- image validation ----
 ok(validateImageTierRequest({ prompt: " a fox " }, "v1-images-fast").prompt === "a fox", "prompt trims and validates");
@@ -645,5 +669,6 @@ for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }
 }
 
 globalThis.fetch = realFetch;
+if (NO_TABLE && rateChecksWithoutTable("test-images-fast-kit", NO_TABLE)) fail++;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

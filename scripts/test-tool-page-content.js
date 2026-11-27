@@ -12,10 +12,7 @@
 //
 //   node scripts/test-tool-page-content.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { paramLimits, toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
@@ -26,7 +23,6 @@ import { requestExampleOf } from "../src/openapi-request.js";
 const stripTags = (s) => stripTagsWith(s, "");
 
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
 let proc = null;
 const fail = (m) => { console.error("FAIL:", m); if (proc) proc.kill("SIGKILL"); process.exit(1); };
@@ -39,7 +35,6 @@ ok(paramLimits({ enum: ["md5", "sha256"], default: "sha256" }, "sha256") === "On
 ok(paramLimits({ minimum: 1, maximum: 100 }, 5) === "From 1 to 100. The example sends <code>5</code>.", "a range and the example's value");
 ok(paramLimits({ maxLength: 10 }, "<b>") === "Up to 10 characters. The example sends <code>&lt;b&gt;</code>.", "an example value is escaped");
 ok(paramLimits({ type: "string", description: "x" }) === "" && paramLimits(null) === "", "a field with no constraint adds nothing");
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 const mainOf = (html) => (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || [, html])[1];
 const titleOf = (html) => decode((html.match(/<title>([^<]*)<\/title>/) || [])[1] || "");
@@ -281,17 +276,12 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
 }
 
 // ---- 2 + 3. Booted: every catalog page. ----
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: "ignore",
-});
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  const srv = await bootServer({ stores: "tool-page-content", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } });
+  proc = srv.child;
+  const BASE = srv.url;
+  ok(srv.port > 0, "server booted");
 
   for (const slug of ["html-entities", "html-links", "html-select", "html-to-markdown", "html-strip"]) {
     const html = await (await fetch(`${BASE}/tools/${slug}`)).text();

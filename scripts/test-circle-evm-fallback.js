@@ -20,19 +20,17 @@
 // Part 1 drives the real hook and the real client against fetch stubs; part 2
 // boots a paid server against stub facilitators to prove the caller path.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { SettleError } from "@x402/core/types";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { hashDomain } from "viem";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { registerFacilitatorFailureHooks, lastResortFallbackOverrides, fallbackCandidatesFor } from "../src/payments.js";
 import {
   CircleFacilitatorClient, preflightUsdcPayment, ARC_PROFILE, CIRCLE_FACILITATOR_BASE, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_PROFILES,
@@ -448,7 +446,6 @@ await check("/supported refresh: a chain dropped stops being tried, re-added com
 
 console.log("part 2: a paid server against stub facilitators");
 
-const [P_SERVER1, P_SERVER2, P_SERVER3, P_CDP, P_PAYAI, P_CIRCLE] = await getFreePorts(6);
 const st = { hits: [], cdpSettle: "402" };
 const readBody = (r) => new Promise((ok) => { let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => { try { ok(JSON.parse(b || "{}")); } catch { ok({}); } }); });
 const raw = (res, s, o) => { res.writeHead(s, { "Content-Type": "application/json", Connection: "close" }); res.end(JSON.stringify(o)); };
@@ -481,7 +478,8 @@ const circleStub = createServer(async (q, res) => {
   if (q.url === "/verify") return raw(res, 200, { isValid: true, payer: payerOf(b) });
   return raw(res, 404, {});
 });
-await Promise.all([[cdp, P_CDP], [payai, P_PAYAI], [circleStub, P_CIRCLE]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+await Promise.all([cdp, payai, circleStub].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+const [P_CDP, P_PAYAI, P_CIRCLE] = [cdp, payai, circleStub].map((s) => s.address().port);
 const tmp = mkdtempSync(join(tmpdir(), "a402-circle-evm-"));
 const preload = join(tmp, "circle-redirect.mjs");
 writeFileSync(preload, `
@@ -494,34 +492,26 @@ globalThis.fetch = function (input, init) {
   return real(input, init);
 };
 `);
-async function boot(port, extraEnv) {
-  const env = { ...process.env };
-  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "CIRCLE_FACILITATOR_API_KEY", "CIRCLE_FACILITATOR_EVM_FALLBACK"]) delete env[k];
-  const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+// Port 0, read back: the port is the one each server bound (scripts/lib/boot-server.js).
+// `run` names a boot's own files.
+async function boot(run, extraEnv) {
+  const srv = await bootServer({
+    stores: "circle-evm", args: ["--import", preload],
     env: {
-      ...env, PORT: String(port), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_EVM_FALLBACK: "",
+      FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,polygon",
       CDP_FACILITATOR_URL: `http://127.0.0.1:${P_CDP}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
       PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
       CIRCLE_EVM_TEST_STUB: `http://127.0.0.1:${P_CIRCLE}`, CIRCLE_FACILITATOR_API_KEY: KEY,
       PAYMENT_SETTLE_FALLBACK: "true", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "", FACILITATOR_GAS_CHECK: "off",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), REFUND_DB_DIR: tmp, INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-${port}.json`),
+      SALES_LEDGER_DB: join(tmp, `sales-${run}.db`), REFUND_DB_DIR: tmp, INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${run}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-${run}.json`),
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  const log = { text: "" };
-  proc.stdout.on("data", (c) => { log.text += c; });
-  proc.stderr.on("data", (c) => { log.text += c; });
-  const url = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${url}/health`)).ok) return { url, log, proc }; } catch { /* booting */ }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  proc.kill("SIGKILL");
-  throw new Error(`server never became healthy: ${log.text.slice(-600)}`);
+  const log = { get text() { return srv.log(); } };
+  return { url: srv.url, log, proc: srv.child };
 }
 const PATH = "/api/demand-radar?limit=1";
 const decode = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
@@ -557,7 +547,7 @@ const seen = {};
 
 await check("switch off (key set): Base settles through CDP then PayAI only; the issuer's facilitator never sees a Base settle", async () => {
   st.hits = []; st.cdpSettle = "402";
-  const { url, log, proc } = await boot(P_SERVER1, {});
+  const { url, log, proc } = await boot(1, {});
   try {
     seen.off = { url, c: await challenges(url) };
     const r = await payBase(url);
@@ -570,7 +560,7 @@ await check("switch off (key set): Base settles through CDP then PayAI only; the
 
 await check("switch on: CDP verifies and is tried first; after CDP and PayAI refuse pre-broadcast the issuer's facilitator settles once", async () => {
   st.hits = []; st.cdpSettle = "402";
-  const { url, log, proc } = await boot(P_SERVER2, { CIRCLE_FACILITATOR_EVM_FALLBACK: "on" });
+  const { url, log, proc } = await boot(2, { CIRCLE_FACILITATOR_EVM_FALLBACK: "on" });
   try {
     for (let i = 0; i < 40 && !log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback`); i++) await new Promise((r) => setTimeout(r, 250));
     assert.ok(log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback on eip155:8453, eip155:137`), "the boot log names the last settle fallback and its networks");
@@ -611,7 +601,7 @@ await check("the 402 challenge is identical with the switch on and off (key set 
 
 await check("switch on, CDP answers 5xx (ambiguous): the chain stops, nobody else is asked", async () => {
   st.hits = []; st.cdpSettle = "500";
-  const { url, log, proc } = await boot(P_SERVER3, { CIRCLE_FACILITATOR_EVM_FALLBACK: "on" });
+  const { url, log, proc } = await boot(3, { CIRCLE_FACILITATOR_EVM_FALLBACK: "on" });
   try {
     for (let i = 0; i < 40 && !log.text.includes(`${CIRCLE_EVM_LABEL}: last settle fallback`); i++) await new Promise((r) => setTimeout(r, 250));
     const r = await payBase(url);

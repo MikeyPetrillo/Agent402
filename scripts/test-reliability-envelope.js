@@ -23,28 +23,21 @@
 //
 //   node scripts/test-reliability-envelope.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const [PORT] = await getFreePorts(1);
-const BASE = `http://127.0.0.1:${PORT}`;
+// The origin the server is told it is served at (BASE_URL): the envelope's
+// own URLs are built on it. The requests go to the port the server bound.
+const SITE = "http://reliability-envelope.test";
+let srv = null;
 
 let pass = 0;
-const fail = (m) => { console.error("FAIL:", m); try { proc.kill("SIGKILL"); } catch {} process.exit(1); };
+const fail = (m) => { console.error("FAIL:", m); try { srv?.child.kill("SIGKILL"); } catch {} process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false" },
-  stdio: "ignore",
-});
 
 try {
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch {} await sleep(500); }
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  srv = await bootServer({ stores: "reliability-envelope", env: { FREE_MODE: "true", BASE_URL: SITE, X402_SYNC_ON_START: "false" } });
+  const BASE = srv.url;
 
   const res = await fetch(`${BASE}/api/reliability`);
   ok(res.status === 200, `/api/reliability → 200 (got ${res.status})`);
@@ -104,11 +97,11 @@ try {
   // guess. (REPO links live elsewhere — only the in-service URLs belong here.)
   ok(typeof body.endpoints === "object" && body.endpoints != null, "endpoints is an object");
   for (const k of ["health", "stats", "openapi", "manifest"]) {
-    ok(typeof body.endpoints[k] === "string" && body.endpoints[k].startsWith(BASE), `endpoints.${k} is on BASE (got ${body.endpoints[k]})`);
+    ok(typeof body.endpoints[k] === "string" && body.endpoints[k].startsWith(`${SITE}/`), `endpoints.${k} is on BASE (got ${body.endpoints[k]})`);
   }
   // Spot-check that endpoints.health actually serves 200 — a stale URL here
   // breaks every listing portal that follows it.
-  const probe = await fetch(body.endpoints.health);
+  const probe = await fetch(BASE + body.endpoints.health.slice(SITE.length));
   ok(probe.status === 200, `endpoints.health resolves to 200 (got ${probe.status})`);
 
   // Incidents — public escalation log. Should be a github.com issues URL so
@@ -116,7 +109,7 @@ try {
   ok(typeof body.incidents === "string" && body.incidents.includes("github.com"), `incidents points to github.com (got ${body.incidents})`);
 
   console.log(`\n${pass} passed (${body.guarantees.length} guarantees, ${Object.keys(body.endpoints).length} endpoints)`);
-  proc.kill("SIGKILL");
+  await srv.stop();
   process.exit(0);
 } catch (e) {
   fail(e.message);

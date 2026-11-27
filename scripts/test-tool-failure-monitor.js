@@ -10,8 +10,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { readFileSync } from "node:fs";
 import { outcomeRailOf } from "../src/payment-rail.js";
 import { createToolFailureMonitor, toolLaneOf, toolClassOf, upstreamKindOfError, upstreamKindOfStatus, BUCKET_MS, DAY_MS } from "../src/tool-failure-monitor.js";
@@ -1046,7 +1046,8 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
 // ---- booted: the surfaces ------------------------------------------------------
 // The render worker is configured at a port nothing listens on yet, so the
 // first render call meets a cold start: refused connections, then an answer.
-const PORT = await getFreePort();
+// That port is the one a test must know before anything binds it, so it is
+// picked ahead; the server itself binds port 0 (scripts/lib/boot-server.js).
 const WORKER_PORT = await getFreePort();
 const { createServer } = await import("node:http");
 let workerCalls = 0;
@@ -1056,14 +1057,16 @@ const worker = createServer((req, res) => {
 });
 const TOKEN = "tool-failure-test-operator-token-0123456789";
 const log = [];
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN,
+// Ready is the health poll below, so the helper waits for the listening line only.
+const srv = await bootServer({ stores: "tool-failure-monitor", readyPath: null,
+  env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN,
     RENDER_WORKER_URL: `http://127.0.0.1:${WORKER_PORT}`, RENDER_WORKER_TOKEN: "tfm-worker-token", RENDER_WORKER_TIMEOUT_MS: "9000", RENDER_WORKER_MIN_ATTEMPT_MS: "2000" },
-  stdio: ["ignore", "pipe", "pipe"],
 });
+const child = srv.child;
+log.push(...srv.log().split("\n"));
 child.stdout.on("data", (d) => log.push(...String(d).split("\n")));
 child.stderr.on("data", (d) => log.push(...String(d).split("\n")));
-const base = `http://127.0.0.1:${PORT}`;
+const base = srv.url;
 try {
   let up = false;
   for (let i = 0; i < 240 && !up; i++) {
