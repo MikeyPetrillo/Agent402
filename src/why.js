@@ -186,9 +186,9 @@ export function whyDocsSectionHtml() {
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 22px;">${countWord(WHY_POINTS.length).replace(/^./, (c) => c.toUpperCase())} claims, each linked to the surface that proves it.</p>
       <div class="why-list">${whyPointsHtml()}
       </div>
-      <h3 id="why-compare" style="font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:34px 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>
+      <details class="doc-more" id="why-compare" style="margin-top:28px;"><summary>Side by side with the other ways in</summary>
       ${whyCompareHtml()}
-      <div style="height:44px;"></div>
+      </details>
       </section>
 `;
 }
