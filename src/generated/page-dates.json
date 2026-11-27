@@ -7,7 +7,7 @@
     "src/agentic-finance.js": "2026-11-23",
     "src/api-explorer.js": "2026-11-18",
     "src/base-no-gas.js": "2026-11-23",
-    "src/blog.js": "2026-11-26",
+    "src/blog.js": "2026-11-27",
     "src/changelog.js": "2026-11-27",
     "src/company.js": "2026-11-27",
     "src/contribute.js": "2026-11-12",
@@ -16,11 +16,11 @@
     "src/decide-page.js": "2026-11-24",
     "src/glossary.js": "2026-11-24",
     "src/guides.js": "2026-11-27",
-    "src/how-to-pay.js": "2026-11-24",
+    "src/how-to-pay.js": "2026-11-27",
     "src/human-reports-page.js": "2026-11-27",
     "src/index-tools-page.js": "2026-11-23",
     "src/integration-pages.js": "2026-11-27",
-    "src/learn.js": "2026-11-24",
+    "src/learn.js": "2026-11-27",
     "src/ledger-catalog.js": "2026-11-23",
     "src/ledger-docs.js": "2026-11-27",
     "src/ledger-home.js": "2026-11-27",
@@ -47,7 +47,7 @@
     "src/sell.js": "2026-11-27",
     "src/seo.js": "2026-11-27",
     "src/server.js": "2026-11-27",
-    "src/skill-md.js": "2026-11-24",
+    "src/skill-md.js": "2026-11-27",
     "src/skill-page-copy.js": "2026-11-27",
     "src/skills.js": "2026-11-27",
     "src/speech-page.js": "2026-11-22",
@@ -161,7 +161,7 @@
     "src/tools/markdown-render.js": "2026-11-09",
     "src/tools/markdown-worker.js": "2026-11-10",
     "src/tools/market-calendar-data.js": "2026-11-24",
-    "src/tools/mcp-package-kit.js": "2026-11-24",
+    "src/tools/mcp-package-kit.js": "2026-11-27",
     "src/tools/media-kit.js": "2026-11-23",
     "src/tools/memory.js": "2026-11-13",
     "src/tools/mev-and-l2-kit.js": "2026-11-24",
@@ -270,13 +270,13 @@
     "wiki/Decide.md": "2026-11-24",
     "wiki/Embeddings.md": "2026-11-06",
     "wiki/FAQ.md": "2026-11-24",
-    "wiki/Getting-Started.md": "2026-11-24",
+    "wiki/Getting-Started.md": "2026-11-27",
     "wiki/Home.md": "2026-11-24",
     "wiki/Image-Gen.md": "2026-11-12",
     "wiki/Ink.md": "2026-11-06",
     "wiki/LLM-Gateway.md": "2026-11-26",
     "wiki/LLM-Proxy.md": "2026-11-26",
-    "wiki/MCP-Connector.md": "2026-11-24",
+    "wiki/MCP-Connector.md": "2026-11-27",
     "wiki/Memory-and-Coordination.md": "2026-10-11",
     "wiki/Operations.md": "2026-11-24",
     "wiki/Pay-per-crawl-Walkthrough.md": "2026-11-24",
@@ -331,7 +331,7 @@
     },
     "/blog/pay-per-call-tools-on-arc": {
       "published": "2026-10-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/blog/proof-of-work-free-tier": {
       "published": "2026-06-23",
@@ -347,7 +347,7 @@
     },
     "/guides/agent-hosts": {
       "published": "2026-08-27",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/guides/agent-to-agent-payments": {
       "published": "2026-11-27",
@@ -403,7 +403,7 @@
     },
     "/guides/x402-in-5-minutes": {
       "published": "2026-06-13",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/guides/x402-payments-toolkit": {
       "published": "2026-06-14",
@@ -447,7 +447,7 @@
     },
     "/integrations/mcp": {
       "published": "2026-09-24",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/integrations/openai": {
       "published": "2026-09-24",
@@ -479,7 +479,7 @@
     },
     "/learn/mcp-payments": {
       "published": "2026-09-24",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/learn/mpp": {
       "published": "2026-09-24",
