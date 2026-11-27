@@ -59,6 +59,25 @@ for (const q of ["calculator: add, subtract, multiply, divide", "add"]) {
   const withAdd = row("calculator for math: add and multiply", "ip-info"), without = row("calculator for math: and multiply", "ip-info");
   ok(withAdd && without && withAdd.score === without.score, `"add" adds nothing to ip-info's score (${withAdd?.score} with, ${without?.score} without)`);
 }
+// Arithmetic on two numbers is the calculator's (its aliases name the task whole:
+// "add-two-numbers", "sum-two-numbers"); a date sum stays date arithmetic's, and
+// a bare "add" or "sum" is not the calculator's word.
+for (const q of ["add two numbers", "sum of two numbers", "subtract two numbers", "multiply two numbers", "divide two numbers"]) {
+  const r = route(q);
+  ok(r[0]?.slug === "calc", `"${q}": calc is first (${r.slice(0, 3).map((x) => x.slug).join(", ")})`);
+}
+{
+  const calc = KIT.find((t) => t.slug === "calc");
+  ok(!calc.aliases.includes("add") && !calc.aliases.includes("sum") && !calc.aliases.includes("plus"), `calc holds no bare "add", "sum" or "plus" alias (${calc.aliases.join(", ")})`);
+  // /api/find reads a query word inside a longer word of a tool's text, so an alias never holds "tip" ("multiply" does:
+  // "tip calculator dollars" would read as covered by the calculator).
+  ok(!calc.aliases.some((x) => /tip/.test(x)), "no calc alias holds the letters of another task's word (tip)");
+  for (const [q, want] of [["add days to a date", "add-time"], ["add", "add-time"]]) {
+    if (!has(want)) { ok(false, `the kit holds ${want}`); continue; }
+    const r = route(q);
+    ok(r[0]?.slug === want, `CONTROL "${q}": ${want} is still first (${r.slice(0, 3).map((x) => x.slug).join(", ")})`);
+  }
+}
 // Controls: an address query reaches ip-info as before.
 for (const q of ["ip address", "classify an address", "addr"]) ok(row(q, "ip-info") !== null, `"${q}" still reaches ip-info`);
 

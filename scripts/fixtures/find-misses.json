@@ -165,6 +165,18 @@
       "top": "calc"
     },
     {
+      "q": "add two numbers",
+      "top": "calc"
+    },
+    {
+      "q": "sum of two numbers",
+      "top": "calc"
+    },
+    {
+      "q": "add days to a date",
+      "top": "add-time"
+    },
+    {
       "q": "convert weights and verify them against a 3 stone threshold",
       "top": "unit-convert"
     },
