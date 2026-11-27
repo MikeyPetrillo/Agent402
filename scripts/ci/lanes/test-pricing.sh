@@ -17,6 +17,7 @@ t node scripts/test-macro-kit.js
 # No macro tool serves FRED data; us-macro-series and the computed tools read BLS, the New York Fed and Treasury; third-party series screened by their notes (offline)
 t node scripts/test-fred-terms.js
 t node scripts/test-fred-series-sources.js
+t node scripts/test-bls-run-cap.js
 t node scripts/test-macro-computed-sources.js
 # Open-Meteo answers carry the credit with links to Open-Meteo and the CC BY 4.0 licence; fema-disasters carries the OpenFEMA disclaimer, endpoint and access date (stubbed upstream - offline)
 t node scripts/test-source-credits.js
