@@ -621,7 +621,7 @@ ${windowList}
 
 <section>
 <h2 id="components">Components</h2>
-<p class="lead">Each bar is one UTC day (tap one for its probe count); grey means no observation, never counted as uptime.</p>
+<p class="lead">Each bar is one UTC day (hover over or tap a bar for its probe count); grey means no observation, never counted as uptime.</p>
 <p class="bar-legend"><i class="b up"></i> every probe passed <i class="b partial"></i> some probes failed <i class="b down"></i> every probe failed <i class="b nodata"></i> no observation</p>
 ${snap.components.map(componentRow).join("\n")}
 
