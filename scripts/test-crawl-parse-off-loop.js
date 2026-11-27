@@ -142,6 +142,14 @@ const stored = (entry, origin) => JSON.parse(JSON.stringify({
   tools: entry?.tools, toolsTotal: entry?.toolsTotal, error: entry?.error, discoveryPath: entry?.discoveryPath,
   openapiSummary: entry?.openapiSummary, fallbackErrors: entry?.fallbackErrors, source: entry?.source,
 }, (k, v) => (/(At|Until)$/.test(k) && typeof v === "number" ? 0 : v)).replaceAll(origin, "https://ORIGIN")); // clock stamps (fetchedAt, quoteRefusedUntil) read 0
+/** Two stored entries are the same; a difference is reported by its first few characters, not as a diff of thousands of rows. */
+function sameStored(x, y, label) {
+  const sx = JSON.stringify(x), sy = JSON.stringify(y);
+  if (sx === sy) return;
+  let at = 0;
+  while (at < sx.length && sx[at] === sy[at]) at++;
+  assert.fail(`${label}: the entries differ at character ${at}: ${sx.slice(Math.max(0, at - 60), at + 80)} | ${sy.slice(Math.max(0, at - 60), at + 80)}`);
+}
 const inPlace = async (fn) => { process.env.CRAWL_PARSE_WORKER = "off"; try { return await fn(); } finally { delete process.env.CRAWL_PARSE_WORKER; } };
 
 // ---- 1. the turn bound, on the fallback path (no manifest: /openapi.json decides) ----
@@ -160,7 +168,7 @@ ok(crawlParseStats().offLoop === 1 && crawlParseStats().pieces > 4 && crawlParse
 const b = await inPlace(() => crawl(B, { "/openapi.json": dense }, "crawl, same document parsed in place"));
 ok(crawlParseStats().offLoop === 1, "control: with the switch off the thread parsed nothing");
 ok(b.worst > LIMIT.ms, `control: the in-place crawl of the same document holds a turn past the bound (${b.worst.toFixed(0)} ms)`);
-assert.deepStrictEqual(stored(a.entry, A), stored(b.entry, B));
+sameStored(stored(a.entry, A), stored(b.entry, B), "dense document");
 ok(true, "the entry stored from the pieces equals the entry stored from the in-place parse");
 ok(readCaps.get("/.well-known/x402") === 4 * MB && readCaps.get("/openapi.json") === 12 * MB, "each read is handed its byte cap as before (4 MB manifest, 12 MB OpenAPI)");
 
@@ -171,7 +179,7 @@ const c = await crawl(C, { "/.well-known/x402": manifest, "/openapi.json": many 
 ok(c.entry?.discoveryPath === "/.well-known/x402" && c.entry.toolsTotal > 50_000, `control: the manifest crawl read every row before the cap (${c.entry?.toolsTotal} listed, ${c.entry?.tools?.length} kept)`);
 ok(c.worst <= LIMIT.ms, `no turn of the manifest crawl held the loop past ${LIMIT.ms} ms (longest ${c.worst.toFixed(0)} ms)`);
 const d = await inPlace(() => crawl(D, { "/.well-known/x402": manifest, "/openapi.json": many }, "crawl, same documents parsed in place"));
-assert.deepStrictEqual(stored(c.entry, C), stored(d.entry, D));
+sameStored(stored(c.entry, C), stored(d.entry, D), "manifest crawl");
 ok(true, "the manifest crawl stores the same entry on both paths");
 // Counted, so the machine's speed does not decide it: each whole-list walk of
 // the long list ran as crawl-lane steps (an iteration counter beside the
@@ -199,14 +207,14 @@ const F = "https://broken-f.example", G = "https://broken-g.example";
 const f = await crawl(F, { "/openapi.json": broken }, "crawl, document cut short");
 const g = await inPlace(() => crawl(G, { "/openapi.json": broken }, "crawl, same cut document parsed in place"));
 ok(f.entry?.error && !(f.entry?.tools?.length) && (f.entry.fallbackErrors || []).some((x) => x.path === "/openapi.json" && /JSON/.test(x.error)), `the crawl refuses the cut document and says which file (${(f.entry?.fallbackErrors || []).map((x) => x.path).join(", ")})`);
-assert.deepStrictEqual(stored(f.entry, F), stored(g.entry, G));
+sameStored(stored(f.entry, F), stored(g.entry, G), "cut document");
 ok(true, "the refusal is recorded the same on both paths");
 const tooLarge = Object.assign(new Error("Response too large (limit 12582912 bytes)"), { statusCode: 422 });
 const H = "https://large-h.example", I = "https://large-i.example";
 const h = await crawl(H, { "/openapi.json": tooLarge }, "crawl, read refused for size");
 const i = await inPlace(() => crawl(I, { "/openapi.json": tooLarge }, "crawl, same refusal, in-place path"));
 ok((h.entry?.fallbackErrors || []).some((x) => x.path === "/openapi.json" && /too large/.test(x.error)) && !(h.entry?.tools?.length), "a read refused for size indexes nothing and is recorded against its file");
-assert.deepStrictEqual(stored(h.entry, H), stored(i.entry, I));
+sameStored(stored(h.entry, H), stored(i.entry, I), "size refusal");
 ok(true, "the size refusal is recorded the same on both paths");
 
 // ---- 5. a registry's whole list in one document ------------------------------------
@@ -267,7 +275,7 @@ for (const [what, over, reason] of [
   lines.length = 0;
   const k = await crawl(K, { "/openapi.json": dense }, `crawl, thread ${what}`);
   const after = crawlParseStats();
-  assert.deepStrictEqual(stored(k.entry, K), stored(a.entry, A));
+  sameStored(stored(k.entry, K), stored(a.entry, A), `thread ${what}`);
   ok(after.fallbacks === before.fallbacks + 1 && after.offLoop === before.offLoop, `thread ${what}: the document is parsed in place and indexed as before`);
   const key = createHash("sha256").update(K).digest("hex").slice(0, 8);
   const line = lines.find((l) => l.startsWith(`[x402-index] crawl parse ${key} /openapi.json 4-12MB: parsed on the main thread (`));
