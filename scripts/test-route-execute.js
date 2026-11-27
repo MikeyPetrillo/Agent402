@@ -1220,5 +1220,73 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(at > 0 && at < fn.indexOf("judgeSellerOrder(task, candidates)") && at < fn.indexOf("probePublicUrl") && /gateDrops\.byReason\.capability_gap/.test(fn), "the resolver sets un-named candidates aside before the judge and before any probe");
   }
 }
+// ---- the resolver itself, in a booted server: what reaches the judge and the probes ----
+// Two outside sellers with the same settlement evidence, both eligible: one
+// named for IP geolocation, one that only describes itself with the words.
+// The server's every outbound request is recorded from inside its process
+// (scripts/lib/outbound-record-preload.js) and answered there.
+{
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { randomBytes } = await import("node:crypto");
+  const { fileURLToPath } = await import("node:url");
+  const { bootServer } = await import("./lib/boot-server.js");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gap-resolver-"));
+  const now = Date.now();
+  const NEAR_ORIGIN = "https://near-lookup.example", NAMED_ORIGIN = "https://named-geo.example";
+  const P1 = "0x1111111111111111111111111111111111111111", P2 = "0x2222222222222222222222222222222222222222";
+  const entry = (origin, payTo, tool) => [origin, {
+    manifest: { name: origin.replace(/^https:\/\//, ""), homepage: origin }, fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1],
+    payToByNetwork: { "eip155:8453": payTo }, evmDomainByNetwork: { "eip155:8453": { name: "USD Coin", version: "2" } },
+    tools: [{ seller: origin, method: "POST", price: "$0.01", networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo }, ...tool }],
+  }];
+  const lbFile = join(dir, "leaderboard-snapshot.json");
+  const lbRow = (rank, origin, payTo) => ({ rank, homepage: origin, origins: [origin], wallet: payTo, wallets: [payTo], callsSettled: 500, uniqueBuyers: 40 });
+  writeFileSync(lbFile, JSON.stringify({
+    spec: "x402-leaderboard/1", asOf: new Date(now).toISOString(), windowLabel: "7d", leaderboard: [lbRow(1, NEAR_ORIGIN, P1), lbRow(2, NAMED_ORIGIN, P2)],
+    walletEvidence: { [P1]: { callsSettled: 500, uniqueBuyers: 40, origins: [NEAR_ORIGIN] }, [P2]: { callsSettled: 500, uniqueBuyers: 40, origins: [NAMED_ORIGIN] } },
+  }));
+  writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 2 }),
+    JSON.stringify(entry(NEAR_ORIGIN, P1, { route: "/api/ip-lookup", slug: "ip-lookup", name: "IP lookup", tags: ["geolocation"], description: "ip geolocation geolocate geoip ip location where is this ip located country city coordinates" })),
+    JSON.stringify(entry(NAMED_ORIGIN, P2, { route: "/api/ip-geolocation", slug: "ip-geolocation", name: "IP geolocation", description: "Country, city and coordinates for an address." }))].join("\n") + "\n");
+  const srv = await bootServer({
+    stores: "gap-resolver", ipc: true, args: ["--import", fileURLToPath(new URL("./lib/outbound-record-preload.js", import.meta.url))],
+    readyPath: `/api/index?seller=${encodeURIComponent(NAMED_ORIGIN)}`, timeoutMs: 90_000,
+    env: { FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
+      LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "0", SOR_EXTERNAL_ENABLED: "1", X402_UPSTREAM_BUYER_KEY: `0x${randomBytes(32).toString("hex")}`, TYPESAFE_API_KEY: "offline-stand-in", ROUTE_JUDGE: "on" },
+  });
+  const record = () => new Promise((resolve) => {
+    const id = randomBytes(6).toString("hex");
+    const on = (m) => { if (m?.outbound === "record" && m.id === id) { srv.child.off("message", on); resolve(m.requests); } };
+    srv.child.on("message", on);
+    srv.child.send({ outbound: "read", id });
+  });
+  try {
+    const run = async (task) => {
+      const before = (await record()).length;
+      const r = await fetch(`${srv.url}/api/route/execute-max`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task, include: "external", params: { ip: "8.8.8.8" } }) });
+      const text = await r.text();
+      const sent = (await record()).slice(before);
+      const toSeller = (origin) => sent.filter((x) => `https://${x.host}` === origin);
+      const judged = sent.filter((x) => !/\.example$/.test(x.host) && /asked a tool router to run this task/.test(x.body));
+      return { status: r.status, text, sent, near: toSeller(NEAR_ORIGIN), named: toSeller(NAMED_ORIGIN), judged, judgedNear: judged.filter((x) => /ip-lookup|near-lookup|IP lookup/.test(x.body)) };
+    };
+    // Both sellers are candidates the router may buy from (the gap is the only thing between them).
+    const listed = await (await fetch(`${srv.url}/api/route?q=${encodeURIComponent("ip geolocation")}&include=external&top=10`)).json();
+    const rowOf = (origin) => (listed.results || []).find((x) => x.seller === origin);
+    ok(rowOf(NEAR_ORIGIN)?.routerDispatchEligible === true && rowOf(NAMED_ORIGIN)?.routerDispatchEligible === true, `both outside sellers are eligible for the router (${rowOf(NEAR_ORIGIN)?.routerDispatchReason}, ${rowOf(NAMED_ORIGIN)?.routerDispatchReason})`);
+    const gap = await run("ip geolocation");
+    ok(gap.near.length === 0 && gap.judgedNear.length === 0, `a gap task: the seller that is not named for it is never probed and never sent to the judge (${gap.near.length} requests to it, ${gap.judgedNear.length} judge calls naming it)`);
+    ok(gap.named.length >= 1 && gap.named.every((x) => x.path === "/api/ip-geolocation") && gap.judged.length >= 1 && gap.judged.every((x) => /ip-geolocation/.test(x.body)), `...and the one named for it is judged and probed (${gap.named.length} requests to it, ${gap.judged.length} judge calls)`);
+    // CONTROL: on a task outside the list the same seller IS judged and probed.
+    const plain = await run("ip lookup");
+    ok(plain.near.length >= 1 && plain.judgedNear.length >= 1, `CONTROL: for a task outside the list the same seller is judged and probed (${plain.near.length} requests to it, ${plain.judgedNear.length} judge calls naming it)`);
+    ok(gap.sent.concat(plain.sent).every((x) => /\.example$/.test(x.host) || x.host === "api.typesafe.ai"), `nothing else left the server during the two runs (${[...new Set(gap.sent.concat(plain.sent).map((x) => x.host))].join(", ")})`);
+  } finally {
+    await srv.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
