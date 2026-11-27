@@ -19,6 +19,7 @@
 //     so we use assertPublicUrl + native fetch for the EDGAR-specific UA.
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, currentBudget, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { secPaced } from "./sec-rate.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
 import { markResaleCleared } from "../resale-terms.js";
 
@@ -66,7 +67,8 @@ async function edgarGetJsonOnce(url) {
   // sockets far past whatever gate is supposed to be holding the line. A read
   // that outlives its cap is a 503 naming the upstream and the step.
   const ctx = { label: "EDGAR", step: "document", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
-  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/json" } }, ctx);
+  // In its turn at the one pace every SEC read shares (src/tools/sec-rate.js).
+  const res = await secPaced(() => upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/json" } }, ctx));
   const text = await bodyUnderDeadline(res.text(), ctx);
   if (!res.ok) {
     // 404 from data.sec.gov usually means "unknown CIK" or "no XBRL for this
@@ -803,7 +805,7 @@ async function fetchInformationTableUrl(cikInt, accession) {
 async function fetchXmlText(url) {
   const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "EDGAR", step: "XML attachment", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
-  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx);
+  const res = await secPaced(() => upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx));
   if (!res.ok) {
     if (res.status === 404) throw Object.assign(bad("EDGAR XML attachment not found (filing may not have the expected layout)", 422), { upstreamStatus: 404 });
     throw Object.assign(bad(`EDGAR XML HTTP ${res.status}`, res.status >= 500 ? 502 : 422), { upstreamStatus: res.status });

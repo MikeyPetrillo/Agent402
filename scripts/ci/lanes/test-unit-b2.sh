@@ -19,6 +19,8 @@ t node scripts/test-health-envelope.js
 t node scripts/test-edgar-kit.js
 # Form 13F data sets: index parser + bounded Range reads of a real in-memory zip (offline)
 t node scripts/test-edgar-13f-datasets.js
+# One pace for every SEC request: thirty calls at once all answer, at most eight starts a rolling second, the wait ends at the deadline, ceiling or signal (offline)
+t node scripts/test-sec-rate.js
 # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, the ledgerDeadLetter hold, fail-open paths per check; offline)
 t node scripts/test-quiet-gate.js
 # Self-check policy (transient-filtering, timeout, unknown-slug — the prod tool-failure alarm — offline)

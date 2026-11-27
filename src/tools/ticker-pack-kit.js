@@ -44,6 +44,7 @@ import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock, reportChat, costOf, textOf } from "../report-synthesis.js";
 import { checkReportGrounding, combineGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText, edgarUserAgent } from "./edgar-kit.js";
+import { secPaced } from "./sec-rate.js";
 import { mapLimit } from "./map-limit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
@@ -205,10 +206,12 @@ export async function scanInfoTableForIssuer(url, state, opts = {}) {
   const fetchImpl = opts.fetchImpl || fetch;
   const reportDate = opts.reportDate;
   const maxBytes = opts.maxBytes || HOLDER_MAX_BYTES;
-  const res = await fetchImpl(url, {
+  // In its turn at the pace every SEC read shares (src/tools/sec-rate.js);
+  // the read's own timeout starts when the request does.
+  const res = await secPaced(() => fetchImpl(url, {
     headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" },
     signal: AbortSignal.timeout(opts.timeoutMs || XML_TIMEOUT_MS),
-  });
+  }));
   if (!res || !res.ok) throw new Error(`EDGAR XML HTTP ${res ? res.status : "no-response"}`);
   const dec = new TextDecoder("utf-8");
   let buf = "", bytes = 0, totalRows = 0, truncated = false;
