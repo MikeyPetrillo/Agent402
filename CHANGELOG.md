@@ -61,11 +61,11 @@ Tools:
   turn in time answers 503 with Retry-After and is not charged on x402.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
-  geolocation, in phrasings such as "which country is this IP in" too, as a
-  miss (`capabilityGap` names it) unless a listed tool is named for it;
-  every other query is answered as before. route-and-execute, with
-  `include:"external"` as well, answers 404 for such a task without running
-  or charging anything.
+  geolocation, in phrasings such as "which country is this IP in" and for
+  the time zone or local time of an IP too, as a miss (`capabilityGap` names
+  it) unless a listed tool is named for it; every other query is answered as
+  before. route-and-execute, with `include:"external"` as well, answers 404
+  for such a task without running or charging anything.
 - route-and-execute answers 400 naming the missing fields when a call to a
   chat completion lacks the fields the seller requires and no other
   candidate can take it, before any purchase.
