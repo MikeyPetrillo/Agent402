@@ -27,6 +27,8 @@ t node scripts/test-selfcheck.js
 t node scripts/test-robots-policy.js
 # Crawl signals agree page by page: no crawl trap or open URL space indexable, Base node and article dates scoped, one sitemap list, no 404 canonical
 t node scripts/test-crawl-signals.js
+# Search landings for Form 4 insider trades and agent-to-agent payments: 200, title, canonical, source and not-advice lines, catalog prices, sitemap and llms.txt (boots FREE_MODE)
+t node scripts/test-new-guides-2026-11.js
 # Machine catalogs in parts: /openapi.json?category= and ?tag= subsets, /tools/<category>.md within its size budget
 t node scripts/test-agent-catalogs.js
 # /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)

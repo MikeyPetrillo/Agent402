@@ -872,7 +872,7 @@ import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PAC
 import { docsPage, docsApi, DOCS_SITE_ROUTES, docsSlugs } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage, playgroundToolEntry, PLAYGROUND_TOOL_PATH } from "./playground.js";
-import { payPerCallApiPage, paidMcpToolsPage, comparePage } from "./search-landings.js";
+import { payPerCallApiPage, paidMcpToolsPage, comparePage, insiderTradesApiPage, INSIDER_TRADES_PATH } from "./search-landings.js";
 import { categoryMarkdown, categoriesMarkdownIndex } from "./category-markdown.js";
 import { apiExplorerPage } from "./api-explorer.js";
 import { sdkPlaygroundPage } from "./sdk-playground.js";
@@ -6842,6 +6842,7 @@ app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.param
 app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
 app.get("/pay-per-call-api", (_req, res) => htmlCache(res, 300, 900).send(payPerCallApiPage(BASE_URL, CATALOG)));
 app.get("/paid-mcp-tools", (_req, res) => htmlCache(res, 300, 900).send(paidMcpToolsPage(BASE_URL, CATALOG)));
+app.get(INSIDER_TRADES_PATH, (_req, res) => htmlCache(res, 300, 900).send(insiderTradesApiPage(BASE_URL, CATALOG)));
 app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
