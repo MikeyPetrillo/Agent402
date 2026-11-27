@@ -5,18 +5,20 @@
 // SECURITY.md and the Security-Model wiki page (test-static-pages renders it,
 // test-surface-copy keeps the house style).
 import { siteOrgRef } from "./site-org.js";
-import { creditsPrepaymentPhrase } from "./credits-sales.js";
+import { creditsPrepaymentPhrase, creditsSalesEnabled } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { backupKeepDays } from "./backup.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
-const SECTIONS = [
+// Built at each render: the credits sentences read the sales switch as it is
+// now (scripts/test-credits-sales-gate.js reads the page in both states).
+const sections = () => [
   {
     h: "Report a vulnerability",
     p: [
       `Open a private advisory on GitHub or email <a href="mailto:security@agent402.tools">security@agent402.tools</a>. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the changelog once it has shipped.`,
-      `Good-faith research inside the scope below will not be met with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not degrade the service for others, and report to us promptly and before any disclosure. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate (for keys already issued), the card front door (/reports, /monitors, the Stripe webhook) and the published packages. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
+      `Good-faith research inside the scope below will not be met with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not degrade the service for others, and report to us promptly and before any disclosure. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate${creditsSalesEnabled() ? "" : " (for keys already issued)"}, the card front door (/reports, /monitors, the Stripe webhook) and the published packages. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
     ],
     links: [[repoUrl("security/advisories/new"), "Private advisory"], ["/.well-known/security.txt", "security.txt"], [repoUrl("blob/main/SECURITY.md"), "SECURITY.md"]],
   },
@@ -86,7 +88,7 @@ export function securityPage(baseUrl) {
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>. This page states how the hosted service is built, what it holds, and how to report a problem.</p>
   </div>
 </header>
-${SECTIONS.map((s) => `
+${sections().map((s) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div style="display:grid;grid-template-columns:260px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);" class="sec-2col">
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(s.h)}</h2>
