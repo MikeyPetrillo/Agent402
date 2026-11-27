@@ -7,7 +7,7 @@
 import { capabilityGap, gapNamedBy } from "./capability-gaps.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
-import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
+import { queryTerms, singularCandidates, versionTerms, TERM_FALSE_FRIENDS } from "./query-terms.js";
 import { applySynonyms, FIND_OPERATION_WORDS, FIND_OPERATION_SAME } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
 // An advice disclaimer ("Information, not investment advice.") is a notice,
@@ -46,6 +46,12 @@ export function isValueTerm(term) {
   const t = String(term || "");
   return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t) || CALENDAR_WORDS.has(t);
 }
+
+// A query word found inside a slug, a name or a tool's text. The words on
+// the shared false-friend list (src/query-terms.js TERM_FALSE_FRIENDS, the
+// rule /api/route reads: "add" is not "address") match only where the text
+// does not go on as the other word; every other word is a plain substring.
+const inText = (str, term) => (Object.hasOwn(TERM_FALSE_FRIENDS, term) ? TERM_FALSE_FRIENDS[term].test(str) : str.includes(term));
 
 const STOPWORDS = new Set([
   "a", "an", "the", "of", "in", "on", "to", "for", "with", "by", "and", "or",
@@ -509,7 +515,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   for (const term of terms) {
     let df = 0;
     const form = nameForm.get(term);
-    for (const e of all) if (e.slug.includes(term) || e.hay.includes(term) || (form && formNames(e, form))) df++;
+    for (const e of all) if (inText(e.slug, term) || inText(e.hay, term) || (form && formNames(e, form))) df++;
     // log((N+1)/(df+1)): ~5.6 for a term unique to one tool, ~1.0 for one that
     // matches 200. Floored so a ubiquitous term still nudges rather than
     // flipping sign or vanishing entirely.
@@ -567,7 +573,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
       // At +1 in the haystack an alias moved nothing: "md5" ranked `hash`
       // below `checksum` although hash carries the alias (2026-09-25).
       const form = nameForm.get(term);
-      const slugPart = slug === term ? 10 : segs.has(term) ? 6 : slug.includes(term) ? 2 : 0;
+      const slugPart = slug === term ? 10 : segs.has(term) ? 6 : inText(slug, term) ? 2 : 0;
       const aliasPart = aliasHitWords.has(term) ? 6 : 0;
       // A plural read as its singular names a tool one step below the word
       // as written: a singular that IS the slug scores like a slug word (6,
@@ -576,10 +582,10 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
       // buyer did not write that name, so it never outweighs a word they did.
       const formPart = form && slug === form ? 6 : aliasFormWords.has(form || term) ? 3 : 0;
       s += Math.max(slugPart, aliasPart, formPart);
-      if (name.includes(term)) s += 2;
+      if (inText(name, term)) s += 2;
       // A curated tag is a stronger signal than a stray hit in the description.
       if (tagSet.has(term)) s += 3;
-      if (hay.includes(term)) s += 1;
+      if (inText(hay, term)) s += 1;
       score += s * idf.get(term);           // weight by how much the term narrows things
     }
     const named = wholeQuery.length > 1 && namesTool(e);
@@ -696,7 +702,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     const top = all.find((e) => e.t.slug === results[0].slug);
     // Check the FULL catalog record, tags included: the API response omits
     // `tags`, so a tool whose match lives in a tag would read as a miss there.
-    const coversWord = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term) || (nameForm.has(term) && formNames(top, nameForm.get(term))));
+    const coversWord = (term) => !!top && (inText(top.slug, term) || inText(top.hay, term) || top.tagSet.has(term) || (nameForm.has(term) && formNames(top, nameForm.get(term))));
     // A word a synonym stands in for is covered when its catalog word is.
     const covers = (term) => coversWord(term) || (standsFor.get(term) || []).some(coversWord);
     rarestTermCovered = covers(rarestTerm);
@@ -748,7 +754,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
         for (const term of own) {
           if (term.length < 3 || !covers(term)) continue;
           const w = nameForm.get(term) || term;
-          if (top.slug.includes(w) || top.name.includes(w) || top.tagSet.has(w) || top.aliasWords.some((ws) => ws.includes(w))) names++;
+          if (inText(top.slug, w) || inText(top.name, w) || top.tagSet.has(w) || top.aliasWords.some((ws) => ws.includes(w))) names++;
         }
         // A money word the hit does not cover still defines the task outside
         // a conversion ("tip calculator dollars"), as it does above.
@@ -778,7 +784,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     const { from, to } = wayOf.get(firstReversed[1].slug);
     const forward = scored.some((x) => wayOf.get(x[1].slug)?.way === "forward");
     const top = all.find((e) => e.t.slug === results[0].slug);
-    const mentions = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term));
+    const mentions = (term) => !!top && (inText(top.slug, term) || inText(top.hay, term) || top.tagSet.has(term));
     // Without a tool named for the direction, the top result still serves it
     // when it mentions both ends (a general converter, a tool whose name
     // does not spell the direction out): a tool that may do the task is

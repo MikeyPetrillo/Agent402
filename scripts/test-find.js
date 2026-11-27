@@ -716,5 +716,27 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   }
 }
 
+// The shared false-friend rule (src/query-terms.js TERM_FALSE_FRIENDS, the one
+// /api/route reads): "add" is not the opening of "address". Route-and-execute's
+// own-catalog leg reads this ranking, so an address tool must not stand beside
+// the tool an "add" task names. Every other word is a plain substring, as before.
+{
+  const { TERM_FALSE_FRIENDS } = await import("../src/query-terms.js");
+  const cat = [
+    { slug: "address-label", name: "Known-address label", description: "Label a wallet address: exchange, bridge or contract. Pass the address.", category: "crypto", tags: ["address", "label"] },
+    { slug: "add-time", name: "Add time to a date", description: "Add days, hours or minutes to a date.", category: "time", tags: ["date", "add"] },
+    { slug: "pad-string", name: "Pad a string", description: "Left or right padding for a string; nothing is added past the width.", category: "text", tags: ["pad"] },
+    { slug: "coin-ohlc", name: "Coin OHLC candle statistics", description: "Candle statistics for a coin.", category: "crypto", tags: ["candles"] },
+    { slug: "stats", name: "Statistics", description: "Mean, median, range and outliers of a list of numbers.", category: "math", tags: ["mean", "range"] },
+  ];
+  const slugs = (q) => (findTools(cat, q, { k: 5 }).results || []).map((x) => x.slug);
+  ok(Object.keys(TERM_FALSE_FRIENDS).join() === "add,and", "the shared list is the two named words");
+  ok(!slugs("add two numbers").includes("address-label") && slugs("add two numbers")[0] === "add-time", `"add two numbers" does not rank the address tool (${slugs("add two numbers").join(", ")})`);
+  ok(!slugs("add").includes("address-label") && slugs("add").includes("add-time") && slugs("add").includes("pad-string"), `"add" still reads add, added and padding (${slugs("add").join(", ")})`);
+  ok(slugs("address label")[0] === "address-label" && slugs("addr")[0] === "address-label" && slugs("address")[0] === "address-label", "CONTROL: address and addr queries find the address tool as before");
+  ok(slugs("candle statistics")[0] === "coin-ohlc" && slugs("mean range and outliers")[0] === "stats" && !slugs("mean range and outliers").includes("coin-ohlc"), `CONTROL: a candle query finds the candle tool, and "and" in a statistics task does not (${slugs("mean range and outliers").join(", ")})`);
+  ok(slugs("pad")[0] === "pad-string" && slugs("label")[0] === "address-label" && slugs("stat").includes("stats") && slugs("stat").includes("coin-ohlc"), "CONTROL: every other word is a plain substring (pad, label, stat)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
