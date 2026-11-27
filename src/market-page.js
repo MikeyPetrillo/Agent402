@@ -1624,8 +1624,9 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: "x402 marketplace: indexed sellers, tools, networks and crawl health",
-    description: "The open directory of every x402 seller we can crawl: advertised tools, settlement networks, crawl health and routability. Free to browse, free to query, and the operator is excluded from its own ranking.",
+    // A search result's title and snippet: what a builder finds here first.
+    title: "x402 marketplace: pay-per-call APIs for AI agents",
+    description: "Find pay-per-call APIs for AI agents: the open x402 seller index, with each seller's tools, chains, crawl health and routability. Free to browse and query.",
     canonical: `${baseUrl}/marketplace`,
     baseUrl,
     activePath: "/marketplace",

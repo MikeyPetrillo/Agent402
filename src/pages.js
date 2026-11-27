@@ -854,9 +854,9 @@ export function faqItems() {
 export function faqPage(baseUrl) {
   const e = ledgerEsc;
   const canonical = `${baseUrl}/faq`;
-  const title = "Agent402 FAQ - x402 + MPP + MCP server for AI agents";
+  const title = "Agent402 FAQ: paying for AI agent tools over x402 and MPP";
   const description =
-    "Answers about Agent402: pricing, proof-of-work, x402 and MPP payments, the /v1 model gateway, MCP, data handling and self-hosting the open-source server.";
+    "Answers for builders: how AI agents find, pay for and verify pay-per-call tools over x402 and MPP, the free proof-of-work tier, MCP and self-hosting.";
   const FAQ_ITEMS = faqItems();
   const jsonLd = {
     "@context": "https://schema.org",

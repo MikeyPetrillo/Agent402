@@ -153,7 +153,13 @@ const catalog = {
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
   const heroText = stripTags(html.slice(html.indexOf("<header"), html.indexOf("</header>")), "").replace(/\s+/g, " ");
   const lead = leadSentence({ receipts: false });
-  ok(heroText.includes(CATEGORY_LINE) && heroText.includes(lead) && heroText.indexOf("an x402 payment settles after a successful answer") > heroText.indexOf(lead) && heroText.indexOf(SUPPORT_LINE.replace(/\.$/, "")) > heroText.indexOf(lead) && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (payment and trust), then how a call is paid and protected, with the catalog's size as the supporting line");
+  ok(heroText.includes(CATEGORY_LINE) && heroText.includes(lead) && heroText.indexOf("An x402 payment settles after a successful answer") > heroText.indexOf(lead) && heroText.indexOf(SUPPORT_LINE.replace(/\.$/, "")) > heroText.indexOf(lead) && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (payment and trust), then how a call is paid, with the catalog's size as the supporting line");
+  // Short answers first: one primary action in the hero, and a first call the
+  // reader can copy in the agents card (the same origin the page is served from).
+  const heroHtml = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  ok((heroHtml.match(/class="btn btn-[a-z]+"/g) || []).length === 1 && /class="btn btn-primary" href="\/start">Add to your agent</.test(heroHtml), "the hero carries one action, Add to your agent");
+  const agents = html.slice(html.indexOf('class="hm-obsidian hm-door hm-door-agents'), html.indexOf('class="hm-milled hm-door hm-door-people'));
+  ok(/data-name="the first call"[\s\S]*?<pre>[\s\S]*?curl (?:"|&quot;)https:\/\/agent402\.tools\/api\/find\?q=whois\+lookup(?:"|&quot;)[\s\S]*?https:\/\/agent402\.tools\/mcp<\/pre>/.test(agents), "the agents card shows a first call: the free find request and the MCP address");
   const proof = homeProofFigures({ external: { value: { count: 40000 }, at: Date.UTC(2026, 10, 11) } });
   const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 }, proof });
   ok(/external payments/.test(withExt) && withExt.includes("40,000") && /of our own test purchases are not counted/.test(withExt) && !/>46,007</.test(withExt),
@@ -300,22 +306,31 @@ const catalog = {
   ok(claimsLink.includes(`all ${countWord(WHY_POINTS.length)} claims`), `the /docs#why link counts WHY_POINTS (${claimsLink})`);
 }
 
-// --- the meta description's card clause reads the switches that sell card ---
+// --- the title and meta description: payments and trust first, scoped -----
+// The snippet a search result shows leads with payments and trust, the
+// catalog as the supporting clause; the
+// receipt clause follows receiptsServed() and is scoped as the lead sentence
+// scopes it. It offers nothing by card, so no card switch can make it untrue.
 {
-  ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && /on the same rails; any tool also by card\.$/.test(homeDescription({ credits: true, storefront: true })), "credits on sale: any tool by card");
-  const store = homeDescription({ credits: false, storefront: true });
-  ok(/on the same rails; reports and monitors also by card\.$/.test(store) && !/any tool also by card/.test(store), "credits off, storefront on: card scoped to reports and monitors");
-  const none = homeDescription({ credits: false, storefront: false });
-  ok(!/card/i.test(none) && /over x402 and MPP[,.]/.test(none) && /500\+ tools on the same rails\.$/.test(none), "no card sale: no card in the description");
-  for (const receipts of [true, false]) {
-    const d = homeDescription({ credits: false, storefront: true, receipts });
-    ok(/signed receipt/.test(d) === receipts && d.length <= 155, `the description names the signed receipt only while receipts are signed, and fits the snippet (${receipts ? "on" : "off"}, ${d.length} chars)`);
+  ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && cardPayClause({ credits: false, storefront: true }) === "reports and monitors also by card" && cardPayClause({ credits: false, storefront: false }) === "", "the card clause reads the switches that sell card (the social card uses it)");
+  for (const credits of [true, false]) for (const storefront of [true, false]) for (const receipts of [true, false]) {
+    const d = homeDescription({ credits, storefront, receipts });
+    ok(!/card/i.test(d) && /^Payments and trust: agents find, pay for and verify paid calls over x402 and MPP[;,] /.test(d) && /\. 500\+ tools on the same rails\.$/.test(d), `the description leads with payments and trust, the catalog supporting, and offers nothing by card (credits ${credits}, storefront ${storefront}, receipts ${receipts})`);
+    ok(/signed receipts on successful direct calls/.test(d) === receipts && d.length >= 120 && d.length <= 155, `the description names signed receipts, scoped, only while receipts are signed, in 120 to 155 characters (${receipts ? "on" : "off"}, ${d.length} chars)`);
   }
-  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
+  ok(homeDescription({ receipts: true }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP; signed receipts on successful direct calls. 500+ tools on the same rails.", "the meta description, word for word (receipts signed)");
+  ok(homeDescription({ receipts: false }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP, with no API key or account. 500+ tools on the same rails.", "the meta description, word for word (no signing key)");
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
-  const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
-  ok(/reports and monitors also by card/.test(meta) && !/, or by card/.test(meta), `the rendered home description reads the switches (${meta})`);
+  const page = ledgerHomePage(BASE_URL, catalog, {}, {}, [], { receipts: true });
+  const meta = (page.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  const title = (page.match(/<title>([^<]*)<\/title>/) || [])[1] || "";
+  ok(meta === homeDescription({ receipts: true }) && !/card/i.test(meta), `the rendered home description is the scoped one, with no card offer (${meta})`);
+  ok(title === "Agent402: payments and trust for AI agents on x402 and MPP" && title.length <= 60, `the home title leads with payments and trust, in 60 characters or fewer (${title.length}: ${title})`);
+  for (const [tag, want] of [['property="og:title"', title], ['name="twitter:title"', title], ['property="og:description"', meta], ['name="twitter:description"', meta]]) {
+    const got = (page.match(new RegExp(`<meta ${tag} content="([^"]*)"`)) || [])[1];
+    ok(got === want, `${tag} matches the page's own title or description (${got})`);
+  }
   for (const [k, v] of [["CREDITS_SALES", saved.c], ["STRIPE_SECRET_KEY", saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   // The social card (/card.png) reads the same switches.
   const cs = socialCardText(537, { credits: false, storefront: true });

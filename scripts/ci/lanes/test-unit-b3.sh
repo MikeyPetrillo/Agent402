@@ -27,6 +27,8 @@ TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 # @step 2: Offline suites (20 scripts, one process each)
 # Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
 t node scripts/test-static-pages.js
+# Home, /sell and /docs read as short answers first: at most 50 words of paragraph above the first h2 and 700 words in view (boots FREE_MODE, offline)
+t node scripts/test-hub-page-words.js
 # A failed-call not-charged claim on a served page carries the settle-first sentence beside it, read from the rendered text (boots FREE_MODE, offline)
 t node scripts/test-not-charged-rendered.js
 # Every served page with an AGENT_KEY placeholder shows where to get a wallet (/start#fund and `agent402-mcp wallet new`), read from the sitemap (boots FREE_MODE, offline)

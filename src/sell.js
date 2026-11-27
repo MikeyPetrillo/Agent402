@@ -44,25 +44,18 @@ const COSTS = [
 // Built per render: step 04 quotes routingProofSentence(), which reads the
 // unproven-tier ceilings from env.
 const registerSteps = () => [
-  ["01", "Serve a 402", "Return HTTP 402 Payment Required with your price, asset, network and payTo address on the endpoints you want to charge for. Any x402 middleware does this."],
-  ["02", "Register the origin", "One POST to /api/index/register. No account, no review queue, no waiting on us."],
-  ["03", "Get crawled", `The crawler reads your manifest at once, records your tools and advertised chains, and re-probes it ${crawlIntervalLabel()}; health is scored from those probes. Probes are never paid calls.`],
-  ["04", "Get ranked", `Your tools appear in Smart Order Router answers, shortlisted by how well they match a described task, so an accurate description is how you win it. The router buys from an outside seller only when the buyer asks for one (include: "external"). ${routingProofSentence()}`],
+  ["01", "Serve a 402", "Answer HTTP 402 with your price, asset, network and payTo on each paid endpoint; any x402 middleware does this."],
+  ["02", "Register the origin", "One POST to /api/index/register. No account and no review queue."],
+  ["03", "Get crawled", `The crawler reads your manifest at once and re-probes it ${crawlIntervalLabel()} for health, never as a paid call.`],
+  ["04", "Get ranked", `The router shortlists tools by how well they match a task, so an accurate description wins. It buys from an outside seller only when the buyer asks (include: "external"). ${routingProofSentence()}`],
   ["05", "Get paid", "Buyers pay your wallet directly, in the asset and on the chains your 402 names. Settled Base USDC volume shows up on the public on-chain leaderboard."],
 ];
 
-const WHAT_WE_READ = [
-  ["manifest", "/.well-known/x402"],
-  ["your tools", "route · price · description"],
-  ["your chains", "from the 402 challenge"],
-  ["health probe", `${crawlIntervalLabel()}, never paid`],
-];
-
 const SURFACES = [
-  ["Smart Order Router", "A buyer describes a task in words and the router ranks matching tools from this catalog and the open index. By default it runs a tool from this catalog; a buyer who passes include: \"external\" has it buy the result from the best outside seller instead and resell it.", "/api/route"],
-  ["Marketplace directory", "Every indexed seller with tool count, advertised networks, last crawl and rolling health - browsable by humans and machines.", "/marketplace"],
-  ["Per-chain market pages", "One page per settlement rail, so a buyer on Solana or Algorand can find sellers who take their chain.", "/solana"],
-  ["On-chain leaderboard", "Ranked by real Base USDC settled. Once you have volume, you get a public row - and the row carries buyer diversity, not just dollars.", "/leaderboard"],
+  ["Smart Order Router", "Ranks tools for a described task; it buys from the best outside seller only when the buyer passes include: \"external\".", "/api/route"],
+  ["Marketplace directory", "Every indexed seller with its tools, networks, last crawl and health.", "/marketplace"],
+  ["Per-chain market pages", "One page per settlement chain, so a buyer finds sellers who take theirs.", "/solana"],
+  ["On-chain leaderboard", "Ranked by settled Base USDC, with buyer diversity beside the dollars.", "/leaderboard"],
 ];
 
 // New sellers: what each router verdict means and what the seller can do
@@ -103,10 +96,10 @@ const faqs = () => [
 // The paid seller reads: demand, payability and the outside audit. Prices come
 // from the catalog the server passes in, never typed.
 const SELLER_TOOLS = [
-  ["bestsellers", "What agents pay for on this catalog, ranked by distinct buyers, sales, revenue or buyer diversity, with each tool's trend. Which tool was bought is in our sales ledger, not on chain."],
+  ["bestsellers", "What agents pay for on this catalog, ranked by buyers, sales or revenue, with each tool's trend, read from our sales ledger."],
   ["demand-radar", "What agents asked this server for and did not find, ranked by cluster."],
-  ["seller-payability", "Buys one call from your endpoint with our wallet and reports every leg, from the decoded 402 to the settlement receipt."],
-  ["x402-audit", "Grades any x402 endpoint's payment-security posture from the outside, without paying it."],
+  ["seller-payability", "Buys one call from your endpoint and reports every leg, from the 402 to the settlement receipt."],
+  ["x402-audit", "Grades any x402 endpoint's payment security from the outside, without paying it."],
 ];
 
 function costRow([label, value, tone]) {
@@ -125,8 +118,8 @@ const formHtml = `
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
       <button class="btn btn-primary btn-sm" id="reg-go">Submit</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" style="font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin-top:8px;">We probe your origin and list you if it answers. An app under a path on a shared host registers with that path (https://host/app/name). An unreachable seller stays listed and is skipped by routing until it recovers.</div>
-    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); a seller whose x402 routes our crawl already sees answering MPP too is picked up automatically.</p>
+    <div id="reg-out" role="status" aria-live="polite" style="font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin-top:8px;">We probe your origin and list you if it answers; an app under a path registers with that path.</div>
+    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:10px 0 0;">Speak MPP? Register on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a></p>
   </div>
   <script src="/js/reg-form.js"></script>`;
 
@@ -194,6 +187,10 @@ export function sellPage(baseUrl, catalog = null) {
 .sl-scroll table{min-width:640px}
 table{border-collapse:collapse;width:100%}
 .sl-details>summary{cursor:pointer;padding:14px 18px;font-weight:600;font-size:var(--fs-base);color:var(--ink)}
+.sl-faq>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0}
+.sl-faq>summary::-webkit-details-marker{display:none}
+.sl-faq-mark{font-family:var(--font-mono);font-size:var(--fs-lg);color:var(--accent);line-height:1;flex:none;transition:transform var(--dur-fast) ease}
+.sl-faq[open] .sl-faq-mark{transform:rotate(45deg)}
 @media (max-width:900px){.sl-2col,.sl-hero{grid-template-columns:minmax(0,1fr)!important}}
 `;
 
@@ -201,9 +198,6 @@ table{border-collapse:collapse;width:100%}
   const registerStepsHtml = REGISTER_STEPS.map(([n, t, b]) =>
     `<li style="display:grid;grid-template-columns:52px 1fr;gap:14px;padding:20px 22px;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);color:var(--accent);">${esc(n)}</span><div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 7px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div></li>`
   ).join("");
-  const whatWeReadHtml = WHAT_WE_READ.map(([label, value]) =>
-    `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:9px 13px;color:var(--muted);">${esc(label)}</th><td style="padding:9px 13px;text-align:right;color:var(--ink);">${esc(value)}</td></tr>`
-  ).join("") + `<tr><th scope="row" style="text-align:left;font-weight:400;padding:9px 13px;color:var(--muted);">what we never read</th><td style="padding:9px 13px;text-align:right;color:var(--accent);font-weight:700;">your keys or funds</td></tr>`;
   const surfacesHtml = SURFACES.map(([t, b, ref]) =>
     `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:700;padding:16px 20px;color:var(--ink);width:220px;font-size:var(--fs-base);">${esc(t)}</th><td style="padding:16px 20px;color:var(--muted);font-size:var(--fs-md);line-height:1.55;">${esc(b)}</td><td style="padding:16px 20px;text-align:right;"><code style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);background:var(--card-zebra);padding:5px 9px;white-space:nowrap;">${esc(ref)}</code></td></tr>`
   ).join("");
@@ -213,8 +207,10 @@ table{border-collapse:collapse;width:100%}
   const verdictsHtml = NEW_SELLER_VERDICTS.map(([code, todo]) =>
     `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;vertical-align:top;font-weight:400;padding:14px 18px;"><code style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);background:var(--card-zebra);padding:4px 8px;white-space:nowrap;">${esc(code)}</code></th><td style="padding:14px 18px;color:var(--muted);font-size:var(--fs-sm);line-height:1.55;vertical-align:top;">${esc(DISPATCH_REASONS[code] || "")}</td><td style="padding:14px 18px;color:var(--ink);font-size:var(--fs-sm);line-height:1.55;vertical-align:top;">${esc(todo)}</td></tr>`
   ).join("");
+  // Each answer is one click away; the #earn answer, which the cost panel
+  // links, is served open.
   const faqHtml = FAQS.map(({ id, q, a, links }) =>
-    `<article${id ? ` id="${id}"` : ""} style="padding:24px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(q)}</h3><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(a)}</p>${links ? `<p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);margin:10px 0 0;">${links.map(([href, label]) => `<span><a href="${esc(href)}"${href.startsWith("http") ? ' rel="noopener"' : ""} style="color:var(--muted);">${esc(label)} →</a></span>`).join("")}</p>` : ""}</article>`
+    `<article${id ? ` id="${id}"` : ""} style="border-bottom:1px solid var(--hairline);"><details class="sl-faq"${id === "earn" ? " open" : ""}><summary><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0;color:var(--ink);">${esc(q)}</h3><span class="sl-faq-mark" aria-hidden="true">+</span></summary><p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;padding:0 0 22px;">${esc(a)}</p>${links ? `<p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);margin:-12px 0 0;padding:0 0 22px;">${links.map(([href, label]) => `<span><a href="${esc(href)}"${href.startsWith("http") ? ' rel="noopener"' : ""} style="color:var(--muted);">${esc(label)} →</a></span>`).join("")}</p>` : ""}</details></article>`
   ).join("");
   const h2 = (text, mb = 16) => `<h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 ${mb}px;color:var(--ink);">${text}</h2>`;
 
@@ -254,26 +250,28 @@ table{border-collapse:collapse;width:100%}
   -H 'content-type: application/json' \\
   -d '{"origin":"https://seller.example"}'`, { name: "the register call", html: true, wrap: true, size: "xs", style: "margin:0 0 18px" })}
       ${formHtml}
-      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
-      <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
     </div>
   </div>
 </section>
 
 <section id="manifest" style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /.well-known/x402</div>
-  ${h2("What the crawler reads", 26)}
-  <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start;">
-    <div>${MANIFEST_RULES.map((p) => `<p class="ml-measure" style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 16px;">${esc(p)}</p>`).join("")}</div>
-    ${codeBlock(MANIFEST_EXAMPLE, { label: "/.well-known/x402", name: "an example manifest", size: "xs", style: "margin:0" })}
-  </div>
+  ${h2("What the crawler reads", 16)}
+  <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 22px;">Your x402 manifest at /.well-known/x402, the routes on the origin you register and their 402s; never your keys or funds. <a href="/crawler" style="color:var(--ink);">The crawler page</a> lists every read.</p>
+  <details class="sl-details" style="border:1px solid var(--hairline);background:var(--card);">
+    <summary>Manifest format, with an example</summary>
+    <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start;padding:18px;border-top:1px solid var(--hairline);">
+      <div>${MANIFEST_RULES.map((p) => `<p class="ml-measure" style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 16px;">${esc(p)}</p>`).join("")}</div>
+      ${codeBlock(MANIFEST_EXAMPLE, { label: "/.well-known/x402", name: "an example manifest", size: "xs", style: "margin:0" })}
+    </div>
+  </details>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/route</div>
   ${h2("How buyers reach you", 0)}
   <div class="ml-meta" style="margin:10px 0 14px;">${ROUTE_ORDER.map((o) => `<span>${esc(o.short)}</span>`).join("")}<span>then judged fit</span></div>
-  <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 28px;">Four places buyers find you. The router ranks matching tools from this catalog and the open index in the order above.</p>
+  <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 28px;">Four places buyers find you; the router ranks matches in the order above.</p>
   <div class="sl-scroll ml-rowlist" style="border:1px solid var(--hairline);background:var(--card);">
     <table style="font-size:var(--fs-md);"><tbody>${surfacesHtml}</tbody></table>
   </div>
@@ -282,7 +280,7 @@ table{border-collapse:collapse;width:100%}
 <section id="new-sellers" style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /api/index?seller=&lt;your host&gt;</div>
   ${h2("Listed, then paid")}
-  <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 28px;">Registering lists you at once. Being paid by the router is the second gate, described under Get ranked above and earned from real buyers past the <a href="#floor" style="color:var(--ink);">settlement floor</a>; your seller-trust answer carries its exact gate.</p>
+  <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 28px;">Registering lists you at once. Router payment is the second gate, earned from real buyers past the <a href="#floor" style="color:var(--ink);">settlement floor</a> (see Get ranked); your seller-trust answer carries its exact gate.</p>
   <details class="sl-details" style="border:1px solid var(--hairline);background:var(--card);">
     <summary>Router verdicts and what to do about each</summary>
     <div class="sl-scroll ml-rowlist" style="border-top:1px solid var(--hairline);">
