@@ -233,7 +233,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   subscription sponsor, the Stellar facilitator in XLM; at most one reading per wallet per 30
   minutes, 24 hours kept, the `funding-runway` state document), fits the spend per day by least
   squares and reads `low-soon` when the line is reached within `FUNDING_RUNWAY_DAYS` (default 3),
-  `unknown` under four readings or six hours of span, `low` under the line. Operator view only
+  `unknown` under four readings or six hours of span, `low` under the line. A wallet with no
+  reading inside the window (a chain turned off, a key removed) leaves the report and the stored
+  document, so its `unknown` never holds the whole word. Operator view only
   (`fundingRunway` on `/api/gateway-status`, with the figures); it makes no chain read, pages
   nothing, moves no money and leaves every alarm word as it was (`scripts/test-funding-runway.js`).
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is

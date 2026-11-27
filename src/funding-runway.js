@@ -26,6 +26,11 @@
 // The trail is kept in the state database when one is configured (one small
 // document, `funding-runway`), so a deploy does not empty it; in process
 // memory otherwise.
+//
+// A wallet nobody reads any more (a chain turned off, a key removed) leaves
+// the report once its newest reading is older than the window: it is not
+// reported, not loaded from the stored document, and deleted from that
+// document by the next write. Its "unknown" never holds the whole word.
 
 export const RUNWAY_WINDOW_MS = 24 * 3600_000; // the trailing window a spend is fitted over
 export const RUNWAY_SAMPLE_MS = 30 * 60_000; // at most one kept reading per wallet per this
@@ -112,6 +117,8 @@ function mergeSamples(a, b, now) {
   for (const p of [...a, ...b]) byT.set(p[0], p);
   return [...byT.values()].filter((p) => p[0] >= now - RUNWAY_WINDOW_MS).sort((x, y) => x[0] - y[0]);
 }
+// Whether a wallet's newest reading is older than the window at `now`.
+const isStale = (samples, now) => !samples.some((p) => p[0] >= now - RUNWAY_WINDOW_MS);
 function ensureLoaded(now) {
   if (loaded) return loaded;
   loaded = (async () => {
@@ -120,12 +127,17 @@ function ensureLoaded(now) {
     const r = await bounded(d.read({ quiet: true }));
     const wallets = r?.ok && r.body && typeof r.body === "object" ? r.body.wallets : null;
     if (!wallets || typeof wallets !== "object") return;
-    for (const [k, raw] of Object.entries(wallets).slice(0, MAX_WALLETS)) {
+    let stale = false;
+    for (const [k, raw] of Object.entries(wallets)) {
       const e = shapeEntry(raw);
       if (!e) continue;
       const mine = trail.get(k);
-      trail.set(k, { line: mine?.line ?? e.line, unit: mine?.unit ?? e.unit, samples: mergeSamples(e.samples, mine?.samples || [], now) });
+      const samples = mergeSamples(e.samples, mine?.samples || [], now);
+      if (!samples.length) { stale = true; continue; } // no reading inside the window: not loaded
+      if (!mine && trail.size >= MAX_WALLETS) continue;
+      trail.set(k, { line: mine?.line ?? e.line, unit: mine?.unit ?? e.unit, samples });
     }
+    if (stale) queueSave(null, null, now);
   })().catch(() => {});
   return loaded;
 }
@@ -135,8 +147,12 @@ function queueSave(key, entry, now) {
     if (d.backend === "memory") return;
     await bounded(d.update((b) => {
       const wallets = b && typeof b === "object" && b.wallets && typeof b.wallets === "object" ? { ...b.wallets } : {};
-      const prev = shapeEntry(wallets[key]);
-      wallets[key] = { line: entry.line, unit: entry.unit, samples: mergeSamples(prev?.samples || [], entry.samples, now) };
+      if (key != null) {
+        const prev = shapeEntry(wallets[key]);
+        wallets[key] = { line: entry.line, unit: entry.unit, samples: mergeSamples(prev?.samples || [], entry.samples, now) };
+      }
+      // A wallet with no reading inside the window leaves the document.
+      for (const k of Object.keys(wallets)) if (isStale(shapeEntry(wallets[k])?.samples || [], now)) delete wallets[k];
       const keys = Object.keys(wallets);
       for (const k of keys.slice(0, Math.max(0, keys.length - MAX_WALLETS))) delete wallets[k];
       return { v: 1, wallets };
@@ -161,7 +177,10 @@ export function noteFundingReading(key, balance, line, { unit = "USD", now = Dat
     if (typeof key !== "string" || !key || !Number.isFinite(balance)) return;
     ensureLoaded(now);
     const cur = trail.get(key) || { line: null, unit, samples: [] };
-    if (!trail.has(key) && trail.size >= MAX_WALLETS) return;
+    if (!trail.has(key) && trail.size >= MAX_WALLETS) {
+      for (const [k, e] of trail) if (isStale(e.samples, now)) trail.delete(k);
+      if (trail.size >= MAX_WALLETS) return;
+    }
     cur.line = Number.isFinite(line) ? line : cur.line;
     cur.unit = unit;
     const last = cur.samples[cur.samples.length - 1];
@@ -176,7 +195,10 @@ export function noteFundingReading(key, balance, line, { unit = "USD", now = Dat
 export async function fundingRunwayStatus({ now = Date.now(), days = runwayDays() } = {}) {
   await bounded(ensureLoaded(now));
   const wallets = {};
-  for (const [k, e] of trail) wallets[k] = { ...projectRunway(e.samples, e.line, { now, days }), unit: e.unit };
+  for (const [k, e] of trail) {
+    if (isStale(e.samples, now)) { trail.delete(k); continue; } // no longer read: off the report
+    wallets[k] = { ...projectRunway(e.samples, e.line, { now, days }), unit: e.unit };
+  }
   return { status: worstRunwayWord(Object.values(wallets).map((w) => w.status)), days, warningOnly: true, wallets };
 }
 

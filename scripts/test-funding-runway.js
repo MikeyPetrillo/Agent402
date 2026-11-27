@@ -108,6 +108,45 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
   ok(Date.now() - t0 < 4000 && hs.wallets.h?.status === "unknown", "a store that never answers holds neither the reader nor the status past its bound");
 }
 
+// A wallet nobody reads any more leaves the report and the stored document:
+// its "unknown" must not hold the whole word after the window, nor come back
+// from the store in a new process.
+{
+  let stored = null;
+  const fake = {
+    backend: "pg",
+    async read() { return { ok: true, exists: stored != null, body: stored }; },
+    async update(mutate) { const next = mutate(stored); stored = next; return { ok: true, body: next }; },
+  };
+  __resetFundingRunwayForTest({ doc: fake });
+  for (let i = 0; i <= 24; i++) {
+    noteFundingReading("base", 40, 6, { now: now - (24 - i) * H });
+    noteFundingReading("evm:retired", 40, 2, { now: now - (24 - i) * H });
+  }
+  noteFundingReading("once", 9, 2, { now }); // read once, then never again
+  await flushFundingRunway();
+  const before = await fundingRunwayStatus({ now });
+  ok(before.wallets["evm:retired"]?.status === "ok" && before.wallets.once?.status === "unknown" && before.status === "unknown", `control: while they are read, every wallet is on the report (${Object.keys(before.wallets).join(", ")})`);
+  const later = now + 30 * H; // only "base" is still read
+  for (let i = 0; i <= 24; i++) noteFundingReading("base", 40, 6, { now: later - (24 - i) * H });
+  await flushFundingRunway();
+  const a = await fundingRunwayStatus({ now: later });
+  ok(!("evm:retired" in a.wallets) && !("once" in a.wallets), `a wallet with no reading inside the window is off the report (${Object.keys(a.wallets).join(", ")})`);
+  ok(a.wallets.base?.status === "ok" && a.status === "ok", `the wallets still read report as before and the whole word returns to ok (${a.status})`);
+  ok(stored && !("evm:retired" in stored.wallets) && !("once" in stored.wallets) && stored.wallets.base?.samples?.length > 0, `the stored document drops it on the next write (${Object.keys(stored?.wallets || {}).join(", ")})`);
+  // A new process over a document that still holds one (written by a build
+  // before the rule, or by a replica that stopped reading it).
+  stored = { v: 1, wallets: { ...stored.wallets, "evm:retired": { line: 2, unit: "USD", samples: [[now - 2 * H, 40], [now - H, 40]] }, empty: { line: 2, unit: "USD", samples: [] } } };
+  __resetFundingRunwayForTest({ doc: fake });
+  const b = await fundingRunwayStatus({ now: later });
+  await flushFundingRunway();
+  ok(!("evm:retired" in b.wallets) && !("empty" in b.wallets) && b.wallets.base?.status === "ok" && b.status === "ok", `a new process does not load it back (${b.status}; ${Object.keys(b.wallets).join(", ")})`);
+  ok(!("evm:retired" in stored.wallets) && !("empty" in stored.wallets) && "base" in stored.wallets, `the load deletes it from the stored document (${Object.keys(stored.wallets).join(", ")})`);
+  // A wallet read again after a gap starts a fresh trail.
+  noteFundingReading("evm:retired", 40, 2, { now: later + H });
+  ok((await fundingRunwayStatus({ now: later + H })).wallets["evm:retired"]?.readings === 1, "a wallet read again is back on the report with a fresh trail");
+}
+
 // The caller path: the low-water readers feed the trail from their own read.
 {
   __resetFundingRunwayForTest();
