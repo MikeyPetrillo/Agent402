@@ -160,54 +160,6 @@ const PACK_TOP1 = [
   ["solidity",                      "contract-audit"],
 ];
 
-// /api/route over this server's own catalog (include=local). The router gives
-// a curated alias the slug's weight, so two picks rest on one alias each:
-// "current bitcoin price" tied crypto-price with bond-price, token-price,
-// gas-estimate and price-coingecko on the word "price" and the shorter slug
-// led; "bitcoin volatility last 90 days" ranked the holiday tools on "days"
-// over the tool that computes a coin's look-back statistics. The neighbors
-// named in those ties keep the queries that name them (read first: a failure
-// there means an alias took a pick that was not its own).
-const ROUTE_TOP1 = [
-  ["bond price",                    "bond-price"],
-  ["current bond price",            "bond-price"],
-  ["token price",                   "token-price"],
-  ["token price history",           "token-price-history"],
-  ["gas estimate",                  "gas-estimate"],
-  ["current gas price",             "gas-estimate"],
-  ["current weather",               "weather-current"],
-  ["current time",                  "time"],
-  ["business days",                 "business-days"],
-  ["bank holidays",                 "bank-holidays"],
-  ["next holidays",                 "next-holidays"],
-  ["public holidays",               "public-holidays"],
-  ["sharpe ratio",                  "sharpe-ratio"],
-  ["option volatility",             "black-scholes"],
-  ["coin ohlc",                     "coin-ohlc"],
-  ["bitcoin price",                 "crypto-price"],
-  ["current price of bitcoin",      "crypto-price"],
-  ["current bitcoin price",         "crypto-price"],
-  ["bitcoin volatility last 90 days", "crypto-history"],
-];
-// The same aliases leave /api/find's picks for those neighbors as they were.
-const FIND_KEPT = [
-  ["bond price",                    "bond-price"],
-  ["token price",                   "token-price"],
-  ["current weather",               "weather-current"],
-  ["current gas price",             "gas-estimate"],
-  ["business days",                 "business-days"],
-  ["public holidays",               "public-holidays"],
-  ["bitcoin price",                 "crypto-price"],
-  ["current bitcoin price",         "crypto-price"],
-];
-
-const routeSlugs = async (q, k = 5) => {
-  const r = await fetch(`${BASE}/api/route?q=${encodeURIComponent(q)}&include=local&top=${k}`);
-  if (!r.ok) throw new Error(`/api/route returned ${r.status} for "${q}"`);
-  const j = await r.json();
-  return (j.results || []).map((x) => x.slug);
-};
-
 const slugs = async (q, k = 3) => {
   const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=${k}`);
   if (!r.ok) throw new Error(`/api/find returned ${r.status} for "${q}"`);
@@ -237,15 +189,6 @@ try {
   for (const [q, expected, k] of TOPN) {
     const found = await slugs(q, k);
     ok(found.includes(expected), `top-${k} for "${q}" includes ${expected} (got ${found.join(",") || "none"})`);
-  }
-
-  for (const [q, expected] of ROUTE_TOP1) {
-    const found = await routeSlugs(q);
-    ok(found[0] === expected, `route top-1 for "${q}" is ${expected} (got ${found.slice(0, 4).join(",") || "none"})`);
-  }
-  for (const [q, expected] of FIND_KEPT) {
-    const found = await slugs(q, 3);
-    ok(found[0] === expected, `find top-1 for "${q}" stays ${expected} (got ${found.join(",") || "none"})`);
   }
 
   for (const [q, expected] of PACK_TOP1) {
