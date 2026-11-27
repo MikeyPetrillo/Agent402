@@ -211,6 +211,14 @@ if (L) {
     ok(JSON.stringify(ch.summary) === JSON.stringify(s.summary) && JSON.stringify(ch.drawdown) === JSON.stringify(s.drawdown) && ch.count === 5 && ch.window.spacing === "1d" && ch.window.days === 4, "crypto-history answers the hand-computed figures for the same series");
     const since = await run("coin-history", { coin: "bitcoin", date: "2026-08-10" });
     ok(since.summary.changePct === 17 && since.date === "2026-08-10" && since.id === "bitcoin" && since.window.from === day(0), `coin-history: the return since the date is the last observation over the date's (${since.summary.changePct})`);
+    // The read carries the caller's currency, and a second currency is a read of its own.
+    const rangeReads = () => calls.filter((u) => /\/market_chart\/range$/.test(u.pathname)).map((u) => u.searchParams.get("vs_currency"));
+    const usdReads = rangeReads();
+    const eur = await tool("coin-history").handler({ coin: "bitcoin", date: "2026-08-10", currency: "EUR" });
+    const afterEur = rangeReads();
+    const usdAgain = await tool("coin-history").handler({ coin: "bitcoin", date: "2026-08-10" });
+    ok(usdReads.join() === "usd" && since.currency === "usd" && afterEur.join() === "usd,eur" && eur.currency === "eur" && eur.cached === false && rangeReads().join() === "usd,eur" && usdAgain.cached === true && usdAgain.currency === "usd",
+      `coin-history: the upstream read carries the caller's vs_currency and a second currency makes its own read (reads ${rangeReads().join(",")}; eur cached ${eur.cached}, usd again cached ${usdAgain.cached})`);
     const tp = await run("token-price-history", { symbol: "ETH", interval: "1d", days: 7 });
     ok(tp.changePct === 17 && tp.volatilityPct === 558.2685 && tp.maxDrawdownPct === -25 && tp.fromHighPct === -10 && tp.count === 5 && !("summary" in tp), "token-price-history answers the same figures at the top level, where changePct always was");
   } finally { Date.now = realNow; keep.forEach((v, k) => { MARKS[k] = v; }); }
