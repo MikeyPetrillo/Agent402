@@ -20,8 +20,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { CONTRACT_TOOLS } from "../src/tools/contract-kit.js";
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-canary-coverage");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-canary-coverage");
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
 import { FINANCE_TOOLS } from "../src/tools/finance-kit.js";
 import { STT_TOOLS } from "../src/tools/stt-kit.js";
@@ -188,21 +188,21 @@ if (sd) {
   if (leg) {
     const q = meteredQuoteUsd(leg.body);
     ok(!q.invalid && q.usd === leg.priceUsd, "llm-metered leg priceUsd equals the kit's quote for its own body");
-    ok(leg.priceUsd > TIERS["v1-chat-metered"].price, "the leg's body quotes ABOVE the floor, so a quote collapsing to the floor is visible as a price change");
+    COSTS.rate("the metered leg quotes above the floor", () => ok(leg.priceUsd > TIERS["v1-chat-metered"].price, "the leg's body quotes ABOVE the floor, so a quote collapsing to the floor is visible as a price change"));
   }
   const { meteredMessagesQuoteUsd } = await import("../src/tools/llm-messages-kit.js");
   const mleg = CANARY_LEGS.find((l) => l.kit === "llm-metered-messages");
   ok(!!mleg && mleg.path === "/v1/metered/messages", "canary has an llm-metered-messages leg on the metered Messages route");
   if (mleg) {
     const q = meteredMessagesQuoteUsd(mleg.body);
-    ok(!q.invalid && q.usd === mleg.priceUsd && mleg.priceUsd > TIERS["v1-chat-metered"].price, "llm-metered-messages leg priceUsd equals the Messages quote for its body and sits above the floor");
+    COSTS.rate("the metered Messages leg quotes above the floor", () => ok(!q.invalid && q.usd === mleg.priceUsd && mleg.priceUsd > TIERS["v1-chat-metered"].price, "llm-metered-messages leg priceUsd equals the Messages quote for its body and sits above the floor"));
   }
   const { meteredResponsesQuoteUsd } = await import("../src/tools/llm-responses-kit.js");
   const rleg = CANARY_LEGS.find((l) => l.kit === "llm-metered-responses");
   ok(!!rleg && rleg.path === "/v1/metered/responses", "canary has an llm-metered-responses leg on the metered Responses route");
   if (rleg) {
     const q = meteredResponsesQuoteUsd(rleg.body);
-    ok(!q.invalid && q.usd === rleg.priceUsd && rleg.priceUsd > TIERS["v1-chat-metered"].price, "llm-metered-responses leg priceUsd equals the Responses quote for its body and sits above the floor");
+    COSTS.rate("the metered Responses leg quotes above the floor", () => ok(!q.invalid && q.usd === rleg.priceUsd && rleg.priceUsd > TIERS["v1-chat-metered"].price, "llm-metered-responses leg priceUsd equals the Responses quote for its body and sits above the floor"));
   }
 }
 
