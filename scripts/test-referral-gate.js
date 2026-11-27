@@ -566,9 +566,13 @@ if (ONLY_PART !== "2") {
       for (const v of Object.values(mod)) for (const t of Array.isArray(v) ? v : [v]) if (isCgTool(t)) cgTools.set(t.slug, t);
     }
     const undecided = [...cgTools.values()].filter((t) => !(t.resale === RESALE_COMPUTED || (t.resale === RESALE_BARRED && typeof t.resaleReason === "string" && t.resaleReason.trim())));
-    const RAW = ["crypto-price", "price-coingecko", "crypto-market", "crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"];
+    // The raw pass-throughs. This list may only shrink (a tool leaves it when its answer becomes a computation).
+    const RAW = ["crypto-price", "price-coingecko", "crypto-market", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"];
     ok(cgTools.size >= 30 && undecided.length === 0, `every tool that serves the market-data source declares resale "barred" (with a reason) or "computed" (${cgTools.size} tools from ${naming.length} modules; undecided: ${undecided.map((t) => t.slug).join(",") || "none"})`);
     ok(RAW.every((x) => cgTools.get(x)?.resale === RESALE_BARRED) && ["stablecoin-peg", "token-diligence", "funding-screener"].every((x) => cgTools.get(x)?.resale === RESALE_COMPUTED), "each raw pass-through of the market-data source is barred, and the computed reads are not");
+    const barredNow = [...cgTools.values()].filter((t) => t.resale === RESALE_BARRED).map((t) => t.slug);
+    ok(RAW.length === 18 && barredNow.every((x) => RAW.includes(x)), `no tool of the market-data source is a raw pass-through outside the list (${barredNow.filter((x) => !RAW.includes(x)).join(",") || "none"})`);
+    ok(["crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history"].every((x) => cgTools.get(x)?.resale === RESALE_COMPUTED), "the history tools answer statistics computed from a series and are marked computed");
     // Control: the guard's own predicate reads an unmarked tool on the source as undecided.
     ok(isCgTool({ slug: "probe-cg", handler: () => ({}), upstreamHosts: [CG_API_HOSTS[0]] }) && isCgTool({ slug: "probe-cg2", handler: () => ({}), attribution: "coingecko" }), "control: a new tool on the source (by host or by attribution) is one the guard reads");
     // The three whole-year holiday lists are barred for the holiday source's portal term.
@@ -5559,7 +5563,7 @@ fac.reset();
 // Paid data tools whose reads carry fixed timeouts of their own, each ended by a run's ceiling (src/run-ceiling.js).
 const DATA_SLUGS = "dns,device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,http-check,ip-info,place-lookup,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,yield-curve-spread".split(",");
 // Raw pass-throughs of a source whose terms bar resale through a third party (src/resale-terms.js): listed, refused at boot with the reason.
-const RESALE_BARRED_SLUGS = ["crypto-price", "price-coingecko", "crypto-market", "crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer", "public-holidays", "bank-holidays", "school-holidays"];
+const RESALE_BARRED_SLUGS = ["crypto-price", "price-coingecko", "crypto-market", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer", "public-holidays", "bank-holidays", "school-holidays"];
 const srv = await bootPaidServer({
   label: "referral-on",
   args: ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hang-fetch-preload.js"],

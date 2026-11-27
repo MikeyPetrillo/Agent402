@@ -101,8 +101,13 @@ const exampleOf = (pr) => pr?.extensions?.bazaar?.info?.output?.example;
 // gone from the answer itself, so the sample must not keep it. token-safety
 // dropped its verdict (2026-11-24: no answer may read as a statement that a
 // token is fine); the named facts are listed in `flags` and `unknown` instead.
+// coin-history answers what changed since a date from one read of the
+// series (2026-11-27: computed answers, never the source's dated snapshot);
+// that read carries no symbol or name, so the answer echoes the coin id only.
+// Its source figures left through WITHDRAWN_SOURCE_FIELDS, not here.
 export const REMOVED_SAMPLE_FIELDS = Object.freeze({
   "token-safety": Object.freeze(["verdict", "because", "blocking", "warnings"]),
+  "coin-history": Object.freeze(["symbol", "name"]),
 });
 
 /** A base listing's text with each reworded source credit in its current
@@ -165,6 +170,8 @@ export function listingLosses(then, now, withdrawn = WITHDRAWN_SOURCE_FIELDS) {
   ok(/still carries withdrawn source field rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawUsd: 2 }), { "z-tool": ["rawUsd"] }).join() || ""), "control: a withdrawn field left in the sample is a loss");
   const [was, now] = REWORDED_ATTRIBUTIONS[0];
   ok(listingLosses(pr(`Prices. ${was}`, { a: 1 }), pr(`Prices. ${now}`, { a: 1 })).length === 0 && /description/.test(listingLosses(pr(`Prices and more. ${was}`, { a: 1 }), pr(`Prices. ${now}`, { a: 1 }))[0] || "") && /description/.test(listingLosses(pr("Prices and a long lead text.", { a: 1 }), pr(`Prices. ${now}`.slice(0, 20), { a: 1 }))[0] || ""), "control: a reworded source credit is not a lost description; a shorter text before it still is");
+  // The five history routes: each withdrawn series field is named for its slug, and nothing else may leave.
+  ok(["crypto-history", "coin-history", "coin-ohlc", "coin-market-chart-range", "token-price-history"].every((x) => Array.isArray(WITHDRAWN_SOURCE_FIELDS[x]) && WITHDRAWN_SOURCE_FIELDS[x].length > 0) && listingLosses({ slug: "crypto-history", ...pr("a", { coin: "x", summary: {}, bars: [] }) }, pr("a", { coin: "x", summary: {} })).length === 0 && /lost summary/.test(listingLosses({ slug: "crypto-history", ...pr("a", { coin: "x", summary: {}, bars: [] }) }, pr("a", { coin: "x" }))[0] || "") && /still carries withdrawn source field bars/.test(listingLosses({ slug: "coin-ohlc", ...pr("a", { bars: [] }) }, pr("a", { bars: [] })).join()), "control: a history route may drop its series from the sample, must drop it, and keeps every other field");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
   const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
   const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };

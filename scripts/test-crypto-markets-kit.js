@@ -350,13 +350,13 @@ reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 1, 2, 0.5, 1.5]]) };
 ok((await h("coin-ohlc")({ coin: "bitcoin", days: 1 })).count === 1, "an unusable body is not kept: the next read answers");
 reset();
-routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { error: { status: { error_code: 10012, error_message: "SECRET-UPSTREAM-TEXT" } } }) };
+routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(401, { error: { status: { error_code: 10012, error_message: "SECRET-UPSTREAM-TEXT" } } }) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 422, "401 (plan limit) -> 422", /^((?!SECRET).)*$/);
 reset();
-routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { status: { error_code: 10010, error_message: "SECRET-UPSTREAM-TEXT" } }) };
+routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(401, { status: { error_code: 10010, error_message: "SECRET-UPSTREAM-TEXT" } }) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 503, "401 (key refused, not a plan code) -> 503 not configured", /^((?!SECRET).)*not configured((?!SECRET).)*$/);
 reset();
-routes = { "/api/v3/coins/bitcoin/history": jsonRes(403, {}) };
+routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(403, {}) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 503, "403 with no recognizable code -> 503 not configured", /not configured/);
 {
   // The retry is a second upstream request and takes its own token.
@@ -465,28 +465,40 @@ ok(prof.links.homepage === "https://www.ethereum.org/" && prof.links.explorers.l
 ok(prof.market.price === 2424.5 && prof.market.change24hPct === 1.2346 && prof.market.change7dPct === -3.1 && prof.market.ath === 4878.26 && prof.market.maxSupply === null && prof.market.lastUpdated === "2026-08-22T13:19:00.000Z", "coin-profile: market block (per-currency with scalar fallback)");
 ok(prof.sentimentUpPct === 71.4 && prof.watchlistUsers === 2200000, "coin-profile: sentiment + watchlist");
 
+// coin-history: one read of the series from the date to now, answered as
+// what changed since the date (no price, market cap or volume of the source).
+const DAY_MS = 86_400_000;
+const sinceSeries = (fromSec, vals) => ({ prices: vals.map((v, k) => [fromSec * 1000 + k * DAY_MS, v]), market_caps: vals.map((v, k) => [fromSec * 1000 + k * DAY_MS, v * 1000]), total_volumes: vals.map((v, k) => [fromSec * 1000 + k * DAY_MS, 50 + k]) });
+{
+  // The clock is held, so both calls fall in one 5-minute step of the window's end.
+  const realNow = Date.now, at = realNow();
+  Date.now = () => at;
+  try {
+    reset();
+    routes = {
+      "/api/v3/coins/bitcoin/market_chart/range": (u) => {
+        const from = Number(u.searchParams.get("from")), to = Number(u.searchParams.get("to"));
+        ok(from % 86_400 === 0 && to % 300 === 0 && to <= at / 1000 && at / 1000 - to < 300 && u.searchParams.get("vs_currency") === "usd", `coin-history: one series read from the date (00:00 UTC) to now, its end on a 5-minute step (${from}..${to})`);
+        return jsonRes(200, sinceSeries(from, [100, 120, 90, 130, 117]));
+      },
+    };
+    const hist = await h("coin-history")({ coin: "bitcoin", daysAgo: "30" });
+    const expectDate = new Date(at - 30 * DAY_MS).toISOString().slice(0, 10);
+    ok(hist.id === "bitcoin" && hist.date === expectDate && hist.currency === "usd" && hist.summary.changePct === 17 && hist.summary.maxDrawdownPct === -25 && hist.summary.fromHighPct === -10, `coin-history: the return, drawdown and distance from the high since the date (daysAgo as a query string; ${JSON.stringify(hist.summary)})`);
+    ok(hist.window.from === `${expectDate}T00:00:00.000Z` && hist.window.observations === 5 && hist.activity.marketCapChangePct === 17 && hist.daily.days === 5 && /return since the date/.test(hist.method), "coin-history: the window starts at the date; activity and daily blocks are computed");
+    ok(!["price", "marketCap", "volume24h", "allCurrencies", "symbol", "name"].some((k) => k in hist) && /withdrawn \(raw source data\)/.test(hist.withdrawn), "coin-history: the source's snapshot fields are withdrawn and the answer says so");
+    const histByDate = await h("coin-history")({ coin: "bitcoin", date: expectDate });
+    ok(histByDate.cached === true && histByDate.date === expectDate && calls.length === 1, "coin-history: explicit date hits the same cache entry as daysAgo");
+  } finally { Date.now = realNow; }
+}
 reset();
-routes = {
-  "/api/v3/coins/bitcoin/history": (u) => {
-    ok(/^\d{2}-\d{2}-\d{4}$/.test(u.searchParams.get("date")) && u.searchParams.get("localization") === "false", `coin-history: date sent dd-mm-yyyy (${u.searchParams.get("date")})`);
-    return jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: { current_price: { usd: 118412.55, eur: 100812.3, btc: 1 }, market_cap: { usd: 2.356e12 }, total_volume: { usd: 4.1e10 } } });
-  },
-};
-const hist = await h("coin-history")({ coin: "bitcoin", daysAgo: "30" });
-ok(hist.id === "bitcoin" && hist.symbol === "BTC" && /^\d{4}-\d{2}-\d{2}$/.test(hist.date) && hist.price === 118412.55 && hist.marketCap === 2.356e12 && hist.volume24h === 4.1e10, "coin-history: snapshot fields (daysAgo as a query string)");
-ok(hist.allCurrencies.price.eur === 100812.3 && hist.allCurrencies.price.btc === 1 && Object.keys(hist.allCurrencies.marketCap).join() === "usd", "coin-history: allCurrencies maps");
-const expectDate = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
-ok(hist.date === expectDate, `coin-history: daysAgo 30 -> ${expectDate}`);
-const histByDate = await h("coin-history")({ coin: "bitcoin", date: expectDate });
-ok(histByDate.cached === true && histByDate.date === expectDate, "coin-history: explicit date hits the same cache entry as daysAgo");
-reset();
-routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
+routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(200, { prices: [], market_caps: [], total_volumes: [] }) };
 // An explicit date, so the block reads the same key at any time of day (a
 // relative daysAgo moved to the next date when the clock was pushed across
 // UTC midnight, and the 10-minute case below read upstream again).
 const MISS_DATE = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10);
 const OTHER_DATE = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
-await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: no market_data on that date -> 422 (free, never a charged empty answer)");
+await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: no market data on that date -> 422 (free, never a charged empty answer)");
 {
   // The miss is kept per coin and date: a repeat answers the same 422 with no
   // upstream read, even once the 5-minute read cache has dropped the document.
@@ -501,19 +513,28 @@ await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin
   } finally { Date.now = realNow; }
   ok(calls.length === reads, "coin-history: the miss memo outlives the read cache (no read after 10 minutes)");
   // Another date for the same coin is its own key and is read.
-  routes["/api/v3/coins/bitcoin/history"] = jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: { current_price: { usd: 1 }, market_cap: {}, total_volume: {} } });
+  routes["/api/v3/coins/bitcoin/market_chart/range"] = (u) => jsonRes(200, sinceSeries(Number(u.searchParams.get("from")), [1, 2, 3]));
   const other = await h("coin-history")({ coin: "bitcoin", date: OTHER_DATE });
-  ok(other.price === 1 && !("recorded" in other) && calls.length === reads + 1, "coin-history: another date is read and answered");
+  ok(other.summary.changePct === 200 && !("recorded" in other) && calls.length === reads + 1, "coin-history: another date is read and answered");
+  // A series that starts later than the date holds nothing for the date itself: the same free 422.
+  reset();
+  routes = { "/api/v3/coins/bitcoin/market_chart/range": (u) => jsonRes(200, sinceSeries(Number(u.searchParams.get("from")) + 3 * 86_400, [1, 2, 3])) };
+  await throws(h("coin-history")({ coin: "bitcoin", date: OTHER_DATE }), 422, "coin-history: a first observation days after the date -> 422");
+  ok(__test.historyMissSize() === 1, "coin-history: a late first observation is kept as a miss");
+  reset();
+  routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(200, { prices: [], market_caps: [], total_volumes: [] }) };
+  await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: the miss again");
+  routes["/api/v3/coins/bitcoin/market_chart/range"] = (u) => jsonRes(200, sinceSeries(Number(u.searchParams.get("from")), [1, 2, 3]));
   // The memo lasts a day: once it lapses the pair is read again.
   try {
     Date.now = () => realNow() + 86_400_000 + 60_000;
     calls.length = 0;
     const again = await h("coin-history")({ coin: "bitcoin", date: MISS_DATE });
-    ok(again.price === 1 && calls.length === 1, "coin-history: a miss older than a day is read again");
+    ok(again.summary.changePct === 200 && calls.length === 1, "coin-history: a miss older than a day is read again");
   } finally { Date.now = realNow; }
   // Bounded: a flood of distinct misses never holds more than HISTORY_MISS_MAX.
   reset();
-  routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
+  routes = { "/api/v3/coins/bitcoin/market_chart/range": jsonRes(200, { prices: [], market_caps: [], total_volumes: [] }) };
   const { HISTORY_MISS_MAX } = await import("../src/tools/crypto-markets-kit.js");
   for (let k = 1; k <= 365; k++) await h("coin-history")({ coin: "bitcoin", daysAgo: k }).catch(() => {});
   ok(__test.historyMissSize() === Math.min(365, HISTORY_MISS_MAX) && HISTORY_MISS_MAX >= 365 && HISTORY_MISS_MAX <= 10_000, `coin-history: miss memo bounded (${__test.historyMissSize()} kept, max ${HISTORY_MISS_MAX})`);
@@ -525,9 +546,20 @@ reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 100, 110, 90, 105], [1787320800000, 105, 120, 100, 115], [1787322600000, 115, 118, 95, 98], ["junk"]]) };
 const ohlc = await h("coin-ohlc")({ coin: "BITCOIN", days: "7", currency: "Usd" });
 ok(ohlc.coin === "bitcoin" && ohlc.days === 7 && ohlc.currency === "usd" && ohlc.count === 3 && ohlc.granularity === "30m", "coin-ohlc: inputs normalized, junk row dropped, granularity derived from spacing");
-ok(ohlc.bars[0].time === "2026-08-21T13:30:00.000Z" && ohlc.bars[0].open === 100 && ohlc.bars[0].close === 105, "coin-ohlc: bar shape");
-ok(ohlc.summary.first === 100 && ohlc.summary.last === 98 && ohlc.summary.high === 120 && ohlc.summary.low === 90 && ohlc.summary.changePct === -2, "coin-ohlc: summary");
+ok(!("bars" in ohlc) && ohlc.window.from === "2026-08-21T13:30:00.000Z" && ohlc.window.observations === 3 && ohlc.window.spacing === "30m", "coin-ohlc: no candles in the answer; the window names its times and count");
+// Closes 105, 115, 98 from a first open of 100; the candles' own high 120 and low 90.
+ok(ohlc.summary.changePct === -2 && ohlc.summary.fromHighPct === +((98 / 120 - 1) * 100).toFixed(4) && ohlc.summary.fromLowPct === +((98 / 90 - 1) * 100).toFixed(4) && !["first", "last", "high", "low"].some((k) => k in ohlc.summary), "coin-ohlc: summary (change from the first open, the last close against the candle extremes)");
+// Up candles 2 of 3; bodies 5/20, 10/20, 17/23 of the range.
+ok(ohlc.candleStats.upSharePct === 66.6667 && ohlc.candleStats.bodyPct === +(((5 / 20 + 10 / 20 + 17 / 23) / 3) * 100).toFixed(4) && ohlc.candleStats.atrPct === +(((20 / 105 + 23 / 115) / 2) * 100).toFixed(4), `coin-ohlc: candle statistics (${JSON.stringify(ohlc.candleStats)})`);
 ok(calls[0].url.searchParams.get("vs_currency") === "usd" && calls[0].url.searchParams.get("days") === "7", "coin-ohlc: upstream query");
+{
+  // The bundle's candle leg reads the same cached document and is not a catalog entry.
+  const { COIN_CANDLES_LEG } = await import("../src/tools/crypto-markets-kit.js");
+  resetCgRateLimit();
+  const leg = await COIN_CANDLES_LEG.handler({ coin: "bitcoin", days: 7 });
+  ok(calls.length === 1 && leg.bars.length === 3 && leg.bars[0].close === 105 && leg.summary.changePct === -2 && leg.days === 7 && leg.granularity === "30m", "the in-process candle leg reads the candles once (the public read's cache) for the bundle");
+  ok(!CRYPTO_MARKETS_TOOLS.includes(COIN_CANDLES_LEG) && COIN_CANDLES_LEG.route === undefined && COIN_CANDLES_LEG.price === CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "coin-ohlc").price, "the candle leg is not a catalog entry (no route) and carries coin-ohlc's price");
+}
 
 reset();
 routes = {
@@ -538,20 +570,21 @@ routes = {
   },
 };
 const rng = await h("coin-market-chart-range")({ coin: "ethereum", lookback: "3d" });
-ok(rng.count === 3 && rng.granularity === "1h" && rng.points[2].marketCap === 3 && rng.points[2].volume === null && rng.summary.first === 1900 && rng.summary.last === 2000 && rng.summary.changePct === 5.2632, "coin-market-chart-range: zipped points + summary + derived granularity");
+ok(rng.count === 3 && rng.granularity === "1h" && !("points" in rng) && rng.summary.changePct === 5.2632 && rng.summary.fromHighPct === 0 && !["first", "last", "high", "low"].some((k) => k in rng.summary), "coin-market-chart-range: summary + derived granularity, no series");
+ok(rng.activity.marketCapChangePct === 200 && rng.activity.volumeChangePct === 100 && rng.activity.turnoverMeanPct === +(((10 / 1 + 20 / 2) / 2) * 100).toFixed(4) && rng.window.observations === 3, `coin-market-chart-range: market-cap and volume changes and turnover (${JSON.stringify(rng.activity)})`);
 reset();
 const fromIso = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
 const fromSec = Math.floor(Date.parse(fromIso + "T00:00:00Z") / 1000), toSec = fromSec + 86_400;
 routes = { "/api/v3/coins/ethereum/market_chart/range": (u) => { ok(u.searchParams.get("from") === String(fromSec) && u.searchParams.get("to") === String(toSec), "coin-market-chart-range: ISO from + unix-string to -> unix seconds"); return jsonRes(200, { prices: [], market_caps: [], total_volumes: [] }); } };
 const rng2 = await h("coin-market-chart-range")({ coin: "ethereum", from: fromIso, to: String(toSec) });
-ok(rng2.count === 0 && rng2.summary.first === null && rng2.granularity === null, "coin-market-chart-range: empty series is a valid answer");
+ok(rng2.count === 0 && rng2.summary.changePct === null && rng2.granularity === null && rng2.window.observations === 0, "coin-market-chart-range: empty series is a valid answer");
 ok(rng2.summary.volatilityPct === null && rng2.summary.maxDrawdownPct === null, "coin-market-chart-range: an empty series has no volatility or drawdown, never a made-up 0");
 
 // ----------------------------------------------------------------------------
 // Series statistics: what the series tools lead with
 // ----------------------------------------------------------------------------
 {
-  const { riskStats, seriesSummary } = await import("../src/tools/crypto-markets-kit.js");
+  const { riskStats, lookbackAnswer } = await import("../src/tools/crypto-markets-kit.js");
   const HOUR = 3_600_000, DAY = 86_400_000;
   const sampleVol = (vals, periodsPerYear) => {
     const rets = []; for (let k = 1; k < vals.length; k++) rets.push(Math.log(vals[k] / vals[k - 1]));
@@ -568,12 +601,11 @@ ok(rng2.summary.volatilityPct === null && rng2.summary.maxDrawdownPct === null, 
   ok(short.volatilityPct === null && short.maxDrawdownPct === -10, "riskStats: two points give a drawdown but no volatility");
   const holes = riskStats(t4(HOUR), [100, null, 0, 50]);
   ok(holes.maxDrawdownPct === -50 && holes.volatilityPct === null, "riskStats: missing and non-positive prices are skipped");
-  const sum = seriesSummary(t4(HOUR), [100, 120, 90, 130]);
-  ok(sum.first === 100 && sum.last === 130 && sum.high === 130 && sum.low === 90 && sum.changePct === 30 && sum.maxDrawdownPct === -25, "seriesSummary: first, last, high, low, % change and the risk figures");
+  const sum = lookbackAnswer(t4(HOUR), [100, 120, 90, 130]).summary;
+  ok(!["first", "last", "high", "low"].some((k) => k in sum) && sum.changePct === 30 && sum.maxDrawdownPct === -25 && sum.fromHighPct === 0 && sum.fromLowPct === 44.4444, "lookbackAnswer: % change, the risk figures and the range position, with no value of the series");
   ok(rng.summary.maxDrawdownPct === 0 && rng.summary.volatilityPct === sampleVol([1900, 1950, 2000], 8760), `coin-market-chart-range: the summary carries volatility and drawdown of its points (${rng.summary.volatilityPct})`);
   ok(ohlc.summary.maxDrawdownPct === +((98 / 115 - 1) * 100).toFixed(4) && ohlc.summary.volatilityPct === sampleVol([105, 115, 98], 17520), `coin-ohlc: volatility and drawdown read the closes at their 30-minute spacing (${ohlc.summary.volatilityPct}, ${ohlc.summary.maxDrawdownPct})`);
-  const keys = Object.keys(rng);
-  ok(keys.indexOf("summary") < keys.indexOf("points") && Object.keys(ohlc).indexOf("summary") < Object.keys(ohlc).indexOf("bars"), "series tools: the summary comes before the series");
+  ok(typeof rng.method === "string" && /not investment advice/.test(rng.method) && typeof ohlc.method === "string" && /candleStats reads each candle/.test(ohlc.method), "history tools: the answer states its formulas and the disclaimer");
 }
 
 reset();

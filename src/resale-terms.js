@@ -9,8 +9,8 @@
 //                       `resaleReason` says why, in a few words, and the boot
 //                       refusal quotes it.
 //   resale: "computed"  it reads such a source and its answer is computed here
-//                       (a screen, a ranking, a deviation, a brief), so it is not
-//                       a pass-through.
+//                       (a screen, a ranking, a deviation, a brief, look-back
+//                       statistics over a series), so it is not a pass-through.
 // Every tool that serves the market-data source (attribution "coingecko",
 // src/data-attribution.js) declares one of the two (scripts/test-referral-gate.js),
 // so a new tool on that source cannot reach /ref undecided.
@@ -158,13 +158,40 @@ export const RAW_MARKET_FIELDS = Object.freeze([
   "fundingPct", "fundingRate", "basisPct", "bidAskPct", "openInterestUsd", "totalUsd", "minPct", "maxPct",
 ]);
 
+/** Field names that hold a source's historical series or a value read from
+ *  it (the rows of a price, candle, market-cap or volume series, the open,
+ *  high, low and close of a candle, the first, last, highest and lowest value
+ *  of a window, a dated snapshot in every currency): never answered by a tool
+ *  that computes its answer from such a series (src/tools/lookback-stats.js).
+ *  A return, a volatility, a drawdown, a share or the time at which one of
+ *  them happened is named otherwise and is not on the list. */
+export const RAW_SERIES_FIELDS = Object.freeze([
+  "bars", "points", "candles", "prices", "series", "allCurrencies",
+  "first", "last", "high", "low", "open", "close", "volume", "value",
+]);
+
+/** Every field name a computed answer never carries: a source's own figures
+ *  and its series. */
+export const RAW_SOURCE_FIELDS = Object.freeze([...RAW_MARKET_FIELDS, ...RAW_SERIES_FIELDS]);
+
+/** The tools that read a source's historical price series and answer
+ *  statistics computed from it, never the series: each is marked computed in
+ *  its own kit, and scripts/test-lookback-stats.js drives every one with
+ *  marked values and requires none of them in the answer. */
+export const COMPUTED_SERIES_SLUGS = Object.freeze(["crypto-history", "coin-history", "coin-ohlc", "coin-market-chart-range", "token-price-history"]);
+
 /** Top-level answer fields a tool stopped returning because each held a
- *  market-data source's own figure (RAW_MARKET_FIELDS). The listing parity
+ *  source's own figure or series (RAW_SOURCE_FIELDS). The listing parity
  *  check (scripts/test-bazaar-listing-parity.js) reads it: a field named here
  *  may leave a route's published sample, and every one must be gone from it. */
 export const WITHDRAWN_SOURCE_FIELDS = Object.freeze({
   "exchange-spread": Object.freeze(["medianPriceUsd", "volumeWeightedPriceUsd"]),
   "dex-pool-health": Object.freeze(["liquidityUsd", "volume24hUsd", "lockedLiquidityPct"]),
+  "crypto-history": Object.freeze(["bars"]),
+  "coin-history": Object.freeze(["price", "marketCap", "volume24h", "allCurrencies"]),
+  "coin-ohlc": Object.freeze(["bars"]),
+  "coin-market-chart-range": Object.freeze(["points"]),
+  "token-price-history": Object.freeze(["first", "last", "high", "low", "points"]),
 });
 
 /** Declare, beside a tool's handler, what its answer becomes on a /ref copy

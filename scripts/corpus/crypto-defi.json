@@ -100,7 +100,7 @@
   },
   {
    "slug": "coin-history",
-   "name": "a snapshot 90 days ago in eur",
+   "name": "the change since 90 days ago, in eur",
    "input": {
     "coin": "bitcoin",
     "daysAgo": 90,
@@ -112,11 +112,24 @@
      "currency": "eur"
     },
     "gt": {
-     "price": 1000
+     "summary.volatilityPct": 0,
+     "window.observations": 60
+    },
+    "lt": {
+     "summary.maxDrawdownPct": 0.0001
     },
     "populated": [
      "date",
-     "marketCap"
+     "summary.changePct",
+     "daily.bestDay.date",
+     "activity.marketCapChangePct",
+     "method"
+    ],
+    "falsy": [
+     "price",
+     "marketCap",
+     "volume24h",
+     "allCurrencies"
     ]
    },
    "paceKey": "coingecko",
@@ -150,9 +163,14 @@
      "count": 20
     },
     "populated": [
-     "points[0]",
-     "summary",
-     "granularity"
+     "summary.changePct",
+     "window.from",
+     "steps.best.at",
+     "granularity",
+     "method"
+    ],
+    "falsy": [
+     "points"
     ]
    },
    "paceKey": "coingecko",
@@ -160,7 +178,7 @@
   },
   {
    "slug": "coin-market-chart-range",
-   "name": "two weeks of bitcoin lead with volatility and drawdown",
+   "name": "two weeks of bitcoin: return, volatility, drawdown and where the last observation stands",
    "input": {
     "coin": "bitcoin",
     "lookback": "2w"
@@ -170,11 +188,17 @@
      "summary.volatilityPct": 0
     },
     "lt": {
-     "summary.maxDrawdownPct": 0.0001
+     "summary.maxDrawdownPct": 0.0001,
+     "summary.fromHighPct": 0.0001
     },
     "populated": [
      "summary.changePct",
-     "points[0]"
+     "summary.fromLowPct",
+     "daily.upDaySharePct",
+     "activity.turnoverMeanPct"
+    ],
+    "falsy": [
+     "points"
     ]
    },
    "paceKey": "coingecko",
@@ -191,9 +215,17 @@
     "gte": {
      "count": 5
     },
+    "gt": {
+     "candleStats.atrPct": 0
+    },
     "populated": [
-     "bars[0]",
-     "summary"
+     "summary.changePct",
+     "candleStats.bodyPct",
+     "window.spacing",
+     "method"
+    ],
+    "falsy": [
+     "bars"
     ]
    },
    "paceKey": "coingecko",
@@ -857,7 +889,7 @@
   },
   {
    "slug": "sol-token-holders",
-   "requires": "RUGCHECK_TOOLS",
+   "requires": "SOLANA_RPC_URL",
    "name": "a mint RugCheck does not track is filled from our own RPC",
    "input": {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -874,12 +906,11 @@
      "concentration.top10Pct",
      "holdersSource"
     ]
-   },
-   "requires": "SOLANA_RPC_URL"
+   }
   },
   {
    "slug": "sol-token-holders",
-   "requires": "RUGCHECK_TOOLS",
+   "requires": "SOLANA_RPC_URL",
    "name": "BONK holders",
    "input": {
     "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
@@ -893,8 +924,7 @@
      "concentration.top10Pct",
      "holdersSource"
     ]
-   },
-   "requires": "SOLANA_RPC_URL"
+   }
   },
   {
    "slug": "sol-token-pairs",
@@ -914,7 +944,7 @@
   },
   {
    "slug": "sol-token-report",
-   "requires": "RUGCHECK_TOOLS",
+   "requires": "SOLANA_RPC_URL",
    "name": "BONK report",
    "input": {
     "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
@@ -931,8 +961,7 @@
      "flags": 0,
      "unknown": 0
     }
-   },
-   "requires": "SOLANA_RPC_URL"
+   }
   },
   {
    "slug": "sol-token-safety",

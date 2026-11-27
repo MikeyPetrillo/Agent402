@@ -299,8 +299,17 @@
           "count": 24
         },
         "gt": {
-          "last": 100
-        }
+          "volatilityPct": 0
+        },
+        "populated": [
+          "changePct",
+          "window.from",
+          "method"
+        ],
+        "falsy": [
+          "points",
+          "last"
+        ]
       }
     },
     {

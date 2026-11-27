@@ -355,7 +355,9 @@ calls = [];
   const r = await h("token-price-history")({ contract: USDC, network: "ethereum", interval: "1d", days: 7 });
   ok(calls.length === 1 && priceUrl.startsWith("https://api.g.alchemy.com/prices/v1/") && priceUrl.endsWith("/tokens/historical"), "token-price-history: ONE Prices API request");
   ok(priceBody.network === "eth-mainnet" && priceBody.address === USDC.toLowerCase() && priceBody.interval === "1d" && !("symbol" in priceBody) && typeof priceBody.startTime === "string", "token-price-history: by-address body");
-  ok(r.count === 3 && r.first === 1880.5615236085 && r.last === 1874.4088568267 && r.high === 1911.3810401579 && r.low === 1874.4088568267 && typeof r.changePct === "number", "token-price-history: points mapped, junk value skipped, stats computed");
+  // 1880.56 -> 1911.38 -> 1874.41: the change, the fall from the high and the place in the range are computed; no price is answered.
+  ok(r.count === 3 && r.changePct === +((1874.4088568267 / 1880.5615236085 - 1) * 100).toFixed(4) && r.maxDrawdownPct === +((1874.4088568267 / 1911.3810401579 - 1) * 100).toFixed(4) && r.fromLowPct === 0, "token-price-history: junk value skipped, statistics computed");
+  ok(!["first", "last", "high", "low", "points"].some((k) => k in r) && !/1880|1911|1874/.test(JSON.stringify(r)) && r.window.observations === 3 && r.drawdown.peakAt === "2026-08-16T00:00:00.000Z" && /not investment advice/.test(r.method), "token-price-history: no price or series in the answer; times, counts and percents only");
   ok(r.contract === USDC.toLowerCase() && r.network === "ethereum" && r.currency === "usd" && r.source === "alchemy", "token-price-history: identity fields");
   const s = await h("token-price-history")({ symbol: "eth", interval: "1h", days: 2 });
   ok(priceBody.symbol === "ETH" && !("address" in priceBody) && s.symbol === "ETH" && s.network === null, "token-price-history: by-symbol body uppercased");
@@ -478,7 +480,7 @@ if (process.env.ALCHEMY_LIVE_TEST === "1" && process.env.ALCHEMY_API_KEY) {
       if (t.slug === "tx-receipt") ok(r.status === "success" && r.blockNumber === 25563191 && r.transfers.length === 1 && r.transfers[0].rawValue === "420000", "LIVE tx-receipt: the example USDC transfer decoded");
       if (t.slug === "block-receipts") ok(r.summary.txCount > 0 && r.receipts.length === 5 && r.block === 25563191, "LIVE block-receipts: summary + 5 rows");
       if (t.slug === "wallet-transfers-multichain") ok(r.count > 0 && r.networkStatus.length === t.discovery.input.networks.length && r.transfers.every((x) => t.discovery.input.networks.includes(x.network)), "LIVE wallet-transfers-multichain: rows from the requested networks");
-      if (t.slug === "token-price-history") ok(r.count >= 5 && r.last > 0.9 && r.last < 1.1, `LIVE token-price-history: USDC ~1.00 (${r.count} pts, last ${r.last})`);
+      if (t.slug === "token-price-history") ok(r.count >= 5 && Math.abs(r.changePct) < 5 && r.maxDrawdownPct <= 0, `LIVE token-price-history: USDC holds its peg over the window (${r.count} observations, change ${r.changePct}%)`);
     } catch (e) {
       fail++; console.error(`ASSERT FAIL - LIVE ${t.slug}: ${e.statusCode ?? ""} ${e.message}`);
     }
