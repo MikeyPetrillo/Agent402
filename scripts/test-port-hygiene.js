@@ -61,14 +61,41 @@ ok(offenders.length === 0, `no test derives its port from pid/random or picks on
 // that predate it are frozen in scripts/port-reservation-baseline.json, which
 // may only shrink: a file that moves to bootServer() must leave the list.
 const BOOTS_SERVER = /["'`]src\/server\.js["'`]/;
+// The same entry spelled as path parts: join(ROOT, "src", "server.js").
+const BOOTS_SERVER_JOINED = /["'`]src["'`]\s*,\s*["'`]server\.js["'`]/;
 const RESERVES = /\bgetFreePorts?\(/;
 const reserving = files.filter((f) => { const src = readFileSync(join(DIR, f), "utf8"); return BOOTS_SERVER.test(src) && RESERVES.test(src); });
+// Files that reserve a port and name the entry only in the joined form, which
+// the scan above did not read when the JSON baseline was frozen. This list may
+// only shrink: a file that moves to bootServer() is deleted from it, and no
+// file is ever added (a new test boots through scripts/lib/boot-server.js).
+const JOINED_FORM_BASELINE = [
+  "test-agent-catalogs.js",
+  "test-crawl-signals.js",
+  "test-first-call-allowance.js",
+  "test-free-call-payment-headers.js",
+  "test-integration-learn-pages.js",
+  "test-reliability-envelope.js",
+  "test-robots-policy.js",
+  "test-title-clamp.js",
+  "test-tool-page-content.js",
+  "test-tool-page-pow-snippet.js",
+];
+const reservingJoined = files.filter((f) => { const src = readFileSync(join(DIR, f), "utf8"); return BOOTS_SERVER_JOINED.test(src) && RESERVES.test(src) && !reserving.includes(f); });
 const baseline = new Set(JSON.parse(readFileSync(join(DIR, "port-reservation-baseline.json"), "utf8")).files);
 const added = reserving.filter((f) => !baseline.has(f));
 const stale = [...baseline].filter((f) => !reserving.includes(f));
 ok(added.length === 0, `no new test boots src/server.js on a reserved port (use bootServer from scripts/lib/boot-server.js)${added.length ? `:\n  ${added.join("\n  ")}` : ""}`);
 ok(stale.length === 0, `the port-reservation baseline lists only files that still reserve (delete moved ones)${stale.length ? `:\n  ${stale.join("\n  ")}` : ""}`);
 ok(baseline.size <= 12, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 12)`);
+{
+  const addedJoined = reservingJoined.filter((f) => !JOINED_FORM_BASELINE.includes(f));
+  const staleJoined = JOINED_FORM_BASELINE.filter((f) => !reservingJoined.includes(f));
+  ok(addedJoined.length === 0, `no new test boots join(..., "src", "server.js") on a reserved port (use bootServer from scripts/lib/boot-server.js)${addedJoined.length ? `:\n  ${addedJoined.join("\n  ")}` : ""}`);
+  ok(staleJoined.length === 0, `the joined-form baseline lists only files that still reserve (delete moved ones)${staleJoined.length ? `:\n  ${staleJoined.join("\n  ")}` : ""}`);
+  ok(JOINED_FORM_BASELINE.length <= 10 && new Set(JOINED_FORM_BASELINE).size === JOINED_FORM_BASELINE.length, `the joined-form baseline never grows past its frozen size (${JOINED_FORM_BASELINE.length} of 10)`);
+  ok(BOOTS_SERVER_JOINED.test('spawn(process.execPath, [join(ROOT, "src", "server.js")])') && BOOTS_SERVER_JOINED.test("path.join(ROOT, 'src','server.js')") && !BOOTS_SERVER_JOINED.test('join(ROOT, "src", "pages.js")') && !BOOTS_SERVER.test('join(ROOT, "src", "server.js")'), "control: a planted joined-form boot is seen by the joined scan and not by the literal one");
+}
 {
   const accepts = bootedReadBack;
   ok(accepts("srv.port", "const srv = await bootServer({});") && !accepts("srv.port", "const srv = { port: 40000 };") && !accepts("cfg.port", "const srv = await bootServer({});"), "control: a .port read is accepted only from a bootServer() result");
