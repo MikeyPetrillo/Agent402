@@ -33,7 +33,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**security-audit**](https://agent402.tools/skills/security-audit) | $0.012 | Enumerate a domain's external attack surface: certs, DNS posture, email auth, HTTP headers, tech stack. |
 | [**email-deliverability**](https://agent402.tools/skills/email-deliverability) | $0.008 | Diagnose why a domain's email lands in spam: SPF, DMARC, DKIM strength, MX, composite score. |
 | [**fraud-signals**](https://agent402.tools/skills/fraud-signals) | $0.01 | Is this domain a phishing site / typosquat / scam? Pull the reputation signals before you click. |
-| [**domain-intel**](https://agent402.tools/skills/domain-intel) | $0.008 | Full domain security + SEO intel: WHOIS, DNS, TLS, headers, tech stack, robots, certificate transparency. |
+| [**domain-intel**](https://agent402.tools/skills/domain-intel) | $0.008 | Full domain security + SEO intel: WHOIS, DNS, TLS, headers, tech stack, robots. |
 | [**ssl-audit**](https://agent402.tools/skills/ssl-audit) | $0.005 | TLS/SSL posture: live certificate inspection, HTTP security headers, and CAA DNS records. |
 | [**email-security**](https://agent402.tools/skills/email-security) | $0.006 | Full email auth posture: SPF, DMARC, DKIM, and a composite deliverability score. |
 | [**brand-protection**](https://agent402.tools/skills/brand-protection) | $0.014 | Is this domain legitimate? WHOIS age, DNS, scam/phishing search, and HTTP headers for a trust read. |

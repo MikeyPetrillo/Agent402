@@ -1566,7 +1566,7 @@ const SKILL_PACKS_ALL = [
     slug: "domain-intel",
     title: "Domain intel",
     tagline:
-      "Full domain security and SEO intelligence in one call: WHOIS, DNS, TLS cert, HTTP headers, tech stack, and robots policy.",
+      "Full domain security and SEO intelligence in one call: WHOIS registration facts, DNS records, the TLS certificate, HTTP security headers, tech stack, and robots policy.",
     useCase:
       "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review - one call gives you the complete external footprint.",
     promptArgs: [
@@ -2446,7 +2446,7 @@ const SKILL_PACKS_ALL = [
     slug: "text-hygiene",
     title: "Text hygiene",
     tagline:
-      "Turn a wall of dirty text - chat logs, scraped pages, user-generated content, log dumps - into text ready to search and pipe into the next step. Measure first, redact matched PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
+      "Turn a wall of dirty text - chat logs, scraped pages, user-generated content, log dumps - into clean text ready to search and pipe into the next step. Measure first, redact matched PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
     useCase:
       "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact before any other step, so no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched. Redaction is pattern-based: a name, a street address or a number written another way is not found. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
     promptArgs: [
