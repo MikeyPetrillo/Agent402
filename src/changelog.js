@@ -18,7 +18,7 @@ import { CSV_ANSWER_MAX_BYTES } from "./tools/kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
-import { settleFirstCopyOn, SETTLE_FIRST_TEXT } from "./settle-first-copy.js";
+import { settleFirstCopyOn, SETTLE_FIRST_TEXT, SETTLE_FIRST_MARK } from "./settle-first-copy.js";
 import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
@@ -84,7 +84,7 @@ const ENTRIES = [
     title: "Tool page payment sentence",
     shownWhen: settleFirstCopyOn,
     items: [
-      "Site: On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a tool page shows the sentence about calls paid before they run only on the routes that can be paid first.",
+      `Site: On a server that does not set \`GATEWAY_SETTLE_FIRST=off\`, a tool page shows the sentence about calls ${SETTLE_FIRST_MARK} only on the routes that can be paid first.`,
     ],
   },
   {
