@@ -3081,21 +3081,21 @@ function crawlLanePump() {
 // piece per lane turn (src/crawl-parse.js); the value, and the error for a
 // document that is not JSON, are the ones JSON.parse gives. When the thread
 // cannot do it the document is parsed here as before, and a line says so.
-// `from` ({ origin, doc }) names the document in the log lines only.
-async function parseInCrawlLane(text, from = null) {
+// `docRef` ({ origin, doc }) names the document in the log lines only.
+async function parseInCrawlLane(text, docRef = null) {
   let mode = "in place", longest = 0, total = 0, pieces = 1;
   try {
     if (parsesOffLoop(text)) {
       const r = await parseOffLoop(text, { turn: crawlLaneTurn, span: (fn) => laneSpan("crawl-parse", fn) });
       if (r.ok) { mode = "in pieces"; longest = r.longestMs; total = r.totalMs; pieces = r.pieces; return r.value; }
-      console.warn(`[x402-index] crawl parse ${crawlDocLabel(from, text)}: parsed on the main thread (${r.reason})`);
+      console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: parsed on the main thread (${r.reason})`);
     }
     await crawlLaneTurn();
     const t0 = performance.now();
     try { return laneSpan("crawl-parse", () => JSON.parse(text)); }
     finally { longest = total = performance.now() - t0; }
   } finally {
-    if (longest >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl parse ${crawlDocLabel(from, text)}: ${mode} longest=${Math.round(longest)}ms total=${Math.round(total)}ms pieces=${pieces}`);
+    if (longest >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: ${mode} longest=${Math.round(longest)}ms total=${Math.round(total)}ms pieces=${pieces}`);
   }
 }
 // One line per crawl-parse or document-walk stretch of this length or more,
@@ -3110,24 +3110,24 @@ function docSizeClass(text) {
   for (const [under, name] of DOC_SIZE_CLASSES) if (n < under) return name;
   return "over-64MB";
 }
-function crawlDocLabel(from, text = from?.chars) {
-  const key = from?.origin ? createHash("sha256").update(String(from.origin)).digest("hex").slice(0, 8) : "--------";
+function crawlDocLabel(docRef, text = docRef?.chars) {
+  const key = docRef?.origin ? createHash("sha256").update(String(docRef.origin)).digest("hex").slice(0, 8) : "--------";
   // A walk over rows names its row count; only a document has a size class.
   const known = typeof text === "string" || Number(text) > 0;
-  return `${key} ${from?.doc || "document"}${known ? ` ${docSizeClass(text)}` : ""}`;
+  return `${key} ${docRef?.doc || "document"}${known ? ` ${docSizeClass(text)}` : ""}`;
 }
-// A walk over a parsed document (or the rows read from it) that runs in one
+// A walk over a parsed document (or the rows read docRef it) that runs in one
 // stretch: a named span, and the long-turn line when it passes the threshold.
-function crawlWalk(name, from, fn) {
+function crawlWalk(name, docRef, fn) {
   const t0 = performance.now();
   try { return laneSpan(`crawl-walk ${name}`, fn); }
-  finally { if (crawlWalkObserver) crawlWalkObserver(name, from); noteCrawlWalk(name, from, performance.now() - t0); }
+  finally { if (crawlWalkObserver) crawlWalkObserver(name, docRef); noteCrawlWalk(name, docRef, performance.now() - t0); }
 }
 let crawlWalkObserver = null;
-/** Test hook: called with (name, from) as each walk stretch ends (a laned walk: each slice). */
+/** Test hook: called with (name, docRef) as each walk stretch ends (a laned walk: each slice). */
 export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof fn === "function" ? fn : null; }
-function noteCrawlWalk(name, from, ms) {
-  if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(from)}: longest=${Math.round(ms)}ms`);
+function noteCrawlWalk(name, docRef, ms) {
+  if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(docRef)}: longest=${Math.round(ms)}ms`);
 }
 /** The same for a walk written as steps: run in the crawl lane a slice at a
  *  time, its longest slice read against the threshold. */
