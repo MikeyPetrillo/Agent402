@@ -99,20 +99,27 @@ export function settleTxOf(resultOrError) {
 }
 
 /** Confirm ONE named transaction: it must be on-chain, successful, and carry
- *  an account_credited effect to our payTo in the pinned asset (code and
- *  issuer). Any miss -> null (the caller falls back to the payer scan). */
-async function confirmByHash({ txHash, payTo, asset, base, fetchImpl, timeoutMs }) {
+ *  both an account_debited effect from THIS payer and an account_credited
+ *  effect to our payTo, each in the pinned asset (code and issuer). A
+ *  transaction that credited us but debited someone else is another buyer's
+ *  payment, not this one. Any miss -> null. */
+async function confirmByHash({ txHash, payer, payTo, asset, base, fetchImpl, timeoutMs }) {
+  if (!payer || !payTo) return null;
   const tx = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}`, fetchImpl, timeoutMs);
   if (!tx || tx.successful !== true) return null;
   const txEff = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}/effects?limit=50`, fetchImpl, timeoutMs);
-  const credited = (txEff?._embedded?.records || []).find((e) => e?.type === "account_credited" && e?.account === payTo && isStellarAsset(e, asset));
-  return credited ? creditedResult(txHash, credited, null) : null;
+  const recs = txEff?._embedded?.records || [];
+  const debited = recs.find((e) => e?.type === "account_debited" && e?.account === payer && isStellarAsset(e, asset));
+  if (!debited) return null;
+  const credited = recs.find((e) => e?.type === "account_credited" && e?.account === payTo && isStellarAsset(e, asset));
+  return credited ? creditedResult(txHash, credited, null, debited.amount) : null;
 }
 
-/** The refund verifier's answer: the transaction, the amount credited, and
- *  the asset it was credited in (src/payment-verify.js checks the asset). */
-function creditedResult(transaction, credited, fallbackAmount) {
-  return { transaction, amount: credited.amount || fallbackAmount || null, assetCode: credited.asset_code, assetIssuer: credited.asset_issuer };
+/** The refund verifier's answer: the transaction, the amount credited, the
+ *  amount the payer was debited (in the same pinned asset), and the asset it
+ *  was credited in (src/payment-verify.js checks the asset and both amounts). */
+function creditedResult(transaction, credited, fallbackAmount, debitedAmount) {
+  return { transaction, amount: credited.amount || fallbackAmount || null, debitedAmount: debitedAmount || null, assetCode: credited.asset_code, assetIssuer: credited.asset_issuer };
 }
 
 // ---- The settle path: confirm THIS payment, and only this payment ----------
@@ -377,19 +384,17 @@ export async function confirmStellarTransfer({
   // token at all.
   if (!assetCode || !assetIssuer) return null;
   const asset = { code: assetCode, issuer: assetIssuer };
-  // A named transaction is checked first and exactly - no window, no payer
-  // matching (the same-buyer-window ambiguity the refund verifier had to
-  // close). It is polled for the wait window too: a settle that timed out
-  // right after submission lands a ledger or two later.
-  if (txHash && payTo) {
+  // A named transaction is checked exactly and is the whole answer: no
+  // window and no scan of the payer's other payments, so a buyer who paid us
+  // again later cannot shadow the transaction a debt recorded. It is polled
+  // for the wait window, since a transaction can land a ledger or two late.
+  if (txHash) {
     const hashDeadline = Date.now() + waitMs;
     for (;;) {
-      const found = await confirmByHash({ txHash, payTo, asset, base, fetchImpl, timeoutMs });
-      if (found) return found;
-      if (Date.now() >= hashDeadline || !payer) break;
+      const found = await confirmByHash({ txHash, payer, payTo, asset, base, fetchImpl, timeoutMs });
+      if (found || Date.now() >= hashDeadline) return found;
       await new Promise((r) => setTimeout(r, stepMs));
     }
-    if (!payer) return null;
   }
   if (!payer || !payTo || !Number.isFinite(sinceMs)) return null;
   const deadline = Date.now() + waitMs;
@@ -445,7 +450,7 @@ export async function confirmStellarTransfer({
       const credited = (txEff?._embedded?.records || []).find(
         (e) => e?.type === "account_credited" && e?.account === payTo && isStellarAsset(e, asset),
       );
-      if (credited) return creditedResult(txHash, credited, d.amount);
+      if (credited) return creditedResult(txHash, credited, d.amount, d.amount);
     }
 
     if (Date.now() >= deadline) return null;

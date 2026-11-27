@@ -258,11 +258,11 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
     if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records: [{ type: "account_debited", account: "GPAYER", asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: USDC_ISSUER, amount: "0.0010000" }, { type: "account_credited", account: PAYTO, asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: USDC_ISSUER, amount: "0.0010000" }] } }) };
     return { ok: false, status: 404, json: async () => ({}) };
   };
-  const byHash = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
+  const byHash = await confirmStellarTransfer({ payer: "GPAYER", payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
   ok(byHash?.transaction === H && byHash.amount === "0.0010000" && hits.every((u) => u.includes(`/transactions/${H}`)), "a named hash is confirmed directly - no payer scan, no window");
-  const wrongPayTo = await confirmStellarTransfer({ payer: null, payTo: "GSOMEONEELSE", sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
+  const wrongPayTo = await confirmStellarTransfer({ payer: "GPAYER", payTo: "GSOMEONEELSE", sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
   ok(wrongPayTo === null, "a named hash that credited someone else is not ours");
-  const failedTx = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: async (url) => ({ ok: true, json: async () => (url.endsWith(`/transactions/${H}`) ? { hash: H, successful: false } : {}) }), waitMs: 10, stepMs: 1 });
+  const failedTx = await confirmStellarTransfer({ payer: "GPAYER", payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: async (url) => ({ ok: true, json: async () => (url.endsWith(`/transactions/${H}`) ? { hash: H, successful: false } : {}) }), waitMs: 10, stepMs: 1 });
   ok(failedTx === null, "a named hash whose transaction failed on-chain moves nothing");
   // The orchestrator hands the hash from the failure body to confirm().
   let seen = null;
@@ -486,10 +486,22 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
     if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records } }) };
     return { ok: false, status: 404, json: async () => ({}) };
   };
-  ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([credit(PAYTO, LOOKALIKE)]), waitMs: 0, stepMs: 1 })) === null, "a named hash that credited a look-alike USDC is not ours");
-  ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([{ type: "account_credited", account: PAYTO, amount: "0.0010000" }]), waitMs: 0, stepMs: 1 })) === null, "a named hash whose credit names no asset is not ours");
-  const real = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([credit(PAYTO, LOOKALIKE), credit(PAYTO)]), waitMs: 0, stepMs: 1 });
-  ok(real?.transaction === H && real.assetIssuer === USDC_ISSUER, "a named hash with a real USDC credit confirms, with its asset");
+  const paid = (acct = PAYER, issuer = USDC_ISSUER, amount = "0.0010000") => ({ type: "account_debited", account: acct, amount, asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: issuer });
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(), credit(PAYTO, LOOKALIKE)]), waitMs: 0, stepMs: 1 })) === null, "a named hash that credited a look-alike USDC is not ours");
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(), { type: "account_credited", account: PAYTO, amount: "0.0010000" }]), waitMs: 0, stepMs: 1 })) === null, "a named hash whose credit names no asset is not ours");
+  const real = await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(), credit(PAYTO, LOOKALIKE), credit(PAYTO)]), waitMs: 0, stepMs: 1 });
+  ok(real?.transaction === H && real.assetIssuer === USDC_ISSUER && real.debitedAmount === "0.0010000", "a named hash with this payer's USDC debit and a real USDC credit confirms, with its asset and both amounts");
+  // THIS payer's debit is part of the proof: a transaction that credited us
+  // from another account is someone else's payment.
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([credit(PAYTO)]), waitMs: 0, stepMs: 1 })) === null, "a named hash with no debit from this payer is not this payer's payment");
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(OTHER), credit(PAYTO)]), waitMs: 0, stepMs: 1 })) === null, "a named hash that debited another account is not this payer's payment");
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(PAYER, LOOKALIKE), credit(PAYTO)]), waitMs: 0, stepMs: 1 })) === null, "a named hash whose payer debit is a look-alike USDC is not ours");
+  ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([paid(), credit(PAYTO)]), waitMs: 0, stepMs: 1 })) === null, "a named hash with no payer to bind confirms nothing");
+  // A named hash is the whole answer: a miss never falls through to the
+  // payer scan, where a later payment from the same buyer would be found.
+  const scanned = [];
+  const missThenScan = async (url) => { scanned.push(String(url)); return { ok: false, status: 404, json: async () => ({}) }; };
+  ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: missThenScan, waitMs: 0, stepMs: 1 })) === null && scanned.every((u) => u.includes(`/transactions/${H}`)), "a named hash that misses never scans the payer's other payments");
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

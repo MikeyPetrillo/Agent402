@@ -61,6 +61,13 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-27",
+    title: "Stellar refund proof",
+    items: [
+      "Payments: A refund owed on a Stellar payment is proven by the transaction the debt recorded: it must have succeeded, debited the buyer and credited this server's address in USDC, each for at least the amount owed. A buyer who paid again after the failed call is no longer held for review.",
+    ],
+  },
+  {
+    date: "2026-11-27",
     title: "ASN lookups, video filter answers",
     items: [
       "Tools: asn-info is named IP to ASN lookup and no longer answers geolocation searches: its country is the one the regional registry records for the address block, not a location. The fraud-signals pack reads it as `registryCountry`.",
