@@ -35,6 +35,7 @@
 import { Worker } from "node:worker_threads";
 import { deserialize } from "node:v8";
 import { fileURLToPath } from "node:url";
+import { threadEnv } from "./tools/child-env.js";
 
 /** Documents shorter than this (UTF-16 units) are parsed in place: the
  *  densest shape measured costs about 25 ms per 512 KB on a laptop, so half of
@@ -144,8 +145,10 @@ function endWorker() {
 }
 function ensureWorker() {
   if (current) return current;
-  // No environment and no preloads: the thread reads neither.
-  const worker = new Worker(cfg.workerFile, { env: {}, execArgv: [], name: "crawl-parse", resourceLimits: { maxOldGenerationSizeMb: cfg.heapMb } });
+  // The narrowed environment every parser thread gets (src/tools/child-env.js:
+  // no key, no store address; NODE_OPTIONS kept, so the thread runs with the
+  // process's flags) and no preloads: the thread reads neither.
+  const worker = new Worker(cfg.workerFile, { env: threadEnv(), execArgv: [], name: "crawl-parse", resourceLimits: { maxOldGenerationSizeMb: cfg.heapMb, maxYoungGenerationSizeMb: 64 } });
   const w = { worker, waiting: null };
   worker.unref(); // a parse in flight holds the loop through its step timer
   const lost = (why) => {
