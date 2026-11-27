@@ -2183,6 +2183,14 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     noteExcluded(1);
     return false;
   });
+  // A task on the gap list keeps only candidates named for the capability
+  // (gapNamedCandidates), before any judge call or probe.
+  {
+    const { gapNamedCandidates } = await import("./tools/route-execute.js");
+    const named = gapNamedCandidates(task, candidates);
+    if (named.dropped > 0) { gateDrops.total += named.dropped; gateDrops.byReason.capability_gap = (gateDrops.byReason.capability_gap || 0) + named.dropped; }
+    candidates = named.items;
+  }
   // Judged order over gated candidates (src/tool-judge.js). The judge reads
   // each listing through the shared judge screen (src/listing-screen.js
   // judgeReadableText, the one decide's judge reads): a listing the screen

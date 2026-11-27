@@ -106,6 +106,25 @@ try {
     ok(llms.includes(`${SITE}${path}`), `${path} is listed in /llms.txt`);
     ok((await get("/guides")).text.includes(`href="${path}"`), `/guides lists ${path}`);
     ok((await get("/guides/sell-your-api-over-x402")).text.includes(`href="${path}"`), `the selling guide links ${path}`);
+    // The buying sample holds the per-call ceiling the next paragraph advises,
+    // with the buyer SDK's real option and method, and the ceiling covers the
+    // call the sample makes.
+    {
+      const code = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"))
+        .find((c) => c.includes("wrapFetchWithPayment(fetch, client)")) || "";
+      const cap = Number(/new Agent402\(\{ maxPerCallUsd: ([\d.]+) \}\)\.guardX402Client\(client\);/.exec(code)?.[1]);
+      ok(code.includes('import { Agent402 } from "agent402-client";') && cap > 0 && code.indexOf("guardX402Client(client)") < code.indexOf("wrapFetchWithPayment(fetch, client)"),
+        `${path}: the buying sample sets a ceiling per call before it wraps fetch (maxPerCallUsd ${cap})`);
+      const { Agent402 } = await import("../client/index.js");
+      const guarded = [];
+      const fake = { onBeforePaymentCreation(fn) { guarded.push(fn); return this; }, onAfterPaymentCreation() { return this; }, registerPolicy(fn) { guarded.push(fn); return this; } };
+      let built = null, err = null;
+      try { built = new Agent402({ maxPerCallUsd: cap }); built.guardX402Client(fake); } catch (e) { err = e; }
+      ok(!err && typeof Agent402.prototype.guardX402Client === "function" && guarded.length >= 1, `${path}: that option and method are the buyer SDK's own (${err ? err.message : "constructed"})`);
+      const usd = Number(String(price.get("extract")).replace("$", ""));
+      ok(usd > 0 && usd <= cap, `${path}: the sample's ceiling covers the call it makes (${price.get("extract")} at most $${cap})`);
+      ok(/a ceiling per call in code, as above/.test(prose), `${path}: the advice points at the sample`);
+    }
   }
   // --- the Form 4 example and the card sentences ---------------------------
   {

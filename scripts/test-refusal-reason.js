@@ -196,6 +196,8 @@ for (const [needle, want] of [
   ["underlying cap", "underlying_over_cap"],
   ["External routing is not enabled", "routing_disabled"],
   ["are listed only: the router does not buy from them", "listed_only"],
+  ["none of them is named for", "judged_no_match"],
+  ["none of them offers", "judged_no_match"],
 ]) {
   const hit = classified.find(([t]) => t.includes(needle));
   ok(!!hit, `route-execute still emits a message containing ${JSON.stringify(needle)}`);

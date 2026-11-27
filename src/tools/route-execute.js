@@ -29,7 +29,7 @@ import { FILLER_TERMS } from "../query-terms.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
-import { capabilityGapLabel } from "../capability-gaps.js";
+import { capabilityGap, gapNamedBy, capabilityGapLabel } from "../capability-gaps.js";
 import { judgeTool, decide, orderByJudgment, CRITERION_NAME_MAX, CRITERION_DESC_MAX, CRITERION_TAG_MAX, CRITERION_TAGS_MAX } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
@@ -173,8 +173,8 @@ const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 
 //
 // A seller is a chat completion only by a real signal: its route ends
 // /chat/completions; or it ends /messages AND its listing says chat (its
-// category, or a declared request contract that names `messages` or
-// `model`). A bare /messages suffix is also a mailbox or an SMS route, which
+// category on a POST route, or a declared request contract on one that names
+// `messages` or `model`). A bare /messages suffix is also a mailbox or an SMS route, which
 // takes other fields and is never asked for these.
 //
 // The fields asked for are the seller's own when it declares them: the chat
@@ -185,7 +185,9 @@ const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 
 // nothing is missing or the route is not a chat completion.
 const CHAT_COMPLETIONS_PATH_RE = /\/chat\/completions\/?$/i;
 const MESSAGES_PATH_RE = /\/messages\/?$/i;
-const CHAT_CATEGORY_RE = /^(?:llm|llms|chat|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
+// A model category, never the bare word "chat": a chat room's message list
+// and a route that posts to a chat channel carry that word too.
+const CHAT_CATEGORY_RE = /^(?:llm|llms|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
 const CHAT_FIELDS = ["model", "messages", "prompt", "input"];
 const topField = (k) => (typeof k === "string" ? k.split(/[.[]/)[0] : "");
 export function chatFieldsMissing(ext, params) {
@@ -195,7 +197,8 @@ export function chatFieldsMissing(ext, params) {
   const requiredBody = Array.isArray(contract?.required?.body) ? contract.required.body.map(topField).filter(Boolean) : [];
   const optionalBody = Array.isArray(contract?.optional?.body) ? contract.optional.body.map(topField).filter(Boolean) : [];
   let chat = CHAT_COMPLETIONS_PATH_RE.test(path);
-  if (!chat && MESSAGES_PATH_RE.test(path)) {
+  // The Messages wire is a POST: a GET at /messages reads a list.
+  if (!chat && MESSAGES_PATH_RE.test(path) && String(ext?.method || "POST").toUpperCase() === "POST") {
     chat = CHAT_CATEGORY_RE.test(String(ext?.category || "").trim())
       || (Array.isArray(ext?.tags) && ext.tags.some((t) => typeof t === "string" && CHAT_CATEGORY_RE.test(t.trim())))
       || [...requiredBody, ...optionalBody].some((k) => k === "messages" || k === "model");
@@ -331,6 +334,21 @@ export function routeMatchOrder(task, candidates, { group = () => 0 } = {}) {
   const share = best * JUDGED_OVERRIDE_MIN_SHARE;
   kept.sort((a, b) => (a.g - b.g) || ((a.s >= share ? 0 : 1) - (b.s >= share ? 0 : 1)) || (a.i - b.i));
   return { items: kept.map((x) => x.r), dropped: rows.length - kept.length, floor, best, share };
+}
+
+// A GAP TASK BUYS ONLY A ROW NAMED FOR IT. A task that asks for a capability
+// on the gap list (src/capability-gaps.js) is a miss on /api/find and
+// /api/route unless a row is named for the capability, slug or name. The
+// external leg holds the same rule: of the outside candidates for such a
+// task, only one named for the capability may be judged, probed or bought,
+// whatever a judge or a description says. Any other task: the list as given
+// (the same array), so nothing else changes.
+export function gapNamedCandidates(task, candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const gap = capabilityGap(task);
+  if (!gap) return { items: list, dropped: 0, gap: null };
+  const items = list.filter((c) => gapNamedBy(gap, c?.slug, c?.name));
+  return { items, dropped: list.length - items.length, gap };
 }
 
 /** What the outside-seller judge reads of one candidate: the seller's host,
@@ -721,6 +739,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
           let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null; let warmingChain = null;
+          // Candidates set aside because the task asks for a capability none
+          // of them is named for (gapNamedCandidates), here or in the resolver.
+          let gapSetAside = 0; let gapAsked = null;
           for (const c of chains) {
             // A seller list still loading (a cold catalog) is waited on for
             // at most what this payment's window has left less the reserve
@@ -728,7 +749,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             const catalogWaitMs = windowBudgetMs != null ? Math.max(0, remainingMs() - CATALOG_WAIT_RESERVE_MS) : null;
             const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, catalogWaitMs, ...(target ? { onlyUrl: target } : {}) });
             if (found && found.__gateDrops?.byReason?.catalog_warming) warmingChain = warmingChain || c;
-            const list = Array.isArray(found) ? found : (found ? [found] : []);
+            const named = gapNamedCandidates(input.task, Array.isArray(found) ? found : (found ? [found] : []));
+            const list = named.items;
+            if (named.gap) { gapAsked = named.gap; gapSetAside += named.dropped + Number(found?.__gateDrops?.byReason?.capability_gap || 0); }
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
@@ -746,6 +769,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms). Nothing was spent.${notChargedOn(req)} Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
+          }
+          // A gap task with outside matches and none of them named for the
+          // capability: the uncharged 404 the own-catalog path answers, before
+          // any booking, signature or spend reservation.
+          if (!candidateList.length && gapAsked && gapSetAside > 0) {
+            traceStep(req, "capability_gap", { gap: gapAsked.id, setAside: gapSetAside });
+            throw bad(`No outside seller here does that task: ${gapSetAside} matched those words and none of them is named for ${capabilityGapLabel(gapAsked.id)}. Nothing was bought.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
           traceStep(req, "candidates", { chain, list: candidateList.map((c) => ({ origin: c.seller, url: c.url, lane: c.unproven ? "unproven" : "proven", price: c.price })) });
@@ -1200,7 +1230,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         // every other task goes on exactly as before.
         if (results.length && found.capabilityGap && found.capabilityGapCovered === false) {
           const hasExternal = externalEnabled() && !!resolveExternal;
-          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`, 404);
+          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? `With include:"external" an outside x402 seller is bought for it only when one is named for ${capabilityGapLabel(found.capabilityGap)}: /api/route?q=<task>&include=external lists them.` : "Try /api/find?q=<task>."}`, 404);
         }
         // find's eligible candidates, in find's order (top 5 go to the judge).
         const eligible = [];

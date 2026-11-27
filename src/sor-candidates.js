@@ -27,6 +27,9 @@ export function resolvedCandidateOf(r, { provenPayTo = null, evidenceWallets = n
     seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled,
     wire: r.wire || "x402", provenPayTo, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [],
     ...(r.wire === "mpp" && r.inputExample ? { inputExample: r.inputExample } : {}),
+    // The listing's name, which the gap rule reads beside the slug
+    // (gapNamedCandidates, src/tools/route-execute.js).
+    ...(typeof r.name === "string" && r.name ? { name: r.name.slice(0, 200) } : {}),
     ...(r.unproven ? { unproven: true } : {}),
     ...(r.judgedSelection ? { selection: r.judgedSelection } : {}),
   };

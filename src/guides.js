@@ -1192,9 +1192,12 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
+import { Agent402 } from "agent402-client";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+// The ceiling per call: this client signs no quote above five cents.
+new Agent402({ maxPerCallUsd: 0.05 }).guardX402Client(client);
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 const res = await payFetch("https://agent402.tools/api/extract", {
@@ -1206,7 +1209,7 @@ console.log(res.headers.get("payment-response"), await res.json());
 \`\`\`
 
 That call costs {{price:extract}}. Give the buying agent its own wallet with a
-small balance, and a ceiling per call in code, so it signs only a quote at or
+small balance, and a ceiling per call in code, as above, so it signs only a quote at or
 under that ceiling. [Create an agent wallet](/guides/create-agent-wallet) shows how to make one.
 
 ## The selling agent

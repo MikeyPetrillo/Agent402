@@ -216,5 +216,31 @@ try {
   globalThis.fetch = realFetch;
 }
 
+// ---- the shared reader (src/tools/content-filter.js): a moderation signal beside
+// words a filter's own message or a quoted prompt holds is still a verdict; text
+// that says the service is in trouble never is ----
+{
+  const { providerContentFiltered: filtered, providerBodyContentFiltered: bodyFiltered } = await import("../src/tools/content-filter.js");
+  for (const [error, want] of [
+    [{ code: "content_filter", message: "The response was filtered due to the prompt triggering the provider's content management policy. Please modify your prompt and retry." }, true],
+    ["Content was filtered. Rephrase the prompt and retry.", true],
+    [{ code: "moderation_blocked", message: "Prompt \"a busy street at rush hour\" was blocked by our content policy" }, true],
+    [{ code: "content_policy_violation", message: "Your request was rejected as a result of our safety system. Request ID 7f3a-512-9b2c." }, true],
+    ["Content was filtered. Rephrase the prompt and try again.", true],
+    ["Your request was rejected as a result of our safety system.", true],
+    ["content filtered", true],
+    // The service's own trouble, with or without a moderation code.
+    [{ message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" }, false],
+    [{ code: "content_policy_violation", message: "Image generation capacity exceeded" }, false],
+    [{ message: "upstream content-filter returned 500", code: "content_filter" }, false],
+    [{ message: "Moderation check failed with status 503", code: "moderation_blocked" }, false],
+    ["Rejected by our safety system: at capacity, try again later", false],
+    ["Safety system timed out, please retry", false], ["Safety system overloaded", false], ["Content moderation service is temporarily unavailable", false],
+    ["Blocked by the moderation system: rate limit exceeded", false], ["Rejected by our content filter. Please try again in a few minutes", false],
+    [{ message: "Internal error in content filter" }, false], ["prompt rejected by safety", false], ["", false], [null, false], [{ message: 5, code: 7 }, false],
+  ]) ok(filtered(error) === want, `content filter reader: ${want ? "a verdict" : "not a verdict"} (${JSON.stringify(error).slice(0, 90)})`);
+  ok(bodyFiltered(JSON.stringify({ error: { code: "content_filter", message: "Please modify your prompt and retry." } })) === true && bodyFiltered("{bad json content was filtered") === true && bodyFiltered(JSON.stringify({ error: { code: "content_filter", message: "service overloaded" } })) === false, "the body reader holds the same rule");
+}
+
 console.log(`\ntest-image-gen-kit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
