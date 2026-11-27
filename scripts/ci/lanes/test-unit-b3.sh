@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (9 scripts, one process each)
+# @step 1: Offline suites (10 scripts, one process each)
 # /api/skill-packs.json shape (what stdio agent402-mcp consumes at startup)
 t node scripts/test-skill-packs-json.js
 # /api/stats envelope (M2M economy counters — rail breakdown, revenue proof, tools floor)
@@ -19,6 +19,8 @@ t node scripts/test-tool-page-backlinks.js
 # Tool pages: escaped examples, one h1, title/description bounds, sections
 t node scripts/test-tool-page-content.js
 t node scripts/test-tool-page-mpp.js
+# Tool pages keep to a word budget: lead 45 prose words, body 250 (code, tables and the tool's own description left out; boots FREE_MODE with MPP and Tempo configured, offline)
+t node scripts/test-tool-page-words.js
 # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
 TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 

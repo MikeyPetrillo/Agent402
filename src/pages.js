@@ -23,7 +23,7 @@ import { responseSchemaFor } from "./openapi-schema.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
-import { getWalletHtml } from "./get-a-wallet.js";
+import { getWalletShortHtml } from "./get-a-wallet.js";
 import { firstFit } from "./seo-meta.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
@@ -32,7 +32,7 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
-import { failedCallFootnote } from "./settlement-footnote.js";
+import { routeFailedCallLine, TEMPO_PUSH_SHORT } from "./settlement-footnote.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
@@ -98,7 +98,12 @@ export const CATEGORIES = {
 export function toolList(catalog) {
   return Object.entries(catalog).map(([route, def]) => {
     const [method, path] = route.split(" ");
-    return { route, method, path, ...def };
+    const tool = { route, method, path, ...def };
+    // server.js marks a route that may settle first with a non-enumerable
+    // `settlesFirst`, which a spread drops; the tool page reads it, and no
+    // listing that serializes the entry picks it up.
+    if (def && def.settlesFirst === true) Object.defineProperty(tool, "settlesFirst", { value: true, configurable: true });
+    return tool;
   });
 }
 
@@ -383,6 +388,40 @@ export function paramLimits(v, exampleValue) {
   return out.join(" ");
 }
 
+// The prose word count scripts/lib/tool-page-prose.js budgets (a token with a
+// letter or a digit; <code> spans and tags left out), so the lead can size its
+// sentence to the room the badge and the meta row leave. A scan, not a pattern:
+// it counts and never sanitizes.
+function proseWordCount(html) {
+  const src = String(html ?? "");
+  let text = "", i = 0;
+  while (i < src.length) {
+    const lt = src.indexOf("<", i);
+    if (lt < 0) { text += src.slice(i); break; }
+    text += src.slice(i, lt) + " ";
+    if (src.startsWith("<code", lt) && /[\s>]/.test(src.charAt(lt + 5))) {
+      const close = src.indexOf("</code>", lt);
+      i = close < 0 ? src.length : close + 7;
+      continue;
+    }
+    const gt = src.indexOf(">", lt);
+    i = gt < 0 ? src.length : gt + 1;
+  }
+  return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w.replace(/&[a-z]+;|&#\d+;/gi, ""))).length;
+}
+
+/** The first `n` words of a sentence, ending "..." when it was cut. */
+function cutWords(text, n) {
+  const words = String(text).trim().split(/\s+/);
+  if (words.length <= n) return words.join(" ");
+  const head = words.slice(0, Math.max(3, n));
+  while (head.length > 3 && /^(a|an|the|of|on|in|to|for|by|and|or|with|from|at|as|via|into|its)$/i.test(head.at(-1))) head.pop();
+  return head.join(" ").replace(/[\s,;:\-(.]+$/g, "") + "...";
+}
+
+/** Lead budget in prose words (scripts/test-tool-page-words.js holds every page to it). */
+export const TOOL_LEAD_MAX_WORDS = 45;
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
   // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
   // without it offers x402 alone, so the page names only the rails it has.
@@ -431,26 +470,22 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     crumbs.ld,
   ];
 
-  // --- Answer-first summary: what it does, what it costs, how to pay, where it lives.
-  const payHow = computePayable
-    ? `pay ${pw.long} over x402${orMpp}, or call it free by solving a proof-of-work challenge`
-    : evmOnly
-      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : tool.longRunning ? orMpp : ""}`
-      : `pay ${pw.long} over x402${orMpp} (there is no free tier)`;
-  const reqPhrase = required.length
-    ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
-    : Object.keys(props).length ? `no required fields (${Object.keys(props).length} optional)` : "no input";
+  // --- How this tool is paid (the first line under "Errors and behavior").
+  // A quoted route says its range here, once.
+  const payWhat = tool.quoteRange ? `per request (${displayPrice(fromPriceLabel(tool))} to $${tool.quoteRange.maxUsd}, quoted from this body)` : pw.long;
+  const payHow = evmOnly
+    ? `Pay ${payWhat} over x402 with ${evmOne}${tool.longRunning ? orMpp : ""}`
+    : `Pay ${payWhat} over x402${orMpp}`;
   // A binary tool's example is a note about the bytes, not a response shape.
   const outKeys = !binaryTypes && example && typeof example === "object" && !Array.isArray(example) ? Object.keys(example) : [];
   const binaryPhrase = binaryTypes ? `raw bytes, not JSON, with <code>Content-Type</code> ${listWords(binaryTypes.map((t) => `<code>${ledgerEsc(t)}</code>`))}` : "";
-  const outPhrase = binaryTypes ? binaryPhrase : outKeys.length ? `a JSON object with ${codeList(outKeys, 5)}` : Array.isArray(example) ? "a JSON array" : "the result";
-  const summary = `${e(firstSentence(tool.description))} Send <code>${e(tool.method)} ${e(tool.path)}</code> with ${reqPhrase} and ${e(payHow)}. It returns ${outPhrase}.`;
-  const restOfDescription = String(tool.description).replace(/\s+/g, " ").trim().slice(firstSentence(tool.description).length).trim();
-  // A trailing query hint ("?q=inflation&rows=10") repeats the parameters table
-  // and the example request on this page, and as the paragraph's last token it
-  // would sit alone on its line; the page shows the prose before it.
-  const restShown = restOfDescription.replace(/(?:\s*Query params?:)?\s*\?[A-Za-z_][\w-]*=\S*(?:\s+\(optional\))?\.?$/, "").trim();
-
+  // The lead is the tool's first sentence; the rest of its description is the
+  // Details section. A trailing query hint ("?q=inflation&rows=10") repeats the
+  // parameters table and the example request, so neither shows it.
+  const dropQueryHint = (t) => t.replace(/(?:\s*Query params?:)?\s*\?[A-Za-z_][\w-]*=\S*(?:\s+\(optional\))?\.?$/, "").trim();
+  const descFlat = String(tool.description).replace(/\s+/g, " ").trim();
+  const leadFull = firstSentence(tool.description);
+  const restShown = dropQueryHint(descFlat.slice(leadFull.length).trim());
   // --- Parameters table from the input schema, plus accepted alternative names.
   const aliasFor = (name) => {
     const alts = PARAM_ALIASES[name];
@@ -478,82 +513,89 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     return `<tr><td><code>${e(k)}</code></td><td>${e(exampleValueType(v))}</td><td>${respRequired.has(k) ? "yes" : "no"}</td><td>${e(sample ?? "")}</td></tr>`;
   }), ...optionalOut.map(([k, v]) => `<tr><td><code>${e(k)}</code></td><td>${e(String(v?.type || ""))}</td><td>no</td><td>${e(String(v?.description || ""))}</td></tr>`)].join("\n");
 
-  // --- Errors and behavior: only statements that hold for this tool.
+  // --- Errors and behavior: one line per fact, only facts that hold for this tool.
   const facts = [];
   const inputErrorBody = "<code>error</code>, <code>tool</code>, <code>expected</code>, <code>required</code> and <code>example</code>";
   if (isPack) {
-    facts.push(`Arguments left out fall back to the pack's own defaults. Each step reports on its own; the call succeeds when at least one step does, and a run where every step fails is refused (400 when the input caused it, 502 otherwise).`);
+    facts.push(`Arguments left out take the pack's defaults. The call succeeds when at least one step does; a run where every step fails is refused (400 when the input caused it, 502 otherwise).`);
   } else if (required.length) {
-    facts.push(`${codeList(required, 6)} ${required.length === 1 ? "is" : "are"} required. An input the tool rejects returns an HTTP 4xx whose body carries ${inputErrorBody}, so the caller can correct it.`);
+    facts.push(`Required: ${codeList(required, 6)}; a rejected input answers 4xx with ${inputErrorBody}.`);
   } else if (Object.keys(props).length) {
-    facts.push(`Every field is optional. An input the tool rejects returns an HTTP 4xx whose body carries ${inputErrorBody}.`);
+    facts.push(`Every field is optional; a rejected input answers 4xx with ${inputErrorBody}.`);
   } else {
-    facts.push(`There is no input to get wrong: any request to ${e(tool.path)} runs the tool.`);
+    facts.push(`No input: any request to ${e(tool.path)} runs the tool.`);
   }
-  // Settlement on failure, per rail this route offers. x402, MPP evm and card
-  // settle only after an under-400 answer and a credits key is debited only on
-  // a 200; a Tempo PUSH credential is a transfer already on chain before the
-  // tool runs (src/mpp-tempo.js), so a failure there is a refund owed
-  // (src/tempo-push-debts.js), not a cancelled charge.
+  // Settlement on failure, per rail this route offers, stated for this route:
+  // x402, MPP evm and card settle only after an under-400 answer and a credits
+  // key is debited only on a 200; the settle-first sentence is added only on a
+  // route that may settle first (def.settlesFirst); a Tempo PUSH credential is
+  // a transfer already on chain before the tool runs (src/mpp-tempo.js), so a
+  // failure there is a refund owed (src/tempo-push-debts.js).
   const tempoHere = tempoOfferedFor(tool) && !!tempoDiscoveryInfo();
-  const notCharged = ["x402", ...(mpp ? ["MPP"] : []), ...(tool.identityBound || paysThirdParty(tool) ? [] : ["a prepaid credits key"])];
-  facts.push(e(failedCallFootnote({ rails: notCharged, tempoPush: tempoHere })));
-  if (computePayable) facts.push(`Free tier: no outbound network call leaves the server for this tool, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it.`);
-  else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model, so it has no proof-of-work tier" : WALLET_ONLY_POLICY_REASON.has(tool.slug) ? `${e(WALLET_ONLY_POLICY_REASON.get(tool.slug))}, so it is metered with money and has no proof-of-work tier` : "reaches the network or stored state, so it has no proof-of-work tier"}.${tool.identityBound ? "" : paysThirdParty(tool) ? " It buys from an outside seller with our wallet, so it is paid with a wallet; prepaid credits and cards do not pay it." : (creditsSalesEnabled() ? " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it." : " A prepaid card-credits key issued earlier (<code>Authorization: Bearer a402_...</code>) also pays it.")}`);
-  if (tool.modelBacked) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce a different result.`);
+  const notCharged = ["x402", ...(mpp ? ["MPP"] : []), ...(tool.identityBound || paysThirdParty(tool) ? [] : ["a credits key"])];
+  // A job's payment settles on its answer: said in the same line, so the
+  // settle-first sentence (only on a route that may settle first) follows
+  // both claims once. A slow route's description already states its run time
+  // and the wait header (server.js runTimeNote), so the line keeps to the job.
+  const runStated = /Prefer: wait=/.test(descFlat);
+  const waitPart = tool.runSeconds && !runStated
+    ? ` It takes up to ${e(String(tool.runSeconds))} seconds${needsAsyncOrWait(tool.asyncProfile) ? `; or send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep the connection open (a paid call with neither header is answered <code>400</code> before any payment is taken)` : ", or keep the connection open that long"}.`
+    : "";
+  const jobPart = tool.runSeconds || tool.asyncProfile
+    ? ` <code>Prefer: respond-async</code> answers <code>202</code> with a job link to poll (<code>GET /api/jobs/{id}</code>), and its payment settles only when the answer is ready${tempoHere ? JOB_PUSH_EXCEPTION : ""}.${waitPart}`
+    : "";
+  facts.push(`${e(routeFailedCallLine({ rails: notCharged }))}${jobPart}${e(settleFirstClause(tool))}${tempoHere ? ` ${e(TEMPO_PUSH_SHORT)}` : ""}`);
+  const creditsLine = tool.identityBound ? "" : paysThirdParty(tool) ? " It buys from an outside seller with our wallet, so prepaid credits and cards do not pay it." : (creditsSalesEnabled() ? " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it." : " A card-credits key issued earlier (<code>Authorization: Bearer a402_...</code>) also pays it.");
+  if (computePayable) facts.unshift(`${e(payHow)}, or free with proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256): this tool makes no outbound network call.`);
+  else if (tool.modelBacked) facts.unshift(`${e(payHow)}. Wallet-only, model-backed: no proof-of-work tier; the same input can give a different result.${creditsLine}`);
+  else facts.unshift(`${e(payHow)}. Wallet-only: this tool ${WALLET_ONLY_POLICY_REASON.has(tool.slug) ? e(WALLET_ONLY_POLICY_REASON.get(tool.slug)) : "reaches the network or stored state"}, so it has no proof-of-work tier.${creditsLine}`);
+  // A free-tier tool is never model-backed today; if one were, it still says so.
+  if (tool.modelBacked && computePayable) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce a different result.`);
   // G.S. 105-164.7(2): a tax-included price is shown with a statement saying so.
-  if (ncTaxableKind(tool.slug)) facts.push(`Sales tax: the price includes North Carolina sales tax for a buyer billed to a North Carolina address by card (a prepaid credits key or a card payment per call).`);
-  if (tool.identityBound) facts.push(`Identity-bound: results are keyed to the wallet that signed the payment, so only EVM x402 payments are accepted; credits keys and Tempo are refused.`);
+  if (ncTaxableKind(tool.slug)) facts.push(`Sales tax: the price includes North Carolina sales tax for a card buyer billed to a North Carolina address.`);
+  if (tool.identityBound) facts.push(`Identity-bound: results are keyed to the paying wallet, so only EVM x402 payments are accepted; credits keys and Tempo are refused.`);
   else if (tool.longRunning) {
     // Read from the offers this route's 402 carries (mppOffersFor), so the
     // sentence names exactly what a buyer can pay with here.
     const lrMpp = mpp ? mppRailsPhrase(mppOffersFor({ priceUsd: priceUsdOf(tool), identityBound: false, longRunning: true })) : "";
-    facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
+    facts.push(`Long-running: x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
   }
-  if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
-  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${settleFirstClause(tool)}${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
-  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${settleFirstClause(tool)}`);
-  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(fromPriceLabel(tool)))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
+  if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer is the tool's own.`);
+  if (tool.quoteRange && tool.quoteFormula) facts.push(`The quote is ${e(tool.quoteFormula)}.`);
   if (isMeteredChatSlug(tool.slug)) facts.push(e(meteredTimeoutSentence()));
-  if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
+  // The tier rule in one line (the whole note is on /api/pricing and /openapi.json).
+  if (typeof tool.tierQuote === "function") facts.push(`A body naming another flat tier's model is quoted and served at that tier's price; the answer names it in <code>agent402_tier</code>.`);
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
   // The method alias (server.js) runs only when no catalog route of the other
   // method shares this path: /api/memory has both, so neither page says it.
   if (!otherMethodRouted) {
     facts.push(tool.method === "GET"
-      ? `A <code>POST</code> with a JSON body to ${e(tool.path)} is served as this GET, with the body as the input.`
-      : `A <code>GET</code> or <code>HEAD</code> to ${e(tool.path)} returns the same 402 quote, so the price can be read without a body.`);
+      ? `A <code>POST</code> with a JSON body is served as this GET.`
+      : `A bodyless <code>GET</code> or <code>HEAD</code> returns the same 402 quote.`);
   }
   // The replay cache holds JSON answers only (it captures res.json) and only
   // up to IDEM_MAX_BODY_BYTES; bytes and streams are never replayed.
-  if (binaryTypes) facts.push(`An <code>Idempotency-Key</code> header does not replay this tool's answer: the replay cache holds JSON answers only, so a retried paid call runs and is charged again.`);
-  else facts.push(`An <code>Idempotency-Key</code> header makes a retried paid call replay the first 200 instead of charging again (an answer larger than ${e(IDEM_MAX_BODY_LABEL)}${String(tool.path).startsWith("/v1/") ? " and a streamed response are" : " is"} not replayed).`);
+  if (binaryTypes) facts.push(`An <code>Idempotency-Key</code> does not replay bytes: a retried paid call runs and is charged again.`);
+  else facts.push(`An <code>Idempotency-Key</code> replays the first 200 uncharged (an answer larger than ${e(IDEM_MAX_BODY_LABEL)}${String(tool.path).startsWith("/v1/") ? " or streamed is" : " is"} not replayed).`);
 
   // --- MCP usage.
   const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
   const mcpNote = computePayable
-    ? `On the hosted connector at <code>${e(baseUrl)}/mcp</code>, <code>catalog.call</code> runs ${e(tool.slug)} free (rate-limited, no wallet).`
-    : `The hosted connector at <code>${e(baseUrl)}/mcp</code> needs a payment for ${e(tool.slug)}; the stdio package pays it from a wallet${tool.identityBound ? "" : creditsSalesEnabled() ? " or from <code>AGENT402_CREDITS_KEY</code>" : " or from an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
+    ? `Hosted connector (<code>${e(baseUrl)}/mcp</code>): free, rate-limited. Stdio package: <code>npx -y agent402-mcp@0.17.1</code>.`
+    : `Hosted connector (<code>${e(baseUrl)}/mcp</code>): paid in the call. Stdio package (<code>npx -y agent402-mcp@0.17.1</code>): pays from a wallet${tool.identityBound ? "" : creditsSalesEnabled() ? " or <code>AGENT402_CREDITS_KEY</code>" : " or an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
 
   const aliases = (Array.isArray(tool.aliases) ? tool.aliases : []).filter((a) => a && a !== tool.slug);
   const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";
 
-  const relatedCards = related.map((t) => {
-    // One short sentence per card: the full description's query syntax belongs on the tool's own page.
-    const desc = cutAtWord(firstSentence(t.description), 120);
-    return `<div class="tp-card">
-  <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
-  ${ledgerPriceLine(t)}
-  <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
-</div>`;
-  }).join("\n");
-
-  // Surface which curated multi-tool workflows include this tool.
+  // Related tools and the packs that hold this tool: linked names only (each
+  // page carries its own description and price).
+  // A long name's trailing parenthetical rides in the link title, not its text.
+  const shortName = (n) => { const s = String(n); const t = s.length > 24 ? s.replace(/\s*\([^()]*\)\s*$/, "").trim() : s; return t || s; };
+  const relatedLinks = related.map((t) => { const n = shortName(t.name); return `<li><a href="/tools/${e(t.slug)}"${n !== t.name ? ` title="${e(t.name)}"` : ""}>${e(n)}</a></li>`; }).join("");
   const inPacks = SKILL_PACKS.filter((p) => (p.toolSlugs || []).includes(tool.slug));
   const packsHtml = inPacks.length
     ? `<h2 class="tp-h2">Part of these workflows</h2>
-  <p class="tp-sub">${e(tool.name)} is one step in ${inPacks.length === 1 ? "this skill pack" : `these ${inPacks.length} skill packs`}, each sold as a single call:</p>
-  <ul style="padding-left:20px;">${inPacks.map((p) => `<li style="margin-bottom:6px;"><a href="/skills/${e(p.slug)}" style="color:var(--accent);font-weight:700;">${e(p.title)}</a> - <span style="color:var(--muted);">${e(p.tagline)}</span></li>`).join("")}</ul>`
+  <ul class="tp-links">${inPacks.map((p) => `<li><a href="/skills/${e(p.slug)}">${e(p.title)}</a></li>`).join("")}</ul>`
     : "";
 
   // The label sits on the dark panel, so it takes the panel accent (lit) for both methods.
@@ -579,11 +621,10 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-tw { overflow-x:auto; }
   .tp-wrap .ml-code { margin:13px 0; }
   /* Target size (DESIGN.md): a link that is not inside a sentence is at least 24px tall. */
-  .tp-meta a, .tp-card h3 a { display:inline-block; padding:4px 0; }
-  .tp-grid { display:grid; gap:14px; margin:20px 0; }
-  @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
-  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:break-word; }
-  @media (max-width:600px) { .tp-card { padding:16px 14px; } }
+  .tp-meta a, .tp-links a { display:inline-block; padding:4px 0; }
+  .tp-links { list-style:none; padding:0; margin:12px 0 0; display:flex; flex-wrap:wrap; gap:8px 12px; max-width:820px; }
+  .tp-links li { background:var(--card); border:1px solid var(--hairline); padding:4px 12px; min-width:0; overflow-wrap:anywhere; }
+  .tp-links a { color:var(--accent); font-weight:700; font-size:var(--fs-base); text-decoration:none; }
   .tp-free { display:inline-block; background:var(--ok); color:var(--paper); font-weight:700; font-size:var(--fs-2xs); letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
   .tp-facts { color:var(--muted); font-size:var(--fs-base); line-height:1.65; max-width:820px; padding-left:20px; }
   .tp-facts li { margin-bottom:6px; }
@@ -593,21 +634,35 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-tags > * { white-space:nowrap; }
   `;
 
-  const body = `<div class="tp-wrap">
-  ${crumbs.nav}
-  <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
-  ${namesEdgar(tool) ? `<p class="tp-mark-notice" style="font-size:var(--fs-xs);color:var(--faint);margin:-4px 0 12px;max-width:76ch;">${e(EDGAR_MARK_NOTICE)}</p>` : ""}
-  <div class="tp-badge">${
+  const badgeHtml = `<div class="tp-badge">${
     computePayable
       ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(pw.short)} in USDC</span>`
       : `<span style="color:var(--on-panel);">${e(pw.long)}</span><span style="color:var(--on-panel-dim);">USDC via x402</span>`
   }<span><code style="color:${methodColor};background:transparent;font-size:var(--fs-sm);">${e(tool.method)}</code> <code style="color:var(--on-panel-muted);background:transparent;font-size:var(--fs-sm);">${e(tool.path)}</code></span>${
     cacheTtl ? `<span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
-  }</div>
-  <p class="tp-lead">${summary}</p>
-  ${restShown ? `<p class="tp-sub">${e(restShown)}</p>` : ""}
-  <div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
-  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" rel="nofollow" style="display:inline-block;">Try in playground →</a></p>
+  }</div>`;
+  const metaHtml = `<div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
+  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" rel="nofollow" style="display:inline-block;">Try in playground →</a></p>`;
+  // The lead is the first sentence, cut to the words the badge and the meta
+  // row leave; a cut sentence is given whole under Details.
+  const leadRoom = Math.max(8, TOOL_LEAD_MAX_WORDS - proseWordCount(badgeHtml) - proseWordCount(metaHtml));
+  const leadShown = cutWords(leadFull, leadRoom);
+  const leadCut = leadShown !== leadFull.trim().split(/\s+/).join(" ");
+  const aboutText = leadCut ? dropQueryHint(descFlat) : restShown;
+  const aboutHtml = aboutText || namesEdgar(tool)
+    ? `<h2 class="tp-h2">Details</h2>
+  ${aboutText ? `<p class="tp-sub tp-about">${e(aboutText)}</p>` : ""}
+  ${namesEdgar(tool) ? `<p class="tp-mark-notice" style="font-size:var(--fs-xs);color:var(--faint);margin:8px 0 0;max-width:76ch;">${e(EDGAR_MARK_NOTICE)}</p>` : ""}`
+    : "";
+
+  const body = `<div class="tp-wrap">
+  ${crumbs.nav}
+  <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
+  ${badgeHtml}
+  <p class="tp-lead">${e(leadShown)}</p>
+  ${metaHtml}
+
+  ${aboutHtml}
 
   <h2 class="tp-h2">Parameters</h2>
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
@@ -615,21 +670,20 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   ${
     computePayable
       ? `<h2 class="tp-h2">Free call, no wallet</h2>
-  <p class="tp-sub">This tool runs free with proof of work: fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header. JavaScript:</p>
+  <p class="tp-sub">Fetch a challenge, solve its sha256 puzzle (${e(String(powDifficulty))} leading zero bits), resend with <code>X-Pow-Solution</code>.</p>
   ${codeBlock(`import { createHash } from "node:crypto";
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
 let n = 0;
 while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
 await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}
-  <p class="tp-sub">Python, standard library only:</p>
+  <p class="tp-sub">Python:</p>
   ${codeBlock(pythonExample(baseUrl, tool, { computePayable }), { name: "the Python proof-of-work call" })}`
       : ""
   }
 
   <h2 class="tp-h2">Example request</h2>
   ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
-  <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
   <h2 class="tp-h2">Watch a call get paid</h2>
   ${paidCallFigure({ method: tool.method, path: tool.path, price: pw.short, chains: x402RailsFor(tool).length === 1 ? railsOrFor(tool) : x402RailsFor(tool).length })}
@@ -642,7 +696,7 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.1</code>.</p>
+  <p class="tp-sub">${mcpNote}</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -659,16 +713,15 @@ registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_K
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 ${payExample(baseUrl, tool)}`, { name: "the paid call" })}
-  <p class="tp-sub">${getWalletHtml()}</p>
+  <p class="tp-sub">${getWalletShortHtml()}</p>
 ${computePayable ? "" : `
   <h2 class="tp-h2">The quote (Python)</h2>
-  <p class="tp-sub">Standard library only: the 402 and the price its <code>PAYMENT-REQUIRED</code> header quotes on each chain. To pay from Python, sign it with any x402 client.</p>
   ${codeBlock(pythonExample(baseUrl, tool), { name: "the Python quote" })}`}
 
   ${packsHtml}
 
-  ${relatedCards ? `<h2 class="tp-h2">Related tools</h2>
-  <div class="tp-grid">${relatedCards}</div>` : ""}
+  ${relatedLinks ? `<h2 class="tp-h2">Related tools</h2>
+  <ul class="tp-links">${relatedLinks}</ul>` : ""}
 </div>
 ${ledgerFooterCompact()}
 ${paidCallScript()}`;

@@ -15,6 +15,7 @@ import { bootServer } from "./lib/boot-server.js";
 import { stripScripts, stripTags } from "./lib/html-text.js";
 import { notChargedClaims } from "./lib/not-charged-claims.js";
 import { SETTLE_FIRST_MARK, SETTLE_FIRST_TEXT, FAILED_CALL_TEXT } from "../src/settle-first-copy.js";
+import { settleFirstSlugs, SETTLE_FIRST_GATEWAY_TOOLS } from "../src/settle-first-tools.js";
 
 let failed = 0;
 const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) failed++; };
@@ -68,8 +69,29 @@ ok(bareClaimsHtml(`<table><tr><td>Not charged: the error cancels settlement befo
   && bareClaimsHtml(`<table><tr><td>Not charged: the error cancels settlement before any facilitator call.</td></tr></table><p>Read on.</p>`).length === 1,
   "control: a table claim is carried by the sentence under its table, and only by that");
 
+// A tool page states the rule for its own route (src/settlement-footnote.js
+// routeFailedCallLine): in its "Errors and behavior" list and in the tool's own
+// description under Details, the sentence is printed only where the route may
+// settle first. On a route that cannot, those two blocks are per-route and
+// true without it, so the reach check reads the rest of the page; the list must
+// then say "On this route" and must not carry the sentence. A route that may
+// settle first carries it in that list.
+const SETTLES_FIRST = settleFirstSlugs(SETTLE_FIRST_GATEWAY_TOOLS);
+const ROUTE_BLOCKS = [/<ul class="tp-facts">[\s\S]*?<\/ul\s*>/i, /<p class="tp-sub tp-about">[\s\S]*?<\/p\s*>/i];
+const factsText = (html) => pageText((String(html).match(ROUTE_BLOCKS[0]) || [""])[0]);
+/** The page with its per-route blocks left out when the route cannot settle first. */
+export function pageForReach(path, html) {
+  const slug = (/^\/tools\/([a-z0-9-]+)$/.exec(path) || [])[1];
+  if (!slug || SETTLES_FIRST.has(slug)) return String(html);
+  return ROUTE_BLOCKS.reduce((h, re) => h.replace(re, " "), String(html));
+}
+ok(pageForReach("/tools/json-format", '<ul class="tp-facts"><li>x</li></ul><p>y</p>').includes("<p>y</p>") && !pageForReach("/tools/json-format", '<ul class="tp-facts"><li>x</li></ul>').includes("tp-facts")
+  && pageForReach("/tools/answer", '<ul class="tp-facts"><li>x</li></ul>').includes("tp-facts") && pageForReach("/docs", '<ul class="tp-facts"></ul>').includes("tp-facts"),
+  "control: only a tool page of a route that cannot settle first leaves its per-route blocks out of the reach check");
+ok(SETTLES_FIRST.has("answer") && SETTLES_FIRST.has("tts") && !SETTLES_FIRST.has("json-format") && !SETTLES_FIRST.has("screenshot"), "control: the settle-first slugs are the ones server.js arms");
+
 const PAGES = ["/", "/docs", "/how-to-pay", "/faq", "/quickstart", "/start", "/what-is-x402", "/what-is-mpp", "/pricing",
-  "/guides/x402-and-mpp", "/docs/MCP-Connector", "/docs/TTS", "/tools/answer", "/tools/search", "/tools/tts", "/tools/json-format", "/tools/screenshot"];
+  "/guides/x402-and-mpp", "/docs/MCP-Connector", "/docs/TTS", "/tools/answer", "/tools/search", "/tools/tts", "/tools/json-format", "/tools/screenshot", "/tools/fx-rate"];
 
 const srv = await bootServer({ env: { FREE_MODE: "true", GATEWAY_SETTLE_FIRST: "" }, stores: "not-charged-rendered" });
 try {
@@ -79,7 +101,13 @@ try {
     const html = await r.text();
     if (r.status !== 200) { ok(false, `${path} answers 200 (got ${r.status})`); continue; }
     claims += [...pageText(html).matchAll(notChargedClaims())].length;
-    const bare = bareClaimsHtml(html);
+    const bare = bareClaimsHtml(pageForReach(path, html));
+    const slug = (/^\/tools\/([a-z0-9-]+)$/.exec(path) || [])[1];
+    if (slug) {
+      const facts = factsText(html);
+      if (SETTLES_FIRST.has(slug)) ok(facts.includes(SETTLE_FIRST_MARK) && bareClaims(facts).length === 0, `${path}: a route that may settle first carries the sentence in its own rule`);
+      else ok(/On this route, /.test(facts) && !facts.includes(SETTLE_FIRST_MARK), `${path}: a route that cannot settle first states its rule for this route, without the sentence`);
+    }
     ok(bare.length === 0, `${path}: every not-charged claim carries the settle-first sentence${bare.length ? ` (bare: ${bare.map((b) => JSON.stringify(b.claim)).join("; ")})` : ""}`);
   }
   ok(claims >= 6, `the claim is found on the rendered pages (${claims} places)`);
