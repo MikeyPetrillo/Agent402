@@ -3,7 +3,10 @@
 // client paid tools (/paid-mcp-tools), and how the ways to give an agent tools
 // compare (/compare). Each one is short, first-party and links to the page
 // that goes deep; every price, count and payment wire is read from the same
-// sources the 402 and the catalog read, never typed here.
+// sources the 402 and the catalog read, never typed here. A fourth,
+// /insider-trades-api, answers the searches for SEC Form 4 insider trades by
+// API: its routes, example input, answer fields and prices are read from the
+// catalog entries that serve them.
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { articleDates } from "./page-dates.js";
 import { toolList } from "./pages.js";
@@ -18,8 +21,11 @@ import { FLAGSHIP_MCP_NAMES, AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { getWalletHtml } from "./get-a-wallet.js";
 import { WHY_COMPARE, WHY_POINTS } from "./why.js";
 import { siteOrgRef, mppOffered } from "./site-org.js";
+import { asyncProfileOf } from "./slow-routes.js";
+import { needsAsyncOrWait } from "./slow-sync-window.js";
 
-export const SEARCH_LANDING_PATHS = ["/pay-per-call-api", "/paid-mcp-tools", "/compare"];
+export const INSIDER_TRADES_PATH = "/insider-trades-api";
+export const SEARCH_LANDING_PATHS = ["/pay-per-call-api", "/paid-mcp-tools", "/compare", INSIDER_TRADES_PATH];
 
 const CSS = `
 .sl-wrap{max-width:900px;margin:0 auto;padding:50px 30px 64px}
@@ -160,5 +166,66 @@ ${links([["/start", "First call"], ["/pay-per-call-api", "Pay-per-call APIs"], [
     h1: "Compare ways to give an agent tools",
     crumb: "Compare",
     body,
+  });
+}
+
+/** The catalog entry for a slug (null when this boot does not serve it). */
+const defOf = (catalog, slug) => toolList(catalog).find((t) => t.slug === slug) || null;
+const routeParts = (def) => { const [method, path] = String(def.route).split(" "); return { method, path }; };
+
+/** /insider-trades-api: SEC Form 4 insider trades by API, with the cheapest
+ *  route that lists them and the report product that reads them. */
+export function insiderTradesApiPage(baseUrl, catalog) {
+  const list = defOf(catalog, "edgar-insider-trades");
+  const report = defOf(catalog, "insider-report");
+  if (!list) throw new Error("insider-trades-api: edgar-insider-trades is not in the catalog");
+  const c = (s) => `<code>${esc(s)}</code>`;
+  const l = routeParts(list);
+  const input = list.discovery?.input || {};
+  const query = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, String(v)])).toString();
+  const example = list.discovery?.output?.example || null;
+  const rowFields = example?.trades?.[0] ? Object.keys(example.trades[0]) : [];
+  // The handler also answers the window's dates and its source, which the
+  // published example leaves out.
+  const topFields = example ? [...new Set([...Object.keys(example).filter((k) => k !== "trades"), "startDate", "endDate", "source"])] : [];
+  const inputFields = Object.keys(list.discovery?.inputSchema?.properties || {});
+  const or = (arr) => arr.length > 1 ? `${arr.slice(0, -1).map(c).join(", ")} and ${c(arr[arr.length - 1])}` : arr.map(c).join("");
+  let reportBlock = "";
+  if (report) {
+    const r = routeParts(report);
+    const job = needsAsyncOrWait(asyncProfileOf(report));
+    const body = JSON.stringify(report.discovery?.input || { ticker: input.ticker });
+    reportBlock = `
+<h2>Get the transactions, read and summarized</h2>
+<p>A filing row says who filed and when; the shares, prices and transaction codes are inside the filing. ${c(`${r.method} ${r.path}`)} (${esc(report.price)} a call, model-backed) reads every Form 4 in the window, separates open-market buys and sales from awards, option exercises and tax withholding, totals them per insider and as a net flow, and a model writes a cited report with the transactions as a table.${job ? ` It runs as a job: send ${c("Prefer: respond-async")}, then poll the ${c("Location")} link it answers (free) until the report is ready.` : ""}</p>
+${pre(`curl -i -X POST ${baseUrl}${r.path} \\
+  -H 'Content-Type: application/json'${job ? " \\\n  -H 'Prefer: respond-async'" : ""} \\
+  -d '${body}'`)}
+<p>People can buy the same report by card at <a href="/reports/insider">Insider flow reports</a>.</p>`;
+  }
+  const bodyHtml = `
+<p class="sl-lead">Form 4 is the filing an officer, director or 10% holder makes after trading the company's stock. Agent402 reads those filings from SEC EDGAR and serves them by API, paid per call from an agent's wallet with no account or key.</p>
+<h2>List the Form 4 filings against a company</h2>
+<p>${c(`${l.method} ${l.path}`)} costs ${esc(list.price)} a call. It takes ${or(inputFields)}, and returns the Form 4 filings where the company is the issuer.</p>
+${pre(`curl -i "${baseUrl}${l.path}?${query}"`)}
+<p>The first answer is HTTP 402 with the price and the ways to pay. An x402 client signs the payment and sends the same request again; the answer is the list below.</p>
+${example ? `<h2>What comes back</h2>
+<p>The top-level fields, ${or(topFields)}, name the company, the window and the source. Each row in ${c("trades")} carries ${or(rowFields)}: ${c("url")} is the filing on sec.gov, and ${c("cik")} there is the insider's own filer number. ${example.trades && Number(example.returned) > example.trades.length ? `The published example, shortened to ${example.trades.length === 1 ? "one row" : `${example.trades.length} rows`}:` : "The published example:"}</p>
+${pre(JSON.stringify(example, null, 2))}` : ""}
+${reportBlock}
+<h2>From an agent</h2>
+<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "insider trades for a ticker" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=insider%20trades">/api/find</a> answers the same question.</p>
+<h2>Source and use</h2>
+<p>Form 4 filings are public records published by the U.S. Securities and Exchange Commission on EDGAR; each row links the filing itself, so every figure can be checked at the source. Agent402 reads them with a declared User-Agent, as SEC's access rules ask. Agent402 is not affiliated with or endorsed by the SEC.</p>
+<p>Information only, not investment advice. A Form 4 reports a trade after it happened, and says nothing about why it was made.</p>
+<h2>More</h2>
+${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/${report.slug}`, "Insider flow report"]] : []), ["/reports/insider", "Reports by card"], ["/start", "First call"], ["/how-to-pay", "How to pay"]])}`;
+  return page(baseUrl, {
+    path: INSIDER_TRADES_PATH,
+    title: "Insider trades API: SEC Form 4 data for agents | Agent402",
+    description: "SEC Form 4 insider trades by API: the filings against any US ticker, paid per call with no account or key, plus a cited report. Information only.",
+    h1: "Insider trades by API: SEC Form 4 data",
+    crumb: "Insider trades API",
+    body: bodyHtml,
   });
 }

@@ -882,7 +882,7 @@ export function hubPage({ kind, baseUrl }) {
     <a class="btn btn-primary" href="/reports">Buy a report, $${esc(cardUsd(family.product))} →</a>
     <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   </div>
-  ${crossLinks([...others, { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
+  ${crossLinks([...others, ...(kind === "insider" ? [{ href: "/insider-trades-api", label: "Insider trades by API" }] : []), { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
   <p class="pg-note">${esc(DISCLAIMER)}${h.offList ? ` ${esc(h.offList)}` : ""}</p>
 </section>`;
   return shell({
