@@ -99,16 +99,29 @@ updates:
       # lines are held and a 0.17.x patch still comes in.
       - dependency-name: "mppx"
         versions: [">=0.18.0"]
+  # One entry per ecosystem and directory (Dependabot refuses two that overlap),
+  # so the plugin scanner's own cadence is a group of its own in this entry: it
+  # releases almost daily, and in the shared group every release reopened the
+  # one Actions PR. Weekly, with a 7-day cooldown, it proposes at most one
+  # release a week, in its own PR; the other actions share the second group.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "github-actions"
     groups:
-      # One PR for all GitHub Actions updates.
+      # The plugin scanner alone (the first group that matches takes an update).
+      ai-plugin-scanner:
+        patterns:
+          - "hashgraph-online/ai-plugin-scanner-action"
+      # One PR for every other GitHub Actions update.
       github-actions:
         patterns:
           - "*"
+        exclude-patterns:
+          - "hashgraph-online/ai-plugin-scanner-action"
