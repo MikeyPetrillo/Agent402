@@ -455,7 +455,7 @@ const SKILL_PACKS_ALL = [
     slug: "crypto-research",
     title: "Crypto research",
     tagline:
-      "Pull live price, market structure, OHLC history, trending status, global market context, and recent news for a single coin in one pass.",
+      "Pull live price, market structure, look-back return and risk statistics, trending status, global market context, and recent news for a single coin in one pass.",
     useCase:
       "Building a one-pager on a token, prepping for a positioning decision, or monitoring a new listing - you want price, supply, sentiment, and headlines without leaving the agent loop.",
     promptArgs: [
@@ -473,14 +473,14 @@ const SKILL_PACKS_ALL = [
     workflow: [
       "Get the live quote from crypto-price - last price, 24h change, 24h volume, and market cap.",
       "Pull the market overview from crypto-market - circulating supply, max supply, ATH, ATH date, and 7d/30d performance for the deep dive.",
-      "Pull OHLC history from crypto-history to compute return, volatility, and max drawdown over a chosen window.",
+      "Read the return, annualized volatility, and max drawdown over a chosen window from crypto-history, which computes them (it answers statistics, not a price series).",
       "Check crypto-trending to see whether the coin is on the market-data index's most-searched list - a fast read on retail attention.",
       "Pull crypto-global for total market cap, BTC dominance, and 24h volume - contextualizes the coin's move against the broader market.",
       "Pull the last week of search-news headlines for the coin - catalysts, partnerships, exploit reports.",
       "For the top 2–3 headlines, use extract to convert the article to clean markdown for the brief.",
     ],
     claudePrompt:
-      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) 90 days of OHLC history with return and max drawdown, (4) whether BTC is in the trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
+      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) the 90-day return, volatility and max drawdown, (4) whether BTC is in the trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
   },
   {
     slug: "content-extraction",
@@ -1363,9 +1363,9 @@ const SKILL_PACKS_ALL = [
     slug: "price-monitor",
     title: "Cross-asset price monitor",
     tagline:
-      "Side-by-side snapshot of a stock and a crypto asset: the equity's latest close against a live crypto quote, a trailing-year series for each, and a date-stamped comparison.",
+      "Side-by-side snapshot of a stock and a crypto asset: the equity's latest close against a live crypto quote, the equity's trailing-year series beside the coin's trailing-year return and risk statistics, and a date-stamped comparison.",
     useCase:
-      "An agent or analyst wants to compare a traditional equity with a crypto asset - e.g. 'How has AAPL performed versus BTC over the last year?' Running stock-quote and crypto-price individually gives two disconnected numbers; adding historical data from both sides plus a date-format timestamp turns it into a dated comparison card the caller can track over time or feed into a report. Useful for portfolio dashboards, market-update bots, newsletter generators, and any agent that needs a quick cross-asset health check.",
+      "An agent or analyst wants to compare a traditional equity with a crypto asset - e.g. 'How has AAPL performed versus BTC over the last year?' Running stock-quote and crypto-price individually gives two disconnected numbers; adding a trailing-year look-back from both sides plus a date-format timestamp turns it into a dated comparison card the caller can track over time or feed into a report. Useful for portfolio dashboards, market-update bots, newsletter generators, and any agent that needs a quick cross-asset health check.",
     toolSlugs: [
       "stock-quote",
       "stock-history",
@@ -1378,10 +1378,10 @@ const SKILL_PACKS_ALL = [
       "Call stock-quote with symbol=<ticker> to get the equity's latest close: price, previousClose, changeAbs, changePct, dayHigh, dayLow and volume. This is end-of-day, not an intraday print; volume is the consolidated market total (null, with coverage three-venue, when a read fell back to three venues) - note the timestamp from step 1 so the caller knows which session it is.",
       "Call stock-history with symbol=<ticker> and days=250 to get a trailing-year price series (250 sessions is the maximum this endpoint serves). Extract the first and last data points to compute the year-over-year return: ((last - first) / first * 100). This is the equity's trailing-12-month performance.",
       "Call crypto-price with coins=<coin> and currency=usd to get the live crypto price: price, market_cap, 24h_volume, 24h_change. This is the 'right now' read for the crypto side.",
-      "Call crypto-history with coin=<coin>, days=365, and currency=usd to get the 1-year price series. Compute the year-over-year return the same way as step 3, then return { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } } as the final payload.",
+      "Call crypto-history with coin=<coin>, days=365, and currency=usd and read summary.changePct: the coin's one-year return, computed by the tool (it answers statistics, not a price series). Then return { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } } as the final payload.",
     ],
     claudePrompt:
-      "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() - returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL - returns {price, previousClose, changeAbs, changePct, dayHigh, dayLow, volume, venueVolume, coverage}.\n\n(3) stock-history with symbol=AAPL, days=250 - returns {bars: [{day, close}]}. Compute stockYearReturn = ((bars[last].close - bars[0].close) / bars[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' - returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' - returns {prices: [[timestamp, price]]}. Compute cryptoYearReturn = ((prices[last][1] - prices[0][1]) / prices[0][1] * 100).toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
+      "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() - returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL - returns {price, previousClose, changeAbs, changePct, dayHigh, dayLow, volume, venueVolume, coverage}.\n\n(3) stock-history with symbol=AAPL, days=250 - returns {bars: [{day, close}]}. Compute stockYearReturn = ((bars[last].close - bars[0].close) / bars[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' - returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' - returns {summary: {changePct, volatilityPct, maxDrawdownPct}} (computed statistics, no price series). Take cryptoYearReturn = summary.changePct.toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
     promptArgs: [
       {
         name: "ticker",
@@ -1596,9 +1596,9 @@ const SKILL_PACKS_ALL = [
     slug: "crypto-dossier",
     title: "Crypto dossier",
     tagline:
-      "Everything about a cryptocurrency in one call: live price, 90-day history, trending status, global market context, news search, and top article extraction.",
+      "Everything about a cryptocurrency in one call: live price, 90-day return and risk statistics, trending status, global market context, news search, and top article extraction.",
     useCase:
-      "Building a one-pager on a token for a portfolio decision, writing a research note, or monitoring a new listing - price, history, market context, and headlines in a single payment.",
+      "Building a one-pager on a token for a portfolio decision, writing a research note, or monitoring a new listing - price, look-back statistics, market context, and headlines in a single payment.",
     promptArgs: [
       { name: "coin", description: "Coin id (e.g. bitcoin, ethereum, solana)", required: true, substitute: "bitcoin" },
     ],
@@ -1612,14 +1612,14 @@ const SKILL_PACKS_ALL = [
     ],
     workflow: [
       "Get the live price from crypto-price - last price, 24h change, market cap, and volume.",
-      "Pull 90 days of OHLC history from crypto-history - compute return, volatility, and max drawdown.",
+      "Read the 90-day return, annualized volatility, and max drawdown from crypto-history, which computes them (statistics, not a price series).",
       "Check crypto-trending to see whether the coin is on the most-searched list - a fast read on retail attention.",
       "Pull crypto-global for total market cap, BTC dominance, and 24h volume - contextualizes the coin's move.",
       "Search the web for recent cryptocurrency news about the coin to catch catalysts and red flags.",
       "Extract the top news article as clean markdown for the brief's headline analysis.",
     ],
     claudePrompt:
-      "Build a comprehensive crypto dossier on bitcoin using Agent402's crypto-dossier skill pack: (1) live price + 24h change, (2) 90-day price history with return and drawdown, (3) trending status, (4) global market context (BTC dominance, total cap), (5) recent news search, (6) full text of the top article. Output a structured brief with sections for price action, market context, and news catalyst.",
+      "Build a comprehensive crypto dossier on bitcoin using Agent402's crypto-dossier skill pack: (1) live price + 24h change, (2) the 90-day return, volatility and drawdown, (3) trending status, (4) global market context (BTC dominance, total cap), (5) recent news search, (6) full text of the top article. Output a structured brief with sections for price action, market context, and news catalyst.",
   },
 
   {

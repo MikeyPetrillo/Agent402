@@ -106,8 +106,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**market-brief**](https://agent402.tools/skills/market-brief) | $0.005 | Quick crypto snapshot: price for a coin, trending coins, and global market stats in one call. |
-| [**crypto-research**](https://agent402.tools/skills/crypto-research) | $0.031 | Live price, market structure, OHLC history, trending status, global context, and news for a coin. |
-| [**crypto-dossier**](https://agent402.tools/skills/crypto-dossier) | $0.028 | Everything about a coin: live price, 90-day history, trending status, market context, news + top article. |
+| [**crypto-research**](https://agent402.tools/skills/crypto-research) | $0.031 | Live price, market structure, look-back return and risk statistics, trending status, global context, and news for a coin. |
+| [**crypto-dossier**](https://agent402.tools/skills/crypto-dossier) | $0.028 | Everything about a coin: live price, 90-day return and risk statistics, trending status, market context, news + top article. |
 | [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.02 | Due-diligence a DeFi protocol: live token price, market context, the token's supply and valuation profile, and recent news. |
 | [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.009 | DeFi overview: DeFi market cap and dominance, ETH price, Base gas, and global crypto stats. |
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |

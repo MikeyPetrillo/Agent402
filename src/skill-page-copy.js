@@ -28,7 +28,7 @@ export const PACK_PAGE_COPY = {
     steps: [
       "Get the live price, 24h change, volume and market cap from crypto-price.",
       "Pull supply, all-time high and 7d/30d performance from crypto-market.",
-      "Pull OHLC history from crypto-history for return, volatility and max drawdown.",
+      "Read the window's return, volatility and max drawdown from crypto-history.",
       "Check crypto-trending for whether the coin is on the most-searched list.",
       "Pull total market cap, BTC dominance and 24h volume from crypto-global.",
       "Read the last week of headlines for the coin with search-news.",
@@ -105,7 +105,7 @@ export const PACK_PAGE_COPY = {
   "crypto-dossier": {
     steps: [
       "Get the live price, 24h change, market cap and volume from crypto-price.",
-      "Pull 90 days of OHLC from crypto-history for return, volatility and drawdown.",
+      "Read the 90-day return, volatility and drawdown from crypto-history.",
       "Check crypto-trending for whether the coin is on the most-searched list.",
       "Pull total market cap, BTC dominance and 24h volume from crypto-global.",
       "Search the web for recent news about the coin with search.",
