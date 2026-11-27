@@ -299,7 +299,11 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
   const ofClass = (r) => (refused ? r.status === refused : (r.error || r.status >= 500));
   const rows = failuresBetween(t0, t1, logPath).filter((r) => hosts.has(String(r.host).toLowerCase()) && ofClass(r));
   if (!rows.length) return { verdict: "fail", reason: refused ? `no request refused with HTTP ${refused} recorded during the call` : "no failed upstream request recorded during the call" };
-  const row = rows[rows.length - 1];
+  // The log is the whole server's: a tool beside this one that reads the
+  // same host and fails in the same window records its own rows, so the row
+  // read is the latest one of this tool's own shape. With none of that shape,
+  // the latest row is the one judged (and fails below).
+  const row = rows.findLast((r) => !r.keyed && r.url && r.method === "GET" && requestMatchesDefinition(shapeSlug, r.url, root)) || rows[rows.length - 1];
   if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the failed request to ${row.host} is keyed or not a GET` };
   if (!requestMatchesDefinition(shapeSlug, row.url, root)) return { verdict: "fail", reason: `the failed request to ${row.host} is not the shape the tool's definition builds (a URL we built wrong is ours)` };
   const opts = row.accept ? { accept: row.accept } : undefined;
