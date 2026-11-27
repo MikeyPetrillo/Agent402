@@ -304,6 +304,10 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
     "average bitcoin price in 2021", "bitcoin price range last month", "bitcoin price vs ethereum price last year", "eth price in gwei yesterday", "bitcoin price next year",
     "bitcoin price this week", "search for bitcoin price in 2020", "stablecoin price deviation last week", "bitcoin etf price yesterday", "price of the day for bitcoin",
     "historical token holders and price", "dex pool price last week for a token", "bitcoin dominance and price in 2021", "price of bitcoin on the day", "bitcoin price today",
+    "bitcoin price for the day", "what is the bitcoin price of the day", "coin price range last week", "token price history for the last month", "bitcoin price history last year",
+    "how volatile was the bitcoin price last year", "bitcoin price drop last week", "how far is the bitcoin price from its high last year",
+    // This year is not a past date (read against the clock, so the case holds next year too).
+    `eth price in ${new Date().getUTCFullYear()}`, `bitcoin price in ${new Date().getUTCFullYear() + 1}`,
     "historical price of gold in bitcoin", "bitcoin price tweet from last week", "eth price high and low in 2021", "token price history statistics in 2024", "bitcoin market cap and price yesterday"];
   const COIN_POSITIVE = ["bitcoin price on 2021-01-01", "historical coin price", "coin snapshot on a date", "price of ETH last June", "historical crypto prices", "btc price in 2021",
     "what was the price of bitcoin on 01/02/2021", "ethereum price 3 years ago", "token price on a given date", "solana price yesterday", "price of dogecoin in March 2024",
@@ -356,6 +360,17 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
     for (const extra of ["chart", "gas", "history", "candles", "news", "peg", "compare", "search"]) {
       ok(capabilityGap(`${q} ${extra}`) === null && capabilityGap(`${extra} ${q}`) === null, `"${q}" with the word "${extra}" is in no gap family`);
     }
+  }
+  // The year a query names is read against the clock: the current year and later ones are not past.
+  {
+    const at = (iso) => Date.parse(iso);
+    ok(capabilityGap("eth price in 2026", at("2026-11-27T12:00:00Z")) === null && capabilityGap("eth price in 2026", at("2026-01-01T00:00:00Z")) === null && capabilityGap("eth price in 2027", at("2026-06-01T00:00:00Z")) === null,
+      "a price in the current year, or a later one, is not a past price");
+    ok(capabilityGap("eth price in 2026", at("2027-01-01T00:00:00Z"))?.id === "coin-price-on-date" && capabilityGap("eth price in 2025", at("2026-11-27T12:00:00Z"))?.id === "coin-price-on-date",
+      "CONTROL: the same words are a past price once the year has ended");
+    ok(capabilityGap("bitcoin price on 2026-03-01", at("2026-11-27T12:00:00Z")) === null && capabilityGap("btc price in june 2026", at("2026-11-27T12:00:00Z")) === null && capabilityGap("btc price june 5 2026", at("2026-11-27T12:00:00Z")) === null
+      && capabilityGap("bitcoin price on 2025-03-01", at("2026-11-27T12:00:00Z"))?.id === "coin-price-on-date" && capabilityGap("btc price last june", at("2026-11-27T12:00:00Z"))?.id === "coin-price-on-date",
+      "a written date or a month in the current year is not read as past; one in an earlier year, or with no year, is");
   }
   ok(capabilityGap("token price on solana yesterday") === null && capabilityGap("price of the day for eth") === null && capabilityGap("eth price for the day") === null, "a token on a named chain and the price of the day are not a past price");
   // The tools that answer the neighbors still do, read as served.

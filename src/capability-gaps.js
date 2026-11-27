@@ -113,9 +113,17 @@ const DATE_DET = new Set(["a", "an", "any", "given", "specific", "certain", "par
 // The function words a past-price question is written with. Nothing else.
 const ASK_WORDS = new Set(["a", "an", "the", "of", "for", "on", "at", "in", "as", "what", "was", "is", "were", "s", "did", "back", "get", "give", "me", "show", "find", "lookup", "usd"]);
 const ASK_MAX_WORDS = 16;
-/** How many words a past date takes at `i`, or 0 when none starts there. */
-function pastDateAt(w, i) {
+/** How many words a past date takes at `i`, or 0 when none starts there.
+ *  A date that names year `thisYear` or a later one is not read as past
+ *  ("eth price in <this year>" asks about now, or about what is to come). */
+function pastDateAt(w, i, thisYear) {
   const at = (k) => w[i + k] ?? "";
+  const pastYear = (t) => YEAR_WORD_RE.test(t) && Number(t) < thisYear;
+  const span = pastDateSpanAt(w, i, at);
+  for (let k = 0; k < span; k++) if (YEAR_WORD_RE.test(at(k)) && !pastYear(at(k))) return 0;
+  return span;
+}
+function pastDateSpanAt(w, i, at) {
   // A written date: 2021-01-01, 01/02/2021.
   if (YEAR_WORD_RE.test(at(0)) && DAY_NUM_RE.test(at(1)) && DAY_NUM_RE.test(at(2))) return 3;
   if (DAY_NUM_RE.test(at(0)) && DAY_NUM_RE.test(at(1)) && YEAR_WORD_RE.test(at(2))) return 3;
@@ -127,7 +135,7 @@ function pastDateAt(w, i) {
   }
   // "last June", "in June", "in June 2021", "in 2021", "during 2021".
   if (at(0) === "last" || at(0) === "in" || at(0) === "during") {
-    if (MONTH_WORD_RE.test(at(1))) return 1 + (pastDateAt(w, i + 1) || 1);
+    if (MONTH_WORD_RE.test(at(1))) return 1 + (pastDateSpanAt(w, i + 1, (k) => w[i + 1 + k] ?? "") || 1);
     if (at(0) !== "last" && YEAR_WORD_RE.test(at(1))) return 2;
     // "last year", "last month", "last week".
     if (at(0) === "last" && /^(?:year|month|week)$/.test(at(1))) return 2;
@@ -144,12 +152,13 @@ function pastDateAt(w, i) {
   }
   return 0;
 }
-function asksPastCoinPrice(n) {
+function asksPastCoinPrice(n, now = Date.now()) {
+  const thisYear = new Date(now).getUTCFullYear();
   const w = n.trim().split(" ");
   if (w.length < 2 || w.length > ASK_MAX_WORDS) return false;
   let coins = 0, prices = 0, past = 0;
   for (let i = 0; i < w.length;) {
-    const span = pastDateAt(w, i);
+    const span = pastDateAt(w, i, thisYear);
     if (span) { past++; i += span; continue; }
     const t = w[i++];
     if (COIN_WORD_RE.test(t)) coins++;
@@ -200,10 +209,11 @@ export const CAPABILITY_GAPS = Object.freeze([
   }),
 ]);
 
-/** The gap family a query asks for, or null (nearly every query). */
-export function capabilityGap(query) {
+/** The gap family a query asks for, or null (nearly every query). `now` is
+ *  the clock a date in the query is read against (a test passes its own). */
+export function capabilityGap(query, now = Date.now()) {
   const n = normQuery(query);
-  for (const gap of CAPABILITY_GAPS) if (gap.asks(n)) return gap;
+  for (const gap of CAPABILITY_GAPS) if (gap.asks(n, now)) return gap;
   return null;
 }
 
