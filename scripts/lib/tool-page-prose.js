@@ -2,8 +2,18 @@
 // scripts/test-tool-page-words.js budgets (read its header for the rule).
 import { stripScripts, stripTags } from "./html-text.js";
 
+import { MAX_WORDS as DESCRIPTION_MAX_WORDS, PAGE_SUMMARY } from "./description-limits.js";
+
 export const LEAD_MAX = 45;
 export const BODY_MAX = 250;
+// The Details paragraph (.tp-about): what is left of the page text after the
+// lead sentence. A tool with a pageSummary shows that shorter text, so its
+// Details holds at most ABOUT_MAX_SUMMARY words; every other tool shows its
+// catalog description, held to that description's own ceiling.
+export const ABOUT_MAX_SUMMARY = 130;
+export const ABOUT_MAX_DESCRIPTION = DESCRIPTION_MAX_WORDS;
+const SUMMARIZED = new Set(PAGE_SUMMARY);
+export const aboutMaxFor = (slug) => (SUMMARIZED.has(slug) ? ABOUT_MAX_SUMMARY : ABOUT_MAX_DESCRIPTION);
 
 const dropAll = (s, re) => { let prev; do { prev = s; s = s.replace(re, " "); } while (s !== prev); return s; };
 
@@ -19,8 +29,8 @@ export function proseWords(html) {
   return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
 }
 
-/** The tool's own description paragraph under Details (its catalog text,
- *  which a template change does not write). */
+/** The tool's own paragraph under Details: its pageSummary, or its catalog
+ *  description, less the sentence the page leads with. */
 const ABOUT = /<p class="tp-sub tp-about">[\s\S]*?<\/p\s*>/i;
 
 /** { lead, body, about } prose word counts of a served tool page: `body` is

@@ -36,14 +36,8 @@ import { bootServer } from "./lib/boot-server.js";
 import { stripTags, decodeEntities } from "./lib/html-text.js";
 import { ATTRIBUTION_TAILS } from "../src/data-attribution.js";
 
-export const MAX_WORDS = 230;
-export const PAGE_MAX_WORDS = 120;
-export const FIRST_SENTENCE_MAX_WORDS = 40;
-export const PAGE_SUMMARY = [
-  "html-frames", "token-risk", "price-webhook", "token-brief", "page-speed", "dex-pool-health", "redact-chat",
-  "sol-token-report", "demand-radar", "token-risk-pro", "linkedin-article", "seller-dossier", "attest", "ticker-pack",
-  "token-safety", "onchain-sql", "email-guard", "filing-report", "loop-gate", "insider-report",
-];
+import { MAX_WORDS, PAGE_MAX_WORDS, FIRST_SENTENCE_MAX_WORDS, PAGE_SUMMARY } from "./lib/description-limits.js";
+export { MAX_WORDS, PAGE_MAX_WORDS, FIRST_SENTENCE_MAX_WORDS, PAGE_SUMMARY };
 
 export const wordCount = (text) => String(text || "").trim().split(/\s+/).filter(Boolean).length;
 // The sentence a tool page leads with (firstSentence in src/pages.js): up to
