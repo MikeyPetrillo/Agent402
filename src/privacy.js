@@ -349,9 +349,9 @@ so every claim below is verifiable in code.</p>
   served back to you; the finished report is served at an unguessable link and is not published.</li>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
   errors) with metadata - tool name, HTTP status, price, settlement chain, a keyed hash of the paying wallet
-  (never the address; events sent before the version of this policy dated 2026-11-25 named the address, and we delete those on request) and, on a settled payment, the first word of the caller's
+  in place of its address (events sent before the version of this policy dated 2026-11-25 named the address, and we delete those on request) and, on a settled payment, the first word of the caller's
   User-Agent; a call to a retired route carries the first word of the User-Agent, the host name of the
-  Referer (no path or query) and which kind of payment header was present (never its value) - in a
+  Referer (no path or query) and which kind of payment header was present (not its value) - in a
   server-side analytics tool (PostHog). This is used to run
   the service: reliability, abuse prevention, and knowing what sells. It does not include tool inputs,
   prompts, outputs, cookies, or browser fingerprints, with these exceptions: a tool call can carry a keyed
