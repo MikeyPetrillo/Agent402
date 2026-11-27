@@ -16,6 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { OPEN_BODY_RE, STILL_BODY_RE } from "./lib/monitor-issue-text.js";
 import { REOPEN_WINDOW_DAYS, reopenCandidate } from "../workers/status-probe/src/reopen-window.js";
 import { fileCheckIssue } from "./check-issue.js";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -140,7 +141,7 @@ const flag = (a, f) => a[a.indexOf(f) + 1];
   const cli = (extra) => {
     const log = join(dir, `log-${extra.length}`);
     writeFileSync(log, "");
-    const r = spawnSync(process.execPath, [new URL("./check-issue.js", import.meta.url).pathname, "--title", T, ...extra], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GH_LOG: log, GITHUB_REPOSITORY: "o/r" } });
+    const r = spawnSync(process.execPath, [fileURLToPath(new URL("./check-issue.js", import.meta.url)), "--title", T, ...extra], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GH_LOG: log, GITHUB_REPOSITORY: "o/r" } });
     return { status: r.status, calls: readFileSync(log, "utf8").trim().split("\n") };
   };
   const plain = cli([]), owned = cli(["--trust-owner"]);
