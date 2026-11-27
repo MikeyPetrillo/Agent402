@@ -1096,7 +1096,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/tools/cdp-kit.js": "a081d5aac2f7",
     "src/tools/decide-kit.js": "c75892754664",
     "src/tools/dub-kit.js": "1dd69d7461ab",
-    "src/tools/image-gen-kit.js": "d0ff399c2a56",
+    "src/tools/image-gen-kit.js": "9d54f4f59a97",
     "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
     "src/tools/llm-images-fast-kit.js": "afc664fa4d2a",
     "src/tools/price-webhook-kit.js": "55e2ba78b2cf",
@@ -1356,6 +1356,28 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
+  }
+  // ...and so does every FIELD text of such a tool (an input or output
+  // field's description is read by the same agents as the description): a
+  // field that says a call is not charged carries the sentence beside it.
+  {
+    const sft = await import("../src/settle-first-tools.js");
+    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS, ...sft.SETTLE_FIRST_REPORT_TOOLS];
+    const bareFields = [];
+    let fieldClaims = 0;
+    const walk = (o, path, depth) => {
+      if (depth > 12) return;
+      if (typeof o === "string") {
+        if (/\bnot charged\b/i.test(o)) { fieldClaims++; if (!o.includes(fam.SETTLE_FIRST_MARK)) bareFields.push(path); }
+      } else if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) walk(v, `${path}.${k}`, depth + 1);
+    };
+    for (const t of tools) walk(t.discovery, t.slug, 0);
+    ok(fieldClaims >= 3 && bareFields.length === 0, `every settle-first tool's field text that says a call is not charged carries the settle-first sentence (${fieldClaims} field claim(s)${bareFields.length ? `; bare: ${bareFields.slice(0, 4).join(", ")}` : ""})`);
+    const probe = [];
+    const walkProbe = (o) => { if (typeof o === "string") { if (/\bnot charged\b/i.test(o) && !o.includes(fam.SETTLE_FIRST_MARK)) probe.push(o); } else if (o && typeof o === "object") for (const v of Object.values(o)) walkProbe(v); };
+    walkProbe({ inputSchema: { properties: { moderation: { description: "a refused prompt is not charged on x402." } } } });
+    walkProbe({ inputSchema: { properties: { moderation: { description: `a refused prompt is not charged on x402. ${fam.SETTLE_FIRST_TEXT}` } } } });
+    ok(probe.length === 1, "CONTROL: the field check fails a bare claim and passes one that carries the sentence");
   }
   // A per-route job sentence ("payment settles only on a delivered result")
   // carries the sentence on a route that may settle first, and only there:

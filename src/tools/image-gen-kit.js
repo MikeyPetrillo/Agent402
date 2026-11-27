@@ -316,7 +316,7 @@ function makeHandler(tierSlug) {
 
 const SHARED_TAGS = ["image", "ai", "generation", "openai", "text-to-image"];
 
-const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 422 with reason content_filtered and is not charged on x402.' };
+const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 422 with reason content_filtered and is not charged on x402.' + (SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : "") };
 const MODERATION_COPY = ` The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 422 with reason content_filtered, not charged on x402. ${SETTLE_FIRST_SENTENCE}`;
 
 export const IMAGE_GEN_TOOLS = [
