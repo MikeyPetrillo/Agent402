@@ -504,9 +504,10 @@ const CSS = `
 .comp-f em{font-style:normal;color:var(--faint)}
 .nomeasure{margin:0;font-size:var(--fs-sm);color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
 .live{display:grid;gap:10px;margin:14px 0 30px}
-.lrow{display:grid;grid-template-columns:12px auto minmax(0,1fr);gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+.lrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .lrow .ln{font-weight:600;font-size:var(--fs-md)}
-.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The reading is never cut: its column takes the width its words need and it wraps between words when the row is narrow. */
+.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-align:right;overflow-wrap:normal;word-break:normal}
 .lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:var(--fs-sm);color:var(--faint)}
 table.inc{width:100%;border-collapse:collapse;margin:12px 0 30px;font-size:var(--fs-md)}
 table.inc th,table.inc td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--hairline);vertical-align:top}

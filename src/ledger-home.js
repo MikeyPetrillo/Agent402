@@ -249,6 +249,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-door-agents strong { color: var(--on-panel); font-weight: 600; }
 .hm-door-people p { color: var(--muted); }
 .hm-door-people strong { color: var(--ink); font-weight: 600; }
+/* The shorter card ends under its own buttons: it takes its content's height, so no empty band opens above them beside the taller card. */
+.hm-door-people { align-self: start; }
+.hm-door-people .hm-door-act { margin-top: 0; }
 .hm-door .ml-ticks { margin: 0; }
 .hm-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 18px; color: var(--muted); }
 .hm-marks a { color: var(--muted); display: inline-flex; padding: 2px 8px; border: 1px solid var(--hairline); font-family: var(--font-mono); font-size: var(--fs-xs); text-decoration: none; white-space: nowrap; }

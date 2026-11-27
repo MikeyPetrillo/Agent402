@@ -7,6 +7,13 @@
 //   - /reports and /credits set the display serif on the type scale (--fs-4xl), never a 5vw clamp;
 //   - /status: a tap on a day strip writes that day's reading under it, and the
 //     lead names tap beside hover.
+//   - a row of tags never begins a row with its dot, and no line of text with a
+//     separator or a period; a short heading does not open on one word;
+//   - /revenue's rows of segments fit their card, /status readings are never cut,
+//     a hyphenated name and a short camelCase field stay whole;
+//   - skill pack step numbers meet AA contrast in both schemes; the home page's
+//     people card ends under its buttons at 1440 px;
+//   - a changed width re-measures the wraps (assets/js/site-chrome.js a402Rebind).
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
@@ -111,6 +118,113 @@ try {
     await p.touchscreen.tap(box.x + box.width * (2.5 / 30), box.y + box.height / 2);
     const read = await p.evaluate(() => { const r = document.querySelector('.bars[data-phone-ux-probe="1"]').nextElementSibling; return r && r.classList.contains("bar-read") ? { t: r.textContent, live: r.getAttribute("aria-live") } : null; });
     ok(read && read.t === "2026-11-03: 100% of 3 probes" && read.live === "polite", `/status: a tap on the strip reads that day under it (${read && read.t})`);
+    await p.close();
+  }
+  // --- Layout shapes measured after a review of rendered pages -------------
+  // A row of tags joined by dots never begins a row with its dot: the tag
+  // that starts a row carries its dot left of the row's clip (sepRowCss).
+  for (const [path, width] of [["/", 375], ["/", 1440], ["/sell", 375], ["/revenue", 375], ["/status", 375]]) {
+    const p = await open(path, width);
+    await p.waitForTimeout(300);
+    const r = await p.evaluate(() => {
+      const rows = new Set(), shown = [];
+      for (const el of document.querySelectorAll("main span, footer span")) {
+        if (getComputedStyle(el, "::before").content !== '"·"') continue;
+        const row = el.parentElement, a = row.getBoundingClientRect(), b = el.getBoundingClientRect();
+        if (!b.width) continue;
+        rows.add(row);
+        const prev = el.previousElementSibling;
+        const startsRow = !prev || b.top > prev.getBoundingClientRect().top + 4;
+        const dotRight = b.left + parseFloat(getComputedStyle(el).paddingLeft);
+        // Drawn when the dot's box is inside the row, or the row does not clip.
+        if (startsRow && (dotRight > a.left + 1 || getComputedStyle(row).clipPath === "none")) shown.push(el.textContent.trim().slice(0, 30));
+      }
+      const text = [];
+      const tw = document.createTreeWalker(document.querySelector("main"), NodeFilter.SHOW_TEXT); let prevTop = null; const rg = document.createRange();
+      for (let n = tw.nextNode(); n; n = tw.nextNode()) { if (n.parentElement.closest("pre,script,style,details:not([open])")) continue; for (let i = 0; i < n.data.length; i++) { if (/[\s⁠]/.test(n.data[i])) continue; rg.setStart(n, i); rg.setEnd(n, i + 1); const b = rg.getBoundingClientRect(); if (!b.height) continue; if (prevTop !== null && b.top > prevTop.top + prevTop.h * 0.6 && b.left < prevTop.left && /[·.]/.test(n.data[i]) && /\s/.test(n.data[i + 1] || " ")) text.push(n.data.slice(i, i + 24)); prevTop = { top: b.top, left: b.left, h: b.height }; } }
+      return { rows: rows.size, shown, text };
+    });
+    ok(r.rows > 0 && r.shown.length === 0, `${path} at ${width}px: no row of tags begins with its dot (${r.rows} rows)${r.shown.length ? `: ${r.shown.join("; ")}` : ""}`);
+    ok(r.text.length === 0, `${path} at ${width}px: no line of text begins with a separator dot or a period${r.text.length ? `: ${r.text.join("; ")}` : ""}`);
+    if (path === "/sell") {
+      // Control: with the pull-back margin removed, the same measure finds the dots.
+      const seen = await p.evaluate(() => { const st = document.createElement("style"); st.textContent = ".ml-meta>span{margin-left:0 !important}"; document.head.append(st); let n = 0; for (const el of document.querySelectorAll("main .ml-meta > span")) { const prev = el.previousElementSibling, b = el.getBoundingClientRect(), a = el.parentElement.getBoundingClientRect(); if (prev && b.top > prev.getBoundingClientRect().top + 4 && b.left + parseFloat(getComputedStyle(el).paddingLeft) > a.left + 1) n++; } return n; });
+      ok(seen > 0, `control: without the pull-back a wrapped tag shows its dot (${seen})`);
+    }
+    await p.close();
+  }
+  // A heading of four or five words does not open on one word alone.
+  {
+    const p = await open("/sell");
+    await p.waitForTimeout(300);
+    const lone = await p.evaluate(() => [...document.querySelectorAll("main h2")].map((h) => {
+      const words = h.textContent.trim().split(/[\s ]+/); if (words.length < 4 || words.length > 5) return null;
+      const r = document.createRange(), tw = document.createTreeWalker(h, NodeFilter.SHOW_TEXT); const tops = [];
+      for (let n = tw.nextNode(); n; n = tw.nextNode()) for (const m of n.data.matchAll(/[^\s ]+/g)) { r.setStart(n, m.index); r.setEnd(n, m.index + 1); tops.push(Math.round(r.getBoundingClientRect().top)); }
+      return tops.length > 1 && tops[1] > tops[0] + 4 ? h.textContent.trim() : null;
+    }).filter(Boolean));
+    const read = await p.evaluate(() => [...document.querySelectorAll("main h2")].filter((h) => { const n = h.textContent.trim().split(/[\s ]+/).length; return n === 4 || n === 5; }).length);
+    ok(read >= 3 && lone.length === 0, `/sell at 375px: no four- or five-word heading opens on one word (${read} read)${lone.length ? `: ${lone.join("; ")}` : ""}`);
+    await p.close();
+  }
+  // /revenue: each row of segments ends inside its card. /status: a reading is never cut.
+  {
+    const p = await open("/revenue");
+    const out = await p.evaluate(() => { const card = document.querySelector(".rvz"); const inner = card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight); return [...document.querySelectorAll(".rvz-controls:not(details .rvz-controls) .rvz-seg")].map((s) => Math.round(s.scrollWidth - s.clientWidth) + ":" + Math.round(s.getBoundingClientRect().right - inner)); });
+    ok(out.length >= 2 && out.every((v) => { const [over, past] = v.split(":").map(Number); return over <= 0 && past <= 0; }), `/revenue at 375px: the rows of segments fit their card (${out.join(", ")})`);
+    const period = await p.evaluate(() => { const s = document.getElementById("rvzWindowText"); const n = s && s.nextSibling; return Boolean(s && n && n.nodeType === 3 && n.data.startsWith(".") && getComputedStyle(s.parentElement).whiteSpace === "nowrap"); });
+    ok(period, "/revenue: the period after the window's dates is held to them");
+    await p.close();
+    const s = await open("/status");
+    const cut = await s.evaluate(() => [...document.querySelectorAll(".lrow .lv")].filter((e) => e.scrollWidth > e.clientWidth + 1 || getComputedStyle(e).textOverflow === "ellipsis" || [...e.childNodes].some((n) => { if (n.nodeType !== 3) return false; const r = document.createRange(); for (const m of n.data.matchAll(/[\p{L}\p{N}]{2,}/gu)) { r.setStart(n, m.index); r.setEnd(n, m.index + m[0].length); if (r.getClientRects().length > 1) return true; } return false; })).map((e) => e.textContent.trim().slice(0, 30)));
+    const rows = await s.evaluate(() => document.querySelectorAll(".lrow .lv").length);
+    ok(rows > 3 && cut.length === 0, `/status at 375px: no live reading is cut or split inside a word (${rows} rows)${cut.length ? `: ${cut.join("; ")}` : ""}`);
+    await s.close();
+  }
+  // A name that holds hyphens, and a short camelCase field name, stay whole.
+  {
+    const whole = async (path, find) => { const p = await open(path); await p.waitForTimeout(300); const n = await p.evaluate((find) => { const tw = document.createTreeWalker(document.querySelector("main"), NodeFilter.SHOW_TEXT); const out = []; for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (t.parentElement.closest("pre")) continue; let at = -1; while ((at = t.data.indexOf(find, at + 1)) >= 0) { const r = document.createRange(); r.setStart(t, at); r.setEnd(t, at + find.length); out.push(new Set([...r.getClientRects()].map((b) => Math.round(b.top))).size); } } return out; }, find); await p.close(); return n; };
+    const duns = await whole("/company", "D-U-N-S");
+    ok(duns.length >= 1 && duns.every((n) => n === 1), `/company at 375px: D-U-N-S sits on one line (${duns.join(",")})`);
+    const field = await whole("/insider-trades-api", "primaryDocument");
+    ok(field.length >= 1 && field.every((n) => n === 1), `/insider-trades-api at 375px: primaryDocument is not split (${field.join(",")})`);
+  }
+  // Skill pack pages: the workflow's step numbers meet WCAG AA contrast in both schemes.
+  for (const scheme of ["light", "dark"]) {
+    const p = await browser.newPage({ viewport: { width: 375, height: 900 }, colorScheme: scheme });
+    await p.goto(`${BASE}/skills/seo-audit`, { waitUntil: "load" });
+    const ratio = await p.evaluate(() => {
+      const cs = getComputedStyle(document.querySelector(".sk-wf li"), "::before");
+      const lum = (c) => { const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const a = lum(cs.color), b = lum(cs.backgroundColor); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    });
+    ok(ratio >= 4.5, `/skills/seo-audit (${scheme}): a workflow step number has ${ratio.toFixed(1)}:1 contrast (4.5 or more)`);
+    await p.close();
+  }
+  // Home at 1440px: the people card ends under its buttons, with no empty band above them.
+  {
+    const p = await open("/", 1440);
+    const gap = await p.evaluate(() => { const act = document.querySelector(".hm-door-people .hm-door-act"); return act ? Math.round(act.getBoundingClientRect().top - act.previousElementSibling.getBoundingClientRect().bottom) : null; });
+    ok(gap !== null && gap <= 32, `home at 1440px: the people card's buttons follow its text (${gap}px)`);
+    await p.close();
+  }
+  // A changed width re-measures the wraps: a page loaded wide and narrowed
+  // reads as the same page loaded narrow. Stale wraps are the control.
+  {
+    const snap = (p) => p.evaluate(() => document.querySelector("main").innerHTML.replace(/\s(?:tabindex|style|class|data-wbr)="[^"]*"/g, ""));
+    for (const path of ["/how-to-pay", "/sell"]) {
+      const fresh = await open(path, 375); await fresh.waitForTimeout(400); const want = await snap(fresh); await fresh.close();
+      const p = await open(path, 1440); await p.waitForTimeout(400);
+      const wide = await snap(p);
+      await p.setViewportSize({ width: 375, height: 900 }); await p.waitForTimeout(700);
+      const got = await snap(p); await p.close();
+      ok(wide !== want, `${path}: the wraps bound at 1440px differ from those at 375px (control)`);
+      ok(got === want, `${path}: narrowed from 1440px to 375px, the text is bound as a fresh load at 375px binds it`);
+    }
+    const p = await open("/how-to-pay", 1440); await p.waitForTimeout(400);
+    const before = await snap(p);
+    await p.setViewportSize({ width: 1440, height: 500 }); await p.waitForTimeout(500);
+    ok((await snap(p)) === before, "a change of height alone (a phone's address bar) re-measures nothing");
     await p.close();
   }
 } finally {

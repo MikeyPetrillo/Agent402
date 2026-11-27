@@ -19,7 +19,7 @@ import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ONFINALITY_RPCS } from "./rpc-terms.js";
-import { ledgerShell, ledgerFooterCompact, codeBlock } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, codeBlock, sepRowCss } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP, GATED_RAILS, railKey, chainDisplayName } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
@@ -2421,7 +2421,7 @@ export function revenueRangeControl(range) {
       </form>
     </div>
     ${range.notice ? `<p class="rvr-note" id="rvzRangeNotice">That range could not be read (${esc(range.notice)}), so this shows the default.</p>` : ""}
-    <p class="rvr-window" id="rvzWindow">Showing <strong id="rvzWindowText" style="white-space:nowrap;">${esc(windowLabel(w))}</strong>. Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
+    <p class="rvr-window" id="rvzWindow">Showing <span style="white-space:nowrap;"><strong id="rvzWindowText">${esc(windowLabel(w))}</strong>.</span> Cumulative lines start at zero on the first day shown; distinct buyers to date are all-time. The headline figures above and the tables below are all-time.</p>
     ${totals}`;
 }
 
@@ -2438,10 +2438,12 @@ export function revenueChartSection(range = null) {
   /* design-tokens: off-end */
   .rvz{border:1px solid var(--hairline);background:var(--card);padding:18px 20px;margin:0 0 26px}
   .rvz-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-  .rvz-seg{display:inline-flex;border:1px solid var(--hairline)}
+  .rvz-seg{display:inline-flex;border:1px solid var(--hairline);max-width:100%;overflow-x:auto}
   .rvz-seg button{background:transparent;border:none;border-right:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 12px;cursor:pointer;white-space:nowrap}
   .rvz-seg button:last-child{border-right:none}
   .rvz-seg button.on{background:var(--panel);color:var(--on-panel);font-weight:700}
+  /* On a phone the widest row of segments fits its card: tighter side padding, and a row still too wide scrolls in place. */
+  @media (max-width:480px){.rvz-seg button{padding:6px 8px}}
   .rvz-legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:10px 0 0}
   .rvz-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
   .rvz-legend i{width:10px;height:10px;display:inline-block}
@@ -2464,8 +2466,10 @@ export function revenueChartSection(range = null) {
   .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--control);border-radius:var(--radius);padding:5px 8px;min-width:0}
   .rvr-custom button{padding:6px 12px}
   .rvr-window,.rvr-totals,.rvr-note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 8px}
-  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 0}
-  .rvr-totals>span{white-space:nowrap}.rvr-totals>span+span:not(:nth-child(2))::before{content:"·";padding:0 8px;color:var(--muted)}.rvr-totals>span:first-child{margin-right:6px}
+  .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;row-gap:4px}
+  .rvr-totals>span{white-space:nowrap}${sepRowCss(".rvr-totals", 8)}.rvr-totals>span::before{color:var(--muted)}
+  /* The label and the first figure carry no dot; the label sits 6px before the figure. */
+  .rvr-totals>span:first-child{margin-left:0;padding-left:0;margin-right:calc(6px - 16px - 1ch)}.rvr-totals>span:first-child::before,.rvr-totals>span:nth-child(2)::before{content:none}
   .rvr-note{color:var(--warn)}
   @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
@@ -2634,7 +2638,7 @@ export function revenuePage(baseUrl, snap) {
     <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 6px;">Every payment through our rails on both wires (<strong>x402</strong> and <strong>MPP</strong>), read from the chain, plus card checkout purchases from our card processor's records; revenue counts only money from others, throughput our own canary and volume runs too.</p>
     ${agents ? `<p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 6px;">The wallet count reads on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers${gwBatched ? ", Circle Gateway batched buyers" : ""}, or a settlement whose payer is not exposed.</p>` : ""}
     <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;"><a href="/transparency#revenue-figures">How each figure is derived</a>, published so these rails can be checked against the chain.</p>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">${ledgerAsOf ? `payments read from the chains as of ${esc(ledgerAsOf)}, refreshed ${revenueLedgerCadence()} · rail status as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}` : `rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}`} · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 28px;">${ledgerAsOf ? `payments read from the chains as of ${esc(ledgerAsOf)}, refreshed ${revenueLedgerCadence()}&nbsp;· rail status as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}` : `rails read as of ${esc(snap.asOf)}, refreshed ${revenueSnapshotCadence()}`}&nbsp;· <a href="/api/revenue">/api/revenue</a>&nbsp;· <a href="/api/revenue/mpp">/api/revenue/mpp</a>&nbsp;· <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection(snap.range)}

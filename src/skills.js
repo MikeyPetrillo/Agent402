@@ -14,7 +14,7 @@
 // rather than crashing, useful for catching dead references in the test suite.
 import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock, sepRowCss } from "./ledger-chrome.js";
 import { firstFit } from "./seo-meta.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
@@ -2781,7 +2781,7 @@ const SKILLS_CSS = `
 .sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
 .sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
 .sk-flagship-tools > span { white-space:nowrap; }
-.sk-flagship-tools > span + span::before { content:"·"; padding:0 6px; }
+${sepRowCss(".sk-flagship-tools", 6)}
 .sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
 /* Equal columns on wide screens, so how many chips share a row does not hang on font metrics. */
 @media (min-width:641px){ .sk-rest-grid { display:grid !important; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } .sk-rest-grid .sk-rest-chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } }
@@ -2812,7 +2812,7 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-tt thead { display:none; } .sk-tt tr { display:grid; grid-template-columns:minmax(0,1fr) max-content; border-bottom:1px solid var(--hairline); } .sk-tt td { border-bottom:0; } .sk-tt td.name { grid-row:1; grid-column:1; } .sk-tt td.price { grid-row:1; grid-column:2; } .sk-tt td.route, .sk-tt td.missing { grid-row:2; grid-column:1 / -1; padding-top:0; white-space:normal; overflow-wrap:break-word; } }
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
 .sk-wf li { position:relative; padding:10px 18px 10px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
-.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:10px; width:26px; height:26px; background:var(--panel); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
+.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:10px; width:26px; height:26px; background:var(--panel); color:var(--accent-lit); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
 `;
 
 const SKILLS_TABS = [
