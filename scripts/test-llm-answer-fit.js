@@ -16,8 +16,8 @@ import { LLM_MESSAGES_TOOLS, meteredMessagesQuoteUsd, EMPTY_MAX_TOKENS_MESSAGE }
 import { LLM_RESPONSES_TOOLS, meteredResponsesQuoteUsd, EMPTY_INCOMPLETE_MESSAGE } from "../src/tools/llm-responses-kit.js";
 import { LLM_GEMINI_TOOLS } from "../src/tools/llm-gemini-kit.js";
 import { CORS_EXPOSE_HEADERS } from "../src/cors.js";
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-llm-answer-fit");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-llm-answer-fit");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };

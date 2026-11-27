@@ -16,8 +16,8 @@
 //  - a model with no successor and no fallbacks still fails as before;
 //  - the successor never goes upstream carrying the opt-out field.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-requireUpstreamCosts("test-gateway-availability");
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
+const COSTS = costsOrStandIn("test-gateway-availability");
 process.env.OPENROUTER_API_KEY = "test-key";
 const { LLM_GATEWAY_TOOLS, AVAILABILITY_SUCCESSORS, failoverChain, retryRateLimited } = await import("../src/tools/llm-gateway-kit.js");
 const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");

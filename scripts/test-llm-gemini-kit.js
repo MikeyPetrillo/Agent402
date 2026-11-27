@@ -17,8 +17,8 @@ const {
 } = await import("../src/tools/llm-gemini-kit.js");
 const { TIERS } = await import("../src/tools/llm-gateway-kit.js");
 const { repointToGeminiWire } = await import("../src/tools/llm-gemini-kit.js");
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-llm-gemini-kit");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-llm-gemini-kit");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -114,7 +114,8 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
   const a = meteredGeminiQuoteUsd(body), b = meteredGeminiQuoteUsd(body);
   ok(a.usd === b.usd && a.usd > 0, "the same body quotes the same price twice");
   const big = meteredGeminiQuoteUsd({ contents: [{ role: "user", parts: [{ text: "word ".repeat(4000) }] }], model: "openai/gpt-4o" });
-  ok(big.usd > a.usd, "a longer prompt quotes more (the price is read from the body, not the route)");
+  // On the placeholder rates both bodies quote the floor, so the comparison reads the real table.
+  COSTS.rate("a longer prompt quotes more than a short one", () => ok(big.usd > a.usd, "a longer prompt quotes more (the price is read from the body, not the route)"));
   ok(meteredGeminiQuoteUsd({ contents: [] }).invalid === true && meteredGeminiQuoteUsd({ contents: [] }).usd === TIERS["v1-chat-metered"].price,
     "an invalid body quotes the floor and never throws: the handler's own 400 refuses it, uncharged");
 }

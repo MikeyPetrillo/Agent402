@@ -718,8 +718,8 @@ const OR_PORT = orStub.address().port;
 // which scripts/test-example-costs-suites.js runs this suite on): without one
 // those routes refuse with 503 by design, so the half needs a table loaded.
 {
-  const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-  requireUpstreamCosts("test-paytime-bounds (booted half)");
+  const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+  const COSTS = costsOrStandIn("test-paytime-bounds (booted half)");
 }
 // Ready is the health poll below, so the helper waits for the listening line only.
 const srv = await bootServer({ stores: "paytime-bounds", readyPath: null, args: ["--import", "./scripts/lib/openrouter-stub-preload.js"],

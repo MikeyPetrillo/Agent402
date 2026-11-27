@@ -20,8 +20,8 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 // Its quotes and caps read the private upstream-cost table: without it they
 // fall to the floor and the checks fail for that reason, so a missing table is
 // named (a failure under CI, a skip locally) instead.
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-gateway-resilience");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-gateway-resilience");
 import { EventEmitter } from "node:events";
 process.env.OPENROUTER_API_KEY = "test-key";
 process.env.OPENAI_API_KEY = "sk-test-not-real";

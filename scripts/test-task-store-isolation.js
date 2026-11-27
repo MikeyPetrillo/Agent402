@@ -17,9 +17,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
 import { createTaskStore, taskDataDir } from "../src/mcp-tasks.js";
-requireUpstreamCosts("test-task-store-isolation");
+const COSTS = costsOrStandIn("test-task-store-isolation");
 
 let pass = 0, fail = 0;
 const procs = [];

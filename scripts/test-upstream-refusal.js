@@ -14,8 +14,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-requireUpstreamCosts("test-upstream-refusal");
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
+const COSTS = costsOrStandIn("test-upstream-refusal");
 
 process.env.OPENROUTER_API_KEY = "test-key";
 delete process.env.OPENROUTER_FLEX;

@@ -9,8 +9,8 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import { __test, estimateXReadUsd, xDataSpendStatus, _xSpendReset, _xSpendBook } from "../src/tools/x-data-kit.js";
 import { REFUSAL_HOLD_MS } from "../src/daily-ceilings.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-requireUpstreamCosts("test-x-data-ceilings");
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
+const COSTS = costsOrStandIn("test-x-data-ceilings");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

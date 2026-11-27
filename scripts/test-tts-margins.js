@@ -12,10 +12,10 @@
 //
 //   UPSTREAM_COSTS_FILE=<private table> node scripts/test-tts-margins.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandInFromCatalog } from "./lib/stand-in-costs.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { TTS_TOOLS, TTS_TIERS, TTS_QUOTE, TTS_BACKUP_MODELS, ttsQuoteUsd } from "../src/tools/tts-kit.js";
-requireUpstreamCosts("test-tts-margins");
+const COSTS = await costsOrStandInFromCatalog("test-tts-margins");
 
 // The share of the paid amount a call's upstream cost may take (the bound the
 // speech tiers have always been held to).
@@ -33,6 +33,8 @@ for (const slug of quoted) {
   ok(tier.chain[0] === tier.model, `${slug}: the documented model is the first link`);
   for (const model of links) {
     const rate = upstreamCosts().speech?.[model];
+    // Rate checks: the private row and its bound at every length.
+    if (COSTS.standIn) { COSTS.needsTable(`${slug}: the private per-char row for ${model}`); COSTS.needsTable(`${slug}: ${model} within the margin share of the quote at every length`); continue; }
     ok(Number.isFinite(rate) && rate > 0, `${slug}: a private per-char row exists for ${model}`);
     if (!(Number.isFinite(rate) && rate > 0)) continue;
     // Worst ratio of cost to the margin allowance over every length (1.0 =

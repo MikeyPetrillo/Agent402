@@ -11,6 +11,10 @@
 //      (requireUpstreamCosts, requireTestPg), run under CI without it: exit 1.
 //   3. A split suite (scripts/test-images-fast-kit.js) without the table: its
 //      rate-free checks run, and under CI the missing rate checks fail it.
+//   4. The private cost table: a suite runs on stand-in costs without it
+//      (scripts/lib/stand-in-costs.js) and counts its rate checks as needing
+//      the table. The suites that still skip WHOLE without it are named in
+//      WHOLE_SKIP_WITHOUT_TABLE with the reason; that list may only shrink.
 //
 //   node scripts/test-no-silent-skips.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -107,6 +111,56 @@ const helper = (body, env) => run(["--input-type=module", "-e", `import "./scrip
   ok(count(ci.out) > 200 && /content_filtered/.test(ci.out) && (ci.out.match(/^FAIL - /gm) || []).length === 1, `...after running its rate-free checks: the 422 content_filtered answers, the outage answers, the price constants (${count(ci.out)} passed, the one failure is the missing table)`);
   const local = run(["scripts/test-images-fast-kit.js"], {});
   ok(local.code === 0 && count(local.out) === count(ci.out) && /^SKIP - test-images-fast-kit \(rate checks only/m.test(local.out), `...and outside CI the same checks pass with the rate checks alone skipped (exit ${local.code}, ${count(local.out)} passed)`);
+}
+
+// ---- 4. the private cost table: stand-ins, and the suites that still skip whole ----
+// A suite on this list calls requireUpstreamCosts(): with no table it prints a
+// whole-suite skip locally (and fails under CI). Every other suite that reads
+// the table runs on stand-ins. A suite leaves the list by moving to
+// costsOrStandIn(); nothing is added.
+const WHOLE_SKIP_WITHOUT_TABLE = new Map([
+  ["test-gateway-model-ids.js", "a live drift guard: every verdict is the real table against the live catalog's prices"],
+  ["test-pricing-margin.js", "every check is a margin bound computed from the real rates"],
+  ["test-llm-gateway.js", "its clamp checks read which link of a chain is dearer; the rest of the file builds on those clamps"],
+  ["test-llm-kit-spend.js", "its expectations are computed from the table's own rows for named models"],
+  ["test-metered-uncapped-reasoning.js", "a quote against the table-rate bill of one named model's row"],
+  ["test-ox-tier.js", "reads the real row of one model and the clamp that row produces"],
+  ["test-server-tools.js", "whether a body fits a tier's price is decided by the real rates of its representative models"],
+  ["test-x-data-kit.js", "its spend ceilings are sized from the real per-read rates"],
+]);
+const WHOLE_SKIP_MAX = 8;
+{
+  const suites = readdirSync(DIR).filter((f) => /^test-.*\.js$/.test(f) && f !== "test-no-silent-skips.js");
+  const text = (f) => readFileSync(join(DIR, f), "utf8");
+  const whole = suites.filter((f) => /\brequireUpstreamCosts\(/.test(text(f)));
+  const standIn = suites.filter((f) => /\bcostsOrStandIn(?:FromCatalog)?\(/.test(text(f)));
+  const unnamed = whole.filter((f) => !WHOLE_SKIP_WITHOUT_TABLE.has(f));
+  const stale = [...WHOLE_SKIP_WITHOUT_TABLE.keys()].filter((f) => !whole.includes(f));
+  ok(unnamed.length === 0, `a suite that reads the cost table runs on stand-ins without it (costsOrStandIn in scripts/lib/stand-in-costs.js)${unnamed.length ? `; these skip whole instead: ${unnamed.join(", ")}` : ""}`);
+  ok(stale.length === 0, `every suite named as skipping whole still does (delete the ones that moved to stand-ins)${stale.length ? `: ${stale.join(", ")}` : ""}`);
+  ok(WHOLE_SKIP_WITHOUT_TABLE.size <= WHOLE_SKIP_MAX && [...WHOLE_SKIP_WITHOUT_TABLE.values()].every((why) => why.length > 30), `the whole-skip list never grows past its frozen size and each entry says why (${WHOLE_SKIP_WITHOUT_TABLE.size} of ${WHOLE_SKIP_MAX})`);
+  ok(standIn.length >= 25 && standIn.every((f) => !whole.includes(f)), `the other suites that read the table run on stand-ins (${standIn.length}), none of them both ways`);
+
+  // The helper itself, in a child with no table: everything runs, a rate
+  // check is counted and never run, and the exit code is CI's to decide.
+  const probe = `const { costsOrStandIn, standInCosts, standInUsd } = await import("./scripts/lib/stand-in-costs.js");
+const { upstreamCostsLoaded, upstreamCostsGaps, upstreamCosts } = await import("./src/upstream-costs.js");
+const COSTS = costsOrStandIn("probe", { media: [["probe/model", 0.02]] });
+let ran = 0; COSTS.rate("a margin floor", () => { ran++; });
+console.log("STATE " + JSON.stringify({ standIn: COSTS.standIn, real: COSTS.real, ran, needed: COSTS.needed, loaded: upstreamCostsLoaded(), gaps: upstreamCostsGaps().length, row: upstreamCosts().media["probe/model"].worstCaseUsd === standInUsd(0.02, 0), under: standInUsd(0.02, 0) < 0.02 * 0.7, child: JSON.parse(process.env.UPSTREAM_COSTS_JSON).media["probe/model"].worstCaseUsd === standInCosts({ media: [["probe/model", 0.02]] }).media["probe/model"].worstCaseUsd }));
+process.exit(0);`;
+  const state = (out) => { try { return JSON.parse(/^STATE (.*)$/m.exec(out)[1]); } catch { return {}; } };
+  const local = helper(probe, {});
+  const s = state(local.out);
+  ok(local.code === 0 && s.standIn === true && s.real === false && s.ran === 0 && s.needed === 1 && /^SKIP - probe \(rate checks only; the rate-free checks ran\): 1 check\(s\) need the table: a margin floor$/m.test(local.out), `without the table a suite runs on stand-ins, and a rate check is counted and named, never run (exit ${local.code})`);
+  ok(s.loaded === true && s.gaps === 0 && s.row === true && s.under === true && s.child === true, "the stand-in is a whole table: the placeholder file plus a row at a fixed share of the list price, under the margin, handed to child processes too");
+  const ci = helper(probe, { CI: "true" });
+  ok(ci.code === 1 && state(ci.out).ran === 0 && /^FAIL - probe \(rate checks\): [^\n]*1 check\(s\) need the table/m.test(ci.out), `under CI the same suite runs everything it can and then fails for the missing table (exit ${ci.code})`);
+  const fork = helper(probe, { CI: "true", UPSTREAM_COSTS_OPTIONAL: "1" });
+  ok(fork.code === 0 && /^SKIP - probe \(rate checks only/m.test(fork.out), `...except where the workflow says the run cannot hold the table (exit ${fork.code})`);
+  const example = fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
+  const real = helper(probe.replace('upstreamCosts().media["probe/model"].worstCaseUsd === standInUsd(0.02, 0)', "true").replace(/child: [^}]*\}\)\.media\["probe\/model"\]\.worstCaseUsd/, "child: true"), { CI: "true", UPSTREAM_COSTS_FILE: example });
+  ok(real.code === 0 && state(real.out).real === true && state(real.out).ran === 1 && !/^(SKIP|FAIL) - probe/m.test(real.out), `with a table loaded nothing is stood in: the rate check runs and no skip is printed (exit ${real.code})`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

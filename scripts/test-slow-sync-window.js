@@ -22,13 +22,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
 import { Challenge, Credential } from "mppx";
 import { slowSyncWindowSeconds, preferWaitSeconds, needsAsyncOrWait, slowSyncWindowMiddleware, syncWindowRefusalOf, SYNC_WINDOW_RETRY } from "../src/slow-sync-window.js";
 import { isTempoPushCredential } from "../src/mpp-tempo.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { carriesPaymentAttempt } from "../src/payment-attempt.js";
-requireUpstreamCosts("test-slow-sync-window");
+const COSTS = costsOrStandIn("test-slow-sync-window");
 
 // A Tempo PUSH credential (a transfer the buyer already sent), shape only.
 const pushCredential = () => Credential.serialize({

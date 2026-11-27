@@ -18,8 +18,8 @@
 // One PAID-mode server (scripts/lib/paid-wires-rig.js); the image tier's
 // cost rows come from the private table (src/upstream-costs.js).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-avm-long-settle-answer");
+const { costsOrStandInFromCatalog } = await import("./lib/stand-in-costs.js");
+const COSTS = await costsOrStandInFromCatalog("test-avm-long-settle-answer");
 const { bootPaidWires } = await import("./lib/paid-wires-rig.js");
 
 let pass = 0, rig = null;
