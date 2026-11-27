@@ -582,7 +582,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
   const mcpNote = computePayable
     ? `Hosted connector (<code>${e(baseUrl)}/mcp</code>): free, rate-limited. Stdio package: <code>npx -y agent402-mcp@0.17.1</code>.`
-    : `Hosted connector (<code>${e(baseUrl)}/mcp</code>): paid in the call. Stdio package (<code>npx -y agent402-mcp@0.17.1</code>): pays from a wallet${tool.identityBound ? "" : creditsSalesEnabled() ? " or <code>AGENT402_CREDITS_KEY</code>" : " or an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
+    : `Hosted connector (<code>${e(baseUrl)}/mcp</code>): paid in the call. Stdio package (<code>npx -y agent402-mcp@0.17.1</code>): pays from a wallet${tool.identityBound || paysThirdParty(tool) ? "" : creditsSalesEnabled() ? " or <code>AGENT402_CREDITS_KEY</code>" : " or an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
 
   const aliases = (Array.isArray(tool.aliases) ? tool.aliases : []).filter((a) => a && a !== tool.slug);
   const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";
