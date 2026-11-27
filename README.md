@@ -698,7 +698,7 @@ working tools, so you don't have to build the catalog yourself.
   non-custodial on the payment tools (your agent signs with its own key and we hold no crypto
   balance for it; prepaid card credits are a held balance and are named as one).
 
-Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402)
+Published for the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar).
 
 **Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
