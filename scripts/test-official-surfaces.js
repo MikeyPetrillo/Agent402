@@ -18,6 +18,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import { bootServer } from "./lib/boot-server.js";
 import { buildList, readList, diffLists, scanPackages, withReadmeSection, README, README_START, README_END } from "./gen-official-surfaces.js";
@@ -28,7 +29,7 @@ import { REPO_URL, REPO_SLUG, REPO_NAMESPACE } from "../src/repo-link.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const text = (html) => String(html).replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 
 // --- the list equals the repository ------------------------------------------
