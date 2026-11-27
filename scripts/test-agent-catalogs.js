@@ -13,32 +13,23 @@
 //
 //   node scripts/test-agent-catalogs.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { CATEGORY_MD_BUDGET_BYTES } from "../src/category-markdown.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A category subset may take at most this share of the whole document.
 const SUBSET_MAX_SHARE = 0.5;
 
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
 const SITE = "https://agent402.tools";
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, ...ownStoreEnv("agent-catalogs"), FREE_MODE: "true", PORT: String(PORT), BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
-  stdio: "ignore",
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+const srv = await bootServer({
+  stores: "agent-catalogs",
+  env: { FREE_MODE: "true", BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
 });
+const BASE = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  ok(srv.port > 0, "server booted");
   const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
   const rows = pricing.endpoints || [];
   const fullText = await (await fetch(`${BASE}/openapi.json`)).text();
@@ -115,7 +106,7 @@ try {
 } catch (e) {
   ok(false, e.stack || e.message);
 } finally {
-  proc.kill("SIGKILL");
+  await srv.stop();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -47,10 +47,8 @@
 // /supported and a /supported without a chain each remove the accept there
 // and leave the plain accepts alone.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -62,7 +60,7 @@ import Database from "better-sqlite3";
 import { parsePaymentRequired } from "@x402/core/schemas";
 import { x402ResourceServer } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   GATEWAY_API_BASE, GATEWAY_KIND_NAME, GATEWAY_WIRE, GatewayNanopaymentsClient, gatewayKindsFromSupported, gatewayAcceptFields,
   installGatewayRouting, isGatewayBatchedPayment, preflightGatewayPayment, createGatewayPendingBook, gatewayBalanceStatus,
@@ -1453,7 +1451,6 @@ await check("refund proof at Gateway: batched (not confirmed), another token, an
 // ---------------------------------------------------------------- part 2
 console.log("part 2: the paid server");
 
-const [P_PAYAI, P_CIRCLE, P_GW, ...SERVER_PORTS] = await getFreePorts(18);
 // transfers: Gateway's transfer records the stub answers lookups from;
 // acceptOnPending: a settle answered settlement_pending also writes a
 // `received` record for that authorization (Gateway accepted it a moment later).
@@ -1510,7 +1507,8 @@ const gwStub = createServer(async (req, res) => {
   }
   return rawJson(res, 404, {});
 });
-await Promise.all([[payaiStub, P_PAYAI], [circleStub, P_CIRCLE], [gwStub, P_GW]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+await Promise.all([payaiStub, circleStub, gwStub].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+const [P_PAYAI, P_CIRCLE, P_GW] = [payaiStub, circleStub, gwStub].map((s) => s.address().port);
 
 const tmp = mkdtempSync(join(tmpdir(), "a402-gateway-"));
 const preload = join(tmp, "redirect.mjs");
@@ -1526,40 +1524,32 @@ globalThis.fetch = function (input, init) {
 };
 `);
 const OP = "gateway-test-operator-token-0123456789";
-let portIdx = 0;
+// Port 0, read back: the port is the one each server bound (scripts/lib/boot-server.js).
+// `run` numbers the boots and names each one's own files.
+let runSeq = 0;
 async function boot(extraEnv = {}) {
-  const port = SERVER_PORTS[portIdx++];
-  mkdirSync(join(tmp, `refunds-${port}`), { recursive: true });
-  const env = { ...process.env };
-  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "CIRCLE_FACILITATOR_API_KEY", "GATEWAY_NANOPAYMENTS", "GATEWAY_NANOPAYMENT_NETWORKS", "GATEWAY_WITHDRAW_ALERT_USD", "GATEWAY_PENDING_WAIT_MS"]) delete env[k];
-  const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  const run = ++runSeq;
+  mkdirSync(join(tmp, `refunds-${run}`), { recursive: true });
+  const srv = await bootServer({
+    stores: "gateway-nano", args: ["--import", preload],
     env: {
-      ...env, PORT: String(port), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", GATEWAY_NANOPAYMENT_NETWORKS: "", GATEWAY_WITHDRAW_ALERT_USD: "",
+      FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,polygon,arc",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
       PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
       CIRCLE_FACILITATOR_API_KEY: KEY, CIRCLE_TEST_STUB: `http://127.0.0.1:${P_CIRCLE}`, GW_TEST_STUB: `http://127.0.0.1:${P_GW}`,
       GATEWAY_NANOPAYMENTS: "on", GATEWAY_PENDING_WAIT_MS: "600",
       SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), REFUND_DB_DIR: join(tmp, `refunds-${port}`), INFLIGHT_COVER: "off",
-      CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATEWAY_PENDING_FILE: join(tmp, `gateway-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-history-${port}.json`),
-      HANGUP_FORGIVE_FILE: join(tmp, `hangup-${port}.json`), AGENT402_OPERATOR_TOKEN: OP,
+      SALES_LEDGER_DB: join(tmp, `sales-${run}.db`), REFUND_DB_DIR: join(tmp, `refunds-${run}`), INFLIGHT_COVER: "off",
+      CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${run}.json`), GATEWAY_PENDING_FILE: join(tmp, `gateway-pending-${run}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-history-${run}.json`),
+      HANGUP_FORGIVE_FILE: join(tmp, `hangup-${run}.json`), AGENT402_OPERATOR_TOKEN: OP,
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  const log = { text: "" };
-  proc.stdout.on("data", (c) => { log.text += c; });
-  proc.stderr.on("data", (c) => { log.text += c; });
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) return { base, log, proc, port }; } catch { /* booting */ }
-    await sleep(500);
-  }
-  proc.kill("SIGKILL");
-  throw new Error(`server did not boot\n${log.text.slice(-3000)}`);
+  const log = { get text() { return srv.log(); } };
+  return { base: srv.url, log, proc: srv.child, run };
 }
 const PATH = "/api/demand-radar?limit=1";
 const read402 = async (base, path = PATH, init = {}) => {
@@ -1571,13 +1561,13 @@ const read402 = async (base, path = PATH, init = {}) => {
 const batchedOf = (env, network) => env.accepts.find((a) => a.network === network && a.extra?.name === GATEWAY_KIND_NAME);
 const plainOf = (env, network) => env.accepts.find((a) => a.network === network && a.scheme === "exact" && a.extra?.name !== GATEWAY_KIND_NAME);
 const pay = (base, p, path = PATH, init = {}) => fetch(`${base}${path}`, { ...init, headers: { ...(init.headers || {}), "payment-signature": Buffer.from(JSON.stringify(p)).toString("base64") } });
-const sales = (port) => { const db = new Database(join(tmp, `sales-${port}.db`), { readonly: true }); try { return db.prepare("SELECT slug, price_usd, rail, network, payer, tx, wire FROM sales ORDER BY id").all(); } finally { db.close(); } };
+const sales = (run) => { const db = new Database(join(tmp, `sales-${run}.db`), { readonly: true }); try { return db.prepare("SELECT slug, price_usd, rail, network, payer, tx, wire FROM sales ORDER BY id").all(); } finally { db.close(); } };
 const gwSettles = () => st.gwHits.filter((h) => h.url === "/v1/x402/settle").length;
 const gwVerifies = () => st.gwHits.filter((h) => h.url === "/v1/x402/verify").length;
 const leaks = (text) => text.includes(MARKER);
 
 await check("switch on: the 402 carries the batched accept on Arc and Base only, last, at the plain accept's price and payTo, valid against the protocol schema", async () => {
-  const { base, log, proc, port } = await boot();
+  const { base, log, proc, run } = await boot();
   try {
     const { env, header } = await read402(base);
     assert.match(log.text, /Circle Gateway batched option: offered on eip155:5042, eip155:8453|offered on eip155:8453, eip155:5042/);
@@ -1679,7 +1669,7 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     assert.deepEqual(pub2.gatewayBalance, { status: "withdraw" });
     assert.ok(!/"usd":\s*30\.5/.test(JSON.stringify(pub2)), "the public body carries no figure");
     assert.ok(!leaks(log.text), "no upstream body in the boot log");
-  } finally { proc.kill("SIGKILL"); void port; }
+  } finally { proc.kill("SIGKILL"); void run; }
 });
 
 await check("every catalog route's 402 stays under the challenge ceiling with the batched accepts in it; a route with a lasting effect (hasLastingEffect) or an identity-bound route carries none", async () => {
@@ -1735,7 +1725,7 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
 
 await check("a batched payment on Base and on Arc is served, settled by Gateway after the handler, booked under the gateway-batched wire, and carries a signed receipt naming Gateway's transaction", async () => {
   const receiptKey = Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
-  const { base, log, proc, port } = await boot({ RECEIPT_SIGNING_KEY: receiptKey, RECEIPT_SIGNING_KEY_ID: "r1-gateway", RECEIPT_RETIRED_KEYS: "" });
+  const { base, log, proc, run } = await boot({ RECEIPT_SIGNING_KEY: receiptKey, RECEIPT_SIGNING_KEY_ID: "r1-gateway", RECEIPT_RETIRED_KEYS: "" });
   try {
     const { keys } = await (await fetch(`${base}${RECEIPT_KEYS_PATH}`)).json();
     const { env } = await read402(base);
@@ -1772,14 +1762,14 @@ await check("a batched payment on Base and on Arc is served, settled by Gateway 
     assert.ok(!st.payaiHits.some((h) => h.url !== "/supported"), "the plain Base facilitator saw no batched payment");
     assert.ok(!st.circleHits.some((h) => h.url !== "/supported"), "Circle's Arc facilitator saw no batched payment");
     await sleep(400);
-    const rows = sales(port);
+    const rows = sales(run);
     assert.equal(rows.length, 2, `two sales booked (${JSON.stringify(rows)})`);
     assert.deepEqual(rows.map((r) => r.wire), [GATEWAY_WIRE, GATEWAY_WIRE]);
     assert.deepEqual(rows.map((r) => r.network), ["base", "arc"]);
     assert.ok(rows.every((r) => /^[0-9a-f-]{36}$/.test(r.tx) && r.payer === acct.address.toLowerCase() && r.rail === "usdc" && r.slug === "demand-radar"), "each row carries Gateway's id, the payer and the price");
     assert.equal(rows[0].price_usd, Number(batchedOf(env, "eip155:8453").amount) / 1e6, "the paid amount");
     // The ledger reads the row as settled off chain.
-    const { saleByTx } = await import("../src/sales-ledger.js?gw-" + port);
+    const { saleByTx } = await import("../src/sales-ledger.js?gw-" + run);
     void saleByTx;
     assert.ok(!leaks(log.text));
   } finally { proc.kill("SIGKILL"); }
@@ -1790,7 +1780,7 @@ await check("agent402-client with the gateway option pays the batched accept and
   const { x402Client } = await import("@x402/core/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
-  const { base, log, proc, port } = await boot();
+  const { base, log, proc, run } = await boot();
   try {
     st.gwHits.length = 0; st.payaiHits.length = 0; st.circleHits.length = 0;
     // The buyer: the catalog read from the real /api/pricing, the 402 read
@@ -1809,7 +1799,7 @@ await check("agent402-client with the gateway option pays the batched accept and
     }
     assert.ok(!st.payaiHits.some((h) => h.url !== "/supported") && !st.circleHits.some((h) => h.url !== "/supported"), "no chain facilitator saw the client's payment");
     await sleep(400);
-    const rows = sales(port);
+    const rows = sales(run);
     assert.equal(rows.length, 1, `one sale booked (${JSON.stringify(rows)})`);
     assert.equal(rows[0].wire, GATEWAY_WIRE);
     assert.match(rows[0].tx, /^[0-9a-f-]{36}$/, "the sale carries Gateway's transfer id");
@@ -1823,14 +1813,15 @@ await check("agent402-client with the gateway option pays the batched accept and
     st.gwHits.length = 0;
     await plain.call("demand-radar", { limit: 1 });
     assert.ok(st.payaiHits.some((h) => h.url === "/verify") && st.payaiHits.some((h) => h.url === "/settle"), "without the option the plain Base accept is paid through the plain facilitator");
-    assert.equal(st.gwHits.filter((h) => h.url !== "/v1/x402/supported").length, 0, "and Gateway saw nothing");
+    // The server's own balance read (its watch's first tick, timed from boot) is no part of this payment.
+    assert.equal(st.gwHits.filter((h) => h.url !== "/v1/x402/supported" && h.url !== "/v1/balances").length, 0, "and Gateway saw nothing");
     await sleep(400);
-    assert.equal(sales(port).length, 2, "the control booked a second sale");
-    assert.notEqual(sales(port)[1].wire, GATEWAY_WIRE, "a plain one");
+    assert.equal(sales(run).length, 2, "the control booked a second sale");
+    assert.notEqual(sales(run)[1].wire, GATEWAY_WIRE, "a plain one");
     // A short Gateway balance: Gateway refuses at verify, the 402 names the
     // deposit, the client relays it, and nothing is settled or booked.
     st.gwVerify = "short"; st.gwHits.length = 0;
-    const before = sales(port).length;
+    const before = sales(run).length;
     await assert.rejects(buyer.call("demand-radar", { limit: 2 }), (e) => {
       assert.equal(e.status, 402);
       // The signed authorization was sent, so the client cannot know it will
@@ -1841,7 +1832,7 @@ await check("agent402-client with the gateway option pays the batched accept and
       return true;
     });
     assert.equal(st.gwHits.filter((h) => h.url === "/v1/x402/settle").length, 0, "nothing was settled");
-    assert.equal(sales(port).length, before, "nothing was booked");
+    assert.equal(sales(run).length, before, "nothing was booked");
     { const sum = buyer.spendingSummary(); assert.equal(sum.dailyUsd, Number((rows[0].price_usd * 1).toFixed(6)), "settled spend counts only the settled calls"); assert.ok(sum.heldUsd >= rows[0].price_usd - 1e-9, `the refused authorization was sent and stays held against the caps (held ${sum.heldUsd})`); }
     st.gwVerify = "ok";
     // settlement_pending: the server books the payment and asks for the same
@@ -1853,7 +1844,7 @@ await check("agent402-client with the gateway option pays the batched accept and
     const settles = st.gwHits.filter((h) => h.url === "/v1/x402/settle");
     assert.equal(settles.length, 1, "Gateway was asked to settle once; the resend was served on its transfer record");
     await sleep(400);
-    const after = sales(port);
+    const after = sales(run);
     assert.equal(after.length, before + 1, "one sale for the pending payment");
     assert.equal(after[after.length - 1].wire, GATEWAY_WIRE);
     assert.equal(after[after.length - 1].tx, st.transfers[st.transfers.length - 1].id.toLowerCase(), "booked under Gateway's transfer record");
@@ -1862,7 +1853,7 @@ await check("agent402-client with the gateway option pays the batched accept and
 });
 
 await check("a handler 4xx never settles; settlement_pending answers 402 with the reason and hint, books no sale and lands in the pending book; an HTML 500 leaks nothing; a plain payment never reaches Gateway; a hang-up during verify runs and settles nothing", async () => {
-  const { base, log, proc, port } = await boot();
+  const { base, log, proc, run } = await boot();
   try {
     const { env } = await read402(base);
     const hash402 = await read402(base, "/api/hash", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
@@ -1875,7 +1866,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     assert.equal(gwVerifies(), 1, "Gateway verified it");
     assert.equal(gwSettles(), 0, "Gateway was never asked to settle a 4xx");
     await sleep(300);
-    assert.equal(sales(port).length, 0, "no sale");
+    assert.equal(sales(run).length, 0, "no sale");
     // settlement_pending, still unresolved after the wait.
     st.gw = "pending"; st.gwHits.length = 0;
     const accept = batchedOf(env, "eip155:8453");
@@ -1895,7 +1886,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     assert.equal(gwSettles(), 1, "one settle call, no vendor retry on an empty transaction");
     assert.ok(st.gwHits.some((h) => h.url.startsWith("/v1/x402/transfers?")), "Gateway's record was read during the wait");
     await sleep(400);
-    assert.equal(sales(port).length, 0, "no sale for a pending settlement");
+    assert.equal(sales(run).length, 0, "no sale for a pending settlement");
     const pending = await (await fetch(`${base}/__operator/gateway-pending.json`, { headers: { Authorization: `Bearer ${OP}` } })).json();
     assert.equal(pending.count, 1);
     assert.equal(pending.entries[0].nonce, pp.payload.authorization.nonce.toLowerCase());
@@ -1943,7 +1934,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     assert.equal(st.gwHits.length, 0, "Gateway saw nothing");
     assert.ok(st.payaiHits.some((h) => h.url === "/settle"), "the plain facilitator settled it");
     await sleep(400);
-    const rows = sales(port);
+    const rows = sales(run);
     assert.equal(rows.length, 1); assert.equal(rows[0].wire, "x402");
     // A batched-shaped payment on a chain without the option is refused before Gateway.
     st.gwHits.length = 0;
@@ -1965,7 +1956,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     st.gwVerifyDelayMs = 0;
     assert.equal(gwVerifies(), 1, "Gateway was asked to verify");
     assert.equal(gwSettles(), 0, "nothing settled for a buyer who left");
-    assert.equal(sales(port).length, 1, "no new sale");
+    assert.equal(sales(run).length, 1, "no new sale");
     const refunds = await (await fetch(`${base}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}` } })).json();
     assert.equal((refunds.refunds || []).length, 0, "nothing owed");
     assert.match(log.text, /SETTLE WITHHELD: client closed the connection/);
@@ -1974,7 +1965,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
 });
 
 await check("pending, end to end: Gateway accepts inside the wait -> served and booked once; still pending -> the same payment resent is refused at verify without reaching Gateway's verify or settle, then served exactly once on Gateway's record when it settles; the pending answers never trip the wallet's breaker", async () => {
-  const { base, log, proc, port } = await boot();
+  const { base, log, proc, run } = await boot();
   try {
     const { env } = await read402(base);
     const accept = batchedOf(env, "eip155:8453");
@@ -1989,7 +1980,7 @@ await check("pending, end to end: Gateway accepts inside the wait -> served and 
     assert.equal(decode(r1.headers.get("payment-response")).transaction, rec1.id, "the receipt names Gateway's transfer id");
     st.acceptOnPending = false;
     await sleep(400);
-    assert.deepEqual(sales(port).map((x) => [x.tx, x.wire]), [[rec1.id, GATEWAY_WIRE]], "one sale, under Gateway's transfer id");
+    assert.deepEqual(sales(run).map((x) => [x.tx, x.wire]), [[rec1.id, GATEWAY_WIRE]], "one sale, under Gateway's transfer id");
     // Still pending after the wait, three times over (three payments): the
     // wallet's settle breaker counts none of them.
     const ps = [];
@@ -2022,7 +2013,7 @@ await check("pending, end to end: Gateway accepts inside the wait -> served and 
     assert.equal(decode(served.headers.get("payment-response")).transaction, rec.id);
     assert.equal(gwVerifies() + gwSettles(), 0, "served on the record: still no Gateway verify or settle");
     await sleep(400);
-    const rows = sales(port);
+    const rows = sales(run);
     assert.deepEqual(rows.map((x) => x.tx), [rec1.id, rec.id], "booked exactly once, under the transfer id");
     assert.equal(rows[1].wire, GATEWAY_WIRE);
     const pend2 = await (await fetch(`${base}/__operator/gateway-pending.json`, { headers: { Authorization: `Bearer ${OP}` } })).json();
@@ -2034,7 +2025,7 @@ await check("pending, end to end: Gateway accepts inside the wait -> served and 
     assert.ok(third.status !== 200 || third.headers.get("x-replayed-answer") === "1", `a payment already served is never run again: refused, or the stored answer marked as a replay (got ${third.status}, replay ${third.headers.get("x-replayed-answer")})`);
     assert.equal(gwVerifies() + gwSettles(), 0, "the resend reaches neither Gateway verify nor settle");
     await sleep(400);
-    assert.equal(sales(port).length, 2, "no second sale");
+    assert.equal(sales(run).length, 2, "no second sale");
     assert.ok(!leaks(log.text));
   } finally { proc.kill("SIGKILL"); st.gw = "ok"; st.acceptOnPending = false; }
 });

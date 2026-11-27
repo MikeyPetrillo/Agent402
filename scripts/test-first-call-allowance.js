@@ -33,14 +33,13 @@
 // of its own (dropped afterwards), and a served grant is also a record there.
 // Requires REDIS_URL (under CI a missing one fails).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { OUR_EVM_WALLETS } from "../src/revenue-live.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,14 +97,15 @@ const facilitator = createServer((req, res) => {
 });
 
 async function boot(extraEnv, { preload = null } = {}) {
-  const [port, facPort] = await getFreePorts(2);
-  if (!facilitator.listening) await new Promise((r) => facilitator.listen(facPort, "127.0.0.1", r));
+  if (!facilitator.listening) await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
   const fac = `http://127.0.0.1:${facilitator.address().port}`;
   const log = [];
-  const proc = spawn(process.execPath, [...(preload ? ["--import", preload] : []), join(ROOT, "src", "server.js")], {
-    cwd: ROOT,
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the paywall answering below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "first-call-allowance", args: preload ? ["--import", preload] : [], readyPath: null,
     env: {
-      ...process.env, TRUST_PROXY_HOPS: "1",
+      TRUST_PROXY_HOPS: "1",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: fac, AGENT402_BASE_RPC: `${fac}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
@@ -116,13 +116,14 @@ async function boot(extraEnv, { preload = null } = {}) {
       REFUND_DB_DIR: mkdtempSync(join(tmpdir(), "fca-refunds-")),
       HANGUP_FORGIVE_FILE: "off", STATS_ALLOW_EPHEMERAL: "true",
       LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
-      AGENT402_OPERATOR_TOKEN: OP_TOKEN, PORT: String(port), FREE_MODE: "",
+      AGENT402_OPERATOR_TOKEN: OP_TOKEN, FREE_MODE: "",
       ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  for (const l of srv.log().split("\n")) if (l.trim()) log.push(l.slice(0, 300));
   for (const st of [proc.stdout, proc.stderr]) st.on("data", (d) => { for (const l of String(d).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); if (log.length > 200) log.splice(0, log.length - 200); });
-  const B = `http://127.0.0.1:${port}`;
+  const B = srv.url;
   const quote = () => fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "hello world" }) }).catch(() => null);
   let r = null;
   for (let i = 0; i < 120; i++) { r = await quote(); if (r?.status === 402) break; await sleep(500); }

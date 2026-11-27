@@ -30,33 +30,29 @@
 //
 //   node scripts/test-robots-policy.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { parseRobots, robotsAllows } from "../src/tools/kit.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
+// The origin the server is told it is served at (BASE_URL): robots.txt names
+// its sitemap and crawl policy on it. The requests go to the port the server bound.
+const SITE = "http://robots-policy.test";
+let srv = null;
 
 let pass = 0;
-const fail = (m) => { console.error("FAIL:", m); try { proc.kill("SIGKILL"); } catch { /* gone */ } process.exit(1); };
+const fail = (m) => { console.error("FAIL:", m); try { srv?.child.kill("SIGKILL"); } catch { /* gone */ } process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: {
-    ...process.env, FREE_MODE: "true", PORT: String(PORT),
-    X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
-    MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-  },
-  stdio: "ignore",
-});
 
 try {
-  for (let i = 0; i < 180; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  srv = await bootServer({
+    stores: "robots-policy",
+    env: {
+      FREE_MODE: "true", BASE_URL: SITE,
+      X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
+      MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    },
+  });
+  const BASE = srv.url;
 
   const res = await fetch(`${BASE}/robots.txt`);
   ok(res.status === 200, `/robots.txt -> 200 (got ${res.status})`);
@@ -188,12 +184,12 @@ try {
   ok(blocked.length === 0, `no sitemap URL is disallowed to a named crawler${blocked.length ? `:\n  ${blocked.slice(0, 10).join("\n  ")}` : ""}`);
 
   // Sitemap reference and the orientation hint.
-  ok(txt.includes(`Sitemap: ${BASE}/sitemap.xml`), `robots.txt references Sitemap: ${BASE}/sitemap.xml`);
+  ok(txt.includes(`Sitemap: ${SITE}/sitemap.xml`), `robots.txt references Sitemap: ${SITE}/sitemap.xml`);
   ok(txt.includes("/llms.txt") && txt.includes("/openapi.json"), "robots.txt advertises /llms.txt + /openapi.json as machine-readable catalogs");
-  ok(/^# Crawling this catalog/m.test(txt) && txt.includes(`${BASE}/crawler`), "robots.txt points crawlers at the crawl policy page");
+  ok(/^# Crawling this catalog/m.test(txt) && txt.includes(`${SITE}/crawler`), "robots.txt points crawlers at the crawl policy page");
 
   console.log(`\n${pass} passed (${LLM_BOTS.length} LLM bots allowed; ${NAMED.length} named crawlers checked by outcome)`);
-  proc.kill("SIGKILL");
+  await srv.stop();
   process.exit(0);
 } catch (e) {
   fail(e?.stack || String(e));

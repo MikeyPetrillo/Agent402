@@ -16,11 +16,9 @@
 //
 //   node scripts/test-crawl-signals.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { childJson } from "./lib/child-json.js";
 import { stripTags } from "./lib/html-text.js";
 
@@ -84,23 +82,20 @@ process.env.PROGRAMMATIC_THIN_FILE = join(THIN_DIR, "offline-thin.json");
 }
 
 // --- booted ------------------------------------------------------------------
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
 // A thin decision kept by an earlier process: the booted server's first sitemap leaves the page out.
 const { SEED_TICKERS: SEEDS } = await import("../src/programmatic-seeds.js");
 const BOOT_THIN = `/reports/insider/${SEEDS[3]}`;
 const BOOT_THIN_FILE = join(THIN_DIR, "boot-thin.json");
 writeFileSync(BOOT_THIN_FILE, JSON.stringify({ paths: [BOOT_THIN] }));
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, ...ownStoreEnv("crawl-signals"), PROGRAMMATIC_THIN_FILE: BOOT_THIN_FILE, FREE_MODE: "true", PORT: String(PORT), BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
-  stdio: "ignore",
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+const srv = await bootServer({
+  stores: "crawl-signals",
+  env: { PROGRAMMATIC_THIN_FILE: BOOT_THIN_FILE, FREE_MODE: "true", BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
 });
+const BASE = srv.url;
 const get = async (p, opts = {}) => { const r = await fetch(`${BASE}${p}`, { redirect: "manual", ...opts }); return { status: r.status, headers: r.headers, text: await r.text() }; };
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  ok(srv.port > 0, "server booted");
   {
     const first = (await get("/sitemap.xml")).text;
     const reports = (await get("/sitemap-reports.xml")).text;
@@ -232,7 +227,7 @@ try {
 } catch (e) {
   ok(false, e.stack || e.message);
 } finally {
-  proc.kill("SIGKILL");
+  await srv.stop();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
