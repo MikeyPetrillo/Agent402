@@ -74,9 +74,9 @@ export function runTimeNote(seconds, { windowSeconds = slowSyncWindowSeconds(), 
   // Past the sync window (src/slow-sync-window.js) a paid call says how it
   // waits: a job link, or Prefer: wait covering the run budget.
   if (needsAsyncOrWait({ slow: s > SLOW_ADVISE_SECONDS, maxSeconds: s }, windowSeconds)) {
-    return `Takes up to ${span}: send "Prefer: respond-async" for a job link (on x402 the payment settles only on a delivered result), or "Prefer: wait=${s}" and keep the connection open at least ${s + 30} seconds; with neither, a paid call is answered 400 before any payment.${settleFirstClause({ settlesFirst })}`;
+    return `Takes up to ${span} to answer: send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result), or with "Prefer: wait=${s}" and keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer. A paid call with neither header is answered 400 before any payment is taken.${settleFirstClause({ settlesFirst })}`;
   }
-  return `Takes up to ${span}: keep the connection open at least ${s + 30} seconds, or send "Prefer: respond-async" for a job link (on x402 the payment settles only on a delivered result).${settleFirstClause({ settlesFirst })}`;
+  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result).${settleFirstClause({ settlesFirst })}`;
 }
 
 const UINT = /^\d{1,20}$/;

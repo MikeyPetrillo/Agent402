@@ -146,6 +146,8 @@ LLC: credit the entity, never a personal name.
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.
+- A tool with a long description may set `pageSummary` (optional): a shorter text that only its `/tools/<slug>` page shows, with every
+  credit, disclaimer and model-backed marking of the description; every listing keeps `description` (`scripts/test-description-length.js`).
 - A tool whose answer is bytes (the `{ __binary, contentType }` sentinel) declares `mimeType`, the type its published example
   returns; listings, `/openapi.json` and `/api/pricing` read it (`src/tool-media-type.js`, `scripts/test-bazaar-contracts.js`).
 - A tool that reaches the network on its own example is in `WALLET_ONLY_SLUGS` (`src/pow.js`), the
