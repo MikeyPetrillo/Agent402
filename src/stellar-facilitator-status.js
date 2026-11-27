@@ -1,3 +1,4 @@
+import { noteFundingReading } from "./funding-runway.js";
 // Low-water alarm for the Stellar facilitator's fee-paying account.
 //
 // Every other spending wallet we run has one (upstreamBuyer, upstreamBuyerAvm,
@@ -56,6 +57,9 @@ export async function stellarFacilitatorStatus({ fetchImpl = fetch } = {}) {
     } finally { clearTimeout(t); }
 
     if (!readsAsOurFacilitator(body)) return out("unknown");
+    // The runway's trail (src/funding-runway.js) keeps the figure this read
+    // already has; FACILITATOR_LOW_BALANCE_XLM is the facilitator's own line.
+    if (typeof body.xlmBalance === "number") noteFundingReading("stellar-facilitator", body.xlmBalance, Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 1, { unit: "XLM" });
     // The facilitator reports low:null when Horizon itself was unreadable.
     // That is an unknown balance, not a healthy one.
     if (body.low === true) return out("low");

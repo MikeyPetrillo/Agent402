@@ -120,6 +120,7 @@ import { chargeSponsorReserveUsd, chargeSponsorshipWord } from "./tempo-charge-s
 import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
 import { recordSanctionsEvent } from "./sanctions-events.js";
 import { TEMPO_PATH_USD_ADDRESS, resolveTempoCurrency } from "./tempo-currencies.js";
+import { noteFundingReading } from "./funding-runway.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
 // commits to the chain id, so a mismatch is a rejected signature, not a
@@ -592,6 +593,7 @@ export async function subscriptionFeePayerStatus() {
     } finally { clearTimeout(t); }
     if (typeof hex !== "string" || !hex.startsWith("0x")) return { status: "unknown", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}`, ...charge };
     const usd = Number(BigInt(hex)) / 1e6;
+    noteFundingReading("subscription-sponsor", usd, low);
     // Bucketed, never the number: this rides a PUBLIC surface.
     return { status: usd < low ? "low" : "ok", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}`, ...charge };
   } catch {

@@ -10,6 +10,7 @@
 // and refuses 503 uncharged; do not read this status as covering it.
 // Bucketed status only: the balance number never leaves the server. 5-min
 // cache; public-RPC read with graceful "unknown" (an RPC flake must never page).
+import { noteFundingReading } from "./funding-runway.js";
 const BASE_RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com"];
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 // Sized against the LARGEST single spend this wallet can be asked to make, not
@@ -249,6 +250,7 @@ async function readBuyerStatus(pk) {
   let result;
   try {
     const balance = await readBaseBuyerBalance(pk);
+    if (balance != null) noteFundingReading("base", balance, BUYER_LOW_USD());
     result = balance == null
       ? { configured: true, status: "unknown", attests: "balance-only" }
       : { configured: true, status: balance < BUYER_LOW_USD() ? "low" : "ok", attests: "balance-only", trend: await noteBuyerBalanceStored(balance) };
@@ -343,6 +345,7 @@ async function readEvmChainStatus(chain, cfg, pk, { readBalance, now, evmBuyerRp
       const j = await res.json();
       if (typeof j.result === "string" && /^0x[0-9a-f]*$/i.test(j.result)) usd = Number(BigInt(j.result === "0x" ? "0x0" : j.result)) / 10 ** cfg.decimals;
     }
+    if (Number.isFinite(usd)) noteFundingReading(`evm:${chain}`, usd, lowUsdFor(chain), { now });
     result = Number.isFinite(usd)
       ? { configured: true, status: usd < lowUsdFor(chain) ? "low" : "ok", attests: "balance-only" }
       : { configured: true, status: "unknown", attests: "balance-only" };

@@ -60,6 +60,7 @@ import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomai
 import { markNotSellerBody } from "./response-observation.js";
 import { spendRefusalFields } from "./refusal-reason.js";
 import { noteSellerDeliveryOutcome } from "./seller-reputation.js";
+import { noteFundingReading } from "./funding-runway.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
  *  through usdFigure, as the lane's other sentences print them. */
@@ -338,6 +339,7 @@ export async function avmBuyerStatus() {
     } else {
       const asa = (json?.assets || []).find((a) => Number(a["asset-id"]) === 31566704);
       const usd = asa ? Number(asa.amount) / 1e6 : 0;
+      if (asa) noteFundingReading("algorand", usd, AVM_BUYER_LOW_USD());
       result = {
         configured: true,
         status: !asa || usd < AVM_BUYER_LOW_USD() ? "low" : "ok",

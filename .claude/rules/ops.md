@@ -27,6 +27,7 @@ paths:
   - "src/solana-leaderboard.js"
   - "src/board-refresh-slots.js"
   - "src/upstream-budgets.js"
+  - "src/funding-runway.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
   - "src/upstream-cap-refusals.js"
@@ -227,6 +228,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   heartbeat and the status probe page on both under "Scheduled check needs review: offsite-backup", closed on
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
+- **Funding runway:** `src/funding-runway.js` keeps a trail of the balance figures each low-water
+  reader already takes (the Base and other EVM buyer chains, Solana, Algorand, Tempo, the
+  subscription sponsor, the Stellar facilitator in XLM; at most one reading per wallet per 30
+  minutes, 24 hours kept, the `funding-runway` state document), fits the spend per day by least
+  squares and reads `low-soon` when the line is reached within `FUNDING_RUNWAY_DAYS` (default 3),
+  `unknown` under four readings or six hours of span, `low` under the line. Operator view only
+  (`fundingRunway` on `/api/gateway-status`, with the figures); it makes no chain read, pages
+  nothing, moves no money and leaves every alarm word as it was (`scripts/test-funding-runway.js`).
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. A rail card on `/status` whose newest reading is more
   than `RAIL_PEER_LAG_MS` (6 hours) behind the newest rail reading (left out of the latest paid
