@@ -173,8 +173,8 @@ const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 
 //
 // A seller is a chat completion only by a real signal: its route ends
 // /chat/completions; or it ends /messages AND its listing says chat (its
-// category, or a declared request contract that names `messages` or
-// `model`). A bare /messages suffix is also a mailbox or an SMS route, which
+// category on a POST route, or a declared request contract on one that names
+// `messages` or `model`). A bare /messages suffix is also a mailbox or an SMS route, which
 // takes other fields and is never asked for these.
 //
 // The fields asked for are the seller's own when it declares them: the chat
@@ -185,7 +185,9 @@ const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 
 // nothing is missing or the route is not a chat completion.
 const CHAT_COMPLETIONS_PATH_RE = /\/chat\/completions\/?$/i;
 const MESSAGES_PATH_RE = /\/messages\/?$/i;
-const CHAT_CATEGORY_RE = /^(?:llm|llms|chat|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
+// A model category, never the bare word "chat": a chat room's message list
+// and a route that posts to a chat channel carry that word too.
+const CHAT_CATEGORY_RE = /^(?:llm|llms|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
 const CHAT_FIELDS = ["model", "messages", "prompt", "input"];
 const topField = (k) => (typeof k === "string" ? k.split(/[.[]/)[0] : "");
 export function chatFieldsMissing(ext, params) {
@@ -195,7 +197,8 @@ export function chatFieldsMissing(ext, params) {
   const requiredBody = Array.isArray(contract?.required?.body) ? contract.required.body.map(topField).filter(Boolean) : [];
   const optionalBody = Array.isArray(contract?.optional?.body) ? contract.optional.body.map(topField).filter(Boolean) : [];
   let chat = CHAT_COMPLETIONS_PATH_RE.test(path);
-  if (!chat && MESSAGES_PATH_RE.test(path)) {
+  // The Messages wire is a POST: a GET at /messages reads a list.
+  if (!chat && MESSAGES_PATH_RE.test(path) && String(ext?.method || "POST").toUpperCase() === "POST") {
     chat = CHAT_CATEGORY_RE.test(String(ext?.category || "").trim())
       || (Array.isArray(ext?.tags) && ext.tags.some((t) => typeof t === "string" && CHAT_CATEGORY_RE.test(t.trim())))
       || [...requiredBody, ...optionalBody].some((k) => k === "messages" || k === "model");

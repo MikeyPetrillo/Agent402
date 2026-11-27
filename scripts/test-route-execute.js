@@ -577,6 +577,27 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(bodies.length === 1 && r.receipt.seller === A.seller && bodies[0]?.to === "+15550100" && bodies[0]?.text === "hi" && chatFieldsMissing(ext, { to: "+15550100", text: "hi" }) === null,
         `a seller at POST /v1/messages taking {to, text} is called, not refused (${label}; ${bodies.length} buys)`);
     }
+    // A chat ROOM is not a chat completion: a GET message list, and a POST
+    // whose only chat signal is the bare category or tag word "chat", are
+    // called with the caller's own fields. A model category on a POST still
+    // reads as the Messages wire, and so does a contract naming model or messages.
+    for (const [ext, params, label] of [
+      [{ ...A, url: "https://a.example/rooms/42/messages", slug: "room-messages", method: "GET", category: "chat" }, { limit: 5 }, "a GET message list, category chat"],
+      [{ ...A, url: "https://a.example/channels/messages", slug: "channel-history", method: "GET", category: "social", tags: ["chat", "history"] }, { limit: 5 }, "a GET message list tagged chat"],
+      [{ ...A, url: "https://a.example/v1/messages", slug: "list-messages", method: "GET", category: "llm" }, { limit: 5 }, "a GET at /messages in a model category"],
+      [{ ...A, url: "https://a.example/rooms/messages", slug: "room-send", method: "POST", category: "chat" }, { room: "r", text: "hi" }, "a POST to a chat room, no contract"],
+      [{ ...A, url: "https://a.example/rooms/messages", slug: "room-send", method: "POST", category: "social", tags: ["chat"] }, { room: "r", text: "hi" }, "a POST tagged chat, no contract"]]) {
+      const urls = [];
+      let threw = null;
+      try { await mk(async (url) => { urls.push(url); return good; }, async () => [ext]).handler({ task: "t", include: "external", params }, {}); } catch (e) { threw = e; }
+      ok(!threw && urls.length === 1 && chatFieldsMissing(ext, params) === null, `${label} is called, not asked for model and messages (${threw ? `${threw.statusCode} ${String(threw.message).slice(0, 80)}` : `${urls.length} buys`})`);
+    }
+    ok(JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", method: "POST", category: "llm" }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", category: "inference" }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", method: "post", tags: ["chat-completions"] }, { model: "m" })) === '["messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/rooms/messages", method: "POST", category: "chat", requestContract: { required: { body: ["model", "messages"] } } }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/chat/completions", category: "chat" }, {})) === '["model","messages"]',
+    "CONTROL: a POST in a model category, one with a contract naming model and messages, and /chat/completions are still asked");
     // The seller's own declared fields decide: one that requires only
     // `prompt` is bought with a prompt, and is asked for `prompt` (never
     // `messages`) when it is missing.
