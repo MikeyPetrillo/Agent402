@@ -69,7 +69,7 @@ Loaded when an index, discovery, router or buyer file is read.
   and folded 1,000 rows per lane turn; a manifest crawl whose list passes 2,000 rows runs its merge,
   vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk
   stretch of 100 ms or more logs `[x402-index] crawl parse|walk ... <origin hash> <file or row count>
-  <size class>: longest=` (never the host). A new whole-document walk in the crawl goes through
+  [<size class>]: longest=` (never the host; a walk over rows has no size class). A new whole-document walk in the crawl goes through
   `crawlWalk` or `crawlWalkLaned` (`scripts/test-crawl-parse-off-loop.js`).
 - **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
   seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is

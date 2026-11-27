@@ -2450,7 +2450,7 @@ async function discoverOneSource(source, selfOrigin) {
       // the paged walk above folds it; nothing is published until the end.
       if (!Array.isArray(list) || list.length <= DISCOVERY_FOLD_TURN_ROWS) fold(list);
       else {
-        const from = { origin: source.url, doc: "registry-list", chars: 0 };
+        const from = { origin: source.url, doc: `registry-list ${list.length}-rows` };
         for (let i = 0; i < list.length; i += DISCOVERY_FOLD_TURN_ROWS) {
           await crawlLaneTurn();
           crawlWalk("registry-fold", from, () => fold(list.slice(i, i + DISCOVERY_FOLD_TURN_ROWS)));
@@ -3112,7 +3112,9 @@ function docSizeClass(text) {
 }
 function crawlDocLabel(from, text = from?.chars) {
   const key = from?.origin ? createHash("sha256").update(String(from.origin)).digest("hex").slice(0, 8) : "--------";
-  return `${key} ${from?.doc || "document"} ${docSizeClass(text)}`;
+  // A walk over rows names its row count; only a document has a size class.
+  const known = typeof text === "string" || Number(text) > 0;
+  return `${key} ${from?.doc || "document"}${known ? ` ${docSizeClass(text)}` : ""}`;
 }
 // A walk over a parsed document (or the rows read from it) that runs in one
 // stretch: a named span, and the long-turn line when it passes the threshold.

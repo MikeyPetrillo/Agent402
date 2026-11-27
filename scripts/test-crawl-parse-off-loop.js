@@ -256,6 +256,8 @@ idx.__setDiscoveryBodyFetchForTest(null);
   const line = lines.find((l) => l.startsWith(`[x402-index] crawl parse ${key} /openapi.json `));
   ok(line && new RegExp(`^\\[x402-index\\] crawl parse ${key} /openapi\\.json 4-12MB: in pieces longest=\\d+ms total=\\d+ms pieces=\\d+$`).test(line), `a long parse is logged with the origin's hash, the file and the size class (${line})`);
   ok(lines.filter((l) => /crawl (parse|walk) /.test(l)).length > 0 && !lines.some((l) => /crawl (parse|walk) /.test(l) && l.includes("named-j")), "no parse or walk line carries the host");
+  const walk = lines.find((l) => l.startsWith(`[x402-index] crawl walk routes ${key} /openapi.json`));
+  ok(walk && /^\[x402-index\] crawl walk routes [0-9a-f]{8} \/openapi\.json: longest=\d+ms$/.test(walk), `a walk is logged the same way, by hash (${walk})`);
   ok(was === 100, "the line's threshold is 100 ms unless a test lowers it");
 }
 
