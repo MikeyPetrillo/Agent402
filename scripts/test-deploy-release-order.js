@@ -2,7 +2,8 @@
 // never starts Railway's own deploy beside the job's trigger (two
 // deployments of one commit, the first stopped and marked FAILED). The
 // publish job runs ClawHub last, so a refusal on ClawHub's side never holds
-// back the npm and MCP Registry releases.
+// back the npm releases; the MCP Registry release is its own job after the
+// deploy.
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
@@ -120,22 +121,36 @@ ok(!/github\.event\.(commits|head_commit)/.test(JSON.stringify(Object.values(wf.
 
 const pub = (wf.jobs?.publish?.steps || []).map((s) => String(s.name || ""));
 const clawAt = pub.findIndex((n) => /ClawHub/.test(n));
-const registryAt = pub.findIndex((n) => /MCP Registry/.test(n));
 const npmAt = pub.map((n, i) => (/to npm$/.test(n) ? i : -1)).filter((i) => i >= 0);
-ok(clawAt >= 0 && registryAt >= 0, "the publish job holds the ClawHub and MCP Registry steps");
-ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after every npm publish and the MCP Registry");
+ok(clawAt >= 0 && npmAt.length >= 10, "the publish job holds the npm and ClawHub steps");
+ok(npmAt.every((i) => i < clawAt), "ClawHub runs after every npm publish");
+// The MCP Registry release is not in the job the deploy waits on: the registry
+// grants our name on a proof the deployed site serves, so it runs in
+// publish-registry, which needs the deploy and the npm publish and which the
+// deploy does not need (no cycle, and a registry refusal never holds it).
+const registryJob = wf.jobs?.["publish-registry"] || {};
+const registryStep = (registryJob.steps || []).find((s) => /MCP Registry/.test(String(s.name || "")) && /mcp-publisher publish/.test(String(s.run || "")));
+ok(!pub.some((n) => /MCP Registry/.test(n)) && Boolean(registryStep), "the MCP Registry release is a step of publish-registry, not of the job the deploy waits on");
+{
+  const rneeds = [].concat(registryJob.needs || []);
+  const dneeds = [].concat(wf.jobs?.deploy?.needs || []);
+  ok(rneeds.includes("deploy") && rneeds.includes("publish") && !dneeds.includes("publish-registry"), "publish-registry runs after the deploy and the npm publish, and the deploy does not wait on it");
+  ok(/needs\.deploy\.result == 'success'/.test(String(registryJob.if || "")) && /needs\.publish\.result == 'success'/.test(String(registryJob.if || "")), "it starts only on a deploy and an npm publish that succeeded");
+}
 // A ClawHub refusal never holds production (the deploy waits on the publish
-// job, and install lines need only npm and the MCP Registry): only the ClawHub
-// step continues on error, and a failure there is a visible warning. Every npm
-// publish and the MCP Registry step still fail the job.
+// job, and install lines need only npm): only the ClawHub step continues on
+// error, and a failure there is a visible warning. Every npm publish still
+// fails its job, and the MCP Registry step fails its own.
 {
   const steps = wf.jobs?.publish?.steps || [];
   const claw = steps[clawAt] || {};
   ok(claw["continue-on-error"] === true && typeof claw.id === "string" && claw.id, "the ClawHub step continues on error and has an id");
   const warn = steps.find((s, i) => i > clawAt && new RegExp(`steps\\.${claw.id}\\.outcome == 'failure'`).test(String(s.if || "")));
   ok(!!warn && /::warning::/.test(String(warn.run || "")), "a ClawHub failure is reported as a ::warning:: by the step after it");
-  const blocking = [...npmAt, registryAt].map((i) => steps[i]);
-  ok(blocking.length >= 2 && blocking.every((s) => !s["continue-on-error"]), `every npm publish and the MCP Registry step still fail the job (${blocking.length} steps)`);
+  const blocking = [...npmAt.map((i) => steps[i]), registryStep];
+  ok(blocking.length >= 2 && blocking.every((s) => s && !s["continue-on-error"]), `every npm publish and the MCP Registry step still fail their job (${blocking.length} steps)`);
+  ok((registryJob.steps || []).every((s) => !s["continue-on-error"]), "no publish-registry step continues on error");
+  ok((wf.jobs?.["registry-earlier-name"]?.steps || []).length >= 3, "the earlier name's job exists");
   ok(steps.filter((s) => s["continue-on-error"]).length === 1, "the ClawHub step is the only publish step that continues on error");
 }
 
@@ -153,7 +168,19 @@ ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after ev
   const live = raw.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
   ok(!/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN\s*:/.test(live), "no job reads a long-lived npm token (secrets.NPM_TOKEN) or sets NODE_AUTH_TOKEN");
   ok(JSON.stringify(job.permissions) === JSON.stringify({ contents: "read", "id-token": "write" }), `the publish job holds id-token: write and contents: read only (${JSON.stringify(job.permissions)})`);
-  ok(Object.entries(wf.jobs || {}).every(([n, j]) => n === "publish" || !JSON.stringify(j.permissions || {}).includes("id-token")), "no other job in the workflow holds id-token");
+  // registry-earlier-name holds one for its MCP Registry login (the earlier
+  // name). It is outside every environment, and the trusted publishers name
+  // the environment, so its token is not an npm publish credential; it is
+  // still held to the publish job's rule, and installs nothing.
+  const ID_TOKEN_JOBS = ["publish", "registry-earlier-name"];
+  ok(Object.entries(wf.jobs || {}).every(([n, j]) => ID_TOKEN_JOBS.includes(n) || !JSON.stringify(j.permissions || {}).includes("id-token")), "no job beside publish and registry-earlier-name holds id-token");
+  ok(Object.entries(wf.jobs || {}).filter(([, j]) => JSON.stringify(j.permissions || {}).includes("id-token") && j.environment !== undefined).map(([n]) => n).join(",") === "publish", "publish is the only job that holds id-token inside an environment");
+  ok(JSON.stringify(registryJob.permissions) === JSON.stringify({ contents: "read" }) && registryJob.environment === "agent402 / production", "publish-registry holds contents: read only, in the production environment (its key's scope)");
+  for (const n of ID_TOKEN_JOBS) {
+    const installs = (wf.jobs?.[n]?.steps || []).filter((st) => String(st.run || "").split("\n").some((l) => !/^\s*#/.test(l) && (/\bnpm (ci|i|install)\b(?! -g npm@\d+\.\d+\.\d+ --ignore-scripts)/.test(l) || /\bpip3? install\b/.test(l)))).map((st) => st.name);
+    ok(installs.length === 0, `${n} (an id-token job) installs no package (${installs.join(", ") || "none"})`);
+  }
+  for (const n of ["publish-registry", "registry-earlier-name"]) ok((wf.jobs?.[n]?.steps || []).every((st) => String(st.run || "").split("\n").every((l) => /^\s*#/.test(l) || !/\bnpx\b|\bnpm (publish|ci|i|install)\b/.test(l))), `${n} runs no npx, no install and no npm publish`);
   ok(job.environment === "agent402 / production", "the publish job runs in the environment its trusted publishers name");
   const upgrade = steps.find((st) => /npm install -g npm@/.test(String(st.run || "")));
   const pinned = /npm install -g npm@(\d+)\.(\d+)\.(\d+) --ignore-scripts/.exec(String(upgrade?.run || ""));

@@ -622,9 +622,25 @@ for (const lane of ["test-sweeps", "test-sweeps2"]) {
 // THE REGISTRY'S SUPERSEDED VERSIONS. The publish step deprecates the version
 // it superseded AND every older version of our name still active (26 were on
 // 2026-11-20), read from every page of the search, our name only, capped and
-// never failing the job.
+// never failing the job. The registry release is its own job after the deploy
+// (publish-registry); the publisher is fetched and verified by one script
+// (scripts/mcp-publisher-fetch.sh) in a step before the one that logs in.
+const FETCH_SCRIPT = "scripts/mcp-publisher-fetch.sh";
+const fetchSrc = readFileSync(new URL(`../${FETCH_SCRIPT}`, import.meta.url), "utf8");
+const registrySteps = jobs["publish-registry"]?.steps || [];
+const isFetch = (x) => String(x.run || "").split("\n").some((l) => !/^\s*#/.test(l) && l.includes(`bash ${FETCH_SCRIPT}`));
+const registryFetch = registrySteps.find(isFetch);
+const registryPublish = registrySteps.find((x) => /mcp-publisher publish/.test(String(x.run || "")));
+ok(Boolean(registryFetch) && Boolean(registryPublish) && registrySteps.indexOf(registryFetch) < registrySteps.indexOf(registryPublish), "publish-registry fetches and verifies the publisher in a step before the one that publishes");
+ok(!(jobs.publish?.steps || []).some((x) => /mcp-publisher/.test(String(x.run || ""))), "the npm publish job runs no registry publisher (the deploy waits on that job)");
 {
-  const st = (jobs.publish?.steps || []).find((x) => /mcp-publisher publish/.test(String(x.run || "")));
+  // Every job that runs the binary fetched it through the script, in an earlier step.
+  const runners = Object.entries(jobs).filter(([, j]) => (j.steps || []).some((x) => /mcp-publisher (login|publish|status)/.test(String(x.run || ""))));
+  ok(runners.length === 2 && runners.every(([, j]) => { const f = (j.steps || []).findIndex(isFetch); return f >= 0 && (j.steps || []).every((x, i) => !/mcp-publisher (login|publish|status)/.test(String(x.run || "")) || i > f); }), `every job that runs the publisher fetched it through ${FETCH_SCRIPT} first (${runners.map(([n]) => n).join(", ")})`);
+  ok(!/modelcontextprotocol\/registry\/releases|mcp-publisher_/.test(JSON.stringify(Object.values(jobs).map((j) => (j.steps || []).map((x) => x.run || "")))), "no workflow step downloads the publisher on its own");
+}
+{
+  const st = registryPublish;
   const run = String(st?.run || "");
   ok(/mcp-find-latest-version\.js --superseded --name "\$SERVER_NAME" --except "\$VER"/.test(run), "the registry publish lists every superseded active version of our name (--superseded --name --except)");
   ok(/mcp-find-latest-version\.js --name "\$SERVER_NAME"/.test(run), "the latest version is read from our own entries, never another publisher's");
@@ -640,9 +656,11 @@ for (const lane of ["test-sweeps", "test-sweeps2"]) {
 // (the github.com downloads) carries it. The job reads public releases only, so
 // contents: read is the permission it needs.
 {
-  const st = (jobs.publish?.steps || []).find((x) => /mcp-publisher publish/.test(String(x.run || "")));
-  const run = String(st?.run || "");
+  const st = registryFetch;
+  const run = fetchSrc;
   ok(/^\$\{\{\s*(github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/.test(String(st?.env?.GH_API_TOKEN || "")), "the registry step's env hands the job token to GH_API_TOKEN");
+  ok(registrySteps.every((x) => x === st || x.env?.GH_API_TOKEN === undefined), "no other registry step holds the job token");
+  ok(/^set -euo pipefail$/m.test(run), "the fetch script stops at its first failure");
   const def = /^gh_api\(\) \{ (.*) \}$/m.exec(run)?.[1] || "";
   ok(/^curl -fsSL /.test(def) && /-H "Authorization: Bearer \$GH_API_TOKEN"/.test(def) && /"\$@";?$/.test(def), "gh_api is a failing curl that sends the token as a Bearer header");
   const apiLines = run.split("\n").filter((l) => /api\.github\.com/.test(l) && !/^\s*#/.test(l));
@@ -652,8 +670,83 @@ for (const lane of ["test-sweeps", "test-sweeps2"]) {
   ok(tokenLines.length === 1 && tokenLines[0].includes("gh_api()"), "the token is read only inside gh_api (never echoed, never sent to github.com downloads)");
   ok(!/(echo|printf)[^\n]*GH_API_TOKEN/.test(run), "the token is never printed");
   ok(/sha256sum -c -/.test(run) && /refusing to execute/.test(run), "the publisher binary is still verified before it runs");
-  const perms = jobs.publish?.permissions || {};
-  ok(perms.contents === "read", "the publish job's contents: read covers the public release reads");
+  const perms = jobs["publish-registry"]?.permissions || {};
+  ok(perms.contents === "read", "the registry job's contents: read covers the public release reads");
+  ok(run.indexOf("refusing to execute") > 0 && run.indexOf("refusing to execute") < run.indexOf("tar -xzf") && !/\.\/mcp-publisher|mcp-publisher (login|publish|status)/.test(run), "the binary is extracted only after it is verified, and the script never runs it");
+}
+
+// THE REGISTRY RELEASE'S ORDER AND ITS KEY. The registry grants the domain's
+// name on a proof the deployed site serves, so the release runs after the
+// deploy and after the npm publish, reads the proof before any login, and
+// nothing waits on it: a refusal there never holds the deploy. The key is an
+// environment secret read by the one step that logs in, checked for its
+// shape and never printed. The earlier name is marked moved by a job of its
+// own, only after the new name is listed and only while a version of it is
+// unmarked; that job holds the id-token for its login and no environment, so
+// its token is not the npm publish credential.
+{
+  const job = jobs["publish-registry"] || {};
+  const needs = [].concat(job.needs || []);
+  const cond = String(job.if || "").replace(/\s+/g, " ");
+  ok(needs.includes("deploy") && needs.includes("publish"), `publish-registry needs the deploy and the npm publish (${needs.join(", ")})`);
+  const holds = (pub, dep, dispatch) => {
+    const js = cond.replace(/!cancelled\(\)/g, "true").replace(/needs\.publish\.result/g, JSON.stringify(pub)).replace(/needs\.deploy\.result/g, JSON.stringify(dep))
+      .replace(/github\.event_name == 'workflow_dispatch' && inputs\.mode == 'publish'/g, String(dispatch)).replace(/==/g, "===");
+    try { return Boolean(new Function(`return (${js});`)()); } catch { return null; }
+  };
+  for (const [pub, dep, dispatch, want] of [["success", "success", false, true], ["success", "failure", false, false], ["success", "skipped", false, false], ["success", "cancelled", false, false], ["failure", "success", false, false], ["skipped", "success", false, false], ["success", "skipped", true, true], ["success", "failure", true, false]]) {
+    ok(holds(pub, dep, dispatch) === want, `npm publish ${pub}, deploy ${dep}${dispatch ? ", a publish dispatch" : ""}: the registry release ${want ? "runs" : "does not run"}`);
+  }
+  const waiters = Object.entries(jobs).filter(([, j]) => [].concat(j.needs || []).includes("publish-registry")).map(([n]) => n);
+  ok(waiters.join(",") === "registry-earlier-name", `only the earlier name's job waits on the registry release, so it cannot hold or fail the deploy (${waiters.join(", ") || "none"})`);
+  const earlierWaiters = Object.entries(jobs).filter(([, j]) => [].concat(j.needs || []).includes("registry-earlier-name")).map(([n]) => n);
+  ok(earlierWaiters.length === 0 && ![].concat(jobs.deploy?.needs || []).some((n) => /registry/.test(n)), "nothing waits on the earlier name's job, and the deploy needs neither");
+  ok(job.environment === "agent402 / production" && Number.isInteger(job["timeout-minutes"]), "publish-registry runs in the production environment (its secret's scope) and is bounded");
+  const steps = job.steps || [];
+  const at = (re) => steps.findIndex((x) => re.test(String(x.run || "")));
+  const proofAt = at(/registry-proof-check\.js/), loginAt = at(/mcp-publisher login http/);
+  const proofRun = String(steps[proofAt]?.run || "");
+  ok(proofAt >= 0 && /registry-proof-check\.js (--tries \d+ --wait-ms \d+ )?https:\/\/agent402\.tools\s*$/.test(proofRun) && !/--warn|\|\|/.test(proofRun) && !steps[proofAt]["continue-on-error"], "the proof read against production fails the job when the proof is not served (no --warn, no fallthrough)");
+  ok(proofAt < steps.indexOf(registryFetch) && proofAt < loginAt && at(/login github-oidc/) === -1, "the proof is read before the publisher is fetched or the login is tried, and the job makes no other login");
+  const login = steps[loginAt] || {}, loginRun = String(login.run || "");
+  ok(/^\$\{\{ secrets\.MCP_REGISTRY_PRIVATE_KEY \}\}$/.test(String(login.env?.MCP_REGISTRY_PRIVATE_KEY || "")), "the login step reads the key from the secret MCP_REGISTRY_PRIVATE_KEY");
+  const holders = Object.entries(jobs).flatMap(([jn, j]) => [...(/secrets\.MCP_REGISTRY_PRIVATE_KEY/.test(JSON.stringify(j.env || {})) ? [`${jn} (job env)`] : []), ...(j.steps || []).filter((x) => /secrets\.MCP_REGISTRY_PRIVATE_KEY/.test(JSON.stringify(x.env || {}) + String(x.run || ""))).map((x) => `${jn}: ${x.name}`)]);
+  ok(holders.length === 1 && holders[0].startsWith("publish-registry: "), `the key is held by that one step, never at job or workflow scope (${holders.join("; ")})`);
+  ok(!/secrets\.MCP_REGISTRY_PRIVATE_KEY/.test(JSON.stringify(wf.env || {})), "the workflow env does not hold the key");
+  ok(/mcp-publisher login http --domain agent402\.tools --private-key "\$MCP_REGISTRY_PRIVATE_KEY"/.test(loginRun), "the login is the domain's HTTP proof, the key passed quoted");
+  const keyLines = loginRun.split("\n").filter((l) => /MCP_REGISTRY_PRIVATE_KEY/.test(l) && !/^\s*#/.test(l));
+  ok(keyLines.every((l) => !/\b(echo|printf|cat|tee)\b[^\n]*\$\{?#?MCP_REGISTRY_PRIVATE_KEY/.test(l) || /::error::/.test(l) && !/\$\{?MCP_REGISTRY_PRIVATE_KEY/.test(l.replace(/\$\{MCP_REGISTRY_PRIVATE_KEY:-\}/g, ""))) && !/set -[a-z]*x/.test(loginRun), "the key is never printed and the step never traces its commands");
+  ok(/\*\[!0-9a-fA-F\]\*\)/.test(loginRun) && /"\$\{#MCP_REGISTRY_PRIVATE_KEY\}" = 64/.test(loginRun) && loginRun.indexOf("= 64") < loginRun.indexOf("login http"), "the key's shape (64 hex characters) is checked before the login");
+  ok(/SERVER_NAME=tools\.agent402\/agent402/.test(loginRun) && /require\('\.\/mcp\/server\.json'\)\.name/.test(loginRun), "the step names the domain's server name and refuses a manifest that names another");
+  const noInstall = (j) => (j.steps || []).every((x) => String(x.run || "").split("\n").every((l) => /^\s*#/.test(l) || !/\bnpm (ci|install|i)\b|\bnpx\b|\bpip3? install\b/.test(l)));
+  ok(noInstall(job) && JSON.stringify(job.permissions) === JSON.stringify({ contents: "read" }), "publish-registry installs nothing beside its key and holds no id-token");
+  // The earlier name's job.
+  const ejob = jobs["registry-earlier-name"] || {};
+  const esteps = ejob.steps || [];
+  const econd = String(ejob.if || "").replace(/\s+/g, " ");
+  ok([].concat(ejob.needs || []).join(",") === "publish-registry" && /needs\.publish-registry\.result == 'success'/.test(econd) && /github\.ref == 'refs\/heads\/main'/.test(econd), "the earlier name is marked only after the registry release succeeded, on main");
+  ok(JSON.stringify(ejob.permissions) === JSON.stringify({ contents: "read", "id-token": "write" }) && ejob.environment === undefined && Number.isInteger(ejob["timeout-minutes"]), "its job holds id-token for the login, no environment (npm's trusted publishers name one) and a bound");
+  ok(noInstall(ejob) && !/secrets\./.test(JSON.stringify(esteps.map((x) => [x.env || {}, x.run || ""]))), "that job installs nothing and reads no secret");
+  const list = esteps.find((x) => x.id === "pending") || {}, listRun = String(list.run || "");
+  const mark = esteps.find((x) => /login github-oidc/.test(String(x.run || ""))) || {}, movedRun = String(mark.run || "");
+  ok(/--unmoved "\$MOVED" --name "\$EARLIER_NAME"/.test(listRun) && /MOVED="Moved to \$SERVER_NAME"/.test(listRun) && /--count --name "\$EARLIER_NAME"/.test(listRun) && /count=\$\{COUNT:-0\}" >> "\$GITHUB_OUTPUT"/.test(listRun), "it lists the versions not yet marked moved and hands their count to the later steps");
+  ok(esteps.filter((x) => x !== list && x.run).every((x) => String(x.if || "") === "steps.pending.outputs.count != '0'") && esteps.indexOf(list) < esteps.findIndex(isFetch) && esteps.findIndex(isFetch) < esteps.indexOf(mark), "the publisher is fetched and the login made only while a version is unmarked");
+  ok(/status --status deprecated --message "\$MOVED" --all-versions --yes "\$EARLIER_NAME"/.test(movedRun) && /MOVED="Moved to \$SERVER_NAME"/.test(movedRun) && /\[ -x \.\/mcp-publisher \] \|\|/.test(movedRun), "it marks every version deprecated with the pointer, and runs nothing without a verified publisher");
+  ok(esteps.every((x) => !/\bexit 1\b/.test(String(x.run || "")) && !/set -[a-z]*e/.test(String(x.run || ""))) && (JSON.stringify(esteps.map((x) => x.run || "")).match(/::warning::/g) || []).length >= 4, "marking the earlier name never fails the run: each miss is a warning");
+  ok(!/--status deleted/.test(JSON.stringify([steps, esteps])), "no registry step deletes an entry");
+  // The deploy job reads the proof on the new build and only warns.
+  const dsteps = jobs.deploy?.steps || [];
+  const dproof = dsteps.find((x) => /registry-proof-check\.js/.test(String(x.run || "")));
+  const verifyAt = dsteps.findIndex((x) => x.id === "verify");
+  ok(Boolean(dproof) && dsteps.indexOf(dproof) > verifyAt && verifyAt >= 0 && /--warn/.test(String(dproof.run)) && dproof["continue-on-error"] === true && Number.isInteger(dproof["timeout-minutes"]), "the deploy reads the proof on the new build after Verify, as a bounded warning that never fails it");
+  const jobSecrets = Object.entries(jobs.deploy?.env || {}).filter(([, v]) => /secrets\./.test(String(v))).map(([k]) => k);
+  const unblanked = jobSecrets.filter((k) => String(dproof?.env?.[k] ?? "x") !== "");
+  ok(jobSecrets.length >= 5 && unblanked.length <= jobSecrets.length && String(dproof?.env?.RAILWAY_API_TOKEN) === "" && String(dproof?.env?.CDP_KEY_SECRET) === "", "that step runs with the deploy job's Railway and facilitator credentials blanked");
+  // The npm publish job reads it too, before anything goes to npm, and never decides there.
+  const psteps = jobs.publish?.steps || [];
+  const pproof = psteps.findIndex((x) => /registry-proof-check\.js/.test(String(x.run || "")));
+  const firstNpm = psteps.findIndex((x) => String(x.run || "").split("\n").some((l) => !/^\s*#/.test(l) && /\bnpm publish\b/.test(l)));
+  ok(pproof >= 0 && pproof < firstNpm && /--warn [^\n]*\|\| true\s*$/.test(String(psteps[pproof].run)), "the npm publish job reports the proof before its first publish and cannot fail on it (the deploy waits on that job)");
 }
 
 // THE TREE GATE'S BOUND. Run 44012918430 (2026-11-17): the gate job's checkout
