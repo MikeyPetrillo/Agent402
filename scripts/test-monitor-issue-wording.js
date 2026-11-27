@@ -14,17 +14,23 @@
 //      off the body the issue already has, or in a workflow listed below;
 //   4. every issue lookup filters by the exact title (the titles share a prefix);
 //   5. the status Worker's titles are the same shape and the body it posts is
-//      the fixed text, with the reading's detail nowhere in it.
+//      the fixed text, with the reading's detail nowhere in it;
+//   6. every issue a check files goes through the one opener,
+//      scripts/check-issue.js (open: comment; closed within the reopen
+//      window: reopen; else create), and the Worker applies the same rule:
+//      no workflow calls `gh issue create` or `gh issue reopen` itself.
 // The workflows listed in STATE_BODY keep their own body: it is the check's
 // saved state (read back by the next run), or a buyer's own report.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { load as yamlLoad } from "js-yaml";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ghIssueCalls, unquoted } from "./lib/shell-words.js";
-import { TITLE_PREFIX, TITLE_RE, OPEN_BODY, STILL_BODY, CLOSE_BODY, STILL_SUFFIXES, NAMES_OUT, RUN_LINK } from "./lib/monitor-issue-text.js";
+import { commandWords, ghIssueCalls, unquoted } from "./lib/shell-words.js";
+import { TITLE_PREFIX, TITLE_RE, OPEN_BODY, STILL_BODY, CLOSE_BODY, STILL_SUFFIXES, NAMES_OUT, RUN_LINK, OPENER, OPEN_BODY_RE, STILL_BODY_RE } from "./lib/monitor-issue-text.js";
+import { openText, stillText } from "./check-issue.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, ".github/workflows");
@@ -46,7 +52,9 @@ const STATE_BODY = {
 };
 
 const files = readdirSync(WF).filter((f) => f.endsWith(".yml")).sort();
-const withIssues = files.filter((f) => /gh issue (create|comment|close|edit)\b/.test(readFileSync(join(WF, f), "utf8")));
+const withIssues = files.filter((f) => /gh issue (create|comment|close|edit)\b|node scripts\/check-issue\.js/.test(readFileSync(join(WF, f), "utf8")));
+// The opener's calls in a text: { words, index } (the words after the script name).
+const openerCalls = (text) => [...text.matchAll(/node scripts\/check-issue\.js\b/g)].map((m) => ({ index: m.index, words: commandWords(text, m.index + m[0].length) }));
 check(withIssues.length >= 20, `at least 20 workflows open issues (found ${withIssues.length})`);
 for (const f of [...Object.keys(NOT_A_CHECK), ...Object.keys(STATE_BODY)]) check(withIssues.includes(f), `${f} is listed as an exception and still opens issues`);
 
@@ -74,7 +82,7 @@ for (const f of withIssues) {
     for (const n of NAMES_OUT) check(!name.includes(n), `${f}: title "${t}" names ${n}`);
   }
   // A title passed as a variable is one of the file's own TITLE variables.
-  for (const c of ghIssueCalls(text, ["create"])) {
+  for (const c of [...ghIssueCalls(text, ["create"]), ...openerCalls(text)]) {
     const i = c.words.indexOf("--title");
     check(i >= 0, `${f}: a create call passes --title`);
     const w = c.words[i + 1] || "";
@@ -110,7 +118,107 @@ for (const f of withIssues) {
     else check(flag === "--body" && MARK_EDIT.some((re) => re.test(value || "")), `${at}: an edit only adds or removes the state mark on the body the issue has, found ${String(value).slice(0, 90)}`);
   }
 }
-check(calls >= 250, `at least 250 issue calls read (found ${calls})`);
+// ---- 6. every check's issue is filed through the one opener ----------------------
+let openers = 0;
+for (const f of withIssues) {
+  if (NOT_A_CHECK[f]) continue;
+  const text = readFileSync(join(WF, f), "utf8").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  check(!/gh issue (create|reopen)\b/.test(text), `${f}: files its issue through ${OPENER}, never gh issue create or reopen itself`);
+  check(!/gh api [^\n]*issues/.test(text) || !/(-X|--method) (POST|PATCH)/.test(text), `${f}: opens no issue through gh api`);
+  for (const c of openerCalls(text)) {
+    openers++;
+    const at = `${f} (${OPENER} near offset ${c.index})`;
+    const rest = c.words.slice(2).filter((w) => !/^(>|2>|>\/dev\/null|2>&1)/.test(w) && w !== "--trust-owner");
+    if (STATE_BODY[f]) check(rest.length === 0 || (rest.length === 2 && rest[0] === "--body-file" && /^out\/[a-z-]+\.md$/.test(rest[1])), `${at}: the saved-state body file only`);
+    else check(rest.length === 0, `${at}: passes the title only (the opener writes the fixed text), found ${rest.join(" ")}`);
+  }
+}
+check(openers >= 110, `every check's create goes through the opener (found ${openers})`);
+check(calls + openers >= 250, `at least 250 issue calls read (found ${calls + openers})`);
+// ---- 6b. every job that runs the opener checks out the opener and all it imports ----
+// A sparse checkout that leaves one imported file out makes the opener throw
+// before it files anything, so the alarm is silent. The closure is read from
+// the files' own relative imports, so a new import is covered the day it lands.
+const importClosure = (start) => {
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(join(ROOT, rel), "utf8");
+    for (const m of src.matchAll(/^\s*(?:import|export)\b[^"'`;]*?(?:from\s*)?["'](\.{1,2}\/[^"']+)["']/gm)) walk(join(dirname(rel), m[1]).split("\\").join("/"));
+    for (const m of src.matchAll(/\bimport\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)) walk(join(dirname(rel), m[1]).split("\\").join("/"));
+  };
+  walk(start);
+  return [...seen].sort();
+};
+const OPENER_CLOSURE = importClosure("scripts/check-issue.js");
+check(OPENER_CLOSURE.includes("scripts/lib/monitor-issue-text.js") && OPENER_CLOSURE.includes("workers/status-probe/src/reopen-window.js"), `the opener's import closure is read (${OPENER_CLOSURE.join(", ")})`);
+/** The files a job's checkout before step `i` leaves out of `need` (null when nothing checks the repository out). */
+const missingFromCheckout = (steps, i, need) => {
+  const co = steps.slice(0, i).filter((s) => /^actions\/checkout@/.test(String(s?.uses || ""))).at(-1);
+  if (!co) return null;
+  const sparse = co.with?.["sparse-checkout"];
+  if (!sparse) return [];
+  const pats = String(sparse).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  return need.filter((f) => !pats.some((p) => p === f || (p.endsWith("/") && f.startsWith(p)) || (p.endsWith("/*") && f.startsWith(p.slice(0, -1)))));
+};
+let openerJobs = 0;
+for (const f of withIssues) {
+  const doc = yamlLoad(readFileSync(join(WF, f), "utf8"));
+  for (const [name, job] of Object.entries(doc?.jobs || {})) {
+    const steps = job?.steps || [];
+    steps.forEach((s, i) => {
+      if (!/node scripts\/check-issue\.js/.test(String(s?.run || ""))) return;
+      openerJobs++;
+      const miss = missingFromCheckout(steps, i, OPENER_CLOSURE);
+      check(miss !== null && miss.length === 0, `${f}:${name}: the checkout before "${s.name}" holds the opener and every file it imports (${miss === null ? "no checkout" : miss.join(", ") || "all"})`);
+    });
+  }
+}
+check(openerJobs >= 30, `every job that runs the opener was read (found ${openerJobs})`);
+
+// ---- 6c. the opener takes exactly the issues the step's own lookup takes -------------
+// The opener trusts only the Actions bot unless the call passes --trust-owner.
+// A call passes it exactly when the lookups of its title in the same step (or,
+// with none there, in the same job) keep the owner's issues; otherwise an
+// owner-filed issue the step never sees would be commented on, edited or
+// reopened by the opener, and never closed by the step.
+let trustCalls = 0;
+for (const f of withIssues) {
+  if (NOT_A_CHECK[f]) continue;
+  const doc = yamlLoad(readFileSync(join(WF, f), "utf8"));
+  for (const [name, job] of Object.entries(doc?.jobs || {})) {
+    const runs = (job?.steps || []).map((s) => String(s?.run || ""));
+    const lookups = (text, v) => text.split("\n").filter((l) => /gh issue list\b/.test(l) && !/^\s*#/.test(l) && new RegExp(`\\$\\{?${v}\\}?(?![A-Za-z0-9_])`).test(l));
+    runs.forEach((run, i) => {
+      for (const c of openerCalls(run)) {
+        const v = (unquoted(c.words[1]) || "").match(/^\$\{?([A-Z_0-9]+)\}?$/)?.[1];
+        if (!v) continue; // a literal title (a dated report) is filed once and never looked up
+        trustCalls++;
+        // A step's lookup function (its title passed as $1) covers every title in that step.
+        let ls = lookups(run, v);
+        if (!ls.length) ls = lookups(run, "1");
+        if (!ls.length) ls = runs.flatMap((r) => lookups(r, v));
+        const owner = ls.map((l) => /env\.[A-Z_]*OWNER\b/.test(l));
+        const flagged = c.words.includes("--trust-owner");
+        const at = `${f}:${name} step ${i + 1} (${v})`;
+        check(ls.length > 0, `${at}: the title the opener files is looked up in its job`);
+        check(!(owner.some(Boolean) && !owner.every(Boolean)), `${at}: the lookups of one title agree on whose issues they keep`);
+        check(flagged === (owner.length > 0 && owner.every(Boolean)), `${at}: --trust-owner ${flagged ? "passed" : "absent"} matches the step's lookup, which ${owner.every(Boolean) && owner.length ? "keeps" : "drops"} the owner's issues`);
+      }
+    });
+  }
+}
+check(trustCalls >= 100, `every opener call's trust was compared with its lookup (found ${trustCalls})`);
+{
+  const run = "https://github.com/o/r/actions/runs/1";
+  check(OPEN_BODY_RE.test(openText(run)) && openText(run) === OPEN_BODY.replace(RUN_LINK, run), "the opener files the fixed opening text");
+  check(STILL_BODY_RE.test(stillText(run, Date.UTC(2026, 10, 1))), "the opener comments and reopens with the fixed still-needs-review text");
+  const src = readFileSync(join(ROOT, "scripts/check-issue.js"), "utf8");
+  check(/from "\.\.\/workers\/status-probe\/src\/reopen-window\.js"/.test(src) && /reopenCandidate\(/.test(src), "the opener reads the reopen window the Worker reads");
+  const worker = readFileSync(join(ROOT, "workers/status-probe/src/index.js"), "utf8");
+  check(/from "\.\/reopen-window\.js"/.test(worker) && (worker.match(/method: "POST", body: JSON\.stringify\(\{ title/g) || []).length === 1 && /reopenCandidate\(closedList/.test(worker), "the Worker files every issue through its one opener, which applies the same reopen rule");
+}
 for (const s of [OPEN_BODY, STILL_BODY, CLOSE_BODY]) check(s.includes(RUN_LINK), "each fixed text links the run");
 
 // ---- 4. lookups filter by the exact title -----------------------------------------

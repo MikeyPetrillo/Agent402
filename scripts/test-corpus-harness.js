@@ -149,6 +149,16 @@ ok(await T({ status: 404, body: { error: "Price feed upstream: not found (check 
   ok((await viaHosts(true, { targetHost: "target.example.org" })).kind === "upstream" && reads.at(-1) === "https://target.example.org/", "a case's outside host is read before the declared ones");
   const none = await classify({ status: 200, body: owner, tier: 1, expectFails: ownerMiss, slug: "asn-info", runnerRead: (x) => runnerConfirmsUnmeasured({ ...x, readFails: read(true), hostsOf: () => new Set() }) });
   ok(none.kind === "fatal" && /no outside host or lookup/.test(none.note), `nothing the runner can read: the miss is ours (${none.note})`);
+  // An owner mark that names its query is read by that query alone, never a host.
+  const named = { ...owner, ownerLookup: { type: "TXT", name: "AS15169.asn.cymru.com" } };
+  const asked = [];
+  reads.length = 0;
+  const byQuery = await classify({ status: 200, body: named, tier: 1, expectFails: ownerMiss, slug: "asn-info", runnerRead: (x) => runnerConfirmsUnmeasured({ ...x, resolve: async (n, t) => { asked.push(`${t} ${n}`); throw Object.assign(new Error("t"), { code: "ETIMEOUT" }); }, readFails: read(true), hostsOf: () => new Set(["agent402.tools"]) }) });
+  ok(byQuery.kind === "upstream" && JSON.stringify(asked) === '["TXT AS15169.asn.cymru.com"]' && reads.length === 0, `a mark that names its query is confirmed by that query, no host read (${byQuery.note})`);
+  // A second mark on another part that names no query still needs its host read.
+  const mixed = { ...named, geo: { hasRecord: null } };
+  const m = await classify({ status: 200, body: mixed, tier: 1, expectFails: [...ownerMiss, "geo.hasRecord = null, expected true"], slug: "asn-info", runnerRead: (x) => runnerConfirmsUnmeasured({ ...x, resolve: async () => { throw Object.assign(new Error("t"), { code: "ETIMEOUT" }); }, readFails: read(false), hostsOf: () => new Set(["whois.example.net"]) }) });
+  ok(m.kind === "fatal" && reads.at(-1) === "https://whois.example.net/", `a mark with no query of its own is not confirmed by another part's query (${m.note})`);
 }
 // A keyless boot: a pack whose every step says "not configured" answers 502,
 // and that is configuration, not an outside host (three packs read as upstream

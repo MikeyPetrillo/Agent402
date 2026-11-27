@@ -80,6 +80,22 @@ try {
   ok(!requestMatchesDefinition("weather-alerts", "https://api.weather.gov/points/1,2"), "a path the definition never writes does not match");
   ok(!requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts/active?area=undefined") && !requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts/active?area=%5Bobject%20Object%5D") && !requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts//active"), "an interpolation's residue (undefined, an object's string form) or an empty segment does not match");
 
+  // ---- two tools on one host failing in the same window: each is judged by
+  // its own request (the log is the whole server's)
+  {
+    const fdLog = join(work, "fiscal-failures.jsonl");
+    const H = "api.fiscaldata.treasury.gov";
+    const debt = `https://${H}/services/api/fiscal_service/v2/accounting/od/debt_to_penny?sort=-record_date&page[size]=1`;
+    const rates = `https://${H}/services/api/fiscal_service/v2/accounting/od/avg_interest_rates?sort=-record_date&page[size]=20`;
+    const rowOf = (t, url) => JSON.stringify({ t, host: H, url, method: "GET", keyed: false, error: "AbortError" });
+    const late = { error: "Source URL did not respond within our 8 s limit; check that the URL is correct and publicly reachable, or retry" };
+    const fd = async (lines) => { writeFileSync(fdLog, `${lines.join("\n")}\n`); let read = null; const v = await upstreamOutageVerdict({ slug: "treasury-debt", status: 504, body: late, t0: 900, t1: 1100, logPath: fdLog, readFails: async (u) => { read = u; return true; } }); return { ...v, read }; };
+    const both = await fd([rowOf(1000, debt), rowOf(1050, rates)]);
+    ok(both.verdict === "upstream" && both.read === debt, `treasury-debt failing beside treasury-avg-rates on the same host is judged by its own request, the latest row being the other tool's (${both.evidence || both.reason}; read ${both.read})`);
+    const other = await fd([rowOf(1050, rates)]);
+    ok(other.verdict === "fail" && /not the shape/.test(other.reason) && other.read === null, `control: only the other tool's request recorded excuses nothing and reads nothing (${other.reason})`);
+  }
+
   // ---- hosts are derived from the tool definitions in src/tools/
   ok(upstreamHostsForSlug("weather-alerts").has("api.weather.gov"), "weather-alerts' upstream host (api.weather.gov) is read from its definition");
   ok(upstreamHostsForSlug("earthquakes").has("earthquake.usgs.gov"), "earthquakes' upstream host (earthquake.usgs.gov) is read from its definition");

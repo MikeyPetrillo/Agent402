@@ -9,12 +9,17 @@
 //   publish  exit 0 / "already exists"   -> done
 //   publish  "staged by failed publish"  -> warning, done (theirs to clear)
 //   publish  "Too many writes"           -> wait, retry; anything else fails
+//   publish  "Plugin id ... is already claimed by another package in this
+//            publisher namespace"        -> fails with its own cause and remedy
+//            (an earlier package under the old name holds the plugin id; it is
+//            the owner's to soft-delete or transfer on ClawHub, never this job's)
 //
 // The "(reset in Ns)" suffix rides on every ClawHub answer, not only on rate
 // limits, so only the "Too many writes" wording marks a limit. At most
 // MAX_ATTEMPTS tries per call inside one BUDGET_MS across both calls.
 // Imports nothing outside node: the publish job installs no packages.
 import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 
 const env = process.env;
 const scale = Number(env.CLAWHUB_TIME_SCALE) > 0 ? Number(env.CLAWHUB_TIME_SCALE) : 1;
@@ -27,6 +32,7 @@ const started = Date.now();
 
 const RATE = /too many writes|too many requests|rate.?limit(ed)?/i;
 const NOT_FOUND = /not found/i;
+const ID_CLAIMED = /plugin id\s+"?([^"\s]+)"?\s+is already claimed by another package/i;
 
 function run(args) {
   const r = spawnSync(cli[0], [...cli.slice(1), ...args], { encoding: "utf8", env });
@@ -50,6 +56,8 @@ function call(args) {
   }
   return { ...r, limited: true };
 }
+// The step's `reason` output names a known cause for the warning step after it.
+const setReason = (reason) => { try { if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `reason=${reason}\n`); } catch { /* the error line still names it */ } };
 const fail = (msg, out) => { if (out) console.log(out); console.log(`::error::${msg}`); process.exit(1); };
 
 if (!version) fail("VERSION is not set");
@@ -85,6 +93,10 @@ if (pub.code === 0) {
 } else if (/is staged by failed publish attempt/.test(pub.out)) {
   console.log(pub.out);
   console.log(`::warning::agent402-model-provider@${version} is staged on ClawHub behind a failed ClawHub scan; npm and the MCP Registry are published`);
+} else if (ID_CLAIMED.test(pub.out)) {
+  const id = ID_CLAIMED.exec(pub.out)[1];
+  setReason("plugin-id-claimed");
+  fail(`ClawHub refused the publish: plugin id "${id}" is already claimed by another package in this publisher namespace (a package published under an earlier name still holds it). Remedy: on ClawHub, soft-delete the superseded package or transfer the plugin id to agent402-model-provider, then re-run the publish job. This job never deletes packages.`, pub.out);
 } else {
   fail("ClawHub publish failed", pub.out);
 }

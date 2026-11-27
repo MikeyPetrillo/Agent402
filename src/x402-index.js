@@ -11428,9 +11428,8 @@ function computeToolStatics(t) {
     offSeller: t.seller !== LOCAL_SELLER && typeof t.seller === "string" && routeLeavesSeller(t.seller, t.route),
     priceRank: priceRank(t.price),
     // Curated alternate names a tool answers to, scored exactly like the slug
-    // (max over slug + aliases per term, never additive). Our asn-info IS an IP
-    // geolocation tool but its slug says neither word, so "ip geolocation"
-    // routed to a $0.05 external seller above our $0.003 one (2026-08-28).
+    // (max over slug + aliases per term, never additive): a tool whose slug
+    // does not say the words a buyer searches with is still found by them.
     aliases: rawAliases.length ? rawAliases.map((a) => a.toLowerCase()) : NO_ALIASES,
     // The row's own NAME in slug form ("Cron next runs" -> cron-next-runs) is an
     // implicit alias: a query that covers every word of the name is an exact

@@ -51,6 +51,8 @@ t node scripts/test-managed-agents-page.js
 t node scripts/test-monitor-issue-wording.js
 # An open issue a check filed under its previous title gets the current one before any lookup: one list, the adoption script against a stand-in gh, the step in every job that looks an issue up (offline)
 t node scripts/test-issue-title-adoption.js
+# A check that fails again within seven days of its issue closing reopens that issue: the one rule, the workflows' opener and the status Worker against stubbed reads (offline)
+t node scripts/test-check-issue-reopen.js
 # Router benchmarks: aggregates over the reputation records, no seller named, nothing under five sellers, no purchase count (offline, port 0)
 t node scripts/test-router-benchmarks.js
 # Price webhooks: input rules, the registrant's cap (never the host's), renewal, expiry and the store's bound, a registration kept only when its call settles, one change set stored once, signed delivery, retries, a delivery turn fair across receivers that never runs beside itself, the fetch guard, the served tool and its removal route (offline, port 0)

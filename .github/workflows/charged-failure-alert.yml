@@ -107,6 +107,9 @@ jobs:
           sparse-checkout: |
             scripts/adopt-issue-titles.js
             workers/status-probe/src/previous-issue-titles.js
+            scripts/check-issue.js
+            scripts/lib/monitor-issue-text.js
+            workers/status-probe/src/reopen-window.js
 
       # An open issue this check filed under a previous title gets the current
       # one, so the lookups below find it (scripts/adopt-issue-titles.js).
@@ -126,7 +129,7 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
             exit 1
           fi

@@ -187,7 +187,7 @@ fs.writeFileSync(${JSON.stringify(STATE)}, JSON.stringify(issues));
       const steps = j.steps || [];
       if (!steps.some((s) => /gh issue list/.test(String(s.run || "")))) continue;
       jobs++;
-      const first = steps.findIndex((s) => /gh issue (list|create|comment|close|edit)\b/.test(String(s.run || "")) || /bazaar-presence\.js/.test(String(s.run || "")));
+      const first = steps.findIndex((s) => /gh issue (list|create|comment|close|edit)\b/.test(String(s.run || "")) || /check-issue\.js|bazaar-presence\.js/.test(String(s.run || "")));
       const at = steps.findIndex((s) => s.name === STEP_NAME);
       if (at < 0 || at > first) { missing.push(`${f}:${job}`); continue; }
       const s = steps[at];

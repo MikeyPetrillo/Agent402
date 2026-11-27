@@ -277,7 +277,7 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(!!sibling && /secrets\.SOLANA_BURNER_KEY/.test(String(siblingEnv.SOLANA_BURNER_KEY || "")) && /secrets\.SOLANA_BURNER_KEY/.test(String(stepEnv.SOLANA_BURNER_KEY || "")), "the pass pays from the same Solana burner as bazaar-solana");
   const installOf = (j) => (j?.steps || []).map((st) => String(st.run || "")).find((r) => /npm install --no-save/.test(r)) || "";
   ok(installOf(spender) && installOf(spender) === installOf(sibling), "it installs the same client packages as bazaar-solana, one line to keep pinned");
-  const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
+  const reporter = Object.values(ljobs).find((j) => /node scripts\/check-issue\.js --title /.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
   const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
   ok(!!reporter && String(reporter.if || "") === "always() && (inputs.job == 'listing-pass' || github.event_name == 'schedule')" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result, and only on a listing-pass dispatch");
   const lp = listing.jobs["listing-pass"] || {};

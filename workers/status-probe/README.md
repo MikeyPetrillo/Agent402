@@ -59,7 +59,12 @@ subrequests per invocation):
   0.05 ms and the hard cap about 1.1 ms (2.6 ms at Node's cost).
 - The paid-call adds two subrequests per attempt; the worst possible run
   (retry, a budget re-read on both attempts, alarms opening and closing) is 40,
-  pinned in `scripts/test-status-probe-worker.js`.
+  pinned in `scripts/test-status-probe-worker.js`. A run that opens an alarm
+  first reads the issues closed in the last seven days (one subrequest, taken
+  from the write budget) and reopens the alarm's own one instead of filing a
+  new number (`src/reopen-window.js`, the rule the workflows read through
+  `scripts/check-issue.js`). A reopen starts only with room for the create that
+  replaces it if it fails, and a failed one is charged both writes.
 
 ## Deploy
 

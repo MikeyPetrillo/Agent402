@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { probe, observe, run, solvePow, checkPaidCall, PAID_CALL_MAX_DIFFICULTY, SOLVE_CAP_FACTOR } from "../workers/status-probe/src/index.js";
 import { OPEN_BODY } from "./lib/monitor-issue-text.js";
+const OPENER_CALL = 'node scripts/check-issue.js --title "$TITLE"';
 
 const PROD = "https://prod.test";
 let failures = 0;
@@ -468,8 +469,9 @@ for (const [name, over, detail] of failCases) {
     // writes than one run may make, so the scenario reaches the write cap.
     assert.ok(ALARMS.length > MAX_ISSUE_WRITES, "the scenario must exceed the write cap");
     assert.deepEqual(out.alarms.opened, ["Scheduled check needs review: buyer-wallet"], "the open goes first");
-    assert.equal(out.alarms.closed.length, MAX_ISSUE_WRITES - 1, "closes fill the rest of the cap");
-    assert.equal(out.alarms.deferred.length, ALARMS.length - MAX_ISSUE_WRITES, "the remainder waits for the next run");
+    // One write's room is the closed-issue read a run takes before it opens (reopen window).
+    assert.equal(out.alarms.closed.length, MAX_ISSUE_WRITES - 2, "closes fill the rest of the cap");
+    assert.equal(out.alarms.deferred.length, ALARMS.length - MAX_ISSUE_WRITES + 1, "the remainder waits for the next run");
     assert.ok(calls <= 40, `${calls} subrequests`);
   });
   // The README states the figure this scenario measures; a change that moves
@@ -835,8 +837,8 @@ for (const [name, over, detail] of failCases) {
     const step = yml.split("\n      - name: ").find((x) => x.startsWith("Subscription gas sponsor ceiling check")) || "";
     assert.ok(step.includes(".subscriptionFeePayer.ceiling"), "reads the ceiling word");
     assert.ok(step.includes(`TITLE="${SC}"`), "same title");
-    assert.ok(step.includes(OPEN_BODY) && !step.includes(ALARMS.find((x) => x.title === SC).body({})), "the fixed body, not the Worker's detail");
-    assert.match(step, /\[ "\$WORD" = "reached" \][\s\S]*gh issue create/, "reached opens");
+    assert.ok(step.includes(OPENER_CALL) && !step.includes(ALARMS.find((x) => x.title === SC).body({})), "the fixed body (the shared opener's), not the Worker's detail");
+    assert.match(step, /\[ "\$WORD" = "reached" \][\s\S]*node scripts\/check-issue\.js --title/, "reached opens");
     assert.match(step, /\[ "\$WORD" = "ok" \] && \[ -n "\$OPEN" \][\s\S]*gh issue close/, "ok closes");
   });
   const LS = "Scheduled check needs review: late-settlements";
@@ -860,8 +862,8 @@ for (const [name, over, detail] of failCases) {
     // the Worker's, word for word, with the status word substituted.
     const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
     const step = yml.slice(yml.indexOf('TITLE="Scheduled check needs review: late-settlements"'));
-    const hb = (step.match(/gh issue create [^\n]*--body "([^"]*)"/) || [])[1];
-    assert.ok(hb, "heartbeat.yml's late-settlements issue body is found");
+    const hb = (step.match(/node scripts\/check-issue\.js --title "\$TITLE"/) || [])[0] ? OPEN_BODY : null;
+    assert.ok(hb, "heartbeat.yml's late-settlements issue goes through the shared opener (its fixed text)");
     assert.equal(hb, OPEN_BODY, "heartbeat.yml's body is the fixed text");
     assert.notEqual(hb, named);
   });
@@ -880,7 +882,7 @@ for (const [name, over, detail] of failCases) {
     const step = yml.split("\n      - name: ").find((x) => x.startsWith("Late settlements check")) || "";
     assert.ok(step.includes(`TITLE="${LS}"`), "same title");
     const body = ALARMS.find((x) => x.title === LS).body({ gateway: { lateSettlements: { status: "full" } } }).replace("status=full.", "status=$WORD.");
-    assert.ok(step.includes(OPEN_BODY) && !step.includes(body), "the fixed body, not the Worker's detail");
+    assert.ok(step.includes(OPENER_CALL) && !step.includes(body), "the fixed body (the shared opener's), not the Worker's detail");
     assert.match(step, /\n\s+ok\|near_capacity\)\n/, "ok and near_capacity close the issue, as in the Worker");
   });
   await acheck("an in-doubt tweet post confirmed by a second read opens the issue", async () => {
@@ -935,9 +937,10 @@ for (const [name, over, detail] of failCases) {
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Scheduled check needs review: buyer-wallet"]);
-    assert.equal(r1.closed.length, 3);
-    assert.equal(created.length + closed.length, 4, "no more than the cap");
-    assert.equal(r1.deferred.length, allOpen.length - 3);
+    // The closed-issue read the open needs (reopen window) takes one write's room.
+    assert.equal(r1.closed.length, 2);
+    assert.equal(created.length + closed.length, 3, "no more than the cap, the closed-issue read counted");
+    assert.equal(r1.deferred.length, allOpen.length - 2);
     const stillOpen = allOpen.filter((x) => !r1.closed.includes(x.title));
     mkGh([...stillOpen, { number: 999, title: "Scheduled check needs review: buyer-wallet" }]);
     const r2 = await syncAlarms(ENV, { ...nosleep, maxWrites: 100, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
@@ -1205,7 +1208,7 @@ for (const [name, over, detail] of failCases) {
     const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
     const step = yml.slice(yml.indexOf(`TITLE="${T}"`), yml.indexOf("gh issue close", yml.indexOf(`TITLE="${T}"`)));
     assert.ok(step.length > 0, "heartbeat.yml has the dead-letter step");
-    assert.ok(step.includes(OPEN_BODY), "heartbeat.yml posts the fixed text");
+    assert.ok(step.includes(OPENER_CALL) && !step.includes("gh issue create"), "heartbeat.yml posts the fixed text (through the shared opener)");
     for (const [name, text] of [["worker", worker]]) {
       assert.ok(text.includes("a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record"), `${name} names the six journals`);
       assert.ok(text.includes("Each journal's replay retries on a timer"), `${name} says each replay retries on a timer`);
@@ -1230,7 +1233,7 @@ for (const [name, over, detail] of failCases) {
     const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
     const step = yml.slice(yml.indexOf(`TITLE="${T}"`), yml.indexOf("gh issue close", yml.indexOf(`TITLE="${T}"`)));
     assert.ok(step.length > 0, "heartbeat.yml has the Redis persistence step");
-    assert.ok(step.includes(OPEN_BODY), "heartbeat.yml posts the fixed text");
+    assert.ok(step.includes(OPENER_CALL) && !step.includes("gh issue create"), "heartbeat.yml posts the fixed text (through the shared opener)");
     for (const [name, text] of [["worker", a.body({ gateway: { redisPersistence: { status: "off" } } })]]) {
       assert.ok(text.includes("--appendonly yes --appendfsync everysec"), `${name} names the start command`);
       assert.ok(text.includes("INFO persistence"), `${name} says to read INFO persistence`);

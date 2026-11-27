@@ -345,7 +345,7 @@ try {
     ok(word({ enabled: false }) === "off", "without a state database: off");
     const hb = (await import("node:fs")).readFileSync(join(ROOT, ".github/workflows/heartbeat.yml"), "utf8");
     const step = hb.slice(hb.indexOf("- name: Ledger dead-letter check"), hb.indexOf("- name:", hb.indexOf("- name: Ledger dead-letter check") + 10));
-    ok(/\.ledgerDeadLetter\.status/.test(step) && /if \[ "\$WORD" = "stuck" \] \|\| \[ "\$WORD" = "local" \]; then sleep 30; WORD=\$\(read_dl\); fi/.test(step) && /stuck\|local\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step),
+    ok(/\.ledgerDeadLetter\.status/.test(step) && /if \[ "\$WORD" = "stuck" \] \|\| \[ "\$WORD" = "local" \]; then sleep 30; WORD=\$\(read_dl\); fi/.test(step) && /stuck\|local\)\s+if \[ -z "\$OPEN" \]; then\s+node scripts\/check-issue\.js --title "\$TITLE"/.test(step),
       "the heartbeat reads ledgerDeadLetter.status, confirms stuck or local on a second reading and opens an issue");
     ok(deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now(), local: 1 }]) === "local" && deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now() - 21 * 60_000, local: 1 }]) === "stuck"
       && deadLetterWord([{ waiting: 1, total: 1, oldestAt: Date.now(), local: 0 }]) === "pending", "an entry on local disk while the journals live in Redis: local (after stuck, before pending)");

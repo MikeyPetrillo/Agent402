@@ -106,7 +106,10 @@ function capture(event, properties, distinctId = DISTINCT_ID) {
   }
   if (!enabled || !client) return;
   try {
-    client.capture({ distinctId, event, properties });
+    // posthog-node 6 sends `$ai_` events on their own lane (captureAi, the
+    // AI endpoint); every other event goes through capture as before.
+    if (String(event).startsWith("$ai_") && typeof client.captureAi === "function") client.captureAi({ distinctId, event, properties });
+    else client.capture({ distinctId, event, properties });
   } catch { /* never throw from telemetry */ }
 }
 

@@ -84,6 +84,6 @@ ok(/TITLE="Scheduled check needs review: analytics-store"/.test(hb), "heartbeat 
 const pgLeg = hb.slice(hb.indexOf("Postgres reachability check"), hb.indexOf("Upstream buyer wallet trend"));
 ok(/probe_db\(\)/.test(pgLeg), "the Postgres leg factors its read into a re-runnable probe");
 ok(/sleep 30[\s\S]*probe_db/.test(pgLeg), "an unreachable first read is re-probed after a delay before paging");
-ok(pgLeg.indexOf("gh issue create") > pgLeg.indexOf("sleep 30"), "the issue is only filed AFTER the second read");
+ok(pgLeg.indexOf("node scripts/check-issue.js --title") > pgLeg.indexOf("sleep 30") && !pgLeg.includes("gh issue create"), "the issue is only filed AFTER the second read");
 
 console.log(`db-status: ${passed} passed, 0 failed`);

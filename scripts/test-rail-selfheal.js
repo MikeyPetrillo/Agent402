@@ -127,7 +127,9 @@ ok(/cannot resolve the Railway service to restart/.test(healer),
   ok(railStep.length > 200, "the Rail check step was located for scoped assertions");
   ok(!/production DOWN/.test(railStep),
     "a degraded rail is reported as a notice, never escalated to a production-down page");
-  ok(/--body "A scheduled check reported a result that needs review\. Run: /.test(railStep),
+  // Filed through the shared opener (scripts/check-issue.js), whose opening
+  // text is the fixed sentence; the step hands it the title alone.
+  ok(/node scripts\/check-issue\.js --title "\$TITLE"(?: --trust-owner)?\s*$/m.test(railStep) && !/gh issue create/.test(railStep),
     "the issue is the fixed text every scheduled check posts");
 }
 

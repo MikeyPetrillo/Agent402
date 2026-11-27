@@ -29,7 +29,11 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { load as yamlLoad } from "js-yaml";
-import { OPEN_BODY_RE, OPEN_BODY } from "./lib/monitor-issue-text.js";
+import { OPEN_BODY_RE, OPEN_BODY, OPENS_ISSUE_RE } from "./lib/monitor-issue-text.js";
+// A step files its issue through the shared opener (scripts/check-issue.js),
+// whose opening text is OPEN_BODY; a step with its own --body-file sends its
+// saved state instead, so it does not carry the Worker's body.
+const workerBody = (run) => run.includes(OPEN_BODY) || (OPENS_ISSUE_RE.test(run) && !/check-issue\.js[^\n]*--body-file/.test(run));
 
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -417,7 +421,7 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
     assert.ok(step, `heartbeat.yml has a step named "${prefix}..."`);
     assert.ok(step.run.includes(`TITLE="${T}"`), "same title");
     assert.ok(step.run.includes(`.${field}.status`), "reads the word");
-    assert.ok(step.run.includes(OPEN_BODY), "same body");
+    assert.ok(workerBody(step.run), "same body");
   });
   if (!step) continue;
   await check(`heartbeat: "${T}" opens once on the alert and never on a healthy, flickering or blind read`, async () => {
@@ -466,7 +470,7 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.ok(step, `heartbeat.yml has a step named "${name}"`);
     assert.ok(step.run.includes(`TITLE="${T}"`), "the title");
     assert.ok(step.run.includes(`.${field}.status`), "reads the word");
-    if (sameBody) assert.ok(step.run.includes(OPEN_BODY), "the Worker's body");
+    if (sameBody) assert.ok(workerBody(step.run), "the Worker's body");
   });
   if (!step) continue;
   await check(`heartbeat: "${T}" opens once on over and on capped, never on ok, off or a blind read`, async () => {
@@ -793,7 +797,7 @@ for (const [name, T, field, sameBody] of SPEND) {
   await check(`heartbeat: "${T}" has a step with the Worker's title and body`, () => {
     assert.ok(worker, "the Worker has the alarm");
     assert.ok(step, "heartbeat.yml has the step");
-    assert.ok(step.run.includes(`TITLE="${T}"`) && step.run.includes(".mppReconcile.run") && step.run.includes(OPEN_BODY), "same title, word and body");
+    assert.ok(step.run.includes(`TITLE="${T}"`) && step.run.includes(".mppReconcile.run") && workerBody(step.run), "same title, word and body");
   });
   if (step && worker) {
     await check(`heartbeat: "${T}" opens once on stale and never on ok, off, unknown or a blind read`, async () => {

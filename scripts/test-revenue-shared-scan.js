@@ -195,7 +195,7 @@ ok(html.length > 1000 && /every 12 hours/.test(html) && /EVERY 12H/.test(html) &
 {
   const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
   const step = hb.slice(hb.indexOf("- name: Live revenue read check"), hb.indexOf("# Refunds owed (src/refund-ledger.js)"));
-  ok(/jq -r '\.revenueLive\.status \/\/ "unknown"'/.test(step) && /\n\s+stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(step) && /fresh\|due\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(step) && !/\$\{\{/.test(step), "heartbeat: stale opens the issue, fresh and due close it, nothing interpolated into the shell");
+  ok(/jq -r '\.revenueLive\.status \/\/ "unknown"'/.test(step) && /\n\s+stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+node scripts\/check-issue\.js --title "\$TITLE"/.test(step) && /fresh\|due\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(step) && !/\$\{\{/.test(step), "heartbeat: stale opens the issue, fresh and due close it, nothing interpolated into the shell");
 }
 
 console.log(`\ntest-revenue-shared-scan: ${pass} passed, ${fail} failed`);

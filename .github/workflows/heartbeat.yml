@@ -146,7 +146,7 @@ jobs:
             gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             echo "already tracked in #$OPEN"; exit 0
           fi
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+          node scripts/check-issue.js --title "$TITLE" --trust-owner
 
       # Gateway credits: /v1 tiers settle the buyer's USDC before the handler
       # runs, so an empty OpenRouter balance turns every gateway call into
@@ -190,7 +190,7 @@ jobs:
           echo "rails: degraded=$DEGRADED batched-dropped=$BATCHED"
           if [ "$DEGRADED" -gt 0 ] || [ "$BATCHED" -gt 0 ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               echo "already tracked in #$OPEN"
             fi
@@ -210,7 +210,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -225,7 +225,7 @@ jobs:
           OPEN2=$(ISSUE_TITLE="$TITLE2" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 180 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE2" --trust-owner
             fi
           elif [ "$STATUS" != "unknown" ] && [ -n "$OPEN2" ]; then
             gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -274,7 +274,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$CODE" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -315,7 +315,7 @@ jobs:
               echo "validator unreadable on $N run(s) in a row"
               if [ "$N" -ge 3 ] || { [ "$N" -ge 2 ] && [ $((NOW - SINCE)) -ge 43200 ]; }; then
                 if [ -z "$OPEN" ]; then
-                  gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                  node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
                 fi
               fi
               ;;
@@ -376,11 +376,11 @@ jobs:
           elif [ "$CODE" = "1" ] && [ -s "$BODY_FILE" ]; then
             [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             # Open once; a repeat run posts nothing while the issue stays open.
-            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            [ -n "$OPEN" ] || node scripts/check-issue.js --title "$TITLE"
           else
             echo "::warning::security advisory triage check UNREADABLE (exit $CODE) - not silently passing"
             [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check. The heartbeat job log names the error. Auto-closes on the next readable check.\n' > "$BODY_FILE"
-            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            [ -n "$OPEN2" ] || node scripts/check-issue.js --title "$TITLE2"
           fi
 
       # Holiday source sponsorship: the holiday tools' source allows commercial
@@ -411,10 +411,10 @@ jobs:
             [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           elif [ "$CODE" = "1" ]; then
             [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            [ -n "$OPEN" ] || node scripts/check-issue.js --title "$TITLE"
           else
             echo "::warning::holiday source sponsorship check UNREADABLE (exit $CODE) - not silently passing"
-            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            [ -n "$OPEN2" ] || node scripts/check-issue.js --title "$TITLE2"
           fi
 
       # Canary burner balance watch: an empty burner once read as a settlement
@@ -448,7 +448,7 @@ jobs:
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               LAST=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json createdAt,comments --jq '[.createdAt, (.comments[]?.createdAt)] | max // empty' 2>/dev/null)
               if [ -n "$LAST" ] && node -e "process.exit(Date.now() - Date.parse(process.argv[1]) >= 86400000 ? 0 : 1)" "$LAST"; then
@@ -501,7 +501,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -532,7 +532,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -555,7 +555,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -584,8 +584,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -604,8 +603,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -626,8 +624,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -650,8 +647,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "withdraw" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -673,8 +669,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -696,8 +691,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -720,8 +714,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "memory" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -744,8 +737,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -767,8 +759,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -791,8 +782,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refusing" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -815,8 +805,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -838,8 +827,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -873,8 +861,7 @@ jobs:
           case "$STATUS" in
             cooling)
               if [ -z "$EXISTING" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                  --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+                node scripts/check-issue.js --title "$TITLE" --trust-owner || true
               else
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
@@ -918,8 +905,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "unavailable" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "spent" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -941,8 +927,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -966,8 +951,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "attention" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
             # One issue covers every reason, so a NEW reason arriving while it is
             # open is said on it. The operator view's tag is a digest of which
@@ -1035,8 +1019,7 @@ jobs:
           if [ "$ALERT" = "ok" ] || [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; then CLEAR=yes; fi
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             else
               # A sustained read after a first clear read starts the count again.
               BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
@@ -1074,8 +1057,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failed" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -1097,8 +1079,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refused" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -1121,8 +1102,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "stale" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -1145,8 +1125,7 @@ jobs:
           EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
@@ -1162,7 +1141,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1183,7 +1162,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1210,7 +1189,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1228,7 +1207,7 @@ jobs:
           OPEN2=$(ISSUE_TITLE="$TITLE2" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 60 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE2" --trust-owner
             fi
           elif [ -n "$OPEN2" ] && { [ "$STATUS" = "ok" ] || [ "$STATUS" = "low" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; }; then
             gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -1247,7 +1226,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1276,7 +1255,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1307,7 +1286,7 @@ jobs:
           case "$WORD" in
             held|failed|stale|unencrypted|unconfigured)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1336,7 +1315,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1359,7 +1338,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1386,7 +1365,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "missing" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1412,7 +1391,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1433,7 +1412,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$WORD" = "reached" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -1457,7 +1436,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             fi
@@ -1480,7 +1459,7 @@ jobs:
           case "$WORD" in
             halted|no_credentials|refused|in_doubt)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1509,7 +1488,7 @@ jobs:
           case "$WORD" in
             due|attention)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1536,7 +1515,7 @@ jobs:
           case "$WORD" in
             reached)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1562,7 +1541,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1590,7 +1569,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1617,7 +1596,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1644,7 +1623,7 @@ jobs:
           case "$WORD" in
             stale)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               fi
               ;;
             fresh|due)
@@ -1688,7 +1667,7 @@ jobs:
               # A debt can stay owed for days (held for review), so an open
               # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 echo "already tracked in #$OPEN"
               fi
@@ -1719,7 +1698,7 @@ jobs:
             owed)
               BODY="/api/gateway-status reports creditsRefunds.status=owed at $(date -u +%FT%TZ): a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {\"session\":\"cs_...\"}. Auto-closes when nothing is owed."
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               fi
               ;;
             ok)
@@ -1748,7 +1727,7 @@ jobs:
             unauthenticated)
               BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1780,7 +1759,7 @@ jobs:
           case "$WORD" in
             burst)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1818,7 +1797,7 @@ jobs:
             OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
             if echo " $BAD " | grep -q " $WORD "; then
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -1942,7 +1921,7 @@ jobs:
           case "$WORD" in
             repeating)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                 # A bad read after a first ok read starts the count again.
@@ -1995,7 +1974,7 @@ jobs:
           case "$WORD" in
             widespread)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                 # A bad read after a first ok read starts the count again.
@@ -2035,7 +2014,7 @@ jobs:
           case "$WORD" in
             degraded)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2071,7 +2050,7 @@ jobs:
           case "$WORD" in
             stuck|local)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2104,7 +2083,7 @@ jobs:
           case "$WORD" in
             off|degraded)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2132,7 +2111,7 @@ jobs:
           case "$WORD" in
             exhausted|failing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2166,7 +2145,7 @@ jobs:
           case "$WORD" in
             missing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2196,7 +2175,7 @@ jobs:
           case "$WORD" in
             attention)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2227,14 +2206,14 @@ jobs:
           case "$WORD" in
             partial)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             missing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+                node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
@@ -2288,7 +2267,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+              node scripts/check-issue.js --title "$TITLE" --trust-owner >/dev/null 2>&1 || echo "issue create failed"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             fi
@@ -2333,7 +2312,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -2370,7 +2349,7 @@ jobs:
             fi
             BODY=$(printf 'The daily MPP reconciliation for %s found records that disagree (categories: %s). Each category is defined in src/mpp-reconcile.js: served_unpaid = booked as settled over Tempo with no transfer on chain; paid_unrecorded = a transfer to our recipient with no sales row; amount_mismatch / wrong_currency / duplicate_tx / missing_tx / evm_unverified / stripe_mismatch as named.\n\n%s\n\nFull detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: POST /__operator/mpp-reconcile/run?day=YYYY-MM-DD. Closes when a reconciliation reads ok.' "$DAY" "${CATS:-see the operator route}" "${ROWS:-(counts need the operator token)}")
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -2409,7 +2388,7 @@ jobs:
                   | jq -r '[.window.mismatches[]? | select(.category != "charged_failed") | "\((.at // "?")[0:10]) \(.category)"] | group_by(.) | map("- \(.[0]): \(length)") | .[]' 2>/dev/null || echo "")
               fi
               BODY=$(printf '/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (%s) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "Scheduled check needs review: payment-reconciliation" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx).\n\n%s\n\nRead /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.' "$DAY" "${ROWS:-(the day and category of each item need the operator token)}")
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             fi
           elif [ "$WIN" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -2438,7 +2417,7 @@ jobs:
             fi
             BODY=$(printf 'An MPP call (Tempo, Stripe SPT or the MPP evm wire) settled and was then answered with a non-200 in the last 24 hours, so the buyer paid and did not get their answer. The debt is on the refund ledger; see GET /__operator/refunds.json and the [mpp-tempo]/[mpp-stripe] CHARGED-BUT-NOT-SERVED log line for the cause.\n\n%s\n\nCloses when the 24-hour count is back to zero.' "${ROWS:-(counts need the operator token)}")
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -2485,7 +2464,7 @@ jobs:
 
           Balances are deliberately not published on /api/gateway-status; read the wallet directly to see the number.
           EOF_BODY
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -2534,7 +2513,7 @@ jobs:
               gh workflow run paid-canary.yml --repo "$GITHUB_REPOSITORY" --ref main \
                 && HEAL="A canary run has been dispatched automatically (a dispatch always buys - the freshness gate applies to scheduled runs only). If it settles, this issue closes itself on the next heartbeat." \
                 || HEAL="Automatic dispatch FAILED, so nothing is retrying on its own."
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "$TITLE" --trust-owner
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
@@ -2552,7 +2531,7 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "Scheduled check needs review: availability" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+              node scripts/check-issue.js --title "Scheduled check needs review: availability"
             fi
             exit 1
           elif [ -n "$OPEN" ]; then

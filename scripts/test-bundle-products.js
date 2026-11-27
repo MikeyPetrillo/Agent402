@@ -318,6 +318,21 @@ try {
     }
     ok(typeof tool("token-diligence").refAnswer !== "function" && JSON.stringify(refAnswerOf(tool("token-diligence"), pub)) === JSON.stringify(pub), "no resale trim: the resold answer is the public one");
     ok(/byMarketCap orders the coins by market cap/.test(k.method) && /return1yPct/.test(k.method), "the answer states its formulas");
+    // The correctness corpus asserts this answer's fields: every path a
+    // token-diligence case expects on a 200 is one the public answer carries,
+    // so the corpus cannot keep asking for a field the contract dropped.
+    const { readFileSync: readCorpus } = await import("node:fs");
+    const corpus = JSON.parse(readCorpus(new URL("./corpus/bundles.json", import.meta.url), "utf8"));
+    const has = (obj, p) => {
+      const parts = String(p).replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+      let cur = obj;
+      for (const key of parts) { if (cur === null || typeof cur !== "object" || !Object.hasOwn(cur, key)) return false; cur = cur[key]; }
+      return true;
+    };
+    const asked = corpus.cases.filter((c) => c.slug === "token-diligence" && !c.expect?.status).flatMap((c) => [...(c.expect.populated || []), ...Object.keys(c.expect.equals || {}), ...Object.keys(c.expect.count || {})]);
+    const missing = asked.filter((p) => !has(k, p));
+    ok(asked.length >= 4 && missing.length === 0, `the corpus's token-diligence paths are all in the public answer (${asked.length} paths${missing.length ? `; missing: ${missing.join(", ")}` : ""})`);
+    ok(!asked.some((p) => /(^|\.)market(\.|$)|supply\.circulating(\.|$)/.test(p.replace(/\[(\d+)\]/g, ".$1"))), "the corpus asks for no market block and no supply count");
   }
   // pacing: both legs read one host, so a coin holds one read at a time and
   // the call at most TOKEN_CONCURRENCY; two reads a coin, none repeated.

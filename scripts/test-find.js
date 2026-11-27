@@ -6,6 +6,7 @@ import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
 import { MEV_AND_L2_TOOLS } from "../src/tools/mev-and-l2-kit.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
+import { NETWORK_TOOLS2 } from "../src/tools/network-kit2.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -669,6 +670,24 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const top2 = (q) => findTools(cat2, q, { k: 5 }).results.map((x) => x.slug);
   ok(top2("rate")[0] === "fx-rate", `"rate" (a one-word alias of feedback) still ranks fx-rate first (${top2("rate").join(", ")})`);
   ok(top2("audit")[0] === "x402-audit", `"audit" (a one-word alias of audit-report) still ranks x402-audit first (${top2("audit").join(", ")})`);
+}
+
+// asn-info reads an IP to ASN mapping service that is not a geolocation
+// source, so a geolocation search does not find it as a match: no alias,
+// tag or name offers it for that, and a bare "ip" word stays under the weak
+// floor /api/find reads (FIND_WEAK_SCORE, 3) with the rarest word uncovered.
+{
+  const cat = {};
+  for (const t of NETWORK_TOOLS2) cat[t.route] = t;
+  const asn = NETWORK_TOOLS2.find((t) => t.slug === "asn-info");
+  ok(!(asn.aliases || []).some((a) => /geo|location/i.test(a)) && !(asn.tags || []).some((t) => /geo/i.test(t)) && !/geolocation/i.test(asn.name), `asn-info carries no geolocation alias, tag or name (${asn.name}; ${(asn.aliases || []).join(", ")})`);
+  for (const q of ["ip geolocation", "geoip", "geolocate ip", "ip-geolocation"]) {
+    const r = findTools(cat, q, { k: 3 });
+    const top = r.results?.[0];
+    const served = top?.slug === "asn-info" && top.score >= 3 && r.rarestTermCovered !== false;
+    ok(!served, `"${q}" does not resolve to asn-info (top ${top?.slug || "none"} ${Math.round(top?.score ?? 0)}, rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
+  }
+  ok(findTools(cat, "ip to asn", { k: 3 }).results?.[0]?.slug === "asn-info", "control: an ASN search still finds asn-info first");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

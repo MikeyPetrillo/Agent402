@@ -185,7 +185,7 @@ ok(/cron:\s*"53 \*\/6 \* \* \*"/.test(wf), "model-drift.yml runs every 6 hours")
 ok(!/^\s*push:/m.test(wf), "model-drift.yml never runs on a push");
 ok(/node scripts\/test-gateway-model-ids\.js 2>&1 \| perl -pe "\$REDACT_RATES"/.test(wf), "the guard's whole output passes through REDACT_RATES before the log");
 ok(!/\bFAILS\b/.test(wf) && !/guard\.log[^\n]*gh issue/.test(wf), "no line of the guard's output is passed to the issue");
-ok(wf.includes('gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: ') && !/UNDER its dearest|ABOVE the dearest/.test(wf), "the issue is the fixed text and names no direction, model or rate");
+ok(wf.includes('node scripts/check-issue.js --title "$TITLE"') && !wf.includes("gh issue create") && !/UNDER its dearest|ABOVE the dearest/.test(wf), "the issue is the fixed text and names no direction, model or rate");
 const guard = readFileSync(new URL("./test-gateway-model-ids.js", import.meta.url), "utf8");
 ok(/advertisedIds\(TIERS, modelsList\(\)\.data\.map/.test(guard) && /advertisedExpiring\(\{ models, advertised, retiring: RETIRING_MODELS, now: Date\.now\(\) \}\)/.test(guard) && /ok\(open\.length === 0, `no advertised model expires within 14 days/.test(guard), "the live guard fails on an advertised id dated inside the window through the shared rule");
 ok(/staleHighRows\(owned\)/.test(guard) && /describeStaleHigh/.test(guard), "the live guard grades the stale-high direction through the shared grader");

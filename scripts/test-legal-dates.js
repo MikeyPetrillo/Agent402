@@ -25,7 +25,7 @@ const PINS = {
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
   "src/terms.js": { date: "2026-11-25", sha: "c4c939171e8493d7", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
-  "src/privacy.js": { date: "2026-11-26", sha: "c44f93c7430a79a6", with: ["src/credits-figures.js"] },
+  "src/privacy.js": { date: "2026-11-27", sha: "99b5b453aa028900", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -55,7 +55,7 @@ for (const [file, pin] of Object.entries(PINS)) {
 // row main already has was rewritten (a changed hash under an old date).
 const RENDERED = {
   terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"], ["2026-11-26", "58e3293b8fb4a807"]] },
-  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"], ["2026-11-26", "2910e5ab1b4758b6"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"], ["2026-11-26", "d61fcb07d2c4efc0"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"], ["2026-11-26", "2910e5ab1b4758b6"], ["2026-11-27", "78ea72c6271c2e9b"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"], ["2026-11-26", "d61fcb07d2c4efc0"], ["2026-11-27", "5216daa1f3d4fc2b"]] },
   dpa: { off: [["2026-11-25", "f2425114421ddfba"]], on: [["2026-11-25", "f2425114421ddfba"]] },
 };
 {

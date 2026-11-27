@@ -60,6 +60,17 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the same item to a server that sets the switch).
 const ENTRIES = [
   {
+    date: "2026-11-27",
+    title: "ASN lookups, video filter answers",
+    items: [
+      "Tools: asn-info is named IP to ASN lookup and no longer answers geolocation searches: its country is the one the regional registry records for the address block, not a location. The fraud-signals pack reads it as `registryCountry`.",
+      "Tools: asn-info asks a public resolver too when this server's own resolver has not answered within one second; when the owner name cannot be read, `ownerLookup` names the query that was asked.",
+      "Tools: /v1/videos/generations answers 422 with reason `content_filtered` when the provider says its content filter may have stopped the clip; a provider outage still answers 502.",
+      "API: A Stripe webhook whose signature does not verify is answered a fixed message.",
+      "Site: /privacy is dated 2026-11-27: an asn-info lookup also goes to a public resolver when this server's own resolver has not answered within one second.",
+    ],
+  },
+  {
     date: "2026-11-26",
     title: "Summaries, receipt checks, token brief",
     items: [

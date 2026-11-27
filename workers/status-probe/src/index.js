@@ -30,6 +30,7 @@
 //
 // Deploy: see README.md. Requires the STATUS_PROBE_TOKEN secret.
 import { planTitleAdoption } from "./previous-issue-titles.js";
+import { REOPEN_WINDOW_MS, reopenCandidate } from "./reopen-window.js";
 
 const REQUIRED_NETWORK = "eip155:8453"; // Base is always expected in the offer
 const CATALOG_FLOOR = 400; // matches the heartbeat + sync-count floor
@@ -1484,6 +1485,44 @@ export async function openIssues(token, env = {}) {
   return byTitle;
 }
 
+// A check that fails again within the reopen window (./reopen-window.js, the
+// rule scripts/check-issue.js applies for the workflows) reopens its last
+// closed issue rather than filing a new number. The closed issues are read
+// once per sync, and only when something is about to open; an unreadable
+// list files a new issue, as before. A reopen is one write, as a create is:
+// the body starts over as the fixed opening text (no clearing mark survives);
+// a reopen that fails costs one more write, the create that replaces it.
+export async function recentlyClosed(token, env = {}, now = Date.now()) {
+  try {
+    const self = await issuesLogin(token, env);
+    const since = new Date(now - REOPEN_WINDOW_MS).toISOString();
+    const r = await gh(`/repos/${ISSUES_REPO}/issues?state=closed&sort=updated&direction=desc&per_page=100&since=${encodeURIComponent(since)}`, token);
+    if (!r.ok) return null;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return null;
+    const list = rows.filter((x) => x && !x.pull_request).map((x) => ({ number: x.number, title: x.title, author: String(x.user?.login || ""), closedAt: x.closed_at, state: x.state }));
+    list.trusted = [self];
+    return list;
+  } catch { return null; }
+}
+// The issue a bad check would reopen, or null (a reopen can cost two writes).
+const reopenTarget = (title, closedList) => (closedList ? reopenCandidate(closedList, { title, trusted: closedList.trusted || [] }) : null);
+// Returns { ok, reopened?, writes }: writes is the subrequests it made (a
+// failed reopen is two, the PATCH and the POST that replaces it).
+async function openOrReopen(token, title, now, closedList) {
+  const n = reopenTarget(title, closedList);
+  if (n) {
+    // A reopen that fails (refused or thrown) files a new issue instead: a
+    // second number is better than an alarm that never reaches anyone.
+    try {
+      const r = await gh(`/repos/${ISSUES_REPO}/issues/${n}`, token, { method: "PATCH", body: JSON.stringify({ state: "open", body: neutralIssueBody(now) }) });
+      if (r.ok) return { ok: true, reopened: n, writes: 1 };
+    } catch { /* filed new below */ }
+  }
+  const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, { method: "POST", body: JSON.stringify({ title, body: neutralIssueBody(now) }) });
+  return { ok: r.ok, writes: n ? 2 : 1 };
+}
+
 /**
  * Reconcile every alarm against GitHub issues.
  * @returns {{opened:string[], closed:string[], bad:string[], error?:string}}
@@ -1568,22 +1607,31 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
     else if (v === "good" && existing) toClose.push(a);
     else if (v === "bad" && existing && a.closeAfterTwoOk && marked(a.title)) toReset.push(a);
   }
+  // The closed-issue read is one subrequest, taken from the write budget
+  // whether this sync or the outage sync before it (same open list) made it.
+  const closedList = !toOpen.length ? null : open.closedList !== undefined ? open.closedList : await recentlyClosed(token, env);
+  if (toOpen.length) maxWrites = Math.max(1, maxWrites - 1);
   const writes = [...toOpen, ...toClose, ...toReset];
-  const deferred = writes.slice(maxWrites).map((a) => a.title);
-  for (const a of writes.slice(0, maxWrites)) {
+  // Spent as the writes are made: a reopen starts only with room for the
+  // create that replaces it if it fails, and a failed one is charged both.
+  // From the first write that does not fit, the rest wait (opens stay first).
+  const deferred = [];
+  const reopened = [];
+  let spent = 0;
+  for (const a of writes) {
     const v = verdicts[a.title];
     const existing = open.get(a.title);
-    if (v === "bad" && !existing) {
-      const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, {
-        method: "POST",
-        body: JSON.stringify({
-          title: a.title,
-          body: neutralIssueBody(now),
-        }),
-      });
+    const isOpen = v === "bad" && !existing;
+    const need = isOpen && reopenTarget(a.title, closedList) ? 2 : 1;
+    if (deferred.length || spent + need > maxWrites) { deferred.push(a.title); continue; }
+    if (!isOpen) spent++;
+    if (isOpen) {
+      const r = await openOrReopen(token, a.title, now, closedList);
+      spent += r.writes;
       if (r.ok) opened.push(a.title);
+      if (r.ok && r.reopened) reopened.push(a.title);
       // The reading's detail goes to this Worker's own log, never the public issue.
-      try { console.log(JSON.stringify({ alarm: a.title, opened: r.ok, detail: a.body(body) })); } catch { /* a detail that cannot be built changes nothing */ }
+      try { console.log(JSON.stringify({ alarm: a.title, opened: r.ok, ...(r.reopened ? { reopened: r.reopened } : {}), detail: a.body(body) })); } catch { /* a detail that cannot be built changes nothing */ }
     } else if (v === "bad" && existing) {
       // The count of ok reads starts again: the mark line comes off.
       await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ body: withoutClearingMark(bodyOf(a.title)) }) });
@@ -1602,7 +1650,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
       if (r.ok) closed.push(a.title);
     }
   }
-  return { opened, closed, bad, deferred, clearing };
+  return { opened, closed, bad, deferred, clearing, reopened };
 }
 
 // Production DOWN. The api check (GET /health) already failed twice 20 s apart
@@ -1627,12 +1675,11 @@ export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => 
   const existing = open.get(DOWN_TITLE);
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   if (down && !existing) {
-    const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, {
-      method: "POST",
-      body: JSON.stringify({ title: DOWN_TITLE, body: neutralIssueBody(now) }),
-    });
-    try { console.log(JSON.stringify({ alarm: DOWN_TITLE, opened: r.ok, detail: String(detail || "no detail").slice(0, 200) })); } catch { /* logging changes nothing */ }
-    return { action: r.ok ? "opened" : "open-failed" };
+    const closedList = open.closedList !== undefined ? open.closedList : await recentlyClosed(token, env);
+    try { open.closedList = closedList; } catch { /* a frozen list is read again */ }
+    const r = await openOrReopen(token, DOWN_TITLE, now, closedList);
+    try { console.log(JSON.stringify({ alarm: DOWN_TITLE, opened: r.ok, ...(r.reopened ? { reopened: r.reopened } : {}), detail: String(detail || "no detail").slice(0, 200) })); } catch { /* logging changes nothing */ }
+    return { action: r.ok ? (r.reopened ? "reopened" : "opened") : "open-failed" };
   }
   if (!apiFailed && existing) {
     const r = await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ state: "closed" }) });

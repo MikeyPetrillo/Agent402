@@ -23,3 +23,8 @@ export const NAMES_OUT = Object.freeze(["openrouter", "payai", "cdp", "coinbase"
 export const OPEN_BODY_RE = /^A scheduled check reported a result that needs review\. Run: \S*\. This issue closes when the check next passes, or by hand after review\.$/;
 export const STILL_BODY_RE = /^Still needs review at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\. Run: \S*(?: reasons mark [0-9a-f]{24}| state: (?:unmarked|clean|again))?$/;
 export const CLOSE_BODY_RE = /^Closed by the scheduled check at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\. Run: \S*$/;
+// A workflow files a check's issue through one script, which comments on the
+// open one, reopens one closed within the reopen window, or files a new one
+// (scripts/check-issue.js); no workflow calls `gh issue create` itself.
+export const OPENER = "node scripts/check-issue.js";
+export const OPENS_ISSUE_RE = /node scripts\/check-issue\.js --title /;

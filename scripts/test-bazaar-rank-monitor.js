@@ -201,8 +201,8 @@ ok(/--body-file out\/body\.md/.test(wf) && !/cat out\/(report|body)/.test(wf), "
 ok(/Not measured this week\./.test(wf), "an unmeasured run says so in its own summary");
 const title = (wf.match(/TITLE:\s*(.+)/) || [])[1]?.trim() || "";
 ok(title !== "" && !/\$|\d/.test(title), `one fixed issue title with no counts (${title})`);
-ok(/gh issue create/.test(wf) && /gh issue edit/.test(wf) && /gh issue comment/.test(wf) && /gh issue close/.test(wf), "opens one issue, updates it on a changed set, closes it when clean");
-ok((wf.match(/gh issue create/g) || []).length === 1, "exactly one place opens an issue");
+ok(/node scripts\/check-issue\.js --title "\$TITLE" --body-file out\/body\.md/.test(wf) && !/gh issue create/.test(wf) && /gh issue edit/.test(wf) && /gh issue comment/.test(wf) && /gh issue close/.test(wf), "opens one issue, updates it on a changed set, closes it when clean");
+ok((wf.match(/node scripts\/check-issue\.js --title /g) || []).length === 1, "exactly one place opens an issue, through the shared opener");
 for (const mm of wf.matchAll(/uses:\s*([^\s#]+)/g)) ok(/@[0-9a-f]{40}$/.test(mm[1]), `action pinned to a commit (${mm[1].split("@")[0]})`);
 
 // ---- the workflow's issue step, run with a stub gh and a stub node ----------
@@ -220,7 +220,7 @@ for (const mm of wf.matchAll(/uses:\s*([^\s#]+)/g)) ok(/@[0-9a-f]{40}$/.test(mm[
   const stepLines = [];
   for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) stepLines.push(lines[i].slice(indent));
   const script = stepLines.join("\n");
-  ok(at > 0 && script.includes("gh issue list") && script.includes("gh issue create"), "the issue step's script is read from the workflow");
+  ok(at > 0 && script.includes("gh issue list") && script.includes("node scripts/check-issue.js --title"), "the issue step's script is read from the workflow");
   const dir = mkdtempSync(join(tmpdir(), "bazaar-rank-wf-"));
   // gh: "issue list" applies the step's own --jq to GH_STUB_ISSUES; every call is logged.
   writeFileSync(join(dir, "gh"), `#!/bin/bash
@@ -234,6 +234,7 @@ elif [ "$1 $2" = "issue view" ]; then printf 'body\\n'; fi
   writeFileSync(join(dir, "node"), `#!/bin/bash
 printf '%s\\n' "node $*" >> "$GH_STUB_LOG"
 OUT=""; while [ $# -gt 0 ]; do if [ "$1" = "--out" ]; then shift; OUT="$1"; fi; shift; done
+[ -n "$OUT" ] || exit 0  # the shared issue opener: logged only
 mkdir -p "$OUT"; printf '%s\\n' "$STUB_ACTION" > "$OUT/action.txt"; printf 'measured\\n' > "$OUT/status.txt"; printf 'b\\n' > "$OUT/body.md"
 `);
   chmodSync(join(dir, "gh"), 0o755); chmodSync(join(dir, "node"), 0o755);
@@ -251,11 +252,11 @@ mkdir -p "$OUT"; printf '%s\\n' "$STUB_ACTION" > "$OUT/action.txt"; printf 'meas
   let w = run([stranger, bot], "close");
   ok(w.status === 0 && w.calls.includes("gh issue view 5") && w.calls.includes("gh issue close 5") && !w.calls.some((c) => / 9$/.test(c)), `with a newer issue by another account under the title, the bot's issue is the one read and closed (${w.calls.join("; ")}) ${w.err.slice(0, 160)}`);
   w = run([stranger], "open");
-  ok(w.status === 0 && !w.calls.some((c) => c.startsWith("gh issue view")) && w.calls.some((c) => c.startsWith("node ") && !c.includes("--issue-body")) && w.calls.includes("gh issue create --repo"), `with only another account's issue under the title, a new issue is opened (${w.calls.join("; ")})`);
+  ok(w.status === 0 && !w.calls.some((c) => c.startsWith("gh issue view")) && w.calls.some((c) => c.startsWith("node ") && !c.includes("--issue-body")) && w.calls.some((c) => c.startsWith("node scripts/check-issue.js --title ")), `with only another account's issue under the title, a new issue is opened (${w.calls.join("; ")})`);
   w = run([{ ...bot, author: { login: "github-actions[bot]" } }], "update");
   ok(w.calls.includes("gh issue edit 5") && w.calls.includes("gh issue comment 5"), "the bot's login in either spelling is ours");
   w = run([{ ...bot, title: `${title} (copy)` }], "open");
-  ok(w.calls.includes("gh issue create --repo"), "a bot issue under another title is not ours");
+  ok(w.calls.some((c) => c.startsWith("node scripts/check-issue.js --title ")), "a bot issue under another title is not ours");
   rmSync(dir, { recursive: true, force: true });
 }
 
