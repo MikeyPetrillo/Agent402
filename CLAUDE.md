@@ -112,6 +112,11 @@ LLC: credit the entity, never a personal name.
   (whether a provider's error is a content-filter verdict: the 422 `content_filtered` rule the video
   and image routes share), `src/funding-runway.js` (an early `low-soon` word for the spending and
   fee wallets, from the readings the low-water alarms take; `.claude/rules/ops.md`).
+- `src/capability-gaps.js` (tasks the catalog does not do: one named list that `/api/find`,
+  `/api/route` and route-and-execute read, so a query in a family is a miss unless a row is named
+  for it; `.claude/rules/index-router.md`), `src/tools/sec-rate.js` (one pace for every request
+  this process starts to the SEC's hosts), `src/tools/lookback-stats.js` (the statistics the
+  price-history tools answer in place of a source's series).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),
@@ -226,6 +231,18 @@ LLC: credit the entity, never a personal name.
 - A list answer that is a page or a capped sample says so in fields (`src/partial-answer.js`),
   not only in a prose note.
 - Before adding a data source, read its terms.
+- A read of an SEC host goes through `src/tools/sec-rate.js` (`SEC_STARTS_PER_SECOND` starts in any
+  rolling second, process-wide): it paces our outbound reads and never counts callers; a read that
+  cannot get its turn inside its bounded wait answers 503 with Retry-After
+  (`scripts/test-sec-rate.js`).
+- A new refusal or miss rule is a narrow named list with controls that prove every other request
+  is answered exactly as before: a capability gap is a family in `CAPABILITY_GAPS` with an `asks`,
+  a `covers` and a case with controls in `scripts/test-capability-gaps.js`.
+- The scheduled crawl sends one seller route at most one unpaid price read per
+  `ROUTE_PROBE_MIN_INTERVAL_DAYS` (default 7; `src/crawl-cadence.js`, printed on /crawler;
+  `scripts/test-route-probe-interval.js`).
+- Page-length budgets count words with one module, `scripts/lib/page-words.js` (its named modes
+  are pinned by `scripts/test-page-words.js`); a budget test never carries a counter of its own.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
 - Public copy: first-party and affirmative, no competitor names, no em dashes, US spelling
@@ -400,6 +417,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   a port-0 boot and a drifted stub, and `mcp-clients.yml` runs it against production every 6
   hours (`MCP_CHECK_TARGET=prod`), paging one issue.
 - A skipped integration test is not coverage: under `CI`, a missing dependency must fail.
+  `scripts/test-no-silent-skips.js` scans every suite for a whole-suite skip with no CI check
+  beside it; its exception list may only shrink.
 - An offline suite imports `scripts/lib/offline-stores.js` FIRST (before any `src/` module): it
   clears `REDIS_URL`, `STATE_DATABASE_URL` and the journal switch, which modules read once at
   import, so a developer's shell never puts the suite on a shared backend. A suite that boots a

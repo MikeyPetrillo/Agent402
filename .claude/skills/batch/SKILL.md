@@ -153,3 +153,9 @@ guard or skill step added.
 - A workflow edited on one branch and deleted on another.
 - An `apt-get install` in a workflow: CI installs apt packages only through
   `bash scripts/ci-apt-install.sh <package>...` (bounded attempts, mirror failover).
+- A brief that changes something a guard or a comment already decides: grep `scripts/` and
+  the module for it first, and treat what they record as a constraint.
+- A catalog `description` (the 402 listing text) shortened: page-only text goes in
+  `pageSummary` (`scripts/test-bazaar-listing-parity.js`).
+- A new refusal or miss rule that is not a narrow named list with controls proving every
+  other request is answered as before.
