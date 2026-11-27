@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // /crypto-history-stats-api, the page written for the searches for a crypto
 // history API. It promotes only the routes whose answers are computed here
-// from a coin's past prices, and says what they are: statistics, not a price
-// series. Pinned here: 200, its title, description and canonical; a short lead
+// from a coin's past prices (the bundle, the peg watch and the four look-back
+// routes read from the same source), and says what they are: statistics, not a
+// price series. A route whose source is not cleared for promotion is not named. Pinned here: 200, its title, description and canonical; a short lead
 // and body; the source's credit with its link, the non-affiliation line and
 // the not-advice line; each route at its catalog price with its published
 // example input; no figure from an answer and no route that returns a series;
@@ -63,14 +64,28 @@ try {
   ok(main.indexOf('<p class="sl-credit">') > 0 && main.indexOf('<p class="sl-credit">') < main.indexOf("<h2"), `${PATH} shows the credit before the first section`);
   ok(/Agent402 is not affiliated with or endorsed by CoinGecko\./.test(prose), `${PATH} says Agent402 is not affiliated with or endorsed by the source`);
   ok(/Information only, not investment advice\./.test(prose), `${PATH} says information only, not investment advice`);
-  ok(/deterministic code, with no model in either route/.test(prose), `${PATH} scopes its no-model sentence to the two routes it names`);
+  ok(/deterministic code, with no model in any route on this page/.test(prose), `${PATH} scopes its no-model sentence to the routes it names`);
 
   // Routes, catalog prices and published example inputs.
   ok(prose.includes(`POST /api/token-diligence costs ${year.price} a coin`), `${PATH} quotes token-diligence at its catalog price (${year.price})`);
   ok(prose.includes(`GET /api/stablecoin-depeg-watch costs ${peg.price} a call`), `${PATH} quotes stablecoin-depeg-watch at its catalog price (${peg.price})`);
+  // The four look-back routes: each at its catalog price, with a curl of its published example input.
+  const LOOKBACK = ["crypto-history", "coin-history", "coin-ohlc", "coin-market-chart-range"];
+  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const lookDefs = LOOKBACK.map((s) => [...CRYPTO_TOOLS, ...CRYPTO_MARKETS_TOOLS].find((t) => t.slug === s));
+  for (const [i, slug] of LOOKBACK.entries()) {
+    const row = bySlug.get(slug), def = lookDefs[i];
+    ok(row && def && row.modelBacked === false && def.resale === "computed" && def.resaleCleared === true, `${slug} is in the catalog, not model-backed, marked computed and cleared in its kit`);
+    ok(prose.includes(`${row.method} ${row.path} costs ${row.price} a call`), `${PATH} quotes ${slug} at its catalog price (${row.price})`);
+    ok(decode(main).includes(`curl -i "${SITE}${row.path}?${new URLSearchParams(Object.entries(def.discovery.input).map(([k, v]) => [k, String(v)]))}"`), `${PATH} shows a curl of ${slug}'s published example input`);
+    ok(main.includes(`href="/tools/${slug}"`), `${PATH} links /tools/${slug}`);
+  }
+  for (const f of Object.keys(lookDefs[0].discovery.output.example.summary)) ok(prose.includes(f), `${PATH} names the look-back summary field ${f}`);
+  ok(/never the points it was computed from/.test(prose), `${PATH} says a look-back route never returns its points`);
   const quoted = [...prose.matchAll(/\$\d+(?:\.\d+)?/g)].map((m) => m[0]);
-  const named = new Set([year.price, peg.price]);
-  ok(quoted.length === 2 && quoted.every((q) => named.has(q)), `${PATH} quotes only those two catalog prices (${quoted.join(", ")})`);
+  const named = new Set([year.price, peg.price, ...LOOKBACK.map((s) => bySlug.get(s).price)]);
+  ok(quoted.length === 2 + LOOKBACK.length && quoted.every((q) => named.has(q)), `${PATH} quotes only the catalog prices of the routes it names (${quoted.join(", ")})`);
   const { BUNDLE_TOOLS } = await import("../src/tools/bundle-kit.js");
   const { CRYPTO_SCREENS_TOOLS } = await import("../src/tools/crypto-screens-kit.js");
   const yDef = BUNDLE_TOOLS.find((t) => t.slug === "token-diligence"), pDef = CRYPTO_SCREENS_TOOLS.find((t) => t.slug === "stablecoin-depeg-watch");
@@ -80,14 +95,14 @@ try {
   for (const f of ["return1yPct", "maxDrawdown1yPct", "volatilityAnnualizedPct", "candles", "maxDeviation24hBps", "maxDeviation7dBps", "method"]) ok(prose.includes(f), `${PATH} names the answer field ${f}`);
   // Both tools are cleared as computed answers; a tool marked a raw pass-through is never named.
   ok(yDef.resale === "computed" && yDef.resaleCleared === true && pDef.resale === "computed" && pDef.resaleCleared === true, "both routes are marked computed and cleared in their kits");
-  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
-  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
   const { ALCHEMY_DATA_TOOLS } = await import("../src/tools/alchemy-data-kit.js");
   const { DERIVATIVES_TOOLS } = await import("../src/tools/derivatives-kit.js");
   const series = [...CRYPTO_TOOLS, ...CRYPTO_MARKETS_TOOLS].filter((t) => t.resale === "barred").map((t) => t.slug)
     .concat(ALCHEMY_DATA_TOOLS.map((t) => t.slug), DERIVATIVES_TOOLS.map((t) => t.slug), ["crypto-indicators"]);
   const namedSeries = series.filter((s) => new RegExp(`(^|[^a-z0-9-])${s}([^a-z0-9-]|$)`).test(code));
-  ok(series.includes("crypto-history") && series.includes("coin-ohlc") && series.includes("token-price-history") && series.includes("perp-klines") && namedSeries.length === 0, `${PATH} names no route that passes a source's series through (${namedSeries.join(", ") || "none"})`);
+  // crypto-history and coin-ohlc answer computed statistics now and are named above;
+  // token-price-history (a source not cleared for promotion) and perp-klines stay off the page.
+  ok(!series.includes("crypto-history") && !series.includes("coin-ohlc") && series.includes("token-price-history") && series.includes("perp-klines") && namedSeries.length === 0, `${PATH} names no route that passes a source's series through or whose source is not cleared for promotion (${namedSeries.join(", ") || "none"})`);
   // No figure from an answer: outside the two prices, the request examples and
   // the fixed windows, the page prints no number with a decimal point or a percent.
   const figures = [...prose.matchAll(/-?\d+\.\d+|\d+(?:\.\d+)?%/g)].map((m) => m[0]).filter((n) => !named.has(`$${n}`));

@@ -227,7 +227,7 @@ ${example ? `<h2>What comes back</h2>
 ${pre(JSON.stringify(example, null, 2))}` : ""}
 ${reportBlock}
 <h2>From an agent</h2>
-<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "insider trades for a ticker" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=insider%20trades">/api/find</a> answers the same question.</p>
+<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches each of them: ${c("catalog.find")} with a task such as "insider trades for a ticker" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=insider%20trades">/api/find</a> answers the same question.</p>
 <h2>Source and use</h2>
 <p>Form 4 filings are public records published by the U.S. Securities and Exchange Commission on EDGAR; each row of a live answer links the filing itself, so every figure can be checked at the source. Agent402 reads them with a declared User-Agent, as SEC's access rules ask. Agent402 is not affiliated with or endorsed by the SEC.</p>
 <p>Information only, not investment advice. A Form 4 reports a trade after it happened, and says nothing about why it was made.</p>
@@ -245,8 +245,9 @@ ${links([[`/tools/${list.slug}`, "Insider trades tool"], ...(report ? [[`/tools/
 
 /** /crypto-history-stats-api: a coin's past year as computed statistics
  *  (return, largest drawdown, volatility) and a stablecoin's worst distance
- *  from its peg over a day and a week. Both routes answer figures computed
- *  here; neither returns a price series, and the page says so. */
+ *  from its peg over a day and a week, then the four look-back routes that
+ *  answer one coin over a chosen window. Every route named answers figures
+ *  computed here; none returns a price series, and the page says so. */
 export function cryptoHistoryStatsApiPage(baseUrl, catalog) {
   const year = defOf(catalog, "token-diligence");
   const peg = defOf(catalog, "stablecoin-depeg-watch");
@@ -270,6 +271,24 @@ export function cryptoHistoryStatsApiPage(baseUrl, catalog) {
 <p>${c(`${p.method} ${p.path}`)} costs ${esc(peg.price)} a call. For every large USD stablecoin it answers the distance from the peg now and the widest distance over the past 24 hours and 7 days, in basis points${pFields.length ? ` (${or(pFields)})` : ""}, with a status and flags for the ones that left it.</p>
 ${pre(`curl -i "${baseUrl}${p.path}${query ? `?${query}` : ""}"`)}`;
   }
+  // The one-coin look-back routes: each answers the same computed summary and
+  // never the series it reads (src/tools/lookback-stats.js). A route the
+  // catalog does not list is left out.
+  const LOOKBACK = [
+    ["crypto-history", "the last N days, with the peak, trough and recovery times of the largest drawdown"],
+    ["coin-history", "what changed since one past date"],
+    ["coin-ohlc", "candle statistics for a window, answered without the candles"],
+    ["coin-market-chart-range", "any window, set by two dates or by a look-back ending now"],
+  ].map(([slug, what]) => ({ def: defOf(catalog, slug), what })).filter((r) => r.def);
+  const curlOf = (def) => { const p = routeParts(def); const q = new URLSearchParams(Object.entries(def.discovery?.input || {}).map(([k, v]) => [k, String(v)])).toString(); return `curl -i "${baseUrl}${p.path}${q ? `?${q}` : ""}"`; };
+  const sFields = Object.keys(LOOKBACK[0]?.def.discovery?.output?.example?.summary || {});
+  const lookbackBlock = LOOKBACK.length ? `
+<h2>Look-back statistics for one coin</h2>
+<p>${LOOKBACK.length === 1 ? "One more route answers" : "More routes answer"} a single coin over a window you choose. Each returns a computed ${c("summary")}${sFields.length ? ` (${or(sFields)})` : ""} and never the points it was computed from.</p>
+<ul>
+${LOOKBACK.map(({ def, what }) => { const p = routeParts(def); return `  <li>${c(`${p.method} ${p.path}`)} costs ${esc(def.price)} a call: ${what}. <a href="/tools/${esc(def.slug)}">Tool page</a>.</li>`; }).join("\n")}
+</ul>
+${pre(LOOKBACK.map(({ def }) => curlOf(def)).join("\n"))}` : "";
   const bodyHtml = `
 <p class="sl-lead">Agent402 answers questions about a coin's past year with statistics computed here: one-year return, largest drawdown and annualized volatility. The routes return those figures, not the price series behind them, paid per call from an agent's wallet with no account or key.</p>
 ${credit}
@@ -288,9 +307,9 @@ ${pre(`curl -i -X POST ${baseUrl}${y.path} \\
   <li>${c("candles")}: how many candles the figures were computed from, and their width.</li>
 </ul>
 <p>${yRanks.length ? `${c("comparison")} ranks the coins you sent (${or(yRanks)}), and ` : ""}${c("flags")} names measured conditions such as a deep drawdown or high volatility. The ${c("method")} field of every answer states each formula, so a figure can be recomputed. The <a href="/tools/${esc(year.slug)}">tool page</a> shows the full answer shape.</p>
-${pegBlock}
+${pegBlock}${lookbackBlock}
 <h2>What these routes are</h2>
-<p>They are computed answers: ratios, ranks, deviations and flags worked out by deterministic code, with no model in either route. They do not return candles, a price series or a coin's price on a past date, so they suit a question such as "how far did this coin fall in the past year" and not a chart or a backtest that needs every point.</p>
+<p>They are computed answers: ratios, ranks, deviations and flags worked out by deterministic code, with no model in any route on this page. They do not return candles, a price series or a coin's price on a past date, so they suit a question such as "how far did this coin fall in the past year" and not a chart or a backtest that needs every point.</p>
 <h2>From an agent</h2>
 <p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "one-year drawdown for a coin" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=one-year%20drawdown%20for%20a%20coin">/api/find</a> answers the same question.</p>
 <h2>Source and use</h2>
