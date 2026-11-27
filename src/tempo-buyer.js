@@ -42,6 +42,7 @@ const unguardedDispatcher = fetchAgent({ connect: withDistrust() });
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "./capped-body.js";
 import { markNotSellerBody } from "./response-observation.js";
 import { noteHostRequest } from "./seller-load.js"; // the request log /crawler describes
+import { noteFundingReading } from "./funding-runway.js";
 
 
 /** The tempo/charge challenge this wallet pays: the first one it CAN pay (USDC.e,
@@ -363,6 +364,7 @@ export async function tempoBuyerStatus() {
     const data = "0x70a08231" + acct.address.toLowerCase().slice(2).padStart(64, "0");
     const hex = await rpc("eth_call", [{ to: TEMPO_USDC, data }, "latest"], { timeoutMs: 8000 });
     const usd = Number(BigInt(hex)) / 1e6;
+    noteFundingReading("tempo", usd, low);
     return { status: usd < low ? "low" : "ok", asset: "USDC.e", chain: TEMPO_CAIP2 };
   } catch {
     return { status: "unknown", asset: "USDC.e", chain: TEMPO_CAIP2 };

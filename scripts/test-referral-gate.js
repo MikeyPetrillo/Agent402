@@ -282,6 +282,17 @@ const rawPost = (url, body, headers, abortAfterMs) => new Promise((resolve) => {
 // true once pred() holds. A caller then reads what it asserts, so a late
 // extra effect still fails it.
 const until = async (pred, ms = 20_000) => { const end = Date.now() + ms; for (;;) { if (await pred()) return true; if (Date.now() > end) return false; await wait(10); } };
+// The outcome a hang-up or a cut leads to, then a quiet window in which nothing
+// more may follow: until(pred), then `read()` must give the same answer again
+// QUIET_MS later. A fixed sleep and a read instead lands before the server has
+// seen the closed connection on a loaded host, and passes a late second effect.
+const QUIET_MS = 120;
+const settledOn = async (pred, read) => {
+  const reached = await until(pred);
+  const first = JSON.stringify(read());
+  await wait(QUIET_MS);
+  return reached && JSON.stringify(read()) === first;
+};
 
 // One paid POST over a raw socket whose client reads `readBytes` of the body
 // and then RESETS the connection; with 0 it reads nothing and resets once
@@ -2221,9 +2232,9 @@ try {
     const afterHangup = app1.book.get(key);
     fac.mode.settleDelayMs = 0;
     const fetched = await send(R("echo"), { body: { text: "lagging" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
-    await wait(60);
+    const deliveredStill = await settledOn(() => app1.book.get(key)?.delivered === true, () => app1.book.get(key));
     const afterDelivery = app1.book.get(key);
-    ok(outcome === "aborted" && afterHangup?.state === "unconfirmed" && afterHangup.delivered !== true && fetched.status === 200 && fetched.json?.echo === "lagging" && afterDelivery?.state === "unconfirmed" && afterDelivery.delivered === true, `a hang-up during settle with the receipt not readable keeps the entry UNCONFIRMED (never charged-undelivered on the facilitator's word); the re-send delivers and sets the delivered mark (${afterHangup?.state} -> ${afterDelivery?.state}, delivered ${afterDelivery?.delivered})`);
+    ok(deliveredStill && outcome === "aborted" && afterHangup?.state === "unconfirmed" && afterHangup.delivered !== true && fetched.status === 200 && fetched.json?.echo === "lagging" && afterDelivery?.state === "unconfirmed" && afterDelivery.delivered === true, `a hang-up during settle with the receipt not readable keeps the entry UNCONFIRMED (never charged-undelivered on the facilitator's word); the re-send delivers and sets the delivered mark (${afterHangup?.state} -> ${afterDelivery?.state}, delivered ${afterDelivery?.delivered})`);
     fac.mode.receiptDown = false;
     skew.ms = 11 * 60_000;
     await app1.gate.sweepOnce();
@@ -2525,13 +2536,13 @@ try {
       // Each run ends (its settle lands after its client left) before the next starts: wait for that, not a fixed time.
       const ended = () => until(() => app8.gate.stats().inflight === 0);
       for (let i = 0; i < 10; i++) { await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": "8.8.4.4" }, whenBusyRuns()); await ended(); }
-      await until(() => settles() - before >= 9);
+      await settledOn(() => settles() - before >= 9, () => [settles(), app8.gate.stats().forgivenHangups]);
       const st = app8.gate.stats();
       ok(st.forgivenHangups === 1 && settles() - before === 9 && st.forgivenUsd === 0.03, `10 hang-ups in a row by one payer and address: 1 forgiven, 9 settled (${st.forgivenHangups} forgiven, ${settles() - before} settled)`);
       // Another payer on the same address is bound by the address's budget; another payer elsewhere has its own.
       await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.4" }, whenBusyRuns()); await ended();
       await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.5" }, whenBusyRuns()); await ended();
-      await until(() => settles() - before >= 10);
+      await settledOn(() => settles() - before >= 10, () => [settles(), app8.gate.stats().forgivenHangups]);
       ok(app8.gate.stats().forgivenHangups === 2 && settles() - before === 10, `the address's budget binds whatever wallet signs, and another payer on another address has its own (${app8.gate.stats().forgivenHangups} forgiven, ${settles() - before} settled)`);
     } finally { await app8.close(); }
   }
@@ -2736,7 +2747,7 @@ try {
       await wait(50);
       const p2 = await signPayment(accept, { account: acct });
       await rawPost(`${second.url}/ref/busy`, { text: "gone" }, { "payment-signature": p2.header, "x-test-ip": "6.6.6.6" }, whenBusyRuns());
-      await until(() => second.gate.stats().inflight === 0 && settles() >= 1);
+      await settledOn(() => second.gate.stats().inflight === 0 && settles() >= 1, () => [settles(), second.gate.stats().forgivenUsd]);
       ok(spent === 0.03 && settles() === 1 && second.gate.stats().forgivenUsd === 0.03, `a restart does not refill the forgiveness budget: the same payer's next hang-up is settled (${settles()} settle; ${second.gate.stats().forgivenUsd} forgiven)`);
       ok(JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore, "and none of it touched the budget a direct buyer's hang-up is judged against");
     } finally { await second.close(); }
@@ -3201,24 +3212,24 @@ try {
       // Several chunks, read to the end: delivered whole, and the entry closes.
       const whole = await pay();
       const full = await big(whole, {}, 300_000);
-      await wait(50);
-      ok(gateMod.REFERRAL_SEND_CHUNK_BYTES === 16384 && full.status === 200 && full.json?.blob?.length === 300_000 && /^0x[0-9a-f]{64}$/.test(full.json.transaction || "") && Number(full.headers.get("content-length")) === Buffer.byteLength(full.text) && /^application\/json/.test(full.headers.get("content-type") || "") && appD.book.get(whole.key) === null && appD.gate.stats().partlyServed === 0, `an answer of several chunks read to the end arrives whole (its length stated), and is delivered (${full.status}, ${full.json?.blob?.length} characters)`);
+      const wholeClosed = await settledOn(() => appD.book.get(whole.key) === null, () => [appD.book.get(whole.key), appD.gate.stats().partlyServed]);
+      ok(wholeClosed && gateMod.REFERRAL_SEND_CHUNK_BYTES === 16384 && full.status === 200 && full.json?.blob?.length === 300_000 && /^0x[0-9a-f]{64}$/.test(full.json.transaction || "") && Number(full.headers.get("content-length")) === Buffer.byteLength(full.text) && /^application\/json/.test(full.headers.get("content-type") || "") && appD.book.get(whole.key) === null && appD.gate.stats().partlyServed === 0, `an answer of several chunks read to the end arrives whole (its length stated), and is delivered (${full.status}, ${full.json?.blob?.length} characters)`);
       // Two pieces confirmed, the third never: partly served.
       const some = await pay();
       const r1 = await big(some, { "x-test-cut": "32768" });
-      await wait(150);
+      const cut1 = await settledOn(() => appD.book.get(some.key)?.partial === true && appD.gate.stats().partlyServed === 1, () => [appD.book.get(some.key), appD.gate.stats().partlyServed]);
       const e1 = appD.book.get(some.key);
-      ok(r1.status === "cut" && e1?.state === "charged-undelivered" && e1.delivered === false && e1.partial === true && e1.partialSent === 49152 && e1.partialOf > N && e1.hangup === gateMod.REFERRAL_PARTIAL_HOLD_REASON && !(Number(e1.sendingUntil) > 0) && appD.gate.stats().partlyServed === 1, `an answer cut off after two pieces were taken and a third was handed over is PARTLY SERVED: not delivered, not closed, marked partial with the bytes handed over, the most the buyer can hold (${e1?.state}, delivered ${e1?.delivered}, at most ${e1?.partialSent} of ${e1?.partialOf})`);
+      ok(cut1 && r1.status === "cut" && e1?.state === "charged-undelivered" && e1.delivered === false && e1.partial === true && e1.partialSent === 49152 && e1.partialOf > N && e1.hangup === gateMod.REFERRAL_PARTIAL_HOLD_REASON && !(Number(e1.sendingUntil) > 0) && appD.gate.stats().partlyServed === 1, `an answer cut off after two pieces were taken and a third was handed over is PARTLY SERVED: not delivered, not closed, marked partial with the bytes handed over, the most the buyer can hold (${e1?.state}, delivered ${e1?.delivered}, at most ${e1?.partialSent} of ${e1?.partialOf})`);
       const settlesBefore = settles();
       const fetched = await big(some);
-      await wait(100);
-      ok(fetched.status === 200 && fetched.json?.blob?.length === N && settles() === settlesBefore && appD.book.get(some.key) === null, `the kept answer is still there for a re-send of the same payment, which delivers it whole and closes the entry (${fetched.status}, ${fetched.json?.blob?.length})`);
+      const someClosed = await settledOn(() => appD.book.get(some.key) === null, () => [appD.book.get(some.key), settles()]);
+      ok(someClosed && fetched.status === 200 && fetched.json?.blob?.length === N && settles() === settlesBefore && appD.book.get(some.key) === null, `the kept answer is still there for a re-send of the same payment, which delivers it whole and closes the entry (${fetched.status}, ${fetched.json?.blob?.length})`);
       // The FIRST piece handed over and never confirmed: still partly served, never "not served".
       const first = await pay();
       const r0 = await big(first, { "x-test-cut": "0" });
-      await wait(150);
+      const cut0 = await settledOn(() => appD.book.get(first.key)?.partial === true && appD.gate.stats().partlyServed === 2, () => [appD.book.get(first.key), appD.gate.stats().partlyServed]);
       const e0 = appD.book.get(first.key);
-      ok(r0.status === "cut" && e0?.state === "charged-undelivered" && e0.delivered === false && e0.partial === true && e0.partialSent === 16384 && e0.hangup === "payer budget" && appD.gate.stats().partlyServed === 2, `a first piece handed to the socket and never confirmed is partly served too: a piece in flight may have reached the buyer (${e0?.state}, at most ${e0?.partialSent} of ${e0?.partialOf})`);
+      ok(cut0 && r0.status === "cut" && e0?.state === "charged-undelivered" && e0.delivered === false && e0.partial === true && e0.partialSent === 16384 && e0.hangup === "payer budget" && appD.gate.stats().partlyServed === 2, `a first piece handed to the socket and never confirmed is partly served too: a piece in flight may have reached the buyer (${e0?.state}, at most ${e0?.partialSent} of ${e0?.partialOf})`);
       // A SEND IN FLIGHT: the sweep leaves its entry alone, and a re-send meanwhile is told so.
       const slowOne = await pay();
       rig.stalled.length = 0;
@@ -3233,11 +3244,11 @@ try {
       ok(during.status === 409 && during.json?.reason === "inflight" && during.headers.get("x-payment-replay") === "inflight" && appD.gate.stats().sendInflightRefused === 1 && byHandDuring.ok === false, `one send in flight per payment: a re-send while the answer is still going out is answered 409 inflight and holds no second copy; an operator cannot close the entry mid-send (${during.status} ${during.json?.reason})`);
       rig.stalled[0].destroy();
       const stalledEnd = await stalledCall;
-      await wait(150);
+      const resetSeen = await settledOn(() => appD.book.get(slowOne.key)?.partial === true && appD.book.get(slowOne.key)?.delivered === false, () => appD.book.get(slowOne.key));
       const afterReset = appD.book.get(slowOne.key);
       const collected = await big(slowOne);
-      await wait(100);
-      ok(stalledEnd.status === "cut" && afterReset?.state === "charged-undelivered" && afterReset.partial === true && afterReset.delivered === false && collected.status === 200 && collected.json?.blob?.length === N && appD.book.get(slowOne.key) === null, `when that send ends cut off the entry is still there, partly served, and the re-send collects the whole answer (${afterReset?.state} then ${collected.status})`);
+      const slowClosed = await settledOn(() => appD.book.get(slowOne.key) === null, () => appD.book.get(slowOne.key));
+      ok(resetSeen && slowClosed && stalledEnd.status === "cut" && afterReset?.state === "charged-undelivered" && afterReset.partial === true && afterReset.delivered === false && collected.status === 200 && collected.json?.blob?.length === N && appD.book.get(slowOne.key) === null, `when that send ends cut off the entry is still there, partly served, and the re-send collects the whole answer (${afterReset?.state} then ${collected.status})`);
       // The same for a success delivered before its receipt could be read: the receipt arriving mid-send does not close it.
       {
         fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "ab12".repeat(16) } });
@@ -3252,11 +3263,11 @@ try {
         const confirmedMidSend = appD.book.get(un.key);
         rig.stalled[0].destroy();
         await unCall;
-        await wait(150);
+        const unCut = await settledOn(() => appD.book.get(un.key)?.partial === true, () => appD.book.get(un.key));
         const cutAfter = appD.book.get(un.key);
         const got = await big(un);
-        await wait(100);
-        ok(asSent?.state === "unconfirmed" && asSent.delivered === true && confirmedMidSend?.state === "charged-undelivered" && confirmedMidSend.delivered === true && cutAfter?.state === "charged-undelivered" && cutAfter.partial === true && got.status === 200 && got.json?.blob?.length === N && appD.book.get(un.key) === null, `an unconfirmed payment whose receipt proves it while its answer is still going out keeps its entry (now charged); the cut-off send is then partly served and the re-send collects the answer (${asSent?.state} -> ${confirmedMidSend?.state} -> ${cutAfter?.state}; re-send ${got.status})`);
+        const unClosed = await settledOn(() => appD.book.get(un.key) === null, () => appD.book.get(un.key));
+        ok(unCut && unClosed && asSent?.state === "unconfirmed" && asSent.delivered === true && confirmedMidSend?.state === "charged-undelivered" && confirmedMidSend.delivered === true && cutAfter?.state === "charged-undelivered" && cutAfter.partial === true && got.status === 200 && got.json?.blob?.length === N && appD.book.get(un.key) === null, `an unconfirmed payment whose receipt proves it while its answer is still going out keeps its entry (now charged); the cut-off send is then partly served and the re-send collects the answer (${asSent?.state} -> ${confirmedMidSend?.state} -> ${cutAfter?.state}; re-send ${got.status})`);
       }
       // After the bound a delivered mark left by a process that died is closed as before.
       const dead = await pay();

@@ -52,6 +52,7 @@ t node scripts/test-tollbooth-mpp.js
 t node scripts/test-buyer-balance-trend.js
 # "Spending-wallet chain words (five hanging RPCs read side by side under one deadline, unknown not a stall; offline)"
 t node scripts/test-upstream-buyer-status.js
+t node scripts/test-funding-runway.js
 # "Stepped sort equals the engine's sort (same comparisons, same order; offline)"
 t node scripts/test-timsort-steps.js
 

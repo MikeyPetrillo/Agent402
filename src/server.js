@@ -707,6 +707,7 @@ import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
 import { upstreamBuyerStatus, upstreamBuyerEvmStatus, acknowledgeBuyerTrend } from "./upstream-buyer-status.js";
+import { fundingRunwayStatus } from "./funding-runway.js";
 import { enabledEvmBuyerChains, evmBuyerChain, isEvmBuyerChain, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -5095,6 +5096,11 @@ app.get("/api/gateway-status", async (req, res) => {
     coverageReads: (() => { try { const v = coverageReadsVerdict(); return { status: v.status, alert: v.sustained === true ? "sustained" : "ok" }; } catch { return { status: "unknown" }; } })(),
     // Operator only: the in-flight coverage ledger's counts (src/inflight-cover.js). Never a wallet.
     ...(full ? { inflightCover: inflightCoverStatus() } : {}),
+    // Operator only: each wallet's projected runway from the balance readings
+    // the low-water words above already took (src/funding-runway.js): ok /
+    // low-soon / low / unknown, with the fitted spend. A warning only: it
+    // moves nothing, refuses nothing and leaves every alarm word as it is.
+    ...(full ? { fundingRunway: await fundingRunwayStatus().catch(() => ({ status: "unknown", warningOnly: true })) } : {}),
     // unsettledReports reads ok / burst: COMPOSITE_GUARD_GLOBAL_MAX_FAILS
     // report or media runs spent upstream and then did not settle inside one
     // guard window (src/composite-spend-guard.js); burst holds for

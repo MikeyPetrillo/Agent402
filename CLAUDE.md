@@ -486,3 +486,5 @@ variable whose source of truth is Railway (`scripts/test-ci-secretless-install.j
 The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_ALERT_USD`
 (Railway; `0` or `off` turns it off; `src/direct-upstream-spend.js`): an alarm only, it never
 refuses, caps or reroutes a call.
+`FUNDING_RUNWAY_DAYS` (default 3; `src/funding-runway.js`) is how far ahead the operator view's
+`fundingRunway` word looks: `low-soon` when a wallet's fitted spend reaches its low-water line in that time.
