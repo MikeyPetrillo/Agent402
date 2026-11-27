@@ -197,6 +197,8 @@ t node scripts/test-crawl-revisit.js
 t node scripts/test-crawl-own-limits.js
 # Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
 t node scripts/test-quote-weekly.js
+# One route gets one unpaid price read per interval whatever makes it due, one retry after no answer, one passing paywall check; a week of crawls on a fake clock (offline)
+t node scripts/test-route-probe-interval.js
 # An origin whose documents moved to another seller is counted on its own day; the seller they land on keeps its day and its crawl (offline)
 t node scripts/test-crawl-redirect-budget.js
 # 300 origins behind one landing host are read in turn, oldest read first, one after another; a held crawl casts no tally vote and its turn reads landing (offline)
