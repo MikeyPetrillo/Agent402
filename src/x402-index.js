@@ -12050,6 +12050,18 @@ const ROUTE_DECORATE_SLICE_MS = 6;
 // whose handler rejects must answer 500 alone and leave the next request whole).
 let routeQueryFaultForTest = null;
 export function _setRouteQueryFaultForTest(err) { routeQueryFaultForTest = err || null; }
+// Whether a row is NAMED for a capability gap (its slug or name), read once
+// per row record and gap: a record's slug and name never change, and a gap
+// query otherwise re-reads every scored row on each pass.
+const gapNamedMemo = new Map(); // gap id -> WeakMap(row record -> boolean)
+function rowNamedForGap(gap, t) {
+  let memo = gapNamedMemo.get(gap.id);
+  if (!memo) gapNamedMemo.set(gap.id, (memo = new WeakMap()));
+  let v = memo.get(t);
+  if (v === undefined) { v = gapNamedBy(gap, t.slug, t.name); memo.set(t, v); }
+  return v;
+}
+
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   if (routeQueryFaultForTest) { const e = routeQueryFaultForTest; routeQueryFaultForTest = null; throw e; }
   const q = String(query || "").slice(0, 500);
@@ -12062,9 +12074,12 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // A capability this host's catalog does not offer (src/capability-gaps.js;
   // null for nearly every query). Its lookup words join the scored terms, so
   // a row NAMED for the capability is a candidate however the query worded
-  // it; the verdict and the order are decided after the sort, below.
+  // it ("where is this IP located" reaches a row named geoip). A lookup word
+  // the query already writes, whole or inside a longer word, is not added: a
+  // query that says "geolocation" scores exactly as it always has. The
+  // verdict and the order are decided after the sort, below.
   const gap = capabilityGap(q);
-  const terms = gap && baseTerms.length ? [...baseTerms, ...gap.terms.filter((t) => !baseTerms.includes(t))] : baseTerms;
+  const terms = gap && baseTerms.length ? [...baseTerms, ...gap.terms.filter((t) => !baseTerms.some((b) => b.includes(t)))] : baseTerms;
   const termSet = new Set(queryWords);
   // The ceiling has to announce itself. ?top=100 returned 25 rows with
   // `count: 25` and nothing else, so a caller reads "25 matched" where the truth
@@ -12375,7 +12390,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   if (gap) {
     const named = [], rest = [];
     for (let i = 0; i < scored.length; i++) {
-      (gapNamedBy(gap, scored[i][1].slug, scored[i][1].name) ? named : rest).push(scored[i]);
+      (rowNamedForGap(gap, scored[i][1]) ? named : rest).push(scored[i]);
       if ((i & 2047) === 2047) yield;
     }
     gapNamed = named.length;
