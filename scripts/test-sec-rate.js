@@ -302,6 +302,15 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
     const manyOrder = startsAt.filter((x) => x.kind === "paid" && /^m/.test(x.label)).map((x) => x.label).join();
     ok(many !== "none" && Math.max(...many.map((o) => o.waited)) <= 2 * WINDOW + SLACK && manyOrder === Array.from({ length: 12 }, (_, i) => `m${i}`).join(),
       `twelve paid reads are all started inside two windows, oldest first (${many === "none" ? "not all started" : `longest ${Math.round(Math.max(...many.map((o) => o.waited)))} ms`})`);
+    // One paid read at a time, arriving at ten different moments of the window:
+    // each is the next start, whatever the line's holder was waiting on.
+    const singles = [];
+    for (let i = 0; i < 10; i++) {
+      await sleep(37 + i * 23);
+      const one = await within(paidRead(`s${i}`), 4 * WINDOW);
+      singles.push(one === "none" ? Infinity : one.waited);
+    }
+    ok(singles.every((w) => w <= WINDOW + SLACK), `ten paid reads arriving one at a time each start within about one window (${singles.map((w) => (Number.isFinite(w) ? Math.round(w) : "never")).join(", ")} ms)`);
     // Paid reads stop: the unpaid line moves again, from the next place that opens.
     const lastPaid = Math.max(0, ...startsAt.filter((x) => x.kind === "paid").map((x) => x.at));
     const unpaidAfter = () => startsAt.filter((x) => x.kind === "unpaid" && x.at > lastPaid).length;
