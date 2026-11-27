@@ -293,7 +293,8 @@ const OUT_EXAMPLE = {
 export const LINKEDIN_TOOLS = [
   {
     route: "POST /v1/linkedin-article", name: "Professional article, ready to publish (research + copy + sized images)", slug: "linkedin-article", category: "llm", price: LINKEDIN_TIERS["linkedin-article"].price,
-    description: "A publish-ready professional article on your topic, formatted for posting on LinkedIn (not affiliated with LinkedIn). Includes cited web research, three headlines, a sourced body, a companion post and generated images in LinkedIn's sizes (cover 1920x1080, link-share 1200x627, square, portrait, 16:9) as JPEG under 3 MB. Model-backed. Nothing is posted for you. Not cached.",
+    description: "Hand over a topic and get a publish-ready professional article back, formatted for posting on LinkedIn (not affiliated with LinkedIn): grounded web research with cited sources, three headline options, a hook-first body under subheads with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images delivered in the sizes LinkedIn uses (article cover 1920x1080, link-share 1200x627, feed square and portrait, in-article 16:9) as inline JPEG under 3 MB. Optional byline, angle, audience, tone and CTA. Nothing from memory; nothing posted on your behalf. One payment, one package. Not cached.",
+    pageSummary: "A publish-ready professional article on your topic, formatted for posting on LinkedIn (not affiliated with LinkedIn). Includes cited web research, three headlines, a sourced body, a companion post and generated images in LinkedIn's sizes (cover 1920x1080, link-share 1200x627, square, portrait, 16:9) as JPEG under 3 MB. Model-backed. Nothing is posted for you. Not cached.",
     // No bare "article"/"content" tag: /api/find's lexical ranker scores a
     // curated tag +3 and this slug's "article" segment already +6, which put
     // this tool above `extract` for "extract article from URL" (test-find-ranking).

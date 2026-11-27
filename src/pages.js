@@ -56,6 +56,7 @@ import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
 import { CARD_ART_VERSION } from "./brand-mark.js";
 import { SETTLE_FIRST_SENTENCE, settleFirstClause } from "./settle-first-copy.js";
+import { ATTRIBUTION_TAILS } from "./data-attribution.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
 // when the price is not a dollar figure.
@@ -483,8 +484,14 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   // Details section. A trailing query hint ("?q=inflation&rows=10") repeats the
   // parameters table and the example request, so neither shows it.
   const dropQueryHint = (t) => t.replace(/(?:\s*Query params?:)?\s*\?[A-Za-z_][\w-]*=\S*(?:\s+\(optional\))?\.?$/, "").trim();
-  const descFlat = String(tool.description).replace(/\s+/g, " ").trim();
-  const leadFull = firstSentence(tool.description);
+  // A tool with a pageSummary (a shorter text for this page only) shows it
+  // here; every listing and the meta description keep the full description.
+  // Each source credit the catalog put in the description (attribute() in
+  // src/data-attribution.js) ends the summary too.
+  const credits = tool.pageSummary ? ATTRIBUTION_TAILS.filter((c) => String(tool.description || "").includes(c) && !String(tool.pageSummary).includes(c)) : [];
+  const pageText = tool.pageSummary ? [String(tool.pageSummary).trim(), ...credits].join(" ") : tool.description;
+  const descFlat = String(pageText).replace(/\s+/g, " ").trim();
+  const leadFull = firstSentence(pageText);
   const restShown = dropQueryHint(descFlat.slice(leadFull.length).trim());
   // --- Parameters table from the input schema, plus accepted alternative names.
   const aliasFor = (name) => {
@@ -536,7 +543,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   // A job's payment settles on its answer: said in the same line, so the
   // settle-first sentence (only on a route that may settle first) follows
   // both claims once. A slow route's description already states its run time
-  // and the wait header (server.js runTimeNote), so the line keeps to the job.
+  // and the wait header (server.js runTimeNote), so the line keeps to the job;
+  // a pageSummary carries no such note, so the line states both.
   const runStated = /Prefer: wait=/.test(descFlat);
   const waitPart = tool.runSeconds && !runStated
     ? ` It takes up to ${e(String(tool.runSeconds))} seconds${needsAsyncOrWait(tool.asyncProfile) ? `; or send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep the connection open (a paid call with neither header is answered <code>400</code> before any payment is taken)` : ", or keep the connection open that long"}.`

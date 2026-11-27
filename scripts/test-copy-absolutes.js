@@ -981,6 +981,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   const X402 = "an x402 verify or settle refusal: only an x402 payment meets it, and nothing settled";
   const GATE = "a gate's refusal before any handler runs or any payment settles: true for every caller it answers";
   const POLICY = "a description stating policy with its rail (and the settle-first sentence where the route can settle first)";
+  const POLICY_AND_SUMMARY = `${POLICY}, and the tool's pageSummary stating the same policy for its page`;
   const LOG = "an operator log or ledger line, never sent to a buyer";
   // file -> [lines that type the claim, why]. The count is pinned, so a new
   // typed claim in a listed file fails here until it is converted or counted.
@@ -1034,13 +1035,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     ["src/tempo-buyer.js", [1, LOG]],
     ["src/x402-buyer.js", [3, LOG]],
     ["src/tools/weather-kit.js", [1, LOG]],
-    ["src/tools/attest-kit.js", [1, POLICY]],
+    ["src/tools/attest-kit.js", [2, POLICY_AND_SUMMARY]],
     ["src/tools/cdp-kit.js", [1, "SQL_WALK_CHARGE, the walk's billing rule in its description, with the Tempo exception"]],
     ["src/tools/dub-kit.js", [1, POLICY]],
     ["src/tools/image-gen-kit.js", [2, POLICY]],
     ["src/tools/llm-images-fast-kit.js", [2, POLICY]],
-    ["src/tools/price-webhook-kit.js", [1, POLICY]],
-    ["src/tools/redact-chat-kit.js", [1, POLICY]],
+    ["src/tools/price-webhook-kit.js", [2, POLICY_AND_SUMMARY]],
+    ["src/tools/redact-chat-kit.js", [2, POLICY_AND_SUMMARY]],
     ["src/tools/search.js", [1, POLICY]],
     ["src/tools/decide-kit.js", [2, "the decide-execute description (scoped to x402; Tempo is not offered for a long-running route) and UNKNOWN_DECISION_MESSAGE, the exact sentence, also the pre-payment 404 server.js answers"]],
     ["src/tools/llm-gateway-kit.js", [4, "three descriptions scoped to x402 or carrying the Tempo exception, and inputTooLargeError's metered branch: the exact sentence, never a step (dispatchable refuses a def.quote tool), also the pre-payment refusal answered through withPushException"]],
@@ -1091,15 +1092,15 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/svm-facilitator-split.js": "3afac15f3c3a",
     "src/svm-funding-refusal.js": "c00679c3beff",
     "src/tempo-buyer.js": "1407c610e202",
-    "src/tools/attest-kit.js": "950101df6d73",
+    "src/tools/attest-kit.js": "243d4273ba49",
     "src/tools/cdp-kit.js": "a081d5aac2f7",
     "src/tools/decide-kit.js": "c75892754664",
     "src/tools/dub-kit.js": "1dd69d7461ab",
     "src/tools/image-gen-kit.js": "d0ff399c2a56",
     "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
     "src/tools/llm-images-fast-kit.js": "afc664fa4d2a",
-    "src/tools/price-webhook-kit.js": "f99bf77da2c8",
-    "src/tools/redact-chat-kit.js": "3c5da5565dcc",
+    "src/tools/price-webhook-kit.js": "55e2ba78b2cf",
+    "src/tools/redact-chat-kit.js": "ba08a3d3c1a1",
     "src/tools/search.js": "aa3228d46d93",
     "src/tools/weather-kit.js": "0b0bfd77c1f2",
     "src/verify-hint.js": "0bdb69dae5ad",
