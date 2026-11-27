@@ -108,6 +108,65 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   ok(PII_TYPES.join() === "email,card,ssn,phone,ip" && /no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(packPageCopy(text).use || "") && /emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(text.useCase), "text-hygiene names the five patterns redact matches, and redact still matches those five");
 }
 
+// The look-back tools (COMPUTED_SERIES_SLUGS, src/resale-terms.js) answer
+// statistics computed from a series and never the series. A line of README.md,
+// wiki/ or docs/ that names one, by slug or by the slug's words, and a pack
+// that runs one, must not say it returns history, candles, OHLC, a series or
+// price points. A phrase is allowed where the text says the figures are
+// computed from it ("computed from a coin's history"), where it is denied
+// ("no price series") and in a tool's own name ("price history statistics").
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { COMPUTED_SERIES_SLUGS } = await import("../src/resale-terms.js");
+  const ROOT = new URL("../", import.meta.url);
+  const SERIES_PHRASES = [
+    /\bOHLC (?:history|data|bars|series|candles)\b/gi,
+    /\b(?:candle|candlestick|kline)s? (?:history|data|series)\b/gi,
+    /\bprice history\b(?! statistics)/gi,
+    /\bhistorical (?:[a-z]+ )?prices?\b/gi,
+    /\bprice (?:series|points)\b/gi,
+    /\bchart data\b/gi,
+  ];
+  const ALLOWED_BEFORE = /(?:computed (?:here )?(?:from|over)|statistics (?:from|over|of|for)|\b(?:no|not|never|without|in place of|instead of)\b)[^.;|]{0,60}$/i;
+  const names = COMPUTED_SERIES_SLUGS.map((slug) => new RegExp(`(?<![\\w-])${slug.split("-").join("[- ]")}(?![\\w-])`, "i"));
+  const namesOne = (text) => names.some((re) => re.test(text));
+  /** The series phrases in `text` that no allowance covers (`before`: the text ahead of it). */
+  const seriesClaims = (text, before = "") => {
+    const out = [];
+    for (const re of SERIES_PHRASES) for (const m of text.matchAll(re)) if (!ALLOWED_BEFORE.test(`${before} ${text.slice(0, m.index)}`.slice(-120))) out.push(m[0]);
+    return out;
+  };
+  const lineFindings = (file, body) => {
+    const lines = body.split("\n");
+    return lines.flatMap((line, k) => (namesOne(line) ? seriesClaims(line, lines[k - 1] || "").map((c) => `${file}:${k + 1} "${c}"`) : []));
+  };
+  const files = ["README.md", ...readdirSync(new URL("wiki/", ROOT)).filter((f) => f.endsWith(".md")).map((f) => `wiki/${f}`), ...readdirSync(new URL("docs/", ROOT)).filter((f) => f.endsWith(".md")).map((f) => `docs/${f}`)];
+  const texts = files.map((f) => [f, readFileSync(new URL(f, ROOT), "utf8")]);
+  const named = texts.filter(([, body]) => body.split("\n").some(namesOne)).map(([f]) => f);
+  const found = texts.flatMap(([f, body]) => lineFindings(f, body));
+  ok(named.includes("README.md") && named.includes("wiki/Tool-Catalog.md") && found.length === 0, `no README, wiki or docs line says a look-back tool returns a series (${named.length} files name one)${found.length ? `: ${found.join("; ")}` : ""}`);
+  const packStrings = (p) => { const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])]; for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); } return out.filter(Boolean); };
+  // Sentence by sentence: one that names only the pack's other tools (a
+  // stock-history step does return daily closes) is about those tools.
+  const sentences = (t) => String(t).split(/(?<=[.;:])\s+|\n+/).filter(Boolean);
+  const aboutOthers = (p, sentence) => !namesOne(sentence) && (p.toolSlugs || []).some((t) => !COMPUTED_SERIES_SLUGS.includes(t) && new RegExp(`(?<![\\w-])${t}(?![\\w-])`).test(sentence));
+  const packFindings = (packs) => packs.filter((p) => (p.toolSlugs || []).some((t) => COMPUTED_SERIES_SLUGS.includes(t)))
+    .flatMap((p) => [...new Set(packStrings(p))].flatMap((t) => sentences(t).filter((x) => !aboutOthers(p, x)).flatMap((x) => seriesClaims(x).map((c) => `${p.slug} "${c}"`))));
+  const withOne = ALL_SKILL_PACKS.filter((p) => (p.toolSlugs || []).some((t) => COMPUTED_SERIES_SLUGS.includes(t)));
+  const packFound = packFindings(ALL_SKILL_PACKS);
+  ok(withOne.length >= 3 && packFound.length === 0, `no pack that runs a look-back tool says it returns a series (${withOne.length} packs)${packFound.length ? `: ${packFound.join("; ")}` : ""}`);
+  // CONTROLS: the three texts this rule was written after, and the allowances.
+  ok(lineFindings("wiki", "| `crypto-price`, `crypto-history` | $0.001 | **crypto-kit**: prices, market data, OHLC history, trending coins |").length === 1, "control: a catalog row that calls crypto-history OHLC history is caught");
+  ok(lineFindings("docs", "  decoded receipts, block receipts, token price history); whole-site crawling").length === 1, "control: a listing line that offers token price history is caught");
+  ok(packFindings([{ slug: "control-pack", toolSlugs: ["crypto-history"], tagline: "Pull live price, market structure, OHLC history, trending status and recent news for a single coin in one pass." }]).length >= 1, "control: a pack tagline that offers OHLC history is caught");
+  ok(packFindings([{ slug: "control-pack", toolSlugs: ["crypto-history", "stock-history"], tagline: "Compare assets.", workflow: ["Call stock-history to read the daily price series.", "Call crypto-history and read the price series."] }]).length === 1, "control: a step about another tool's series is not read, the look-back tool's is");
+  ok(lineFindings("x", "`coin-ohlc` returns candle data and `token-price-history` returns price points and historical token prices").length === 3 && lineFindings("x", "`coin-market-chart-range` returns chart data").length === 1, "control: candle data, price points, historical prices and chart data are caught");
+  ok(lineFindings("x", "`crypto-history`: look-back statistics computed from a coin's price history (return, volatility, drawdown; no price series)").length === 0
+    && lineFindings("x", "`token-price-history` (Token price history statistics) answers statistics, not the prices").length === 0
+    && lineFindings("x", "`perp-klines` returns kline data and OHLC candles").length === 0, "control: computed-from, denied and named-statistics wording passes, and a line about another tool is not read");
+}
+
 // A pack's copy says which of its tools are pure-CPU, free over proof-of-work
 // or wallet-only, and each such claim is read against the pack's tool list:
 // a tool is PoW-eligible when src/free-tier.js lists it and WALLET_ONLY_SLUGS

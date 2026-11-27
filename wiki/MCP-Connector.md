@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-Agent402 speaks [MCP](https://modelcontextprotocol.io) two ways. Both are listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402) as `tools.agent402/agent402`, a name the registry verifies against the agent402.tools domain. The earlier name stays resolvable there, marked deprecated with a pointer to this one.
+Agent402 speaks [MCP](https://modelcontextprotocol.io) two ways. Both are published for the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402) under `tools.agent402/agent402`, a name the registry verifies against the agent402.tools domain. The earlier name stays resolvable there and is being marked deprecated with a pointer to this one.
 
 ## 1. Hosted connector - zero install (the free tier)
 

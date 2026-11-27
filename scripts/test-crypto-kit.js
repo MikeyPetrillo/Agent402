@@ -229,7 +229,7 @@ await live("crypto-market", { limit: 10, currency: "usd" },
     typeof r.coins[0].turnoverPct === "number" && r.coins[0].athDrawdownPct <= 0,
   "crypto-market top 10 usd");
 
-// 7-day BTC history — exercises symbol→id resolution and the statistics
+// 7-day BTC history: exercises symbol→id resolution and the statistics
 // computed over the prices/caps/volumes series. CoinGecko returns ~168 hourly points for 7d; assert >24 to ride
 // out any sparse-data hiccup.
 await live("crypto-history", { coin: "BTC", days: 7, currency: "usd" },

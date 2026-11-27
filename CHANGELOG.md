@@ -33,9 +33,11 @@ Site:
   same list is in the README and in /.well-known/x402 (field `official`).
 Index:
 - The index crawler sends one seller route an unpaid price request at most
-  once a week, with one more try on the next crawl after a server error, a
-  redirect or no answer; registering again still reads at once, and /crawler
-  says the same.
+  once a week, and one more inside that time after a server error, a
+  redirect or no answer, to confirm a not-found answer from a route the
+  seller's documents do not list, or when the price those documents state
+  has changed; registering again still reads at once, and /crawler says the
+  same.
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
@@ -81,10 +83,10 @@ Operations:
   server does not spend from, read by public address
   (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.
 Packages:
-- agent402-mcp 0.17.2 is listed in the MCP Registry as
+- agent402-mcp 0.17.2 is published for the MCP Registry under
   tools.agent402/agent402, a name verified against the agent402.tools
-  domain; the earlier name stays resolvable and is marked deprecated with a
-  pointer to it.
+  domain; the earlier name stays resolvable and is being marked deprecated
+  with a pointer to it.
 
 ### 2026-11-28 (Tool page payment sentence)
 Site:

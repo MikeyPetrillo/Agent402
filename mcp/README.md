@@ -193,7 +193,7 @@ automatically:
 
 ## MCP Registry
 
-Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402) as `tools.agent402/agent402`, a name the registry verifies against the agent402.tools domain. The earlier name stays resolvable there, marked deprecated with a pointer to this one. Installs are unchanged: `npx agent402-mcp` and the hosted connector read no registry name.
+Published for the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402) under `tools.agent402/agent402`, a name the registry verifies against the agent402.tools domain. The earlier name stays resolvable there and is being marked deprecated with a pointer to this one. Installs are unchanged: `npx agent402-mcp` and the hosted connector read no registry name.
 
 ## Test
 

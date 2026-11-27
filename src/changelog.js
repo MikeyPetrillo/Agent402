@@ -73,7 +73,7 @@ const ENTRIES = [
       "Site: Two new pages: SEC Form 4 insider trades by API at /insider-trades-api, and a guide to agent-to-agent payments over x402 at /guides/agent-to-agent-payments, whose sample sets a per-call ceiling.",
       "Site: A new page at /crypto-history-stats-api covers the routes that answer a coin's history as computed figures, not a price series.",
       "Site: /company lists the official Agent402.tools packages and endpoints; the same list is in the README and in /.well-known/x402 (field `official`).",
-      "Index: The index crawler sends one seller route an unpaid price request at most once a week, with one more try on the next crawl after a server error, a redirect or no answer; registering again still reads at once, and /crawler says the same.",
+      "Index: The index crawler sends one seller route an unpaid price request at most once a week, and one more inside that time after a server error, a redirect or no answer, to confirm a not-found answer from a route the seller's documents do not list, or when the price those documents state has changed; registering again still reads at once, and /crawler says the same.",
       "Tools: /v1/videos/generations has a higher list price, shown on /api/pricing and in its 402.",
       "Tools: ip-info is named \"IP address type and reverse DNS\"; its route and answer are unchanged.",
       "Tools: An image prompt the provider's content filter stops answers 422 with reason `content_filtered`, in place of the earlier 400 or 502; a provider outage keeps its 5xx answer, and an overloaded or rate-limited provider is read as an outage, not a filtered prompt.",
@@ -87,7 +87,7 @@ const ENTRIES = [
       "API: route-and-execute answers 400 naming the missing fields when a call to a chat completion lacks the fields the seller requires and no other candidate can take it, before any purchase.",
       "API: route-and-execute no longer asks a chat-room message route for `model` and `messages`.",
       "Operations: The operator view of /api/gateway-status shows a projected-runway word for each spending and fee wallet whose balance a low-balance alarm already reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held steady while a wallet sits at the mark; it can also watch wallets the server does not spend from, read by public address (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.",
-      "Packages: agent402-mcp 0.17.2 is listed in the MCP Registry as tools.agent402/agent402, a name verified against the agent402.tools domain; the earlier name stays resolvable and is marked deprecated with a pointer to it.",
+      "Packages: agent402-mcp 0.17.2 is published for the MCP Registry under tools.agent402/agent402, a name verified against the agent402.tools domain; the earlier name stays resolvable and is being marked deprecated with a pointer to it.",
     ],
   },
   {

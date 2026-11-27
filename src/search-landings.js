@@ -301,7 +301,7 @@ ${pre(`curl -i -X POST ${baseUrl}${y.path} \\
 <h2>What comes back</h2>
 <p>Each row's ${c("computed")} block carries ${or(yFields)}:</p>
 <ul>
-  <li>${c("return1yPct")}: the change from the first to the last candle close of the year.</li>
+  <li>${c("return1yPct")}: the change from the first candle's open to the last candle's close of the year.</li>
   <li>${c("maxDrawdown1yPct")}: the largest fall from a running high to a later candle's low.</li>
   <li>${c("volatilityAnnualizedPct")}: the standard deviation of close-to-close log returns, scaled to a year.</li>
   <li>${c("candles")}: how many candles the figures were computed from, and their width.</li>
@@ -311,7 +311,7 @@ ${pegBlock}${lookbackBlock}
 <h2>What these routes are</h2>
 <p>They are computed answers: ratios, ranks, deviations and flags worked out by deterministic code, with no model in any route on this page. They do not return candles, a price series or a coin's price on a past date, so they suit a question such as "how far did this coin fall in the past year" and not a chart or a backtest that needs every point.</p>
 <h2>From an agent</h2>
-<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches both: ${c("catalog.find")} with a task such as "one-year drawdown for a coin" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=one-year%20drawdown%20for%20a%20coin">/api/find</a> answers the same question.</p>
+<p>Over MCP, the hosted connector at ${c(`${baseUrl}/mcp`)} reaches each of them: ${c("catalog.find")} with a task such as "one-year drawdown for a coin" returns the route, its input schema and its price, and ${c("catalog.call")} runs it. Over HTTP, <a href="/api/find?q=one-year%20drawdown%20for%20a%20coin">/api/find</a> answers the same question.</p>
 <h2>Source and use</h2>
 <p>The figures are computed from market data. Powered by <a href="${esc(COINGECKO_API_URL)}" rel="noopener">CoinGecko</a>; every answer carries the same credit. Agent402 is not affiliated with or endorsed by CoinGecko.</p>
 <p>Information only, not investment advice. A past return, drawdown or volatility describes what happened, and says nothing about what happens next.</p>

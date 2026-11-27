@@ -57,7 +57,7 @@ ok(text.includes(`No request to a site in our index, or to a URL a caller names,
   // The per-route interval (scripts/test-route-probe-interval.js drives it).
   {
     const { ROUTE_PROBE_MIN_INTERVAL_MS } = await import("../src/crawl-cadence.js");
-    ok(ROUTE_PROBE_MIN_INTERVAL_MS > 0 && text.includes(`Whatever makes a route due, the scheduled crawl sends it this price request at most once in ${spanLabel(ROUTE_PROBE_MIN_INTERVAL_MS)}, with one more try on the next crawl when the first got a server error, a redirect or no answer.`), "the page states the per-route interval and its one retry, from code");
+    ok(ROUTE_PROBE_MIN_INTERVAL_MS > 0 && text.includes(`Whatever makes a route due, the scheduled crawl sends it this price request at most once in ${spanLabel(ROUTE_PROBE_MIN_INTERVAL_MS)}. One more is sent inside that time when the first got a server error, a redirect or no answer, when a route your documents do not list answered not found (read once more to confirm), or when the price your documents state has changed since.`), "the page states the per-route interval and each read it allows inside it, from code");
     ok(text.includes(`is one request to its cheapest paid route, on a rotation across the index. When that route refuses the shape of our request, the check is not repeated for ${spanLabel(ROUTE_PROBE_MIN_INTERVAL_MS)}.`), "and what the paywall check sends, with the wait after a refusal of our request's shape");
   }
   ok(text.includes(`The unpaid price checks take at most ${SL.probeShareLabel()} of that`) && text.includes("counted apart and never use that allowance"), "the probes' share and the registration reads' own count are stated, from code");
