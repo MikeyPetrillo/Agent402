@@ -212,11 +212,14 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   const { readdirSync } = await import("node:fs");
   const wf = load(text);
   const scriptsDir = new URL("../scripts/", import.meta.url);
-  const needTable = readdirSync(scriptsDir).filter((f) => f.endsWith(".js") && /require-upstream-costs\.js/.test(readFileSync(new URL(f, scriptsDir), "utf8")));
+  const needTable = readdirSync(scriptsDir).filter((f) => f.endsWith(".js") && /(?:require-upstream-costs|stand-in-costs)\.js/.test(readFileSync(new URL(f, scriptsDir), "utf8")));
   const MUST = ["test-leak-guard.js", "test-llm-gateway.js", "test-llm-messages.js", "test-llm-responses.js", "test-async-jobs.js"];
   for (const s of MUST) ok(needTable.includes(s), `${s} requires the cost table (fails under CI without it)`);
   const lib = readFileSync(new URL("lib/require-upstream-costs.js", scriptsDir), "utf8");
   ok(/upstreamCostsRequired = \(\) => Boolean\(process\.env\.CI\) && process\.env\.UPSTREAM_COSTS_OPTIONAL !== "1"/.test(lib) && /if \(upstreamCostsRequired\(\)\) \{\s+console\.error\([^\n]*\n\s+process\.exit\(1\)/.test(lib), "require-upstream-costs fails under CI unless the run is marked optional");
+  // A suite on stand-in costs runs what needs no rate and still fails under CI without the table.
+  const standIn = readFileSync(new URL("lib/stand-in-costs.js", scriptsDir), "utf8");
+  ok(/if \(upstreamCostsRequired\(\)\) \{\s+console\.error\([^\n]*\n\s+if \(!code\) process\.exitCode = 1;/.test(standIn), "stand-in-costs fails a suite under CI without the table unless the run is marked optional");
   const FORK_ONLY = /^\$\{\{ github\.event\.pull_request\.head\.repo\.fork && '1' \|\| '' \}\}$/;
   const runs = new Map();
   for (const [jobName, job] of Object.entries(wf.jobs || {})) {
