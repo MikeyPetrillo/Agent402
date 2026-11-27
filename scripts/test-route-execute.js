@@ -1112,5 +1112,92 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(contractFieldsMissing({}, {}, { sellerStatus: 400 }) === null && contractFieldsMissing({ requestContract: { required: {} } }, {}, { sellerStatus: 400 }) === null, "no declared body contract names nothing");
   ok(contractFieldsMissing(ext, { model: 1, messages: [] }, { sellerStatus: 400 }) === null, "nothing missing -> null");
 }
+// --- a gap task on the external leg buys only a row NAMED for the capability ---
+// (gapNamedCandidates: src/capability-gaps.js is the list /api/find and
+// /api/route read.) An outside candidate a judge or a description put forward
+// for "ip geolocation" is not bought unless its slug or name says so; the
+// refusal is the uncharged 404, before any spend reservation; every other
+// task is handed the resolver's list untouched.
+{
+  const { gapNamedCandidates } = await import("../src/tools/route-execute.js");
+  const { resolvedCandidateOf } = await import("../src/sor-candidates.js");
+  const guard = await import("../src/external-spend-guard.js");
+  const NEAR = { seller: "https://near.example", slug: "ip-lookup", name: "IP lookup", url: "https://near.example/api/ip-lookup", method: "POST", price: "$0.01", networks: ["eip155:8453"], selection: { method: "judged", confidence: 0.99 } };
+  const NAMED = { seller: "https://geo.example", slug: "ip-geolocation", name: "IP geolocation", url: "https://geo.example/api/ip-geolocation", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const BYNAME = { seller: "https://g2.example", slug: "lookup-v2", name: "IP to country", url: "https://g2.example/v2/lookup", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const good = { result: { country: "US" }, quote: { usd: 0.01, network: "eip155:8453" }, receipt: { transaction: "0xTX", network: "eip155:8453" } };
+  let paid = [];
+  const day = () => guard.walletDailySpentUsd("base");
+  const mk = (resolve) => buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, externalEnabled: () => true,
+    resolveExternal: resolve, payExternal: async (url) => { paid.push(url); return good; } });
+  const run = async (tool, task, req = { headers: {} }) => { paid = []; try { return { r: await tool.handler({ task, include: "external", params: { ip: "8.8.8.8" } }, req), req }; } catch (e) { return { e, req }; } };
+  const GAP_TASKS = ["ip geolocation", "which country is this IP in", "where is 8.8.8.8", "geoip lookup"];
+
+  // The judge's pick alone: refused, nothing bought, nothing reserved or held.
+  for (const task of GAP_TASKS) {
+    const before = day();
+    const x = await run(mk(async () => [NEAR]), task);
+    ok(x.e?.statusCode === 404 && /none of them is named for IP geolocation\. Nothing was bought\. Nothing was charged\./.test(x.e.message) && paid.length === 0,
+      `"${task}": an outside seller not named for it is not bought, the uncharged 404 (${x.e ? `${x.e.statusCode} ${String(x.e.message).slice(0, 150)}` : `bought ${paid.join()}`})`);
+    ok(day() === before && x.req.__externalSpend === undefined && x.req.__externalSpends === undefined && !x.req.__hangupTicket,
+      `"${task}": no spend was reserved against the wallet's day and nothing is held on the request (day ${before} -> ${day()})`);
+  }
+  // A step (no request) makes no charge claim, as every refusal here does.
+  {
+    paid = [];
+    let e = null;
+    try { await mk(async () => [NEAR]).handler({ task: "ip geolocation", include: "external", params: {} }); } catch (err) { e = err; }
+    ok(e?.statusCode === 404 && /Nothing was bought\./.test(e.message) && !/Nothing was charged/.test(e.message) && paid.length === 0, "the refusal inside a step makes no charge claim");
+  }
+  // The resolver's own tally of the same rule words the same refusal.
+  {
+    const x = await run(mk(async () => Object.assign([], { __gateDrops: { total: 2, byReason: { capability_gap: 2 } } })), "ip geolocation");
+    ok(x.e?.statusCode === 404 && /2 matched those words and none of them is named for IP geolocation/.test(x.e.message) && paid.length === 0, `candidates the resolver set aside read the same (${x.e?.message?.slice(0, 120)})`);
+  }
+  // A named row is the one bought, whatever stands ahead of it; a name alone names it.
+  {
+    const x = await run(mk(async () => [NEAR, NAMED]), "ip geolocation");
+    ok(!x.e && paid.join() === NAMED.url && x.r?.receipt?.seller === NAMED.seller, `a seller named for it is bought past a judged near name (${paid.join() || x.e?.message})`);
+    const y = await run(mk(async () => [NEAR, BYNAME]), "which country is this IP in");
+    ok(!y.e && paid.join() === BYNAME.url, `a listing whose NAME says it is bought (${paid.join() || y.e?.message})`);
+    const z = await run(mk(async () => NEAR), "ip geolocation");
+    ok(z.e?.statusCode === 404 && paid.length === 0, "a single (non-array) candidate is held to the same rule");
+  }
+  // A pinned target narrows only: it is held to the rule too.
+  {
+    paid = [];
+    let e = null;
+    try { await mk(async () => [NEAR]).handler({ task: "ip geolocation", include: "external", target: NEAR.url, params: {} }, { headers: {} }); } catch (err) { e = err; }
+    ok(e?.statusCode === 404 && paid.length === 0, "a pinned target that is not named for it is not bought");
+  }
+  // CONTROLS: any other task buys the same candidate, and no outside match at all keeps its own answer.
+  for (const task of ["reverse dns for an ip", "is this ip private", "ip address validation", "asn for an ip", "where is the ip for example.com", "weather for my location"]) {
+    const before = day();
+    const x = await run(mk(async () => [NEAR]), task);
+    ok(!x.e && paid.join() === NEAR.url && day() > before && x.req.__externalSpend != null, `CONTROL "${task}": the resolver's candidate is bought as before, its spend reserved (${paid.join() || x.e?.message}; day ${before} -> ${day()})`);
+  }
+  {
+    const x = await run(mk(async () => []), "ip geolocation");
+    ok(x.e?.statusCode === 404 && /No external x402 seller matched that task/.test(x.e.message), `CONTROL: a gap task with no outside match keeps the no-seller answer (${x.e?.message?.slice(0, 80)})`);
+  }
+  // The helper: the same array for any other task; slug or name for a gap task.
+  {
+    const list = [NEAR, NAMED];
+    const same = gapNamedCandidates("reverse dns for an ip", list);
+    ok(same.items === list && same.dropped === 0 && same.gap === null, "any other task gets the resolver's own list back");
+    const g = gapNamedCandidates("ip geolocation", [NEAR, NAMED, BYNAME, { slug: "geo", name: "IP" }, { slug: "ip-lookup", name: "Lookup", description: "ip geolocation geoip", tags: ["geolocation"] }]);
+    ok(g.items.map((c) => c.slug).join() === "ip-geolocation,lookup-v2" && g.dropped === 3 && g.gap?.id === "ip-geolocation", `a gap task keeps rows named by slug or by name, never by description or tags (${g.items.map((c) => c.slug).join()})`);
+  }
+  // The name rides from an index row to the candidate the handler reads.
+  ok(resolvedCandidateOf({ seller: "https://g2.example", slug: "lookup-v2", name: "IP to country", url: "https://g2.example/v2/lookup" }).name === "IP to country" && !("name" in resolvedCandidateOf({ seller: "s", slug: "x", url: "u" })), "a resolved candidate carries its listing's name");
+  // The resolver applies the rule before its judge call and its probes.
+  {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const fn = src.slice(src.indexOf("async function resolveExternalSeller("), src.indexOf("async function diagnoseExternalSeller("));
+    const at = fn.indexOf("gapNamedCandidates(task, candidates)");
+    ok(at > 0 && at < fn.indexOf("judgeSellerOrder(task, candidates)") && at < fn.indexOf("probePublicUrl") && /gateDrops\.byReason\.capability_gap/.test(fn), "the resolver sets un-named candidates aside before the judge and before any probe");
+  }
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

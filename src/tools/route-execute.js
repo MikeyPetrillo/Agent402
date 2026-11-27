@@ -29,7 +29,7 @@ import { FILLER_TERMS } from "../query-terms.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
-import { capabilityGapLabel } from "../capability-gaps.js";
+import { capabilityGap, gapNamedBy, capabilityGapLabel } from "../capability-gaps.js";
 import { judgeTool, decide, orderByJudgment, CRITERION_NAME_MAX, CRITERION_DESC_MAX, CRITERION_TAG_MAX, CRITERION_TAGS_MAX } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
@@ -331,6 +331,21 @@ export function routeMatchOrder(task, candidates, { group = () => 0 } = {}) {
   const share = best * JUDGED_OVERRIDE_MIN_SHARE;
   kept.sort((a, b) => (a.g - b.g) || ((a.s >= share ? 0 : 1) - (b.s >= share ? 0 : 1)) || (a.i - b.i));
   return { items: kept.map((x) => x.r), dropped: rows.length - kept.length, floor, best, share };
+}
+
+// A GAP TASK BUYS ONLY A ROW NAMED FOR IT. A task that asks for a capability
+// on the gap list (src/capability-gaps.js) is a miss on /api/find and
+// /api/route unless a row is named for the capability, slug or name. The
+// external leg holds the same rule: of the outside candidates for such a
+// task, only one named for the capability may be judged, probed or bought,
+// whatever a judge or a description says. Any other task: the list as given
+// (the same array), so nothing else changes.
+export function gapNamedCandidates(task, candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const gap = capabilityGap(task);
+  if (!gap) return { items: list, dropped: 0, gap: null };
+  const items = list.filter((c) => gapNamedBy(gap, c?.slug, c?.name));
+  return { items, dropped: list.length - items.length, gap };
 }
 
 /** What the outside-seller judge reads of one candidate: the seller's host,
@@ -721,6 +736,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
           let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null; let warmingChain = null;
+          // Candidates set aside because the task asks for a capability none
+          // of them is named for (gapNamedCandidates), here or in the resolver.
+          let gapSetAside = 0; let gapAsked = null;
           for (const c of chains) {
             // A seller list still loading (a cold catalog) is waited on for
             // at most what this payment's window has left less the reserve
@@ -728,7 +746,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             const catalogWaitMs = windowBudgetMs != null ? Math.max(0, remainingMs() - CATALOG_WAIT_RESERVE_MS) : null;
             const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, catalogWaitMs, ...(target ? { onlyUrl: target } : {}) });
             if (found && found.__gateDrops?.byReason?.catalog_warming) warmingChain = warmingChain || c;
-            const list = Array.isArray(found) ? found : (found ? [found] : []);
+            const named = gapNamedCandidates(input.task, Array.isArray(found) ? found : (found ? [found] : []));
+            const list = named.items;
+            if (named.gap) { gapAsked = named.gap; gapSetAside += named.dropped + Number(found?.__gateDrops?.byReason?.capability_gap || 0); }
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
@@ -746,6 +766,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms). Nothing was spent.${notChargedOn(req)} Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
+          }
+          // A gap task with outside matches and none of them named for the
+          // capability: the uncharged 404 the own-catalog path answers, before
+          // any booking, signature or spend reservation.
+          if (!candidateList.length && gapAsked && gapSetAside > 0) {
+            traceStep(req, "capability_gap", { gap: gapAsked.id, setAside: gapSetAside });
+            throw bad(`No outside seller here does that task: ${gapSetAside} matched those words and none of them is named for ${capabilityGapLabel(gapAsked.id)}. Nothing was bought.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
           traceStep(req, "candidates", { chain, list: candidateList.map((c) => ({ origin: c.seller, url: c.url, lane: c.unproven ? "unproven" : "proven", price: c.price })) });

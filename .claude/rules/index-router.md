@@ -214,7 +214,11 @@ Loaded when an index, discovery, router or buyer file is read.
   `scripts/test-capability-gaps.js`.
 - **Route-and-execute refusals before any purchase:** a gap task with no named row answers 404
   ("No tool in this catalog does that task"), nothing run and nothing charged, with the
-  `include:"external"` retry named only when external dispatch is on. A candidate that is a
+  `include:"external"` retry named only when external dispatch is on. The external leg holds the
+  same rule (`gapNamedCandidates`): for a gap task only an outside candidate named for the
+  capability (slug or name) is judged, probed or bought, in the resolver (gate reason
+  `capability_gap`) and again in the handler; none left is the same uncharged 404, before any
+  spend reservation. A candidate that is a
   chat completion (`chatFieldsMissing`: its route ends `/chat/completions`, or ends `/messages`
   AND its category, tags or declared request contract say chat; a bare `/messages` route is
   never asked) is skipped when the call lacks the chat fields it needs: the ones its request
