@@ -2806,10 +2806,9 @@ ${sepRowCss(".sk-flagship-tools", 6)}
 .sk-tt .name a { color:var(--ink); font-weight:700; text-decoration:none; white-space:nowrap; }
 .sk-tt .name a:hover { color:var(--accent); }
 .sk-tt .route { color:var(--muted); font-family:var(--font-mono); font-size:var(--fs-xs); white-space:nowrap; }
-.sk-tt .price { color:var(--accent); font-family:var(--font-mono); font-size:var(--fs-sm); text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .sk-tt .missing { color:var(--bad); font-style:italic; }
 /* On a phone each tool is one card-like row: name and price on the first line, the route under them. */
-@media (max-width:640px){ .sk-tt thead { display:none; } .sk-tt tr { display:grid; grid-template-columns:minmax(0,1fr) max-content; border-bottom:1px solid var(--hairline); } .sk-tt td { border-bottom:0; } .sk-tt td.name { grid-row:1; grid-column:1; } .sk-tt td.price { grid-row:1; grid-column:2; } .sk-tt td.route, .sk-tt td.missing { grid-row:2; grid-column:1 / -1; padding-top:0; white-space:normal; overflow-wrap:break-word; } }
+@media (max-width:640px){ .sk-tt thead { display:none; } .sk-tt tr { display:grid; grid-template-columns:minmax(0,1fr); border-bottom:1px solid var(--hairline); } .sk-tt td { border-bottom:0; } .sk-tt td.name { grid-row:1; } .sk-tt td.route, .sk-tt td.missing { grid-row:2; padding-top:0; white-space:normal; overflow-wrap:break-word; } }
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
 .sk-wf li { position:relative; padding:10px 18px 10px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
 .sk-wf li::before { content:counter(step); position:absolute; left:14px; top:10px; width:26px; height:26px; background:var(--panel); color:var(--accent-lit); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
@@ -3028,18 +3027,26 @@ ${ledgerFooterCompact()}`;
   });
 }
 
-// The pack's tools as one row each: name (linked to its tool page), route and
-// price, read from the served catalog. Each tool's own description lives on its
-// /tools page; the pack page names the parts and what they cost, beside the
-// derivation sentence that turns that sum into the pack price.
+// The pack's tools as one row each: name (linked to its tool page) and route,
+// read from the served catalog. Each tool's own description lives on its
+// /tools page.
+//
+// No per-member price here. This page sells the BUNDLE (one call, one
+// payment, priced above); a column of member prices next to it reads as an
+// itemized bill for buying the parts separately instead, which is pricing
+// advice against the product the page exists to sell. Each member's own
+// price is one click away on its tool page, and /api/pricing carries every
+// price for agents that need them. The derivation sentence under the pack
+// price states the parts' sum once (scripts/test-pack-page-words.js fails a
+// member price printed in this table).
 function renderToolTable(pack, ix) {
   const e = ledgerEsc;
   const rows = [...new Set(pack.toolSlugs)].map((slug) => {
     const t = ix.get(slug);
-    if (!t) return `<tr><td class="name">${e(slug)}</td><td class="missing" colspan="2">not in the catalog</td></tr>`;
-    return `<tr><td class="name"><a href="/tools/${e(slug)}">${e(t.name)}</a></td><td class="route">${e(t.route)}</td><td class="price">${e(t.price)}</td></tr>`;
+    if (!t) return `<tr><td class="name">${e(slug)}</td><td class="missing">not in the catalog</td></tr>`;
+    return `<tr><td class="name"><a href="/tools/${e(slug)}">${e(t.name)}</a></td><td class="route">${e(t.route)}</td></tr>`;
   }).join("");
-  return `<div class="sk-tt-wrap"><table class="sk-tt"><thead><tr><th scope="col">Tool</th><th scope="col">Route</th><th scope="col" style="text-align:right;">Price</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="sk-tt-wrap"><table class="sk-tt"><thead><tr><th scope="col">Tool</th><th scope="col">Route</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // The page's own short copy for a pack (src/skill-page-copy.js): a lead under
