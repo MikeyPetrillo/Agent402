@@ -18,6 +18,9 @@
 //          letters or digits (a parameter name split mid-word); a code token
 //          may break at its punctuation or a camelCase seam, and a hash or address (an unbroken
 //          run of more than 24 letters and digits) may break anywhere
+//  sep     a wrapped row of items joined by a drawn dot (a "·" ::before)
+//          begins a line with the dot: the item that starts a line shows its
+//          dot inside the row, or the row does not clip it (sepRowCss does)
 //
 // Eyeballing a page missed these more than once; counting line boxes does not.
 // DESIGN.md "Wrap" states the rules this enforces.
@@ -26,7 +29,8 @@
 // Hand-written pages run in full. Each generated family (tool pages, tool
 // categories, skill packs, fund / insider / dossier reports, report samples)
 // runs a deterministic sample of WRAP_SAMPLE pages (default 25): the longest
-// h1s and the longest code tokens first, then a fixed hash order. WRAP_ALL=1
+// h1s and the longest code tokens first, then a fixed hash order, plus the
+// pages in PINNED (shapes a sample by length does not reach). WRAP_ALL=1
 // runs every page of every family.
 //
 //   node scripts/test-wrap-quality.js                 (boots its own FREE_MODE server)
@@ -78,6 +82,11 @@ const FAMILIES = [
   ["reports-samples", /^\/reports\/sample\/[^/]+$/],
 ];
 const familyOf = (path) => (FAMILIES.find(([, re]) => re.test(path.split("?")[0])) || ["pages"])[0];
+// Always in a sampled run, each for a shape the length-ordered sample misses:
+// an address as a parameter's example value and a price badge that wraps on a
+// phone; a hash typed inside a parameter description; a six-word h1 whose
+// last two words fill a 360 px line.
+const PINNED = ["/tools/usdc-balance", "/tools/chain-storage", "/tools/edgar-13f-holdings"];
 // Sitemap entries that are data, not pages.
 const NOT_A_PAGE = /^\/(api\/|\.well-known\/)|\.(txt|md|json|xml)$/i;
 
@@ -334,6 +343,18 @@ function audit({ exclude, width, ragFrac, ragWords }) {
     }
     if (bad) out.push({ rule: "break: code token split mid-word", path: pathOf(el), text: snippet(el), lines: bad });
   }
+  // 6. A row of items joined by a drawn dot never begins a line with the dot.
+  // The dot is a "·" ::before; on the item that starts a line it must sit
+  // left of the row's box (in the item's pulled-back padding) with the row
+  // clipping it. A dot inside the row, or a row that does not clip, shows.
+  for (const el of document.body.querySelectorAll("main *, footer *, header *")) {
+    if (getComputedStyle(el, "::before").content !== '"·"' || !visible(el)) continue;
+    const prev = el.previousElementSibling;
+    const row = el.parentElement, a = row.getBoundingClientRect(), b = el.getBoundingClientRect();
+    if (!prev || !(b.top > prev.getBoundingClientRect().top + 4)) continue; // not the start of a wrapped line
+    const dotRight = b.left + parseFloat(getComputedStyle(el).paddingLeft);
+    if (dotRight > a.left + 1 || getComputedStyle(row).clipPath === "none") out.push({ rule: "sep: a wrapped row begins a line with its separator dot", path: pathOf(el), text: snippet(el), lines: `${Math.round(dotRight - a.left)}px into the row` });
+  }
   return out;
 }
 
@@ -405,6 +426,7 @@ async function pageList() {
     take(scored.slice().sort((a, b) => b.h1 - a.h1 || (a.p < b.p ? -1 : 1)), third);
     take(scored.slice().sort((a, b) => b.code - a.code || (a.p < b.p ? -1 : 1)), third);
     take(scored.slice().sort((a, b) => (hashOrder(a.p) < hashOrder(b.p) ? -1 : 1)), SAMPLE);
+    for (const p of PINNED) if (list.includes(p)) pick.add(p);
     chosen.push(...list.filter((p) => pick.has(p)));
   }
   return chosen;
@@ -430,6 +452,19 @@ try {
       const caught = found.some((f) => /^rag/.test(f.rule) && f.text.includes("qqqq"));
       const clean = !found.some((f) => f.text.includes("one short line"));
       console.log(`${caught && clean ? "ok" : "FAIL"} - self-test: a one-word last line is flagged (${caught}) and a one-line block is not (${clean})`);
+      if (!caught || !clean) failures++;
+    }
+    // Self-test: a wrapped row whose second line begins with its drawn dot is
+    // flagged; the same row with the dot pulled left of a clipping row is not.
+    {
+      const page = await browser.newPage({ viewport: { width: 600, height: 400 } });
+      const row = (cls) => `<div class="${cls}" style="width:200px;display:flex;flex-wrap:wrap"><span>aaaaaaaaaaaa one</span><span>bbbbbbbbbbbb two</span></div>`;
+      await page.setContent(`<!doctype html><style>span{white-space:nowrap}.bad>span+span::before{content:"·";padding:0 8px}.good{column-gap:24px;clip-path:inset(-6px)}.good>span{position:relative;margin-left:-24px;padding-left:24px}.good>span::before{content:"·";position:absolute;left:0;width:24px;text-align:center}</style><body style="margin:40px;font:16px/1.4 monospace"><main>${row("bad")}${row("good")}</main></body>`);
+      const found = (await page.evaluate(audit, { exclude: EXCLUDE, width: 600, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS })).filter((f) => /^sep/.test(f.rule));
+      await page.close();
+      const caught = found.some((f) => /div\.bad/.test(f.path));
+      const clean = !found.some((f) => /div\.good/.test(f.path));
+      console.log(`${caught && clean ? "ok" : "FAIL"} - self-test: a line that begins with its separator dot is flagged (${caught}) and a clipped one is not (${clean})`);
       if (!caught || !clean) failures++;
     }
     for (const width of WIDTHS) {

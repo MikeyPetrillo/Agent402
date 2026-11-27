@@ -22,7 +22,7 @@ import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { captureNote } from "./tool-output-examples.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock, sepRowCss } from "./ledger-chrome.js";
 import { getWalletShortHtml } from "./get-a-wallet.js";
 import { firstFit } from "./seo-meta.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
@@ -510,13 +510,17 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     if (!alts || !required.includes(name)) return [];
     return alts.filter((a) => !(a in props));
   };
+  // A hash or address typed in a description (an unbroken run of more than 24
+  // letters and digits) is marked, so it breaks where the column ends instead
+  // of setting the column's width (.tp-hash). The text is unchanged.
+  const hashSpans = (escaped) => escaped.replace(/(^|[^A-Za-z0-9&;])([A-Za-z0-9]{25,})(?![A-Za-z0-9;])/g, '$1<span class="tp-hash">$2</span>');
   const paramRows = Object.entries(props).map(([k, v]) => {
     const req = required.includes(k);
     const alts = aliasFor(k);
     const altNote = alts.length ? ` <span style="color:var(--faint);">Also accepted as ${alts.map((a) => `<code>${e(a)}</code>`).join(", ")}.</span>` : "";
     const limits = paramLimits(v, input[k]);
     const limitNote = limits ? ` <span style="color:var(--faint);">${limits}</span>` : "";
-    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}${limitNote}</td></tr>`;
+    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${hashSpans(e(v.description ?? ""))}${altNote}${limitNote}</td></tr>`;
   }).join("\n");
 
   // --- Response fields from the documented example (same derivation as /openapi.json).
@@ -623,13 +627,23 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   // The H1 wraps balanced: tool names run from 3 chars ("hex") to 50+, and a
   // long name takes two even lines instead of an ellipsis, so the page's own
   // title is always whole. A JS comment, not a CSS one: the CSS block is served.
+  // The container takes the 16px phone gutter (DESIGN.md "Layout") by its own
+  // rule: the shared one matches a container set inline, and this one is a class.
+  // The badge's panel pads an inner row: the row clips the dot of the item
+  // that starts a line (sepRowCss), which a padded box would still show.
+  // A hash typed in a parameter's description (.tp-hash) breaks where the
+  // column ends, so one long token never sets the column's width: whole when
+  // a line holds it, and on a phone filling each line from the sentence on.
   const TOOL_PAGE_CSS = `
   .tp-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
   .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-3xl); line-height:1; letter-spacing:-.02em; margin-bottom:10px; text-wrap:balance; }
   @media (max-width:640px){ .tp-h1 { font-size:var(--fs-2xl); line-height:1.1; } }
-  .tp-badge { display:inline-flex; flex-wrap:wrap; row-gap:4px; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
-  .tp-badge > span { white-space:nowrap; }
-  .tp-badge > span + span::before { content:"·"; padding:0 8px; color:var(--on-panel-dim); }
+  @media (max-width:600px){ .tp-wrap { padding-left:16px; padding-right:16px; } }
+  .tp-badge { display:inline-block; max-width:100%; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
+  .tp-badge-row { display:flex; flex-wrap:wrap; row-gap:4px; }
+  .tp-badge-row > span { white-space:nowrap; }
+  ${sepRowCss(".tp-badge-row", 8)}
+  .tp-badge-row > span::before { color:var(--on-panel-dim); }
   .tp-sub { color:var(--muted); font-size:var(--fs-lg); line-height:1.6; max-width:760px; }
   .tp-lead { color:var(--ink); font-size:var(--fs-lg); line-height:1.6; max-width:760px; margin:14px 0 6px; }
   .tp-sub code, .tp-lead code, .tp-facts code { background:var(--card); border:1px solid var(--hairline); font-family:var(--font-mono); padding:1px 5px; font-size:var(--fs-code-inline); }
@@ -637,6 +651,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-table { border-collapse:collapse; width:100%; font-size:var(--fs-md); }
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
+  .tp-hash { overflow-wrap:anywhere; }
+  @media (max-width:600px){ .tp-hash { word-break:break-all; } }
   .tp-tw { overflow-x:auto; }
   .tp-wrap .ml-code { margin:13px 0; }
   /* Target size (DESIGN.md): a link that is not inside a sentence is at least 24px tall. */
@@ -653,13 +669,13 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-tags > * { white-space:nowrap; }
   `;
 
-  const badgeHtml = `<div class="tp-badge">${
+  const badgeHtml = `<div class="tp-badge"><div class="tp-badge-row">${
     computePayable
       ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(pw.short)} in USDC</span>`
       : `<span style="color:var(--on-panel);">${e(pw.long)}</span><span style="color:var(--on-panel-dim);">USDC via x402</span>`
   }<span><code style="color:${methodColor};background:transparent;font-size:var(--fs-sm);">${e(tool.method)}</code> <code style="color:var(--on-panel-muted);background:transparent;font-size:var(--fs-sm);">${e(tool.path)}</code></span>${
     cacheTtl ? `<span style="color:var(--on-panel-dim);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
-  }</div>`;
+  }</div></div>`;
   const metaHtml = `<div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
   <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" rel="nofollow" style="display:inline-block;">Try in playground →</a></p>`;
   // The lead is the first sentence, cut to the words the badge and the meta
