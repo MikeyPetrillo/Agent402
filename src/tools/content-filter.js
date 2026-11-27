@@ -12,7 +12,11 @@
 // and can quote the prompt.
 export const CONTENT_FILTER_CODES = new Set(["content_filter", "content_filtered", "content_policy_violation", "moderation_blocked", "safety_violation", "safety_violations", "responsible_ai_policy_violation"]);
 const FILTER_TEXT_RE = /\bcontent (?:may have been |was |has been )?(?:filtered|moderated)\b|\bcontent[ _-]polic(?:y|ies) violation\b|\bmoderation[ _-]blocked\b|\bsafety violations?\b|\b(?:blocked|flagged|rejected|refused) (?:by|as a result of) (?:the |our |its )?(?:safety|moderation|content) (?:filter|system|check|policy)\b/i;
-const OUTAGE_TEXT_RE = /\b(?:unavailable|timed? ?out|internal error|retry|5\d\d)\b/i;
+// An outage worded as a rejection ("Request rejected by the moderation
+// system: service overloaded") is still an outage: the same prompt may pass
+// on a retry, so it must never read as "rephrase". ("try again" alone is
+// not a marker: a filter's own message says "rephrase and try again".)
+const OUTAGE_TEXT_RE = /\b(?:unavailable|timed? ?out|timeout|internal error|retry|try again (?:later|shortly|soon|in )|overloaded|overload|capacity|rate[ _-]?limit(?:ed|s)?|too many requests|busy|5\d\d)\b/i;
 
 /** `error` is the provider's error: a string, or an object with message,
  *  code and type. */
