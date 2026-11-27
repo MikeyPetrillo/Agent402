@@ -23,6 +23,13 @@
 //          ceiling its description is held to (MAX_WORDS in
 //          scripts/lib/description-limits.js, checked on the description
 //          itself by scripts/test-description-length.js).
+// How a lead ends is held too (leadFaults in the same library): no lead stops
+// inside an open parenthesis, bracket or quote or on "e.g."; a lead the
+// template cut never stops on a number, a price or a connecting word (a closed
+// list of articles, prepositions and conjunctions), and one that ends "..."
+// stops where its sentence has a clause boundary. A sentence with no such
+// boundary inside the budget gets a `pageSummary` whose first sentence fits.
+// The run prints how many leads end "...".
 // Not counted anywhere: code, tables, the figure, the breadcrumb and the h1
 // (listed above). The server boots with MPP and a
 // Tempo relay configured (placeholder keys, nothing is called), so each page
@@ -30,9 +37,9 @@
 // The counting lives in scripts/lib/tool-page-prose.js.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { LEAD_MAX, BODY_MAX, ABOUT_MAX_SUMMARY, ABOUT_MAX_DESCRIPTION, aboutMaxFor, proseWords, toolPageWords } from "./lib/tool-page-prose.js";
+import { LEAD_MAX, BODY_MAX, ABOUT_MAX_SUMMARY, ABOUT_MAX_DESCRIPTION, aboutMaxFor, proseWords, toolPageWords, leadFaults, toolPageLead, LEAD_END_WORDS } from "./lib/tool-page-prose.js";
 import { PAGE_SUMMARY } from "./lib/description-limits.js";
-import { TOOL_LEAD_MAX_WORDS } from "../src/pages.js";
+import { TOOL_LEAD_MAX_WORDS, firstSentence } from "../src/pages.js";
 
 let failed = 0, passed = 0;
 const ok = (c, m) => { if (c) passed++; else { failed++; console.error(`FAIL - ${m}`); } };
@@ -51,6 +58,27 @@ const REPORT = process.argv.includes("--report");
   ok(long.about === ABOUT_MAX_SUMMARY + 1 && long.about > aboutMaxFor(PAGE_SUMMARY[0]) && long.about <= aboutMaxFor("hash"), "control: a Details paragraph one word over the summary budget is over for a summarized tool only");
   ok(proseWords("<p>webhook&#39;s &lt;t&gt;.&lt;body&gt; &amp; more</p>").length === 3, "control: an entity reads as the character it shows");
 }
+// Controls, offline: how a lead may end.
+{
+  const full = 'Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field) and "one more" thing; then the rest. Second sentence.';
+  const f = (lead, about = full) => leadFaults(lead, about).join("|");
+  ok(f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005...") === "number|mid-clause", `control: a lead cut on a price is a fault (${f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005...")})`);
+  ok(f("Runs the best tool in the same call - flat $0.01 covering any tool listed at...") === "word:at|mid-clause" && f("Runs the best tool in the...") === "word:the|mid-clause", "control: a lead cut on a preposition or an article is a fault");
+  ok(f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools...") === "open parenthesis", "control: a lead cut inside a parenthesis is a fault");
+  ok(f('Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field) and "one...') === "open quote|mid-clause", "control: a lead cut inside a quote is a fault");
+  ok(f("Runs the best tool in the same call - flat $0.01 covering any tool...") === "mid-clause", "control: a lead cut where its sentence has no boundary is a fault");
+  ok(f("Resolve a ticker (e.g.", "to its number.") === "open parenthesis|abbreviation" && f("Reads a path, e.g.", "") === "abbreviation", "control: a lead that stops on e.g. is a fault");
+  ok(f("Runs the best tool in the same call...") === "" && f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less...") === ""
+    && f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog...") === ""
+    && f("Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field)...") === ""
+    && f('Runs the best tool in the same call - flat $0.01 covering any tool listed at $0.005 or less, from this catalog (the top 60 pools, or more with a field) and "one more" thing.') === "",
+  "control: a lead cut before a dash, at a comma, before or after a parenthesis, or closed at a semicolon is clean");
+  ok(f("Full-text search across every filing since 2001.", "") === "" && f("Returns the rate at which NPV = 0.", "More detail follows here.") === "", "control: a whole first sentence may end on a number");
+  ok(f("Returns the rate at 0.", "Returns the rate at 0; then more.") === "number", "control: a lead closed with a period where its sentence went on is held as a cut one");
+  ok(LEAD_END_WORDS.length <= 45 && new Set(LEAD_END_WORDS).size === LEAD_END_WORDS.length, `the connecting words are a small closed list (${LEAD_END_WORDS.length})`);
+  ok(firstSentence("Resolve a US ticker (e.g. AAPL) to its CIK. Next.") === "Resolve a US ticker (e.g. AAPL) to its CIK." && firstSentence('Extract by path, e.g. "items[2].name". Next.') === 'Extract by path, e.g. "items[2].name".'
+    && firstSentence("Reads window.renderAt(t). The tool renders it.") === "Reads window.renderAt(t)." && firstSentence("One (two. Three") === "One (two. Three.", "a first sentence does not end inside a parenthesis or on e.g.");
+}
 
 const srv = await bootServer({
   stores: "tool-page-words",
@@ -68,10 +96,18 @@ try {
   const counts = [];
   const over = [];
   const overAbout = [];
+  const badEnds = [];
+  let ellipsis = 0;
   for (const t of list) {
     const r = await fetch(`${srv.url}/tools/${t.slug}`);
     if (r.status !== 200) { ok(false, `/tools/${t.slug} answers 200 (got ${r.status})`); continue; }
-    const c = toolPageWords(await r.text());
+    const html = await r.text();
+    const c = toolPageWords(html);
+    const { lead, about } = toolPageLead(html);
+    if (!lead) ok(false, `/tools/${t.slug}: the lead is found`);
+    if (lead.endsWith("...")) ellipsis++;
+    const faults = leadFaults(lead, about);
+    if (faults.length) badEnds.push(`${t.slug} (${faults.join(", ")}: "${lead.slice(-48)}")`);
     if (!c) { ok(false, `/tools/${t.slug}: the tool column is found`); continue; }
     counts.push({ slug: t.slug, ...c, total: c.lead + c.body + c.about });
     if (c.lead > LEAD_MAX || c.body > BODY_MAX) over.push(`${t.slug} (lead ${c.lead}, body ${c.body})`);
@@ -86,13 +122,16 @@ try {
   const aboutMax = (pick) => counts.filter(pick).sort((a, b) => b.about - a.about)[0];
   const aS = aboutMax((c) => summarized.has(c.slug)), aD = aboutMax((c) => !summarized.has(c.slug));
   console.log(`Details paragraph: longest with a page summary ${aS?.slug} ${aS?.about} (budget ${ABOUT_MAX_SUMMARY}); longest without ${aD?.slug} ${aD?.about} (budget ${ABOUT_MAX_DESCRIPTION})`);
+  console.log(`leads ending "...": ${ellipsis} of ${counts.length}; leads with a bad ending: ${badEnds.length}`);
   if (REPORT) {
+    for (const b of badEnds) console.log(`bad lead ending: ${b}`);
     for (const s of (process.env.WORDS_SLUGS || "").split(",").filter(Boolean)) console.log(JSON.stringify(counts.find((c) => c.slug === s) || { slug: s, missing: true }));
   } else {
     // Some summarized tools belong to a switched family this boot does not list.
     const readSummarized = PAGE_SUMMARY.filter((s) => counts.some((c) => c.slug === s)).length;
     ok(readSummarized >= 10, `the pages of tools with a page summary were read (${readSummarized} of ${PAGE_SUMMARY.length})`);
     ok(overAbout.length === 0, `every tool page keeps its Details paragraph to its budget (${ABOUT_MAX_SUMMARY} words with a page summary, ${ABOUT_MAX_DESCRIPTION} without; ${overAbout.length} over${overAbout.length ? `: ${overAbout.slice(0, 12).join(", ")}` : ""})`);
+    ok(badEnds.length === 0, `no lead stops inside a parenthesis, bracket or quote, on e.g., or (when cut) on a number, a price, a connecting word or mid-clause (${badEnds.length}${badEnds.length ? `: ${badEnds.slice(0, 12).join("; ")}${badEnds.length > 12 ? "; ..." : ""}` : ""})`);
     ok(over.length === 0, `every tool page keeps its lead to ${LEAD_MAX} prose words and its body to ${BODY_MAX} (${over.length} over${over.length ? `: ${over.slice(0, 12).join(", ")}${over.length > 12 ? ", ..." : ""}` : ""})`);
   }
 } finally {
