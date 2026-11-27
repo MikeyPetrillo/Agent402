@@ -18,10 +18,12 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 delete process.env.TRANSCRIBE_LONG;
-const { CHANGELOG_ENTRIES, changelogPage: changelogRecentPage, changelogArchivePage, changelogRss } = await import("../src/changelog.js");
+const changelogModule = await import("../src/changelog.js");
+const { CHANGELOG_ENTRIES, changelogRss } = changelogModule;
+const { renderedChangelogText } = await import("./lib/changelog-text.js");
 // /changelog holds the recent entries and /changelog/archive every older one:
 // an entry is on the site when it is on either page.
-const changelogPage = (base) => `${changelogRecentPage(base)}\n${changelogArchivePage(base)}`;
+const changelogPage = (base) => renderedChangelogText(changelogModule, base);
 const { sttLongEnabled } = await import("../src/tools/stt-kit.js");
 
 // Each switched route and the switch function that sells it.

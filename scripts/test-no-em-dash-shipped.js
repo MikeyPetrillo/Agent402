@@ -18,7 +18,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ROOT, packageDirs, shippedFiles } from "./lib/shipped-files.js";
 import { issueBodyTexts } from "./lib/issue-bodies.js";
-import { CHANGELOG_ENTRIES, changelogPage, changelogArchivePage, changelogRss } from "../src/changelog.js";
+import * as changelogModule from "../src/changelog.js";
+import { renderedChangelogText } from "./lib/changelog-text.js";
+const { CHANGELOG_ENTRIES, changelogRss } = changelogModule;
 
 const EM_DASH = "—";
 let pass = 0, fail = 0;
@@ -73,7 +75,7 @@ ok(hits.length === 0, `no shipped file carries an em dash${hits.length ? `:\n   
   // Every served string is on the pages the scan reads (/changelog and its
   // archive), so the page scan covers them (an entry whose switch is off is
   // not served; the item scan below still reads it).
-  const page = `${changelogPage("https://example.test")}\n${changelogArchivePage("https://example.test")}`;
+  const page = renderedChangelogText(changelogModule, "https://example.test");
   const shown = CHANGELOG_ENTRIES.filter((e) => typeof e.shownWhen !== "function" || e.shownWhen()).flatMap((e) => [e.title, ...e.items]);
   ok(shown.length >= 100 && shown.every((t) => page.includes(t.split(/[&<>"']/)[0])), "control: every served entry string is on the rendered page");
 
