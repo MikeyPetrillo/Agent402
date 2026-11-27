@@ -8,10 +8,11 @@
 //             Not counted: scripts, styles, svg, tables, code, pre, the footer
 //             and nav, a paragraph styled display:none, the body of a closed
 //             <details> (its summary is counted; an open one is read whole).
-//             A word holds a LETTER: a bare figure is not a word. Entities:
-//             the ones the renderers emit are decoded (&amp; &lt; &gt; &quot;
-//             &#39; &#47;); any other is left as text, so a no-break space
-//             joins its neighbors and a named mark (&middot;) reads as a word.
+//             A word holds a LETTER: a bare figure, a separator dot or any
+//             other token of punctuation alone is not a word. Entities: the
+//             ones the renderers emit are decoded (&amp; &lt; &gt; &quot;
+//             &#39; &#47;); a no-break space separates words; any other
+//             entity standing alone (&middot;) is a mark, not a word.
 //   visible   (test-hub-page-words)
 //             visiblePageWords, countVisibleWords
 //             Every word a sighted reader is shown from <main> to the site
@@ -81,7 +82,11 @@ export function proseText(html) {
     const sum = /<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i.exec(m[2]);
     return ` ${sum ? sum[1] : ""} `;
   });
-  return decodeEntities(stripTags(s)).replace(/\s+/g, " ").trim();
+  // A no-break space separates words like any space. An entity the decoder
+  // leaves that stands alone (&middot;, &rarr;) is a mark, not a word; one
+  // inside a word stays part of that word.
+  const text = stripTags(s).replace(/&nbsp;|&#160;|&#xa0;|\u00a0/gi, " ");
+  return decodeEntities(text).replace(/\u00a0/g, " ").replace(/(^|\s)&#?[a-z0-9]+;(?=\s|$)/gi, "$1").replace(/\s+/g, " ").trim();
 }
 
 export function countWords(text) {

@@ -47,10 +47,14 @@ is(mainProseWords(PAGE), 30, "main: the body adds headings and prose, a closed d
 ok(!/inline code|pre block|styled away|chart label|script words|closed body|fee/.test(proseText(mainOf(PAGE))), "main: code, pre, a display:none paragraph, svg, script, a closed details' body and table cells are not prose");
 ok(/More rules/.test(proseText(mainOf(PAGE))) && /Open one open body/.test(proseText(mainOf(PAGE))), "main: a closed details keeps its summary and an open one is read whole");
 ok(/text & more/.test(proseText(mainOf(PAGE))), "main: the entities the renderers emit are decoded before counting (&amp; here)");
-// Kept as measured: this mode decodes &amp; &lt; &gt; &quot; &#39; &#47; only, so a
-// no-break space joins its neighbors into one word and a named mark holding
-// letters (&middot;) reads as a word. The budgets were set on this measure.
-is(countWords(proseText("<p>a&nbsp;b &middot; c &amp; &#39;d&#39;</p>")), 4, "main: a no-break space joins two words, a named mark counts, an ampersand does not");
+// A no-break space separates words; an entity standing alone, a separator dot
+// or any other token of punctuation alone is a mark, not a word; an entity
+// inside a word stays part of that one word.
+is(countWords(proseText("<p>a&nbsp;b</p>")), 2, "main: a no-break space separates two words");
+is(countWords(proseText("<p>a&#160;b c\u00a0d</p>")), 4, "main: a numeric or literal no-break space separates words too");
+is(countWords(proseText("<p>a &middot; b</p>")), 2, "main: a named mark standing alone is not a word");
+is(countWords(proseText("<p>&middot; &rarr; - \u00b7 &amp; 12</p>")), 0, "main: marks, a separator dot, an ampersand and a bare figure alone make no word");
+is(countWords(proseText("<p>caf&eacute; bar &#39;d&#39;</p>")), 3, "main: an entity inside a word stays part of that word");
 is([countWords("100% of 299 probes"), countWords("a -> b"), countWords("x402 v2")], [2, 2, 2], "main: a word holds a letter, so a bare figure or an arrow is not one");
 is(mainOf("<p>no main here</p>"), "<p>no main here</p>", "main: a page without <main> is read whole");
 is(mainProseWords("<main><details><summary>Outer</summary><details open><summary>Inner</summary><p>deep words</p></details></details></main>"), 1, "main: a details nested in a closed one stays closed with it");
