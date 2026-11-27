@@ -67,7 +67,7 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 | `POST /v1/images/fast` | $0.02 | Budget text-to-image, about two seconds a picture, inline base64 out |
 | `POST /v1/images/pro` | $0.05 | Higher-fidelity text-to-image, one picture a call |
 | `POST /v1/images/generations` | $0.08 | The flagship image route |
-| `POST /v1/videos/generations` | $0.20 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402; a clip the provider's content filter may have stopped answers 422 with reason content_filtered; a wallet payer collects a timed-out clip by sending the same request again unchanged within the window the 504 names |
+| `POST /v1/videos/generations` | $0.25 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402; a clip the provider's content filter may have stopped answers 422 with reason content_filtered; a wallet payer collects a timed-out clip by sending the same request again unchanged within the window the 504 names |
 
 Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 

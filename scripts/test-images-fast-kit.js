@@ -45,7 +45,7 @@ ok(IMAGES_FAST_TOOLS.length === 4, "four tools exported");
 ok(bySlug("v1-images-edit")?.route === `POST ${IMAGES_EDIT_PATH}` && bySlug("v1-images-edit").price === "$0.020" && IMAGES_EDIT_PATH === "/v1/images/edits", "edit route at POST /v1/images/edits (OpenAI's path), $0.020");
 ok(bySlug("v1-images-fast")?.route === `POST ${IMAGES_FAST_PATH}` && bySlug("v1-images-fast").price === "$0.020", "fast tier at POST /v1/images/fast, $0.020");
 ok(bySlug("v1-images-pro")?.route === `POST ${IMAGES_PRO_PATH}` && bySlug("v1-images-pro").price === "$0.050", "pro tier at POST /v1/images/pro, $0.050");
-ok(bySlug("v1-videos")?.route === `POST ${VIDEOS_PATH}` && bySlug("v1-videos").price === "$0.200", "video tier at POST /v1/videos/generations, $0.200");
+ok(bySlug("v1-videos")?.route === `POST ${VIDEOS_PATH}` && bySlug("v1-videos").price === "$0.250", "video tier at POST /v1/videos/generations, $0.250");
 ok(IMAGES_FAST_TOOLS.every((t) => t.discovery?.bodyType === "json" && t.discovery.input?.prompt && t.discovery.inputSchema?.required?.includes("prompt") && typeof t.handler === "function" && t.category === "llm"), "every tool carries a json discovery example with a prompt and a handler");
 ok(IMAGES_FAST_TOOLS.every((t) => !/\u2014/.test(t.description + t.name)), "no em dashes in tool copy");
 for (const [tier, t] of Object.entries(IMAGE_TIERS)) {

@@ -169,7 +169,7 @@ export const IMAGE_TIERS = {
 };
 
 export const VIDEOS_MODEL = "google/veo-3.1-lite";
-export const VIDEOS_PRICE = 0.2;
+export const VIDEOS_PRICE = 0.25;
 export const VIDEOS_DURATION_SECONDS = 4;
 export const VIDEOS_RESOLUTION = "720p";
 export const VIDEOS_ASPECT_RATIOS = ["16:9", "9:16"];
@@ -731,9 +731,9 @@ export const IMAGES_FAST_TOOLS = [
     name: "Video generation (4-second clip)",
     slug: "v1-videos",
     category: "llm",
-    price: "$0.200",
+    price: `$${VIDEOS_PRICE.toFixed(3)}`,
     description:
-      "Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $0.20, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402 (a clip the provider's content filter may have stopped answers 422 with reason content_filtered), and a wallet payer whose request timed out can send it again unchanged to collect the same clip.",
+      `Text-to-video over x402 - one silent 4-second 720p clip (MP4, inline base64) for a flat $${VIDEOS_PRICE.toFixed(2)}, served by Veo 3.1 Lite. Choose aspect_ratio 16:9 (default) or 9:16; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (about 40 seconds measured, up to 4 minutes). A failed or timed-out generation is not charged on x402 (a clip the provider's content filter may have stopped answers 422 with reason content_filtered), and a wallet payer whose request timed out can send it again unchanged to collect the same clip.`,
     tags: ["video-generation", "video", "videos", "text-to-video", "generate", "generate-video", "create-video", "clip", "animation", "veo", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

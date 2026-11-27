@@ -289,7 +289,7 @@ price per call whatever the length.
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
 | `POST /v1/images/pro` | $0.05 | higher-fidelity text-to-image, one picture a call |
 | `POST /v1/images/edits` | $0.02 | edit an image with a prompt, OpenAI `images.edit` wire: one to four PNG or JPEG references in, one JPEG out |
-| `POST /v1/videos/generations` | $0.20 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
+| `POST /v1/videos/generations` | $0.25 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
 | `POST /v1/audio/transcriptions` | $0.03 | speech-to-text, OpenAI transcription wire: multipart `file` in, transcript out, recordings up to four minutes |
 | `POST /v1/pro/audio/transcriptions` | $0.10 | the same model for recordings up to ten minutes |
 | `POST /v1/audio/speech` | $0.06 | text-to-speech, OpenAI `audio.speech.create()` wire - up to 2,000 chars in, raw mp3 (default) or pcm bytes out, five-model failover chain |
