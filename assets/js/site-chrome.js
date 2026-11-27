@@ -134,7 +134,13 @@ document.addEventListener('DOMContentLoaded',function(){try{var btns=document.qu
    parameter name or route wraps at its own seams instead of splitting a word
    (a shorter camelCase name stays whole). Copied text is unchanged.
    A short name in a table cell gets no seams: one there would let the table
-   squeeze its column, so it stays whole and a wide table scrolls instead. */
+   squeeze its column, so it stays whole and a wide table scrolls instead.
+   A hash or an address (0x and hex digits, or an unbroken run of more than 24
+   letters and digits that is a tenth digits or more) has no words: it gets no
+   camelCase seam, and when it is wider than the room its block has (the
+   table's own scroller, or the block's measure) it breaks where each line
+   ends, starting on the line the sentence is on, instead of setting the
+   column's width or leaving a short piece of itself on a line alone. */
 /* Every edit the passes below make is measured at one viewport width, so each
    records how to take itself back (a402Undo, newest last). When the width
    changes (a rotated phone, a resized window) the edits are undone newest
@@ -144,6 +150,11 @@ var a402Undo=[];
 window.a402BreakCode=function(root){try{
   /* A code phrase of 4+ words holds its last three together (when they are short) in a nowrap span, so it never ends on one word. Copied text is unchanged. */
   var holdTail=function(el){var ln=el.lastChild;if(!ln||ln.nodeType!==3)return null;var d=ln.data,re=/\S+/g,m,toks=[];while((m=re.exec(d)))toks.push(m);var w=0,at=-1;for(var q=toks.length-1;q>0;q--){if(/[\p{L}\p{N}]/u.test(toks[q][0]))w++;if(w>=3){at=toks[q].index;break;}}if(at<0||d.length-at>32)return null;var sp=document.createElement('span');sp.style.whiteSpace='nowrap';sp.textContent=d.slice(at);ln.data=d.slice(0,at);el.appendChild(sp);return sp;};
+  var hashLike=function(r){if(/^0x[0-9a-fA-F]+$/.test(r))return true;var n=r.replace(/[^0-9]/g,'').length;return n>=4&&n*10>=r.length;};
+  /* The alphanumeric run around offset k of d, when it is a hash. */
+  var inHash=function(d,k){var a=k,b=k;while(a>0&&/[A-Za-z0-9]/.test(d.charAt(a-1)))a--;while(b<d.length&&/[A-Za-z0-9]/.test(d.charAt(b)))b++;return b-a>24&&hashLike(d.slice(a,b));};
+  /* The width a token has to fit: its table's scroller less the cell's padding, else its block's measure. */
+  var roomFor=function(el){var blk=el.parentElement;while(blk&&blk!==document.body&&/^inline/.test(getComputedStyle(blk).display))blk=blk.parentElement;if(!blk)return Infinity;var cs=getComputedStyle(blk),pad=parseFloat(cs.paddingLeft||0)+parseFloat(cs.paddingRight||0);for(var a=blk.parentElement;a&&a!==document.body;a=a.parentElement){var ox=getComputedStyle(a).overflowX;if(ox==='auto'||ox==='scroll')return a.clientWidth-pad;}return blk.clientWidth-pad;};
   var els=(root||document).querySelectorAll('code,kbd,samp');
   for(var i=0;i<els.length;i++){var el=els[i];if(el.closest('pre')||el.getAttribute('data-wbr'))continue;
     el.setAttribute('data-wbr','1');
@@ -151,13 +162,15 @@ window.a402BreakCode=function(root){try{
     if(!el.children.length){(function(el,txt,ws){a402Undo.push(function(){if(!el.isConnected||el.textContent!==txt)return;el.textContent=txt;el.style.whiteSpace=ws;el.removeAttribute('data-wbr');});})(el,el.textContent,el.style.whiteSpace);}
     /* In a table cell a name stays whole (a short token or phrase); a long one wraps like inline code, at its seams. */
     if(el.closest('td,th')){var tx=el.textContent.trim();if(tx.length<=40){el.style.whiteSpace='nowrap';continue;}}
+    var whole=el.textContent.trim();
+    if(!el.children.length&&/^[A-Za-z0-9]{25,}$/.test(whole)&&(hashLike(whole)||!/[a-z0-9][A-Z][a-z]/.test(whole))){var hw=0,hr=el.getClientRects();for(var h=0;h<hr.length;h++)hw+=hr[h].width;if(hw>roomFor(el)){el.style.setProperty('word-break','break-all','important');(function(el){a402Undo.push(function(){el.style.removeProperty('word-break');});})(el);}continue;}
     var held=holdTail(el);
     var tw=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),nodes=[];for(var n=tw.nextNode();n;n=tw.nextNode())if(!held||!held.contains(n))nodes.push(n);
     nodes.forEach(function(t){var d=t.data;if(d.length<9)return;
       var parts=[],from=0;
       for(var k=1;k<d.length-1;k++){var a=d.charAt(k-1),b=d.charAt(k);
         var c2=d.charAt(k-2)||'';var punct=/[_.\/:?&=,-]/.test(a)&&/[^\s_.\/:?&=,-]/.test(b)&&/\S/.test(c2)&&c2!==a;
-        var camel=d.length>24&&/[a-z0-9]/.test(a)&&/[A-Z]/.test(b)&&/[a-z]/.test(d.charAt(k+1)||'');
+        var camel=d.length>24&&/[a-z0-9]/.test(a)&&/[A-Z]/.test(b)&&/[a-z]/.test(d.charAt(k+1)||'')&&!inHash(d,k);
         if(punct||camel){parts.push(d.slice(from,k));from=k;}}
       if(!parts.length)return;parts.push(d.slice(from));
       var f=document.createDocumentFragment();parts.forEach(function(x,j){if(j)f.appendChild(document.createElement('wbr'));f.appendChild(document.createTextNode(x));});

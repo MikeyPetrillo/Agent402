@@ -211,7 +211,7 @@ rules below.
 ## Layout
 - Container 1180px, 30px gutter (16px on phones). Sections 56px apart. A page module sets the
   container inline (`max-width:1180px` with a 30px side padding); the 16px phone gutter is one rule
-  in `ledger-chrome.js`, and a closing call-to-action panel (`.ml-cta-panel`) narrows its inset there too.
+  in `ledger-chrome.js` (a container set by a class, the tool page's `.tp-wrap`, states the same gutter itself), and a closing call-to-action panel (`.ml-cta-panel`) narrows its inset there too.
 - Nothing scrolls the page sideways at 360px; wide tables scroll inside their own wrapper. On a phone a
   prose cell of a scrolling table keeps a reading width (site-chrome.js gives it a floor of about
   20em) so the table scrolls instead of squeezing a sentence to a word per line, and a cell that is
@@ -228,7 +228,8 @@ Measured, not eyeballed: `scripts/test-wrap-quality.js` lays out every page in t
 plus every `/docs/<wiki page>` in Chromium at 1440, 400, 390 and 360 px, reads each block's line boxes
 and fails on any of these. CI runs every hand-written page and a fixed sample of 25 per
 generated family (tool, category, skill pack and report pages, longest titles and code
-names first); `WRAP_ALL=1` runs all of them.
+names first, plus the pages its `PINNED` list names for shapes a sample by length misses);
+`WRAP_ALL=1` runs all of them.
 - **No rag**: a block of 2+ lines ends on a line of at least 30% of its widest line and at
   least 3 words (a heading of 5 words or fewer may split 2 + 2 or 3 + 2; punctuation alone
   is not a word). Widow control in `assets/js/site-chrome.js` measures each block's tail
@@ -245,6 +246,11 @@ names first); `WRAP_ALL=1` runs all of them.
   adds a `<wbr>` there), never between two letters. Inline code is `overflow-wrap: break-word`, never `anywhere` (that collapses a
   table column to one letter); only an unbroken hash or address may split. A short name in
   a table cell stays on one line and a wide table scrolls in its own wrapper.
+- **A hash or address has no words**: it takes no camelCase seam (a checksum address is
+  mixed case by chance), stays whole where a line holds it, and where its table's scroller
+  or its block is narrower it breaks at each line's end, starting on the sentence's own line
+  (site-chrome.js for inline code; `.tp-hash` for one typed in a tool page's parameter
+  description), so it never sets a column's width or leaves a short piece alone on a line.
 - **A page's own title is whole**: an h1 wraps with `text-wrap: balance`, never a
   line clamp or an ellipsis; a long catalog name steps down to `--fs-2xl` on a phone.
   Breadcrumbs (`.ml-crumb`) keep each link whole and drop the current page's name on a
@@ -253,7 +259,8 @@ names first); `WRAP_ALL=1` runs all of them.
   chips, buttons, kickers, stat labels and each link of a link row stay on one line. A run
   of tags is `.ml-meta` (or `sectionMeta([...])`): one `<span>` per tag, wrapping between
   tags. The dot between tags is drawn by `sepRowCss(selector, gap)` (ledger-chrome.js), which
-  keeps a row from beginning with its dot; a separator typed in a sentence stays with the
+  keeps a row from beginning with its dot (a padded panel such as the tool page's price badge pads an
+  inner row, since the clip is the row's own box; the guard's `sep` rule reads every drawn dot); a separator typed in a sentence stays with the
   item before it (`&nbsp;·`). Shorten a label that does not fit; never shrink it below the type scale or clip it.
 - **No stray item**: a row of links or chips does not end on one item under a row of 3+.
   Long rows become a two-column list or a sideways strip at phone width (`.ml-strip` on any
