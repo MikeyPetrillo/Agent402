@@ -1,5 +1,5 @@
 // The home page and the hub pages (/sell, /docs) are short answers first.
-// Two budgets per page, both in words a reader sees (scripts/lib/hub-page-words.js):
+// Two budgets per page, both in words a reader sees (scripts/lib/page-words.js, its "visible" mode):
 //
 //   top   every visible word above the first h2: the h1, the lead paragraphs,
 //         button and link labels, kickers, and the labels and cells of any
@@ -27,7 +27,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { pageWords, countWords } from "./lib/hub-page-words.js";
+import { visiblePageWords as pageWords, countVisibleWords as countWords } from "./lib/page-words.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

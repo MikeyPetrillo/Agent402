@@ -10,7 +10,7 @@
 //   node scripts/test-changelog-archive.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { proseWords } from "./lib/page-prose.js";
+import { fragmentProseWords as proseWords } from "./lib/page-words.js";
 
 const { CHANGELOG_ENTRIES, CHANGELOG_RECENT, changelogSplit, changelogPage, changelogArchivePage } = await import("../src/changelog.js");
 const { PAGE_SOURCES } = await import("../src/page-dates.js");

@@ -27,10 +27,10 @@
 // (listed above). The server boots with MPP and a
 // Tempo relay configured (placeholder keys, nothing is called), so each page
 // carries every rail sentence production prints.
-// The counting lives in scripts/lib/tool-page-prose.js.
+// The counting lives in scripts/lib/page-words.js (its "tool" mode).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { LEAD_MAX, BODY_MAX, ABOUT_MAX_SUMMARY, ABOUT_MAX_DESCRIPTION, aboutMaxFor, proseWords, toolPageWords } from "./lib/tool-page-prose.js";
+import { TOOL_LEAD_MAX as LEAD_MAX, TOOL_BODY_MAX as BODY_MAX, TOOL_ABOUT_MAX_SUMMARY as ABOUT_MAX_SUMMARY, TOOL_ABOUT_MAX_DESCRIPTION as ABOUT_MAX_DESCRIPTION, aboutMaxFor, toolProseWordList as proseWords, toolPageWords } from "./lib/page-words.js";
 import { PAGE_SUMMARY } from "./lib/description-limits.js";
 import { TOOL_LEAD_MAX_WORDS } from "../src/pages.js";
 

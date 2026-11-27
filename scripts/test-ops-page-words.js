@@ -1,6 +1,6 @@
 // /status and /revenue answer first and explain after: at most 50 prose words
 // above the first h2, and at most 700 prose words a reader meets with the
-// optional detail closed (scripts/lib/page-words.js says what counts).
+// optional detail closed (scripts/lib/page-words.js, its "main" mode, says what counts).
 //
 // Counted: prose in <main> (headings, paragraphs, list items, labels), a
 // closed <details>' summary, an open one whole. Not counted: tables, <pre>
