@@ -195,7 +195,7 @@ var a402CellMeasure=function(root){try{var cells=(root||document).querySelectorA
 }catch(e){}};
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */
 var a402BindNow=function(root){a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);};
-var a402BindPass=function(root){try{
+var a402BindPass=function(root,sliced){try{
   var SEL='p,li,h1,h2,h3,h4,dd,dt,td,th,figcaption,blockquote,label,[class*="lede"],[class*="intro"],[class*="meta"]';
   var OPAQUE=/^(CODE|PRE|KBD|SAMP|SCRIPT|STYLE|TEXTAREA|BUTTON|SELECT|svg|SVG|IMG|BR)$/;
   var INLINE=/^inline$|^contents$/;
@@ -208,7 +208,8 @@ var a402BindPass=function(root){try{
      Range, inline code by its boxes; a block child in the tail is never bound. */
   var tailW=function(map,x,last){var W=0;for(var q=0;q<map.length;q++){var g=map[q];var a=Math.max(x,g.start),b=Math.min(last+1,g.start+g.len);if(b<=a)continue;var rs;if(g.node){var r=document.createRange();r.setStart(g.node,a-g.start);r.setEnd(g.node,b-g.start);rs=r.getClientRects();}else if(g.el){rs=g.el.getClientRects();}else return Infinity;for(var u=0;u<rs.length;u++)W+=rs[u].width;}return W;};
   /* Reads first (every block's tail measured), writes after, so the page lays out once. */
-  for(var i=0;i<els.length;i++){var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
+  /* `until` (a clock time) ends a turn of the reads or the writes early; each says whether it has more to do. */
+  var i=0;var read=function(until){for(;i<els.length;i++){if(until&&performance.now()>=until)return true;var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
     var segs=collect(el);
     /* A block that closes the element (a nested list after a list item's lead sentence) is measured on its own: the tail bound here is the text before it. */
     var e2=segs.length,blk=false;while(e2>0){var gq=segs[e2-1];if(gq.node&&!/\S/.test(gq.text)){e2--;continue;}if(!gq.node&&!gq.el){blk=true;e2--;continue;}break;}if(blk)segs=segs.slice(0,e2);
@@ -232,8 +233,8 @@ var a402BindPass=function(root){try{
       if(piece<0||piece>hi)return null;return {j:jb,seams:seams,from:runs[R-jb+1].b};})();
     /* The block's words, counted as the tail's are. */
     var tot=s.slice(first,last+1).split(/[\s\u00A0]+/).filter(function(t){return /[\p{L}\p{N}]/u.test(t);}).length;
-    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,tot:tot,whole:whole,cell:cell,ext:ext});}
-  plans.forEach(function(p){
+    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,tot:tot,whole:whole,cell:cell,ext:ext});}return false;};
+  var write=function(p){
     var s=p.s,map=p.map,first=p.first,last=p.last,segAt=p.segAt,runs=p.runs;
     /* Bind the fewest last words that make a tail of 3+ words and a third of the measure; never more than 97% of it, so the tail always fits a line. */
     var lo=p.w*0.33,hi=p.w*0.97,k=0;
@@ -261,11 +262,21 @@ var a402BindPass=function(root){try{
     a402Undo.push(function(){var q;for(q=0;q<before.length;q++)if(!before[q][0].isConnected||before[q][0].data!==before[q][2])return;for(q=0;q<made.length;q++)if(made[q].parentNode)made[q].parentNode.removeChild(made[q]);for(q=0;q<before.length;q++)before[q][0].data=before[q][1];p.el.a402Split=false;});
     edits.forEach(function(e){var d=e.node.data;if(e.op==='wbr'){var rest=e.node.splitText(e.off);var wb=document.createElement('wbr');rest.parentNode.insertBefore(wb,rest);made.push(wb,rest);return;}if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
     before.forEach(function(b){b[2]=b[0].data;});
-  });
+  };
+  var j=0;var writes=function(until){for(;j<plans.length;j++){if(until&&performance.now()>=until)return true;write(plans[j]);}return false;};
+  if(sliced)return {read:read,write:writes};
+  read(0);writes(0);
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
-/* The measure changed: take every edit back, newest first, and bind again. Only a change of width counts (a phone's address bar resizes the height on every scroll). */
-window.a402Rebind=function(){try{var u=a402Undo;a402Undo=[];for(var i=u.length-1;i>=0;i--){try{u[i]();}catch(e){}}}catch(e){}window.a402BindWidows(document);};
+/* The measure changed: take every edit back, newest first, and bind again. Only a change of width counts (a phone's address bar resizes the height on every scroll).
+   A long page holds a thousand edits, so the work runs in turns of about 12 ms with the browser given the thread between them: the edits are taken back, then each
+   pass reads every tail before it writes any (the result is the one a single pass gives). A newer change of width starts over, and takes back what the last run left. */
+var a402Stale=[],a402Run=0;
+window.a402Rebind=function(){var run=++a402Run;a402Stale=a402Stale.concat(a402Undo);a402Undo=[];
+  var pass=function(){var p=null,made=false;return [function(u){if(!made){made=true;p=a402BindPass(document,true);}return p?p.read(u):false;},function(u){return p?p.write(u):false;}];};
+  var steps=[function(u){while(a402Stale.length){if(performance.now()>=u)return true;try{a402Stale.pop()();}catch(e){}}return false;},
+    function(){a402CellMeasure(document);if(window.a402BreakCode)window.a402BreakCode(document);return false;}].concat(pass(),pass());
+  var k=0;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length)setTimeout(go,0);};go();};
 (function(){var w=window.innerWidth,t=null;var later=function(){if(window.innerWidth===w)return;clearTimeout(t);t=setTimeout(function(){if(window.innerWidth===w)return;w=window.innerWidth;window.a402Rebind();},200);};window.addEventListener('resize',later);window.addEventListener('orientationchange',later);})();
 /* A day strip (/status .bars) reads on touch too: a tap or click on the strip writes the nearest bar's title (its date and probe count) into a line under it, read out by a screen reader. */
 document.addEventListener('click',function(e){try{var strip=e.target&&e.target.closest&&e.target.closest('.bars');if(!strip)return;var bars=strip.querySelectorAll('[title]');if(!bars.length)return;var r=strip.getBoundingClientRect();var i=Math.min(bars.length-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*bars.length)));var out=strip.nextElementSibling&&strip.nextElementSibling.classList.contains('bar-read')?strip.nextElementSibling:null;if(!out){out=document.createElement('p');out.className='bar-read';out.setAttribute('aria-live','polite');out.style.cssText='font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:6px 0 0;';strip.parentNode.insertBefore(out,strip.nextSibling);}out.textContent=bars[i].getAttribute('title');}catch(err){}});

@@ -240,7 +240,8 @@ names first, plus the pages its `PINNED` list names for shapes a sample by lengt
   or the measure is wrong, so shorten the words or widen the column. Text rendered after
   load calls `window.a402BindWidows(root)`. Every edit is measured at one width and records
   how to take itself back: when the width changes (a rotated phone) the pass undoes them
-  and binds again (`window.a402Rebind`).
+  and binds again (`window.a402Rebind`). That re-measure runs in turns of about 12 ms with the
+  browser given the thread between them, so no page holds the main thread for it, however long.
 - **Code keeps whole words**: a code name in prose or a table cell breaks only at its own
   punctuation, or at a camelCase seam when it is longer than 24 characters (site-chrome.js
   adds a `<wbr>` there), never between two letters. Inline code is `overflow-wrap: break-word`, never `anywhere` (that collapses a
