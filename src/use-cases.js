@@ -106,7 +106,6 @@ export function examplesSectionHtml(catalog = {}) {
   return `<!-- EXAMPLES -->
       <section>
       <h2 id="examples" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Examples.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Each task's calls and what they cost today, read from the live catalog.</p>
       <details class="doc-more"><summary>${esc(String(USE_CASES.length))} tasks, their calls and their costs</summary>
       <div class="ex-grid">${cards}
       </div>

@@ -163,7 +163,7 @@ function whyCompareHtml() {
 
 /** The rows, each a kicker and a one-line heading on the left; on the
  * right one sentence, at most two proof links, and the full claim (with any
- * further proof links) behind "how it works". */
+ * further proof links) behind "details". */
 /** A point's text as HTML: escaped, with a `field` in backticks set as code. */
 export function whyTextHtml(text) { return esc(text).replace(/`([^`<]+)`/g, "<code>$1</code>"); }
 function whyPointsHtml() {
@@ -173,7 +173,7 @@ function whyPointsHtml() {
       <div><div class="why-k">${esc(w.kicker)}</div><h3>${esc(w.t)}</h3></div>
       <div class="why-body">
         <p>${esc(w.s)}</p>
-        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>how it works +</summary><p><strong>${esc(w.h)}</strong> ${whyTextHtml(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
+        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>details +</summary><p><strong>${esc(w.h)}</strong> ${whyTextHtml(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
       </div>
     </div>`).join("");
 }

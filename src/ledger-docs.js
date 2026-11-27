@@ -26,6 +26,7 @@ import { RAILS_OR } from "./rails.js";
 import { gatewayProductHtml } from "./gateway-product-copy.js";
 import { receiptsServed } from "./receipt-signing.js";
 import { OFFICIAL_PAGE_PATH } from "./official-surfaces.js";
+import { meteredTimeoutSentence } from "./metered-lead.js";
 
 // A link in the docs page's own style (the get-a-wallet step).
 const DOC_LINK = (href, label) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">${esc(label)}</a>`;
@@ -125,7 +126,7 @@ node demo.js
 </span>npm i @x402/core @x402/evm @x402/fetch viem
 <span style="color:var(--on-panel-faint);"># Use a new wallet holding only a few dollars of USDC. Never your main wallet.
 </span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js`, { label: "terminal", name: "the terminal commands", html: true, wrap: true, style: "margin-bottom:14px" })}</div>
-      ${P(`The demo signs on the EVM chains; to pay on Solana, Stellar or Algorand, see ${DOC_LINK("/docs/Paying-with-x402", "Paying with x402")}.`, 44)}
+      ${P(`To pay on Solana, Stellar or Algorand, see ${DOC_LINK("/docs/Paying-with-x402", "Paying with x402")}.`, 44)}
       </section>
 
       <!-- HOW -->
@@ -199,7 +200,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });`, { name: "
       <!-- GATEWAY -->
       <section>
       ${H2("gateway", "/v1 - OpenAI-compatible LLM gateway.")}
-      ${P(`Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call, with no API key. These routes are model-backed. ${gatewayProductHtml({ receipts: receiptsServed() })} Wires and timeouts: ${DOC_LINK("/docs/LLM-Gateway", "LLM Gateway")}.`)}
+      ${P(`Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call, with no API key. These routes are model-backed. ${gatewayProductHtml({ receipts: receiptsServed() })} ${esc(meteredTimeoutSentence())} Wires: ${DOC_LINK("/docs/LLM-Gateway", "LLM Gateway")}.`)}
       <details class="doc-more"><summary>The /v1 routes and their prices</summary>
       <div style="font-family:var(--font-mono);font-size:var(--fs-sm);">
 ${gateway.rows}
