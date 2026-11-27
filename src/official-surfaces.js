@@ -65,7 +65,8 @@ export function officialSurfacesDocument() {
 
 // The rows a person reads, in one order for the page and the README: the
 // endpoints, then each registry's current packages, then each registry's
-// earlier names (a last release that installs its replacement).
+// earlier names (a last release that installs its replacement; the README
+// and the data only, never a page).
 //
 // A served page never prints the repository's account name as text (the
 // source link is an href; scripts/test-static-pages.js). So on a page the
@@ -86,7 +87,9 @@ function rows({ page = false } = {}) {
     const mine = pkgs.filter((p) => p.registry === key);
     const now = mine.filter((p) => !p.renamedTo), earlier = mine.filter((p) => p.renamedTo);
     if (now.length) out.push({ label, kind: "code", items: now.map((p) => ({ text: p.name, url: p.url })) });
-    if (earlier.length) out.push({ label: `${label}, earlier names`, kind: "code", items: earlier.map((p) => ({ text: p.name, url: p.url, now: p.renamedTo })) });
+    // An earlier name is listed in the data and the README only: a page
+    // prints the current names and says where the earlier ones are.
+    if (earlier.length && !page) out.push({ label: `${label}, earlier names`, kind: "code", items: earlier.map((p) => ({ text: p.name, url: p.url, now: p.renamedTo })) });
   }
   return out;
 }
@@ -95,9 +98,8 @@ const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").re
 
 /** The list as table rows for a page: [label, html] pairs, design tokens only.
  *  A row of several names is a list (OFFICIAL_LIST_CSS: one line of names on a
- *  wide screen, one name per line on a phone). An earlier name links to its
- *  registry page, which names its replacement; the data and the README carry
- *  the replacement too. */
+ *  wide screen, one name per line on a phone). Earlier names are not on the
+ *  page: OFFICIAL_EARLIER_NOTE_HTML says where they are listed. */
 export function officialSurfacesRows() {
   const a = (url, inner) => `<a href="${escHtml(url)}" rel="noopener" style="color:var(--ink);">${inner}</a>`;
   const code = (t) => `<code style="font-family:var(--font-mono);font-size:var(--fs-code-inline);">${escHtml(t)}</code>`;
@@ -106,6 +108,8 @@ export function officialSurfacesRows() {
     return [label, cells.length > 1 ? `<ul class="official-names">${cells.map((c) => `<li>${c}</li>`).join("")}</ul>` : cells[0]];
   });
 }
+/** The page's one clause about earlier package names, with the README link. */
+export const OFFICIAL_EARLIER_NOTE_HTML = `Earlier package names are listed in the <a href="${REPO_URL}#official-packages-and-endpoints" rel="noopener" style="color:var(--ink);">README</a>.`;
 export const OFFICIAL_LIST_CSS = `.official-names{list-style:none;margin:0;padding:0}.official-names li{display:inline}.official-names li:not(:last-child)::after{content:", "}
 @media (max-width:600px){.official-names li{display:block;padding:2px 0}.official-names li:not(:last-child)::after{content:none}}`;
 

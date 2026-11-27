@@ -13,7 +13,7 @@ import { ERC8004_IDENTITY_REGISTRY, erc8004AgentId } from "./tools/a2a-card.js";
 import { companyPostalLine } from "./email.js";
 import { mppOffered } from "./site-org.js";
 import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
-import { OFFICIAL_SENTENCE, OFFICIAL_DATA_PATH, OFFICIAL_LIST_CSS, officialSurfacesRows } from "./official-surfaces.js";
+import { OFFICIAL_SENTENCE, OFFICIAL_DATA_PATH, OFFICIAL_LIST_CSS, OFFICIAL_EARLIER_NOTE_HTML, officialSurfacesRows } from "./official-surfaces.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
 // The business's public contact points, by role: the help address for
 // support, billing, legal and abuse, the security address for vulnerability
@@ -79,6 +79,7 @@ export function companyPage(baseUrl) {
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">Official packages</h2>
     <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${esc(OFFICIAL_SENTENCE)}</p>
     <table class="co-contacts co-official" style="border-collapse:collapse;max-width:820px;margin:0 0 14px;"><tbody>${officialSurfacesRows().map(([k, v]) => `<tr><th scope="row">${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>
+    <p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${OFFICIAL_EARLIER_NOTE_HTML}</p>
     <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;"><a href="${OFFICIAL_DATA_PATH}" style="display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">The list as data →</a></div></div>
   </div>
 </section>`;

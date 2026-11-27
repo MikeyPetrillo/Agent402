@@ -137,10 +137,21 @@ try {
     const section = (company.match(/<section id="official"[\s\S]*?<\/section>/) || [""])[0];
     const shown = text(section);
     ok(section.length > 0 && shown.includes(OFFICIAL_SENTENCE), "/company has the official packages section, opening with the statement");
-    const missing = fresh.packages.filter((p) => !section.includes(`>${p.name}</code>`)).map((p) => p.name);
-    ok(missing.length === 0, `/company names every package on the list${missing.length ? ` (missing ${missing.join(", ")})` : ""}`);
-    const unlinked = officialPackages().filter((p) => !section.includes(`href="${p.url}"`)).map((p) => p.name);
-    ok(unlinked.length === 0, `/company links every package to its registry page${unlinked.length ? ` (missing ${unlinked.join(", ")})` : ""}`);
+    // The page names the current packages. An earlier name is not printed or
+    // linked there: it stays in the data and the README, and the page says so.
+    const current = officialPackages().filter((p) => !p.renamedTo), earlierNames = officialPackages().filter((p) => p.renamedTo);
+    const missing = current.filter((p) => !section.includes(`>${p.name}</code>`)).map((p) => p.name);
+    ok(current.length >= 10 && missing.length === 0, `/company names every current package on the list${missing.length ? ` (missing ${missing.join(", ")})` : ""}`);
+    const unlinked = current.filter((p) => !section.includes(`href="${p.url}"`)).map((p) => p.name);
+    ok(unlinked.length === 0, `/company links every current package to its registry page${unlinked.length ? ` (missing ${unlinked.join(", ")})` : ""}`);
+    const printed = earlierNames.filter((p) => company.includes(p.name)).map((p) => p.name);
+    ok(earlierNames.length >= 10 && printed.length === 0, `/company prints no earlier package name, as text or in a link${printed.length ? ` (found ${printed.join(", ")})` : ""}`);
+    ok(/Earlier package names are listed in the README ?\./.test(shown) && section.includes(`href="${REPO_URL}#official-packages-and-endpoints"`), "/company says earlier package names are listed in the README, with the link");
+    {
+      const manifest = await (await get(off, OFFICIAL_DATA_PATH)).json();
+      const readmeText = readFileSync(README, "utf8");
+      ok(earlierNames.every((p) => manifest.official?.packages?.some((q) => q.name === p.name && q.renamedTo === p.renamedTo)) && earlierNames.every((p) => readmeText.includes(`\`${p.name}\``)), "the data and the README still carry every earlier name");
+    }
     ok(shown.includes(OFFICIAL_CONNECTOR) && section.includes(`href="${REPO_URL}"`) && section.includes(`href="${OFFICIAL_SITE}"`) && section.includes(`href="${OFFICIAL_DATA_PATH}"`), "/company names the site, the hosted connector, the repository (as a link) and the data address");
     // A page prints no repository account name as text (scripts/test-static-pages.js):
     // a registry name in that account's namespace stays in the data and the
