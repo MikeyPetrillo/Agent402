@@ -320,6 +320,14 @@ const catalog = {
   }
   ok(homeDescription({ receipts: true }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP; signed receipts on successful direct calls. 500+ tools on the same rails.", "the meta description, word for word (receipts signed)");
   ok(homeDescription({ receipts: false }) === "Payments and trust: agents find, pay for and verify paid calls over x402 and MPP, with no API key or account. 500+ tools on the same rails.", "the meta description, word for word (no signing key)");
+  // A boot that offers no MPP names x402 alone, in the snippet as in the lead.
+  for (const receipts of [true, false]) {
+    const d = homeDescription({ receipts, mpp: false });
+    ok(!/MPP/.test(d) && /paid calls over x402[;,] /.test(d) && d.length >= 120 && d.length <= 155, `with MPP off the description names x402 alone, in 120 to 155 characters (receipts ${receipts ? "on" : "off"}, ${d.length} chars)`);
+    const off = ledgerHomePage(BASE_URL, catalog, {}, {}, [], { receipts, mpp: false });
+    const m = (off.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+    ok(m === d && !/MPP/.test(m), `the home page rendered with MPP off carries that description (${m.slice(0, 80)}...)`);
+  }
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const page = ledgerHomePage(BASE_URL, catalog, {}, {}, [], { receipts: true });

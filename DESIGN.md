@@ -234,12 +234,15 @@ names first); `WRAP_ALL=1` runs all of them.
   is not a word). Widow control in `assets/js/site-chrome.js` measures each block's tail
   and binds its last words to about a third of its measure (two words that fit stay
   together; a short cell of a scrolling table stays whole; a URL or code token too wide to
-  join a short tail joins it and breaks at its own seams); if a block still rags, the copy
+  join a short tail joins it and breaks at its own seams; a block of four or five words gives a word
+  back so it never opens on one word alone); if a block still rags, the copy
   or the measure is wrong, so shorten the words or widen the column. Text rendered after
-  load calls `window.a402BindWidows(root)`.
+  load calls `window.a402BindWidows(root)`. Every edit is measured at one width and records
+  how to take itself back: when the width changes (a rotated phone) the pass undoes them
+  and binds again (`window.a402Rebind`).
 - **Code keeps whole words**: a code name in prose or a table cell breaks only at its own
-  punctuation or a camelCase seam (site-chrome.js adds a `<wbr>` there), never between two
-  letters. Inline code is `overflow-wrap: break-word`, never `anywhere` (that collapses a
+  punctuation, or at a camelCase seam when it is longer than 24 characters (site-chrome.js
+  adds a `<wbr>` there), never between two letters. Inline code is `overflow-wrap: break-word`, never `anywhere` (that collapses a
   table column to one letter); only an unbroken hash or address may split. A short name in
   a table cell stays on one line and a wide table scrolls in its own wrapper.
 - **A page's own title is whole**: an h1 wraps with `text-wrap: balance`, never a
@@ -249,7 +252,9 @@ names first); `WRAP_ALL=1` runs all of them.
 - **A label never breaks inside itself**: small mono text, uppercase letter-spaced labels,
   chips, buttons, kickers, stat labels and each link of a link row stay on one line. A run
   of tags is `.ml-meta` (or `sectionMeta([...])`): one `<span>` per tag, wrapping between
-  tags. Shorten a label that does not fit; never shrink it below the type scale or clip it.
+  tags. The dot between tags is drawn by `sepRowCss(selector, gap)` (ledger-chrome.js), which
+  keeps a row from beginning with its dot; a separator typed in a sentence stays with the
+  item before it (`&nbsp;·`). Shorten a label that does not fit; never shrink it below the type scale or clip it.
 - **No stray item**: a row of links or chips does not end on one item under a row of 3+.
   Long rows become a two-column list or a sideways strip at phone width (`.ml-strip` on any
   chip row; a grid column holding one is `minmax(0,1fr)` so the strip scrolls in place).

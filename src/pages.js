@@ -411,11 +411,22 @@ function proseWordCount(html) {
   return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w.replace(/&[a-z]+;|&#\d+;/gi, ""))).length;
 }
 
-/** The first `n` words of a sentence, ending "..." when it was cut. */
+/** The first `n` words of a sentence, ending "..." when it was cut. A cut
+ *  lands on the last clause boundary in the back half of the room (a comma,
+ *  a colon, a closed parenthesis, with every parenthesis closed), so the lead
+ *  never stops inside a phrase ("no API key, no..."); a sentence with no such
+ *  boundary is cut at a word, never on a connecting one. */
 function cutWords(text, n) {
   const words = String(text).trim().split(/\s+/);
   if (words.length <= n) return words.join(" ");
-  const head = words.slice(0, Math.max(3, n));
+  const room = Math.max(3, n);
+  let depth = 0, at = -1;
+  for (let i = 0; i < room; i++) {
+    depth += (words[i].match(/\(/g) || []).length - (words[i].match(/\)/g) || []).length;
+    if (depth === 0 && /[,;:)]$/.test(words[i]) && i + 1 >= Math.ceil(room / 2)) at = i + 1;
+  }
+  if (at > 0) return words.slice(0, at).join(" ").replace(/[\s,;:\-(.]+$/g, "") + "...";
+  const head = words.slice(0, room);
   while (head.length > 3 && /^(a|an|the|of|on|in|to|for|by|and|or|with|from|at|as|via|into|its)$/i.test(head.at(-1))) head.pop();
   return head.join(" ").replace(/[\s,;:\-(.]+$/g, "") + "...";
 }
@@ -590,7 +601,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
   const mcpNote = computePayable
     ? `Hosted connector (<code>${e(baseUrl)}/mcp</code>): free, rate-limited. Stdio package: <code>npx -y agent402-mcp@0.17.1</code>.`
-    : `Hosted connector (<code>${e(baseUrl)}/mcp</code>): paid in the call. Stdio package (<code>npx -y agent402-mcp@0.17.1</code>): pays from a wallet${tool.identityBound ? "" : creditsSalesEnabled() ? " or <code>AGENT402_CREDITS_KEY</code>" : " or an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
+    : `Hosted connector (<code>${e(baseUrl)}/mcp</code>): paid in the call. Stdio package (<code>npx -y agent402-mcp@0.17.1</code>): pays from a wallet${tool.identityBound || paysThirdParty(tool) ? "" : creditsSalesEnabled() ? " or <code>AGENT402_CREDITS_KEY</code>" : " or an <code>AGENT402_CREDITS_KEY</code> issued earlier"}.`;
 
   const aliases = (Array.isArray(tool.aliases) ? tool.aliases : []).filter((a) => a && a !== tool.slug);
   const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";

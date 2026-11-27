@@ -14,7 +14,7 @@
 // rather than crashing, useful for catching dead references in the test suite.
 import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock, sepRowCss } from "./ledger-chrome.js";
 import { firstFit } from "./seo-meta.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
@@ -281,7 +281,7 @@ const SKILL_PACKS_ALL = [
       "Parse the DMARC policy - p=none means receivers ignore SPF/DKIM failures, which usually explains a 'we set it all up but it still goes to spam' problem.",
       "Probe 14 common DKIM selectors and warn on <1024-bit keys and testing-mode (t=y) records. Most sending platforms publish under a predictable selector this catches.",
       "Run the composite deliverability score (25 points each for SPF + DMARC + DKIM + MX) for a single integer to report back to the team.",
-      "Validate a single recipient address with email-validate to confirm the MX is actually reachable.",
+      "Validate a single recipient address with email-validate to confirm its syntax and that its domain publishes MX records.",
       "Spot-check the MX records with dns-lookup type=MX to verify the chain matches the sending platform's documented setup.",
     ],
     claudePrompt:
@@ -381,7 +381,7 @@ const SKILL_PACKS_ALL = [
     workflow: [
       "Pull the live Treasury yield curve (all maturities from 1M to 30Y) - the base data for every spread/inversion chart.",
       "Get the 10Y–2Y and 10Y–3M spreads from yield-curve-spread; the latter is the spread the New York Fed's published yield-curve model uses.",
-      "Pull CPI YoY (cpi-yoy) for the headline and core inflation read.",
+      "Pull CPI YoY (cpi-yoy) for the headline inflation read.",
       "Pull the headline unemployment rate (unemployment-rate) - the U-3 series.",
       "Get the effective fed funds rate (fed-funds) for the current policy stance.",
       "Compute the Sahm rule (sahm-rule) - a real-time recession indicator that triggers when the 3-month unemployment average rises >0.5pp above its 12-month low.",
@@ -972,7 +972,7 @@ const SKILL_PACKS_ALL = [
       "totp",
     ],
     workflow: [
-      "Validate the email with email-validate. Returns a structured verdict beyond a regex - surfaces whether the local-part / domain are well-formed, whether the domain looks like a typo of a major provider (gmial.com), and whether the address has obvious red flags. Reject here on hard failures (malformed) and surface soft warnings (likely typo) for the agent to confirm with the user. Every step after assumes a valid email so any downstream 'send confirmation email' step doesn't fail silently.",
+      "Validate the email with email-validate. Returns the syntax verdict, the domain's MX records and who hosts its mail (a disposable inbox service is named as one). Reject here on hard failures (malformed, or a domain with no mail servers). Every step after assumes a valid email so any downstream 'send confirmation email' step doesn't fail silently.",
       "Score the password with password-strength. Returns a score (0-4 or similar zxcvbn-style band) plus the actual weakness reason ('common password', 'contains username', 'too short'). Reject below a threshold and surface the *specific* weakness - 'your password is too weak' is unhelpful, 'your password contains your username' tells the user exactly what to change. Doing this here, before any hashing or mint step, means a rejected signup leaves no trace of the bad password anywhere.",
       "Mint the stable internal ID with uuid. UUID v4 is the right default - globally unique, no information leakage, decoupled from any user-controlled field. This is the dedupe / primary-key for the rest of the workup; every downstream record (user record, audit row, related entity) references this UUID rather than email or handle, both of which can change. Generate ONCE per signup and never regenerate.",
       "Derive the URL-safe handle with slugify on displayName. 'Ada Lovelace' → 'ada-lovelace'; 'Søren Kierkegaard' → 'soren-kierkegaard' (diacritics folded). Two failure modes to handle: collision with an existing handle (append the first 6 chars of the UUID), and reserved / forbidden slugs (admin, api, login - match against a denylist). The UUID from step 3 is the collision-resolution suffix because it's the only stable thing you have.",
@@ -981,7 +981,7 @@ const SKILL_PACKS_ALL = [
       "Verify 2FA setup with totp. Takes the base32 secret you generated server-side during enrollment, computes the current code, compares to what the user typed in. Three outcomes: (a) match → 2FA is wired up correctly, persist the secret encrypted-at-rest; (b) off by one window (the user took 30+ seconds to type) → accept and warn; (c) mismatch → either the user scanned the QR but typed wrong, or the QR encoded a different secret - re-issue the secret rather than letting them retry indefinitely. Doing this BEFORE finalizing the account means a broken 2FA enrollment fails the entire signup, not the next login attempt.",
     ],
     claudePrompt:
-      "Onboard this signup using Agent402: email=ada@example.com, password=S0meStrongPassw0rd!, displayName=Ada Lovelace, totpSecret=JBSWY3DPEHPK3PXP, totpCode=492039. (1) email-validate the email. If invalid, return {accepted: false, reason: 'invalid-email', detail}. If 'likely-typo', surface the suggested correction and ask the user to confirm rather than rejecting outright. (2) password-strength on the password. If score < 3, return {accepted: false, reason: 'weak-password', specifically: <why>, suggestion: 'add length / drop common-pattern / vary character classes'}. Hard-reject signups that contain the email local-part or the displayName. (3) uuid (v4). Save as userId - this is the dedupe key for the rest of the steps. (4) slugify the displayName. If the slug collides with a reserved word (admin/api/login/root/help/about) or an existing handle, append the first 6 chars of userId hex. (5) password - generate one recovery code (length=20, alphanumeric) and one API key (length=48, alphanumeric+symbol). Return both to the user ONCE; persist only the hash. (6) hash the recovery code with alg=sha256 - this is what you'll store. Separately, hash the user-chosen password ONLY for the pwned-password k-anonymity probe (first 5 chars of SHA-1) - DO NOT use the SHA-256 output as the password store; the prompt MUST recommend bcrypt/argon2 for real persistence. (7) totp with secret=totpSecret. Compare computed code to totpCode. If match, set enrollment=confirmed. If off-by-one window, accept-with-warning. If mismatch, reject 2FA and instruct re-enroll (don't reject the whole signup; let the user retry the QR). Final return: {accepted: true|false, reason?, userId, handle, email, recoveryCodeHash, apiKey, twofaConfirmed, persistableRecord: {userId, email, handle, passwordStorage: 'TODO: replace SHA-256 with bcrypt/argon2', recoveryCodeHash, totpSecretEncrypted}}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid. Never log plaintext password / recovery code / API key - these appear in the return value only.",
+      "Onboard this signup using Agent402: email=ada@example.com, password=S0meStrongPassw0rd!, displayName=Ada Lovelace, totpSecret=JBSWY3DPEHPK3PXP, totpCode=492039. (1) email-validate the email. If invalid, return {accepted: false, reason: 'invalid-email', detail}. If the domain has no mail servers (deliverableDomain false), return {accepted: false, reason: 'no-mail-servers'}. (2) password-strength on the password. If score < 3, return {accepted: false, reason: 'weak-password', specifically: <why>, suggestion: 'add length / drop common-pattern / vary character classes'}. Hard-reject signups that contain the email local-part or the displayName. (3) uuid (v4). Save as userId - this is the dedupe key for the rest of the steps. (4) slugify the displayName. If the slug collides with a reserved word (admin/api/login/root/help/about) or an existing handle, append the first 6 chars of userId hex. (5) password - generate one recovery code (length=20, alphanumeric) and one API key (length=48, alphanumeric+symbol). Return both to the user ONCE; persist only the hash. (6) hash the recovery code with alg=sha256 - this is what you'll store. Separately, hash the user-chosen password ONLY for the pwned-password k-anonymity probe (first 5 chars of SHA-1) - DO NOT use the SHA-256 output as the password store; the prompt MUST recommend bcrypt/argon2 for real persistence. (7) totp with secret=totpSecret. Compare computed code to totpCode. If match, set enrollment=confirmed. If off-by-one window, accept-with-warning. If mismatch, reject 2FA and instruct re-enroll (don't reject the whole signup; let the user retry the QR). Final return: {accepted: true|false, reason?, userId, handle, email, recoveryCodeHash, apiKey, twofaConfirmed, persistableRecord: {userId, email, handle, passwordStorage: 'TODO: replace SHA-256 with bcrypt/argon2', recoveryCodeHash, totpSecretEncrypted}}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid. Never log plaintext password / recovery code / API key - these appear in the return value only.",
   },
 
 
@@ -1471,9 +1471,9 @@ const SKILL_PACKS_ALL = [
     slug: "seo-audit",
     title: "Technical SEO audit",
     tagline:
-      "Can search engines and AI crawlers actually index this page? One pass over reachability, TLS, robots policy, sitemap health, meta/OpenGraph tags, and the on-page link graph.",
+      "Can search engines and AI crawlers actually index this page? One pass over reachability, TLS, robots policy, sitemap health, meta/OpenGraph tags, and the response headers search engines act on.",
     useCase:
-      "You shipped a page (or inherited a site) and want the technical indexability picture without opening six tools: is it up and fast, is TLS valid, does robots.txt allow the crawlers that matter (including LLM bots), does the sitemap parse, are title/description/OG tags present and sized right, and where do its links point? Distinct from a security audit (headers/SPF/CT) and an uptime snapshot - this is the 'will Google and ChatGPT see what I meant' check. Run it pre-launch, post-migration, or on a competitor.",
+      "You shipped a page (or inherited a site) and want the technical indexability picture without opening six tools: is it up and fast, is TLS valid, does robots.txt allow the crawlers that matter (including LLM bots), does the sitemap parse, are title/description/OG tags present and sized right, and do the response headers carry a noindex? Distinct from a security audit (headers/SPF/CT) and an uptime snapshot - this is the 'will Google and ChatGPT see what I meant' check. Run it pre-launch, post-migration, or on a competitor.",
     toolSlugs: [
       "http-check",
       "tls-cert",
@@ -1566,7 +1566,7 @@ const SKILL_PACKS_ALL = [
     slug: "domain-intel",
     title: "Domain intel",
     tagline:
-      "Full domain security and SEO intelligence in one call: WHOIS, DNS, TLS cert, HTTP headers, tech stack, robots policy, and certificate transparency.",
+      "Full domain security and SEO intelligence in one call: WHOIS, DNS, TLS cert, HTTP headers, tech stack, and robots policy.",
     useCase:
       "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review - one call gives you the complete external footprint.",
     promptArgs: [
@@ -2142,18 +2142,18 @@ const SKILL_PACKS_ALL = [
     tagline:
       "Verify an email address is deliverable - syntax validation plus MX record check on the domain.",
     useCase:
-      "An agent collecting contact information needs to verify an email before storing it or sending to it: does the address pass syntax validation, and does the domain actually have mail servers? Catches typos, disposable domains, and dead mailboxes.",
+      "An agent collecting contact information needs to verify an email before storing it or sending to it: does the address pass syntax validation, and does the domain actually have mail servers? Catches malformed addresses, disposable domains, and domains with no mail servers.",
     promptArgs: [
       { name: "email", description: "Email address to verify (e.g. test@gmail.com)", required: true, substitute: "test@gmail.com" },
     ],
     toolSlugs: ["email-validate", "dns-lookup", "spf-check"],
     workflow: [
-      "Call email-validate to check syntax, domain existence, and mailbox reachability.",
+      "Call email-validate to check syntax and the domain's MX records.",
       "Call dns-lookup with host=<domain from email> and type='MX' to independently verify the domain has mail exchange records.",
       "Call spf-check on the domain - a domain that publishes a valid SPF record is configured for legitimate sending, an added deliverability signal beyond MX (and a hint the domain isn't a throwaway).",
     ],
     claudePrompt:
-      "Verify the email address test@gmail.com using Agent402's contact-verify skill pack: (1) email-validate for syntax and reachability, (2) dns-lookup for MX records on gmail.com, (3) spf-check on gmail.com. Report whether the address is likely deliverable and whether the domain is properly configured for sending.",
+      "Verify the email address test@gmail.com using Agent402's contact-verify skill pack: (1) email-validate for syntax and the domain's MX records, (2) dns-lookup for MX records on gmail.com, (3) spf-check on gmail.com. Report whether the address is likely deliverable and whether the domain is properly configured for sending.",
   },
 
   {
@@ -2446,9 +2446,9 @@ const SKILL_PACKS_ALL = [
     slug: "text-hygiene",
     title: "Text hygiene",
     tagline:
-      "Turn a wall of dirty text - chat logs, scraped pages, user-generated content, log dumps - into something safe to store, search, and pipe into the next step. Measure first, redact PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
+      "Turn a wall of dirty text - chat logs, scraped pages, user-generated content, log dumps - into text ready to search and pipe into the next step. Measure first, redact matched PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
     useCase:
-      "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact PII before any other step caches an intermediate result. Every step after redact is allowed to be sloppy with retention because the secrets are already gone. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
+      "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact before any other step, so no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched. Redaction is pattern-based: a name, a street address or a number written another way is not found. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
     promptArgs: [
       { name: "text", description: "The raw text dump to clean (max 500KB)", required: true, substitute: "support log dump" },
     ],
@@ -2781,7 +2781,7 @@ const SKILLS_CSS = `
 .sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
 .sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
 .sk-flagship-tools > span { white-space:nowrap; }
-.sk-flagship-tools > span + span::before { content:"·"; padding:0 6px; }
+${sepRowCss(".sk-flagship-tools", 6)}
 .sk-flagship-cta { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--accent); }
 /* Equal columns on wide screens, so how many chips share a row does not hang on font metrics. */
 @media (min-width:641px){ .sk-rest-grid { display:grid !important; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); } .sk-rest-grid .sk-rest-chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } }
@@ -2812,7 +2812,7 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-tt thead { display:none; } .sk-tt tr { display:grid; grid-template-columns:minmax(0,1fr) max-content; border-bottom:1px solid var(--hairline); } .sk-tt td { border-bottom:0; } .sk-tt td.name { grid-row:1; grid-column:1; } .sk-tt td.price { grid-row:1; grid-column:2; } .sk-tt td.route, .sk-tt td.missing { grid-row:2; grid-column:1 / -1; padding-top:0; white-space:normal; overflow-wrap:break-word; } }
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
 .sk-wf li { position:relative; padding:10px 18px 10px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
-.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:10px; width:26px; height:26px; background:var(--panel); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
+.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:10px; width:26px; height:26px; background:var(--panel); color:var(--accent-lit); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
 `;
 
 const SKILLS_TABS = [

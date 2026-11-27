@@ -240,7 +240,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   projects nothing; and the word holds, in at `FUNDING_RUNWAY_DAYS` and out only past 1.5 times
   it on the whole-window fit (`clearDays` on the view; the held word is stored with the trail). A wallet with no
   reading inside the window (a chain turned off, a key removed) leaves the report and the stored
-  document, so its `unknown` never holds the whole word. Operator view only
+  document, so its `unknown` never holds the whole word. The Stellar
+  facilitator's line is `FACILITATOR_LOW_BALANCE_XLM` (default 1), the facilitator's own. Operator view only
   (`fundingRunway` on `/api/gateway-status`, with the figures); it makes no chain read, pages
   nothing, moves no money and leaves every alarm word as it was (`scripts/test-funding-runway.js`).
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is

@@ -24,8 +24,8 @@ const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-28", sha: "9dc03987f8340c1b", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
-  "src/privacy.js": { date: "2026-11-28", sha: "15529d0fb34f63b9", with: ["src/credits-figures.js"] },
+  "src/terms.js": { date: "2026-11-28", sha: "918e002fd687d63d", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
+  "src/privacy.js": { date: "2026-11-28", sha: "ad51fb73b28599d6", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -54,8 +54,8 @@ for (const [file, pin] of Object.entries(PINS)) {
 // main branch is at hand the test also reads main's history and fails when a
 // row main already has was rewritten (a changed hash under an old date).
 const RENDERED = {
-  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"], ["2026-11-28", "6464766f698bccdc"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"], ["2026-11-26", "58e3293b8fb4a807"], ["2026-11-28", "e4f8380856b67fb5"]] },
-  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"], ["2026-11-26", "2910e5ab1b4758b6"], ["2026-11-27", "78ea72c6271c2e9b"], ["2026-11-28", "855bb2e4452dd88c"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"], ["2026-11-26", "d61fcb07d2c4efc0"], ["2026-11-27", "5216daa1f3d4fc2b"], ["2026-11-28", "05c5ed039aca0a87"]] },
+  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "8fed2f147ef1ee84"], ["2026-11-25", "696c00279ca432d1"], ["2026-11-28", "6a9c9968ef4e7726"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "df3b68735a710e89"], ["2026-11-25", "61a8acc63764b77a"], ["2026-11-26", "58e3293b8fb4a807"], ["2026-11-28", "5f4f409b3ab90f55"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "0b275a7bdc3bc4ee"], ["2026-11-25", "cad695c8dc1c700d"], ["2026-11-26", "2910e5ab1b4758b6"], ["2026-11-27", "78ea72c6271c2e9b"], ["2026-11-28", "8663c916125e9b3c"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "e990e3381282fd66"], ["2026-11-25", "b24420d56f278b75"], ["2026-11-26", "d61fcb07d2c4efc0"], ["2026-11-27", "5216daa1f3d4fc2b"], ["2026-11-28", "5409296ed90bbc1e"]] },
   dpa: { off: [["2026-11-25", "f2425114421ddfba"]], on: [["2026-11-25", "f2425114421ddfba"]] },
 };
 {

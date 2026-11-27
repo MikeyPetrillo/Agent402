@@ -26,7 +26,7 @@ try {
     await page.waitForTimeout(300);
     const r = await page.evaluate(() => {
       // The element the widow pass edited most: the one whose text holds the most joiners.
-      const els = [...document.querySelectorAll("main a, main p, main li")].filter((e) => /[⁠ ]/.test(e.textContent));
+      const els = [...document.querySelectorAll("main a, main p, main li")].filter((e) => /[⁠ ]/.test(e.textContent) && !e.closest("details:not([open])"));
       els.sort((a, b) => (b.textContent.match(/[⁠ ]/g) || []).length - (a.textContent.match(/[⁠ ]/g) || []).length);
       const el = els[0];
       if (!el) return { found: false };

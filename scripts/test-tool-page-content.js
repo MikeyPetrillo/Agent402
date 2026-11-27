@@ -234,6 +234,25 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
     ok(creditsSalesEnabled() ? /AGENT402_CREDITS_KEY/.test(note) : /AGENT402_CREDITS_KEY issued earlier/.test(note), "MCP note: the credits clause follows the sales switch");
     const ib = decode(stripTags(toolPage("https://example.test", { ...plain, identityBound: true }, [])));
     ok(!/from an AGENT402_CREDITS_KEY|or from AGENT402_CREDITS_KEY/.test(ib), "MCP note: no credits clause on an identity-bound tool");
+    // A tool no credits key pays (identity-bound, or one that buys from an
+    // outside seller with our wallet) names no credits key in its MCP note,
+    // which would contradict its own fact line.
+    const noteOf = (def) => decode(stripTags((toolPage("https://example.test", def, []).match(/From an MCP client[\s\S]*?<p class="tp-sub">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    ok(/pays from a wallet/.test(noteOf(plain)) && /AGENT402_CREDITS_KEY/.test(noteOf(plain)), "MCP note: an ordinary paid tool names the wallet and the credits key");
+    for (const [what, extra] of [["identity-bound", { identityBound: true }], ["flagged as buying from an outside seller", { paysThirdPartySeller: true }], ["that spends our wallet before settlement", { spendsOwnWallet: true }]]) {
+      const n = noteOf({ ...plain, ...extra });
+      ok(/pays from a wallet\.$/.test(n) && !/AGENT402_CREDITS_KEY/.test(n), `MCP note: no credits key on a tool ${what} (${n.slice(-60)})`);
+    }
+  }
+  // A lead cut to its budget ends at a clause boundary, with every parenthesis closed, never inside a phrase.
+  {
+    const leadOfPage = (description) => decode(stripTags((toolPage("https://example.test", { ...plain, description }, []).match(/<p class="tp-lead">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    const long = "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup, no card on file, no monthly plan, no minimum spend and no contract of any kind at all.";
+    const lead = leadOfPage(long);
+    ok(/\.\.\.$/.test(lead) && /(accepted rail\)|no API key|no signup|no card on file|no monthly plan)\.\.\.$/.test(lead), `a cut lead ends at a clause boundary (${lead.slice(-50)})`);
+    ok((lead.match(/\(/g) || []).length === (lead.match(/\)/g) || []).length, "a cut lead closes every parenthesis it opens");
+    const flat = leadOfPage(`${Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ")}.`);
+    ok(/word\d+\.\.\.$/.test(flat), "a sentence with no clause boundary is still cut at a word");
   }
   ok(displayPrice("$3.3") === "$3.30" && displayPrice("$0.010") === "$0.01" && displayPrice("$0.001") === "$0.001" && displayPrice("$0.500") === "$0.50" && displayPrice("$2") === "$2.00", "displayPrice: one display form for catalog prices");
   {
@@ -280,6 +299,16 @@ try {
     ok(!/<a href=\\?"x\\?"/.test(html), `/tools/${slug}: no live link from an example string`);
   }
 
+  // The served pages: a route-execute tier says credits and cards do not pay
+  // it and names no credits key; an ordinary paid tool names one.
+  {
+    const noteIn = (html) => decode(stripTags((html.match(/From an MCP client[\s\S]*?<p class="tp-sub">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    const tier = await (await fetch(`${BASE}/tools/route-execute`)).text();
+    ok(/prepaid credits and cards do not pay it/.test(decode(stripTags(tier))), "/tools/route-execute: the fact line says credits and cards do not pay it");
+    ok(/pays from a wallet\.$/.test(noteIn(tier)) && !/AGENT402_CREDITS_KEY/.test(noteIn(tier)), `/tools/route-execute: the MCP note names no credits key (${noteIn(tier).slice(-70)})`);
+    const normal = await (await fetch(`${BASE}/tools/extract`)).text();
+    ok(/AGENT402_CREDITS_KEY/.test(noteIn(normal)), "/tools/extract: the MCP note names the credits key");
+  }
   const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
   const list = (Array.isArray(pricing) ? pricing : pricing.tools || pricing.endpoints || []).filter((t) => t.slug);
   ok(list.length >= 400, `catalog listed (${list.length})`);

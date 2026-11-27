@@ -18,18 +18,27 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import { bootServer } from "./lib/boot-server.js";
 import { buildList, readList, diffLists, scanPackages, withReadmeSection, README, README_START, README_END } from "./gen-official-surfaces.js";
 import { OFFICIAL_SENTENCE, OFFICIAL_SITE, OFFICIAL_CONNECTOR, OFFICIAL_PAGE_PATH, OFFICIAL_DATA_PATH, officialPackages, officialSurfacesDocument, officialSurfacesMarkdown, officialSurfacesRows } from "../src/official-surfaces.js";
 import { MCP_REGISTRY_AUTH_PATH, MCP_REGISTRY_AUTH_MAX_BYTES, registryAuthProof } from "../src/mcp-registry-auth.js";
 import { hiddenCharacters } from "../src/hidden-chars.js";
+import { LEGAL_ENTITY_SENTENCE } from "../src/legal-entity.js";
 import { REPO_URL, REPO_SLUG, REPO_NAMESPACE } from "../src/repo-link.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const text = (html) => String(html).replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+
+// --- the publisher is the one the manifests name --------------------------------
+{
+  const authors = ["mcp", "client", "tollbooth"].map((d) => String(JSON.parse(readFileSync(join(ROOT, d, "package.json"), "utf8")).author || ""));
+  const entity = OFFICIAL_SENTENCE.replace(/^.*published by /, "").replace(/\.$/, "");
+  ok(/ \(doing business as [^)]+\)$/.test(entity) && authors.every((a) => a.startsWith(`${entity} <`)), `the official sentence names the publisher as the package manifests name their author (${entity})`);
+}
 
 // --- the list equals the repository ------------------------------------------
 const fresh = buildList();
@@ -68,13 +77,13 @@ const fresh = buildList();
 
 // --- the wording ---------------------------------------------------------------
 {
-  ok(OFFICIAL_SENTENCE === "These are the official Agent402.tools packages and endpoints, published by Havok Holdings LLC.", `the statement is the first-party sentence ("${OFFICIAL_SENTENCE}")`);
+  ok(OFFICIAL_SENTENCE === `These are the official Agent402.tools packages and endpoints, published by ${LEGAL_ENTITY_SENTENCE}.`, `the statement is the first-party sentence ("${OFFICIAL_SENTENCE}")`);
   const doc = officialSurfacesDocument();
   const all = [JSON.stringify(doc), officialSurfacesMarkdown(), officialSurfacesRows().flat().join("\n"), readFileSync(new URL("../src/official-surfaces.js", import.meta.url), "utf8"), readFileSync(new URL("../src/mcp-registry-auth.js", import.meta.url), "utf8")].join("\n");
   ok(hiddenCharacters(all).length === 0, "no hidden character in the list, its renderings or the modules");
   ok(hiddenCharacters(`official​ packages`).length > 0, "control: the scan reports a zero-width character");
   ok(!/—/.test(all), "no em dash in the list or its renderings");
-  ok(doc.statement === OFFICIAL_SENTENCE && doc.publisher === "Havok Holdings LLC" && doc.site === "https://agent402.tools" && doc.hostedConnector === "https://agent402.tools/mcp" && doc.repository === REPO_URL && doc.mcpRegistry?.name === fresh.mcpRegistryName && doc.page === `${OFFICIAL_SITE}${OFFICIAL_PAGE_PATH}`, "the data names the publisher, the site, the hosted connector, the repository and the MCP Registry name");
+  ok(doc.statement === OFFICIAL_SENTENCE && doc.publisher === LEGAL_ENTITY_SENTENCE && doc.site === "https://agent402.tools" && doc.hostedConnector === "https://agent402.tools/mcp" && doc.repository === REPO_URL && doc.mcpRegistry?.name === fresh.mcpRegistryName && doc.page === `${OFFICIAL_SITE}${OFFICIAL_PAGE_PATH}`, "the data names the publisher, the site, the hosted connector, the repository and the MCP Registry name");
   ok(doc.packages.length === fresh.packages.length && doc.packages.every((p) => (p.registry === "npm" ? p.url === `https://www.npmjs.com/package/${p.name}` : p.url === `https://pypi.org/project/${p.name}/`)), "every package in the data links its own registry page");
 }
 

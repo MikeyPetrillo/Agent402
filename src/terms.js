@@ -461,13 +461,15 @@ ${ledgerFooterCompact()}`;
   // The short version, each sentence said in full in the section it names,
   // and the jump list read from the sections themselves.
   const summary = legalSummaryBox([
-    "You must be 18 or older.",
-    "Answers from the /v1 gateway and the model-backed tools are written in whole or in part by third-party AI models and may be inaccurate.",
-    `An x402 payment on our own routes settles only after a successful response, so an error is not charged.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""}`,
-    "If a defect on our side charged you for something that did not deliver, we repay the wallet that paid.",
-    "Monitors renew automatically until you cancel.",
-    "Total liability is capped at the greater of what you paid for the call at issue or one U.S. dollar.",
-    "A dispute not resolved informally in 30 days goes to binding individual arbitration or small-claims court; class actions are waived.",
+    "You must be 18 or older, or the age of majority where you live if that is higher.",
+    "Model-backed answers come from third-party AI models and may be inaccurate.",
+    `An x402 payment on our own routes settles only after a successful response.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""} Payments and Refunds list when a charge is owed back to the paying wallet.`,
+    "Monitors renew automatically until canceled.",
+    "Liability is capped at the greater of what you paid for the call at issue or one U.S. dollar; this limit does not reduce any refund or repayment these terms say we owe you.",
+    "A dispute unresolved informally after 30 days goes to binding individual arbitration or small-claims court; class actions are waived.",
+    "Either side may ask a court to stop infringement, unauthorized access or abuse.",
+    "Where the law allows, claims must be filed within one year.",
+    "This summary does not replace the full text below, which governs.",
   ]);
   const page = body.replace("<!--lg-top-->", `${summary}\n${legalJumpList(body)}`);
 

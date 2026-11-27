@@ -237,5 +237,12 @@ eq(tool.price, "$0.050", "priced from the MEASURED 616k-gas attest, not the 150k
 ok(35000 <= (50000 * 7) / 10, "gas ceiling under the margin share of price (micro-USD, no float)");
 ok(0.0277 < 0.035, "the first live run's bounded estimate clears the ceiling");
 
+// The buyer is told before paying that the record cannot be taken back and whom it names.
+{
+  const said = (d) => /The record is public(?:,| and) permanent\b[^.]*\bnames the payer\b/.test(String(d));
+  ok(said(ATTEST_TOOLS.find((t) => t.slug === "attest").description), "the attest description says the record is public, permanent and names the payer");
+  ok(!said("Writes an attestation on Base. The record names the payer.") && !said("The record is public and names the payer."), "control: a description without public or permanent is caught");
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`test-attest-kit: ${n} assertions ok`);

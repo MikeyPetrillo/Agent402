@@ -10,7 +10,7 @@ import { sampleLinkFor, SAMPLES } from "./sample-reports.js";
 // A long unbroken input (a token mint, a wallet) shows as head…tail in the
 // samples list, so it never breaks mid-string; the sample page shows it whole.
 const shortInput = (v) => (/^\S{25,}$/.test(String(v)) ? `${String(v).slice(0, 6)}…${String(v).slice(-4)}` : String(v));
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, sepRowCss } from "./ledger-chrome.js";
 import { monitorMapJson } from "./report-upgrade.js";
 import { priceUsdFor } from "./report-tiers.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
@@ -42,7 +42,7 @@ export const REPORTS_CSS = `
   .wrap{max-width:940px;margin:0 auto;padding:0 26px}
   @media screen{#app[data-api]{min-height:100vh}}
   .eyebrow{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
-  .eyebrow-tags{display:flex;flex-wrap:wrap;row-gap:4px}.eyebrow-tags>span{white-space:nowrap}.eyebrow-tags>span+span::before{content:"·";padding:0 10px}
+  .eyebrow-tags{display:flex;flex-wrap:wrap;row-gap:4px}.eyebrow-tags>span{white-space:nowrap}${sepRowCss(".eyebrow-tags", 10)}
   .samples-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:8px 28px;font-size:var(--fs-md);line-height:1.45}
   .samples-list a{color:var(--ink);text-decoration:none;overflow-wrap:anywhere}.samples-list a:hover{color:var(--accent)}.samples-list b{font-weight:600}
   .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
@@ -99,7 +99,7 @@ export const REPORTS_CSS = `
   .cite-run{white-space:nowrap}
   @media (max-width:600px){.cite-run{white-space:normal}.cite-gap::after{content:"\\200b"}}
   .report .rpt-note{font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin:12px 0 0;max-width:76ch}.report .rpt-note+.rpt-note{margin-top:4px}
-  .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}.rpt-meta>span+span::before{content:"·";padding:0 8px}
+  .rpt-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:10px;display:flex;flex-wrap:wrap;row-gap:2px}.rpt-meta>span{white-space:nowrap}${sepRowCss(".rpt-meta", 8)}
   .upsell{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);padding:24px 26px;margin-top:24px;box-shadow:inset 0 1px 0 var(--card-inset)}
   .upsell .k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
   .upsell h3{font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0;color:var(--ink)}

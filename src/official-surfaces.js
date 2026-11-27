@@ -12,8 +12,11 @@
 // and README.md holds the same section.
 import { readFileSync } from "node:fs";
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 
-export const OFFICIAL_PUBLISHER = "Havok Holdings LLC";
+// The publisher is named as each package manifest names its author: the
+// legal entity and the name it does business as.
+export const OFFICIAL_PUBLISHER = LEGAL_ENTITY_SENTENCE;
 export const OFFICIAL_SITE = "https://agent402.tools";
 export const OFFICIAL_CONNECTOR = `${OFFICIAL_SITE}/mcp`;
 /** Where the list is shown to a person, and where it is served as data. */

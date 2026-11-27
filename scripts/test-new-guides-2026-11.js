@@ -107,6 +107,32 @@ try {
     ok((await get("/guides")).text.includes(`href="${path}"`), `/guides lists ${path}`);
     ok((await get("/guides/sell-your-api-over-x402")).text.includes(`href="${path}"`), `the selling guide links ${path}`);
   }
+  // --- the Form 4 example and the card sentences ---------------------------
+  {
+    const { EDGAR_TOOLS } = await import("../src/tools/edgar-kit.js");
+    const { insiderTradesApiPage } = await import("../src/search-landings.js");
+    const list = EDGAR_TOOLS.find((t) => t.slug === "edgar-insider-trades");
+    const ex = list.discovery.output.example;
+    const row = ex.trades[0];
+    // A Form 4 row names a person: the published example names nobody real
+    // and no filing that could be looked up, while its input stays a ticker
+    // the tool answers.
+    ok(/^Example /.test(ex.name) && /^0+$/.test(ex.cik), `the example issuer is a made-up one (${ex.name}, ${ex.cik})`);
+    ok(row.displayNames.every((n) => /^EXAMPLE /.test(n)), `the example filer is a made-up one (${row.displayNames.join("; ")})`);
+    ok(/^0{10}-00-0{6}$/.test(row.accessionNumber) && row.url.includes(row.accessionNumber.replace(/-/g, "")), `the example accession number is a placeholder and its url carries it (${row.accessionNumber})`);
+    ok(list.discovery.input.ticker === "AAPL", "the example input stays a real ticker");
+    const catalog = { [list.route]: list, "POST /v1/insider-report": { route: "POST /v1/insider-report", slug: "insider-report", price: "$2", modelBacked: true, discovery: { input: { ticker: "AAPL" } } } };
+    const text = (html) => proseOf(html, "sl-wrap");
+    const off = insiderTradesApiPage(SITE, catalog, { storefront: false });
+    const on = insiderTradesApiPage(SITE, catalog, { storefront: true });
+    ok(/made-up issuer, filer and accession number/.test(text(off)), "the page says the example row is made up");
+    ok(/each row of a live answer links the filing itself/.test(text(off)) && !/; each row links the filing itself/.test(text(off)), "the page claims the filing link for live rows only");
+    ok(!/by card/i.test(text(off)) && !off.includes('<a href="/reports">Reports'), "with the storefront off the page offers no report by card");
+    ok(/People can buy the same report by card at Reports ?\./.test(text(on)) && /Reports by card/.test(text(on)), "with the storefront on the page offers the report by card");
+    ok(on.includes(`<a href="/reports">Reports</a>`) && on.includes(`<a href="/reports">Reports by card</a>`) && !/href="\/reports\/insider"[^>]*>(Reports by card|Insider flow reports)/.test(on), "the card sentences link /reports, not the free hub");
+    const html = (await get("/insider-trades-api")).text;
+    ok(!/by card/i.test(text(html)), "this boot holds no card key, and its page offers no report by card");
+  }
 } finally {
   await srv.stop();
 }

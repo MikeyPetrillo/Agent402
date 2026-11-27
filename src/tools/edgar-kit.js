@@ -955,13 +955,16 @@ EDGAR_TOOLS.push(
       },
       output: {
         example: {
-          cik: "0000320193",
-          name: "Apple Inc.",
+          // A made-up issuer, filer and accession number: a Form 4 row names
+          // a person, so the example never shows a real one beside a filing
+          // that does not exist.
+          cik: "0000000000",
+          name: "Example Issuer Inc.",
           windowDays: 30,
           total: 8,
           returned: 8,
           trades: [
-            { accessionNumber: "0001127602-25-009999", form: "4", filedDate: "2025-11-04", cik: "0001214128", displayNames: ["COOK TIMOTHY D (CIK 0001214128)"], url: "https://www.sec.gov/Archives/edgar/data/1214128/000112760225009999/xslF345X05/wf-form4.xml", primaryDocument: "xslF345X05/wf-form4.xml" },
+            { accessionNumber: "0000000000-00-000000", form: "4", filedDate: "2025-11-04", cik: "0000000001", displayNames: ["EXAMPLE FILER A (CIK 0000000001)"], url: "https://www.sec.gov/Archives/edgar/data/1/000000000000000000/xslF345X05/wf-form4.xml", primaryDocument: "xslF345X05/wf-form4.xml" },
           ],
         },
       },
