@@ -198,8 +198,8 @@ ok(runwayDays({}) === 3 && runwayDays({ FUNDING_RUNWAY_DAYS: "7" }) === 7 && run
   ok(farLine.status === "ok" && farLine.daysLeft > 3, `the same young drain with the line more than 3 days off reads ok (${farLine.daysLeft} days)`);
   // Not a drain still running: under the minimum readings, under the minimum
   // span, or ended (the latest reading is not lower than the one before).
-  const three = young(11).map(([t, v], i) => [t, i <= 21 ? 20 : 20 - 2 * (i - 21)]); // three falling readings
-  ok(projectRunway(three, 6, { now, days: 3 }).status === "ok", "a fall over fewer consecutive readings than a fit needs projects nothing");
+  const sparse = [...Array.from({ length: 17 }, (_, i) => [now - (24 - i) * H, 20]), [now - 4 * H, 18], [now, 16]]; // three falling readings across eight hours
+  ok(projectRunway(sparse, 6, { now, days: 3 }).status === "ok", "a fall over fewer consecutive readings than a fit needs projects nothing");
   const burst = Array.from({ length: 49 }, (_, i) => [now - (48 - i) * H / 2, i <= 40 ? 20 : 20 - (i - 40)]); // eight falls in four hours
   ok(projectRunway(burst, 6, { now, days: 3 }).status === "ok", "a fall over less than the minimum span projects nothing");
   const ended = [...young(11).slice(1).map(([t, v]) => [t - H, v]), [now, 9]];
