@@ -105,7 +105,7 @@ const secondSentence = (text) => {
 const pagesIn = (text) => [...new Set((text.match(/https?:\/\/[^\s)"';]+/g) || []).map((u) => u.replace(/[.,]$/, "")).filter((u) => !/\/mcp(\/credits)?$/.test(u)))];
 
 async function resolves(srv, text, what) {
-  const pages = pagesIn(text).filter((u) => u.startsWith(SITE));
+  const pages = pagesIn(text).filter((u) => { try { return new URL(u).origin === new URL(SITE).origin; } catch { return false; } });
   await ok(pages.length > 0, `${what} carries a web address on this site (${pages.join(", ")})`);
   for (const u of pages) {
     const r = await fetch(`${srv.url}${u.slice(SITE.length).split("#")[0]}`);

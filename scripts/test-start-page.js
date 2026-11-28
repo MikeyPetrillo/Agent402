@@ -25,6 +25,7 @@
 //     sentences are on /privacy.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { jsonLdBlocks } from "./lib/html-text.js";
 import { pageText } from "./lib/html-text.js";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -87,7 +88,7 @@ ok(apps.map((a) => a.name).join() === "On your phone,Claude desktop,Cursor,Claud
   ok(FREE_TIER_SLUGS.has(START_FIRST_PROMPT.slug) && isComputePayable({ slug: START_FIRST_PROMPT.slug, route: "POST /api/x", price: "$0.001" }), `the first prompt's tool is on the free list (${START_FIRST_PROMPT.slug})`);
   ok(phoneOff?.prompt === START_FIRST_PROMPT.text && cardOf(offHtml).includes(START_FIRST_PROMPT.text) && cardOf(onHtml).includes(START_FIRST_PROMPT.text), "the phone card ends on the first prompt, in both states");
   ok(/data-name="the connector address"/.test(offHtml) && /data-name="the first prompt"/.test(offHtml), "the address and the prompt sit in code blocks (each gets a copy button)");
-  const ld = JSON.parse(offHtml.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => m.replace(/^<script[^>]*>|<\/script>$/g, "")).find((j) => /"HowTo"/.test(j)));
+  const ld = JSON.parse(jsonLdBlocks(offHtml).find((j) => /"HowTo"/.test(j)));
   const step = ld.step.find((x) => x.name === "On your phone");
   ok(step && step.text.includes(install.hostedUrl) && step.text.includes(START_FIRST_PROMPT.text) && !/credit/i.test(JSON.stringify(ld)), "the page's structured data carries the phone step and offers no credits with sales off");
   ok(/<p class="st-ask"[^>]*>Ask this to check the connection:<\/p>\s*<div class="ml-code[^"]*" data-name="the first prompt"/.test(offHtml) && phoneOff.promptLabel === "Ask this to check the connection:", "the prompt's label is its own line, directly above the prompt block");
@@ -201,7 +202,7 @@ ok(allOn.includes(BASE_NO_GAS_PLAIN) && allOff.includes(BASE_NO_GAS_PLAIN) && !a
   setPublicIndexOfferedChains([]);
   // The structured data and the page a reader sees carry the same answers.
   const html = faqPage(ORIGIN);
-  const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => JSON.parse(m.replace(/^<script[^>]*>|<\/script>$/g, ""))).flat().find((j) => j["@type"] === "FAQPage");
+  const ld = jsonLdBlocks(html).map((b) => JSON.parse(b)).flat().find((j) => j["@type"] === "FAQPage");
   const seen = plain(html);
   const qs = (ld?.mainEntity || []).map((e) => e.name);
   ok(ld && [FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q].every((q) => qs.includes(q)) && new Set(qs).size === qs.length, `the FAQ structured data parses and holds the four questions once each (${qs.length} questions)`);

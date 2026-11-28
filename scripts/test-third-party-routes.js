@@ -4,6 +4,7 @@
 // definitions carry the flag and that both card-funded gates receive it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripElements } from "./lib/html-text.js";
 import { paysThirdParty } from "../src/third-party-routes.js";
 
 let failed = 0;
@@ -110,7 +111,7 @@ ok(/tool\.identityBound \|\| paysThirdParty\(tool\) \? \[\] : \["a credits key"\
   const { toolPage, toolList } = await import("../src/pages.js");
   const offers = (html) => {
     const own = html.slice(0, html.indexOf("</head>")) + html.slice(html.indexOf("<main"), html.indexOf("</main>"));
-    const text = own.replace(/<script[\s\S]*?<\/script>/g, (m) => (/ld\+json/.test(m) ? m : " ")).replace(/<style[\s\S]*?<\/style>/g, " ")
+    const text = stripElements(stripElements(own, ["script"], " ", (m) => /ld\+json/.test(m)), ["style"])
       // The share image's meta name and address hold the word and offer nothing.
       .replace(/twitter:card|\/tools\/[a-z0-9-]+\/card\b/g, " ")
       .replace(/prepaid credits and cards do not pay it\./g, " ");

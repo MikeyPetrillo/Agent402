@@ -42,7 +42,7 @@ globalThis.fetch = async (url, opts = {}) => {
 const tool = MACRO_TOOLS.find((t) => t.slug === "us-macro-series");
 const caught = async (p) => { try { await p; return null; } catch (e) { return e; } };
 try {
-  ok(tool && (tool.upstreamHosts || []).includes("api.bls.gov"), "us-macro-series declares api.bls.gov, the host the grader reads");
+  ok(tool && (tool.upstreamHosts || []).some((h) => h === "api.bls.gov"), "us-macro-series declares api.bls.gov, the host the grader reads");
   process.env.BLS_API_KEY = "ci-test-key";
   process.env.BLS_DAILY_MAX = String(BLS_RUN_READ_CAP);
   _resetUsMacroForTest();

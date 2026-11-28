@@ -12,7 +12,7 @@
 //   node scripts/test-crypto-history-stats-page.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { stripTags } from "./lib/html-text.js";
+import { stripTags, stripElements } from "./lib/html-text.js";
 
 const SITE = "https://agent402.tools";
 const PATH = "/crypto-history-stats-api";
@@ -24,7 +24,7 @@ const canonOf = (html) => (html.match(/<link rel="canonical" href="([^"]*)"/) ||
 const descOf = (html) => decode((html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "");
 const mainOf = (html) => { const start = html.indexOf('class="sl-wrap"'); const end = html.indexOf("<footer", start); return html.slice(start, end > start ? end : undefined); };
 /** The page's own prose: the main column with code blocks, scripts and styles removed. */
-const proseOf = (html) => decode(stripTags(mainOf(html).replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<pre[\s\S]*?<\/pre>/g, " "), " ")).replace(/\s+/g, " ").trim();
+const proseOf = (html) => decode(stripTags(stripElements(mainOf(html), ["script", "style", "pre"]), " ")).replace(/\s+/g, " ").trim();
 const words = (s) => s.split(/\s+/).filter(Boolean).length;
 
 // PORT=0, the bound port read back: no port is picked before the server binds it.

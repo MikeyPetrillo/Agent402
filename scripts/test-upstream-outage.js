@@ -460,7 +460,7 @@ try {
         && (await verdict("bls-pack", [step("bls-a", REFUSED)], blsRefuses, 400)) === null && (await verdict("bls-pack", [step("bls-a", REFUSED)], blsRefuses, 200)) === null,
         "(pack fields) an answer without the fields, a 400 and a 200 are not read by this rule (null: the caller's other rules grade them)");
       // The real tree: the packs declare what the rule reads.
-      ok([...packUpstreamHosts("forecasting-bake-off")].includes("api.bls.gov") && [...packUpstreamHosts("security-audit")].join() === "crt.sh" && packUpstreamHosts("decode-blob").size === 0 && packUpstreamHosts("no-such-pack").size === 0,
+      ok([...packUpstreamHosts("forecasting-bake-off")].some((h) => h === "api.bls.gov") && [...packUpstreamHosts("security-audit")].join() === "crt.sh" && packUpstreamHosts("decode-blob").size === 0 && packUpstreamHosts("no-such-pack").size === 0,
         "(pack fields) the pack runner's entries declare their hosts as literal lists, and a pack with no source declares none");
       ok(upstreamHostsForSlug("cert-transparency").size === 1 && upstreamHostsForSlug("us-macro-series").has("api.bls.gov") && upstreamHostsForSlug("stats-summary").size === 0, "(pack fields) a pack's host list is never read as a tool's own");
     }

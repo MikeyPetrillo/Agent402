@@ -15,6 +15,7 @@
 //   node scripts/test-pack-page-words.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
+import { stripTags } from "./lib/html-text.js";
 import { fragmentProseWords as proseWords, packPageProse } from "./lib/page-words.js";
 import { ALL_SKILL_PACKS, SKILL_PACKS, packAsListed, packPageCopy } from "../src/skills.js";
 import { attributionTailOf } from "../src/data-attribution.js";
@@ -27,7 +28,7 @@ const words = (s) => String(s ?? "").split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.
 // heading or its cell class) or an amount in any cell. A tool or route named
 // for prices ("Crypto price", /api/crypto-price) is a name, not an amount.
 const memberPriceIn = (table) => {
-  const heads = [...table.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+  const heads = [...table.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g)].map((m) => stripTags(m[1], "").trim());
   if (heads.some((h) => /\b(?:price|cost|usd|usdc)\b/i.test(h))) return `a "${heads.find((h) => /\b(?:price|cost|usd|usdc)\b/i.test(h))}" column`;
   if (/<t[dh]\b[^>]*class="[^"]*\bprice\b/.test(table)) return "a price cell";
   const text = table.replace(/<[^>]+>/g, " ");

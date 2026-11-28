@@ -11,7 +11,7 @@
 //   node scripts/test-new-guides-2026-11.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
-import { stripTags } from "./lib/html-text.js";
+import { stripTags, stripElements, decodeEntities } from "./lib/html-text.js";
 
 const SITE = "https://agent402.tools";
 let pass = 0, fail = 0;
@@ -24,8 +24,7 @@ const descOf = (html) => decode((html.match(/<meta name="description" content="(
 function proseOf(html, wrapClass) {
   const start = html.indexOf(`class="${wrapClass}"`);
   const end = html.indexOf("<footer", start);
-  const part = html.slice(start, end > start ? end : undefined)
-    .replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<pre[\s\S]*?<\/pre>/g, " ");
+  const part = stripElements(html.slice(start, end > start ? end : undefined), ["script", "style", "pre"]);
   return decode(stripTags(part, " ")).replace(/\s+/g, " ").trim();
 }
 const words = (s) => s.split(/\s+/).filter(Boolean).length;
@@ -110,7 +109,7 @@ try {
     // with the buyer SDK's real option and method, and the ceiling covers the
     // call the sample makes.
     {
-      const code = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"))
+      const code = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map((m) => decodeEntities(stripTags(m[1], "")))
         .find((c) => c.includes("wrapFetchWithPayment(fetch, client)")) || "";
       const cap = Number(/new Agent402\(\{ maxPerCallUsd: ([\d.]+) \}\)\.guardX402Client\(client\);/.exec(code)?.[1]);
       ok(code.includes('import { Agent402 } from "agent402-client";') && cap > 0 && code.indexOf("guardX402Client(client)") < code.indexOf("wrapFetchWithPayment(fetch, client)"),
