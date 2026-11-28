@@ -7,6 +7,7 @@
 // update the entry here in the same change. Tool links are resolved against
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
+import { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
@@ -507,13 +508,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.17.1",
+    install: "npx -y agent402-mcp@0.17.2",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -526,7 +527,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.2
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -744,7 +745,7 @@ const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid 
  *  Strands page names AgentCore too, so it carries AWS's notice as well. */
 export function integrationMarkNotice(i) {
   if (!i?.markOwner) return "";
-  const own = `Product names on this page are trademarks of their owners. ${i.pkg} is an independent package published by Havok Holdings LLC; it is not affiliated with, sponsored by or endorsed by ${i.markOwner}.`;
+  const own = `Product names on this page are trademarks of their owners. ${i.pkg} is an independent package published by ${LEGAL_ENTITY_SENTENCE}; it is not affiliated with, sponsored by or endorsed by ${i.markOwner}.`;
   return i.slug === "strands" ? `${own} ${AWS_MARK_NOTICE}` : own;
 }
 

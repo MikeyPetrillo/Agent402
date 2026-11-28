@@ -12,7 +12,9 @@
 //                     or src/server.js for an entry written there)
 //   skill pack pages  the newest commit touching the module that defines the
 //                     pack (a pack and a tool may share a name: /skills/<slug>
-//                     and /tools/<slug> are two pages with two sources)
+//                     and /tools/<slug> are two pages with two sources), or a
+//                     later one touching a module every pack page renders
+//                     (PACK_PAGE_MODULES)
 //   legal pages       the "last updated" date the page itself prints
 //   sample reports    the fixture's own generation date
 //   public reports    the report's publication date
@@ -58,11 +60,13 @@ export const PAGE_SOURCES = {
   "/integrations/claude-managed-agents": ["src/managed-agents-page.js"],
   "/pricing": ["src/ledger-pricing.js"],
   "/changelog": ["src/changelog.js"],
+  "/changelog/archive": ["src/changelog.js"],
   "/quickstart": ["src/quickstart.js"],
   "/what-is-x402": ["src/what-is-x402.js"],
   "/what-is-mpp": ["src/what-is-mpp.js"],
   "/how-to-pay": ["src/how-to-pay.js"],
   "/start": ["src/start-page.js", "src/base-no-gas.js"],
+  "/recipes": ["src/recipes-page.js"],
   "/speech": ["src/speech-page.js"],
   "/agentic-finance": ["src/agentic-finance.js"],
   "/x402-test": ["src/x402-test-page.js"],
@@ -98,6 +102,8 @@ export const PAGE_SOURCES = {
   "/pay-per-call-api": ["src/search-landings.js"],
   "/paid-mcp-tools": ["src/search-landings.js"],
   "/compare": ["src/search-landings.js"],
+  "/insider-trades-api": ["src/search-landings.js"],
+  "/crypto-history-stats-api": ["src/search-landings.js"],
   ...Object.fromEntries(Object.keys(CHAIN_PAGES).map((key) => [`/${key}`, ["src/market-page.js"]])),
 };
 
@@ -110,11 +116,18 @@ export const FAMILY_SOURCES = [
   ["/skills/", ["src/skills.js"]],
 ];
 
+/** Modules whose text every skill pack page (/skills/<slug>) renders beside
+ *  its own entry: a change to one moves every pack page's date, never back.
+ *  A listed module that is not on disk is skipped (the generator dates the
+ *  ones that exist, and the lookup reads only a date the table holds), so a
+ *  module may be listed in the change before the one that adds it. */
+export const PACK_PAGE_MODULES = ["src/skill-page-copy.js"];
+
 /** Pages that carry Article JSON-LD and are rendered by one module: their
  *  published date is that module's first commit, their modified date the
  *  page's lastmod. Family entries (blog, guides, learn, integrations, skill
  *  packs) are dated one by one in the table's `entries`. */
-export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/integrations/claude-managed-agents", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
+export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/integrations/claude-managed-agents", "/pay-per-call-api", "/paid-mcp-tools", "/compare", "/insider-trades-api", "/crypto-history-stats-api"];
 /** The module whose first commit dates each article page. */
 export function articleSourceFiles() {
   return [...new Set(ARTICLE_PAGES.map((p) => (PAGE_SOURCES[p] || [])[0]).filter(Boolean))].sort();
@@ -211,9 +224,22 @@ export function packLastmod(slug) {
   return file ? filesLastmod([file]) : null;
 }
 
+/** A pack page's date: its own, or the later date of a module every pack page
+ *  renders. A path outside /skills/<slug>, or an undated page, is unchanged. */
+function packPageDay(p, day) {
+  if (!day || !p.startsWith("/skills/")) return day;
+  const { files } = loadTable();
+  let out = day;
+  for (const f of PACK_PAGE_MODULES) { const d = validDay(files[f]); if (d && d > out) out = d; }
+  return out;
+}
+
 /** lastmod for a sitemap path, or null when nothing truthful is known. */
 export function pageLastmod(path) {
   const p = String(path || "").split("?")[0];
+  return packPageDay(p, ownLastmod(p));
+}
+function ownLastmod(p) {
   if (p === "/terms" || p === "/privacy" || p === "/dpa") return legalLastmod(p);
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
@@ -246,7 +272,7 @@ export function entryDates(path) {
 export function articleDates(path, { published: printed = null } = {}) {
   const p = String(path || "").split("?")[0];
   const entry = entryDates(p);
-  let modified = entry ? entry.modified : pageLastmod(p);
+  let modified = entry ? packPageDay(p, entry.modified) : pageLastmod(p);
   // A printed date later than the source's last change (a post committed
   // before its publication day) is the newest truthful date for both.
   if (validDay(printed) && (!modified || validDay(printed) > modified)) modified = validDay(printed);

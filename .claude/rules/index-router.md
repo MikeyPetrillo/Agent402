@@ -58,6 +58,62 @@ Loaded when an index, discovery, router or buyer file is read.
   `[x402-index] fallback passes <listed> rows (kept <n>) <origin hash>: pick= copy= vouch= stamp= carry=
   quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
   over 100 ms (`scripts/test-fallback-crawl-turn.js`).
+- **Document parse:** a fetched document of 256 KB or more (`OFF_LOOP_MIN_CHARS`, `src/crawl-parse.js`)
+  is parsed in a child process (`src/crawl-parse-child.js`) and rebuilt on the main thread a piece per
+  crawl-lane turn; the value and the error for invalid JSON are JSON.parse's own, and a shorter document
+  is parsed in place in its lane turn. When the child cannot start, answers nothing (the step timeout),
+  is paused or stopped, the document is parsed in place and `[x402-index] crawl parse <origin hash>
+  <file> <size class>: parsed on the main thread (<reason>)` is logged; three such failures in a row
+  leave it alone for ten minutes. A document of `DECLINED_IN_PLACE_MAX_CHARS` or more is never parsed
+  in place on any of those paths (`inPlaceRefusal`): it is not parsed and the last read is kept
+  (`too-large-to-parse`, below). `CRAWL_PARSE_WORKER=off` keeps every parse in place, that one
+  included, and switches nothing else: the lane-step walks below stay. The parser is a process, never a thread: a parser
+  that runs out of memory inside JSON.parse ends its process, and no reading of the text bounds the
+  tree for every shape (an integer-like key reserves a slot per index below it). Its own heap limit
+  (`heapMb`, 512, its `--max-old-space-size`) is the bound: a document whose tree passes it ends the
+  child alone (killed by a signal while holding it) and is NOT parsed in place (`KEEP_PREVIOUS`,
+  "skip and keep previous"): `parseInCrawlLane` throws `KeptPrevious`, every catch between it and the
+  crawl's top passes it on as it does a LandingHeld, and the seller's entry stays byte for byte as the
+  last read left it (an origin with none stays unlisted); `crawlSeller` answers `{ keptPrevious }`,
+  drops the validators, counts no read, and the scheduled turn passes under the word `parser-ended`
+  in the cycle's `skipped`; its later scheduled turns pass the same way with no request until the
+  parser's memory of the document ends (`crawlParseRecallMs`, a day), an explicit crawl still reads
+  and a completed read ends the wait (`scripts/test-crawl-kept-backoff.js`). The keep is bounded: a
+  `parser-ended` turn is the seller's document, so it never moves the hold start (`noteTurnNotRead`), and
+  after `KEPT_PREVIOUS_MAX_IN_A_ROW` (3) kept reads in a row, or `CRAWL_HOLD_MS` since the first, the
+  entry reads the seller's failed read and its last listing is no longer held. A registry pass ends the
+  same way (its last pass's rows stand; the word is in its status `error` and `keptPrevious`), and
+  `crawlParse` on `/api/gateway-status` reads `registry-kept` while one does (`discoveryKeptPrevious`;
+  the status Worker and the heartbeat page on it; `fallback` / `paused` / `off` / `ok` otherwise). One line: `crawl parse <origin hash> <file> <size class>:
+  not parsed, last read kept (<word>)`. The child first measures the text (`estimateTreeBytes`) and
+  declines a document that plainly will not fit (half the limit); a declined document under
+  `DECLINED_IN_PLACE_MAX_CHARS` (16 M characters: every seller document) is parsed in place, a longer
+  one is not (`too-large-to-parse`: the costliest declined shapes take about 50 bytes of heap per
+  character in place, about 3 GB for a 64 MB registry list). Neither counts toward the pause. A document
+  that ended or was declined is known by the hash of its text (taken a chunk per turn) and answered the
+  same way with no child started until its text changes or a day passes (`recallMs`). It gets
+  the helper allowlist environment (`childEnv`: no key, no store address, no NODE_OPTIONS) and two
+  flags of its own, takes the text a chunk per lane turn, gives a finished document's memory back at
+  once, ends 30 seconds after its queue empties (a start is a fork of the server) and at the start of
+  the drain (`stopCrawlParse()`; a parse waiting on it is handed back at once). One document at a
+  time. `scripts/test-crawl-parse-contained.js` searches shapes for heap per character and runs the
+  costliest at both byte caps under the image's NODE_OPTIONS. Depth is never a refusal to split (the
+  splitter and the rebuild use explicit stacks). A registry list read in one fetch is parsed the same way
+  and folded 1,000 rows per lane turn; a manifest crawl whose list passes 2,000 rows runs its merge,
+  vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk
+  stretch of 100 ms or more logs `[x402-index] crawl parse|walk ... <origin hash> <file or row count>
+  [<size class>]: longest=` (never the host; a walk over rows has no size class). A new whole-document walk in the crawl goes through
+  `crawlWalk` or `crawlWalkLaned` (`scripts/test-crawl-parse-off-loop.js`). The probe-example walk, the
+  payment-signal walk and the packing of an OpenAPI seller's rows (`packedRowsSteps`: the bytes
+  `JSON.stringify({ tools, routes })` gives) are laned walks; a laned slice of 20 ms or more is
+  recorded under `crawl-walk <name>` (a fallback pass under `crawl-fallback <name>`) for the
+  `[loop-lag]` line. The quote probes' row passes (`enrichLiveQuotes`: gone-route drop, carries, POST
+  marks, the pick of a short list) take a lane turn of their own in the crawl, timed as
+  `crawl-quote-prep`. On a heap of gigabytes the long turns left in a cycle are V8's marking steps
+  inside whichever turn allocates while a full collection marks; no gc entry reports them and no
+  slice ends them (`scripts/test-crawl-cycle-heap-turns.js` lists them apart and bounds the rest);
+  a stall inside such a window carries `gc-marking` among its turns (`markingDuring`, `src/loop-lag.js`;
+  the stall ring keeps it beside three named turns).
 - **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
   seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
   matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
@@ -146,6 +202,22 @@ Loaded when an index, discovery, router or buyer file is read.
   (`quoteRefusedUntil`, 3 days doubling to 14, carried across rebuilds, persisted with the row;
   a re-registration lifts it); a 5xx, a redirect, a timeout or a failed connection starts no
   hold, so the next crawl asks again (`scripts/test-quote-probe-free-routes.js`).
+- **One unpaid request pass per route per interval:** whatever makes a route due, the scheduled
+  crawl sends one route at most one unpaid price read per `ROUTE_PROBE_MIN_INTERVAL_DAYS`
+  (default 7, at most 30; `off` or 0 removes the interval; `ROUTE_PROBE_MIN_INTERVAL_MS` in
+  `src/crawl-cadence.js`, printed on /crawler). Each pass is stamped on the row (`unpaidAskedAt`,
+  carried across rebuilds and persisted). Exceptions: a pass that got no answer of the route's own
+  (a 5xx, a redirect, a connection that did not finish) keeps one retry on the next crawl
+  (`unpaidRetryAt`; a first "no such route" keeps the read that confirms the miss); a price the
+  seller's documents changed since the pass (`unpaidAskedDeclared`) is read once; a registration
+  asks at once (`routeHeldToInterval` in `src/x402-index.js`). The paywall check (below) is one
+  more request to the seller's cheapest paid route and keeps its own cadence, because the
+  reputation record's paywall metric needs its samples: a passing verdict stays on the rotation
+  and a failed one keeps `X402_PAYWALL_FAILED_RECHECK_HOURS`; only a no-verdict reading of the
+  route's own 400, 415 or 422 is held to the interval, where the re-check window asked it daily
+  (`paywallShapeRefusalHeld`). The per-path back-off (`CRAWL_BACKOFF_STEPS_MS`, in process
+  memory) still applies under it (`scripts/test-route-probe-interval.js`, a week of crawls on a
+  fake clock).
 - **Sellers the router lists and never buys from (`src/router-listed-only.js`):** a seller on the list keeps its rows in discovery and reads `listed_only` on every chain (first in `REASON_PRECEDENCE`, `src/dispatch-eligibility.js`; the seller's own page says there is nothing to fix on the listing); only route-and-execute, which buys and hands the answer on, refuses it. The list names no one: each entry is a digest of a lowercased registrable domain (the one `scripts/gen-third-party-hashes.js` writes), a host matches by itself or any parent of two labels or more, and `ROUTER_EXCLUDED_SELLER_HASHES` (a comma list of digests) adds entries at runtime (`scripts/test-router-listed-only.js`). Every public surface (the legend, the refusal bodies, `/sell`, the changelog) says only that the router lists the seller and does not buy from it, and that a buyer can pay it directly: no surface gives a reason, and the same suite fails one that does.
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
@@ -198,6 +270,51 @@ Loaded when an index, discovery, router or buyer file is read.
   as Base, so a seller's day and the lane's day are one day across chains.
   `unprovenLaneAtLivePayTo` (`src/dispatch-eligibility.js`) reads the lane's verdict at the
   address the live 402 names on the paying chain. Suite: `scripts/test-evm-unproven-chains.js`.
+- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today three
+  families: `ip-geolocation`, the time zone or local time of an IP included, `coin-price-on-date`,
+  a coin's price on a past date, which needs a coin word, a price word and a past date or "historical"
+  and never a statistic, forecast or alert word, and `stock-price-history`, a stock word or a ticker
+  on the closed `STOCK_TICKERS` list with a price word and a history word and no other content word,
+  on only while no stock history tool is listed, `stockToolServed`) of tasks this host's catalog does not do, read by `/api/find`,
+  `/api/route` and route-and-execute so the three agree. A query is in a family only when it asks
+  for the capability in so many words (`asks`); every other query is ranked and served as before.
+  A gap query is a miss unless a candidate row is NAMED for the capability in its slug or name
+  (`gapNamedBy`; a description never clears it), and a named row, an outside seller's included,
+  is the pick over a better-scored near name. The family's `terms` join the scored terms so a
+  named row is a candidate however the query was worded. Fields: `capabilityGap` (the family id)
+  and `capabilityGapCovered` on any answer to a gap query that scored a row; on a miss
+  `/api/route` and `/api/find` add `weakMatches: true`, `weak: true` on every row and a `hint`
+  (`/api/find` gets there through `rarestTermCovered: false`, which its weak-match marking
+  reads). A new
+  family adds `asks`, `covers`, `terms` and a case with controls in
+  `scripts/test-capability-gaps.js`.
+- **Phrase aliases and arithmetic in words:** `src/phrase-aliases.js` is an opt-in table
+  (`PHRASE_ALIASES`, slug to phrases) beside the curated `aliases`, read by `/api/find` and
+  `/api/route` for this host's own rows only. A phrase scores each of its words like a covered name
+  when its words stand next to each other in the query, in any order, the function words in
+  `PHRASE_SKIP` aside, and nothing for one word of it; a curated alias is read word by word as
+  before, so a name whose single words belong to other tools goes in the phrase table.
+  `arithmeticAsk` (`src/query-terms.js`) reads a number, one operator word (plus, minus, times,
+  multiplied by) and a number as the calculator's task on both surfaces: the expression's words are
+  set aside and `calc` is scored for them; the operator outside an expression is an ordinary word.
+  A new phrase or operator comes with its neighbors' controls (`scripts/test-phrase-aliases.js`,
+  the route and find tables in `scripts/test-find-ranking.js`).
+- **Route-and-execute refusals before any purchase:** a gap task with no named row answers 404
+  ("No tool in this catalog does that task"), nothing run and nothing charged, with the
+  `include:"external"` retry named only when external dispatch is on. The external leg holds the
+  same rule (`gapNamedCandidates`): for a gap task only an outside candidate named for the
+  capability (slug or name) is judged, probed or bought, in the resolver (gate reason
+  `capability_gap`) and again in the handler; none left is the same uncharged 404, before any
+  spend reservation. A candidate that is a
+  chat completion (`chatFieldsMissing`: its route ends `/chat/completions`, or ends `/messages`
+  on a POST AND its category or tags name a model category (never the bare word `chat`) or its declared request contract names `model` or `messages`; a bare `/messages` route is
+  never asked) is skipped when the call lacks the chat fields it needs: the ones its request
+  contract requires among `model`, `messages`, `prompt` and `input`, or `model` and `messages`
+  when it declares none. The next candidate is tried first (trace step `chat_fields_missing`);
+  with none left the answer is 400 naming each field as `params.<field>` (the error carries
+  `missing`), before any booking or signature. `contractFieldsMissing` is the after-the-fact
+  twin: it names the contract's required body fields the call lacked when the seller's paid
+  answer was a 400 or 422.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
 - **Per-minute spend ceilings:** `SOR_SPEND_CAP_ATOMIC` (atomic USDC, default 2000000) is the
   alarm on what `payX402` holds for outside sellers in one minute, summed across buyers

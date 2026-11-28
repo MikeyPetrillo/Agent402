@@ -61,13 +61,39 @@ function stateOf(req) {
   return req && typeof req === "object" && Object.hasOwn(req, STATE) ? req[STATE] : null;
 }
 
+let paidAmbient = null;
+/** The server: whether the call running now belongs to a request whose
+ *  payment is final before its run (its settle point returned success, it is
+ *  the resend of a payment settled first, or it was final before the handler). */
+export function setPaidBeforeRunAmbient(fn) { paidAmbient = typeof fn === "function" ? fn : null; }
+/** Mark a request's scope: its payment was final before its handler ran (a
+ *  Tempo push transfer, on chain before the request arrived), so a refusal
+ *  of our own making inside the run would be a charged failure. */
+export function markFinalBeforeHandler(scope) { if (scope && typeof scope === "object") scope.finalBeforeHandler = true; }
+/** What the server's reader answers from a request's scope: paid before its
+ *  run when the payment is FINAL: it was final before the handler, it is the
+ *  resend of a payment settled first, or its settle point returned success.
+ *  A settlement still in flight is not a payment yet, and one that failed
+ *  never was: a call running beside the settle point (a second leg of the
+ *  same run) reads unpaid until the settlement succeeds. */
+export function scopePaidBeforeRun(scope) {
+  return !!scope && typeof scope === "object" && (scope.finalBeforeHandler === true || scope.settledFirstResend === true || settleFirstSucceeded(scope.settleFirstRequest));
+}
+/** True when the run this call belongs to is already paid for, so a refusal
+ *  of our own making here would be a charged failure (src/tools/sec-rate.js
+ *  never refuses such a read for its pace). False with no reader registered. */
+export function paidBeforeRunHere() {
+  if (!paidAmbient) return false;
+  try { return paidAmbient() === true; } catch { return false; }
+}
+
 /** Arm a request: its payment is settled by `run()` at the settle point.
  *  `run` resolves once the payment settled and throws the refusal otherwise.
  *  `reason` is why the run settles first. Returns the state, or null when the
  *  request cannot carry one. */
 export function armSettleFirst(req, { run, reason = null } = {}) {
   if (!req || typeof req !== "object" || typeof run !== "function") return null;
-  const state = { armed: true, reason, run, promise: null, settled: null, refusal: null, holds: new Map() };
+  const state = { armed: true, reason, run, promise: null, succeeded: false, failed: false, settled: null, refusal: null, holds: new Map() };
   try { Object.defineProperty(req, STATE, { value: state, enumerable: false, configurable: true }); } catch { return null; }
   return state;
 }
@@ -86,6 +112,36 @@ export function disarmSettleFirst(req) {
 export function settleFirstReasonOf(req) { return stateOf(req)?.reason ?? null; }
 /** True when this request was armed and its settle point was reached. */
 export function settleFirstStarted(req) { return !!stateOf(req)?.promise; }
+/** True only once this request's settle point returned success: false while
+ *  the settlement is in flight and after it failed. */
+export function settleFirstSucceeded(req) { return stateOf(req)?.succeeded === true; }
+/** The settlement the run this call belongs to has in flight: a promise that
+ *  ends when its outcome is known and never rejects, or null when the run has
+ *  none (not armed, settle point not reached, or the outcome already known).
+ *  A refusal of our own making is held until it ends: answered while the
+ *  payment is still being taken, it would be a charged failure if the
+ *  settlement then succeeds (src/tools/sec-rate.js waits on it). */
+export function settleInFlightHere() {
+  let r = null;
+  if (ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  if (!s || !s.promise || s.succeeded || s.failed) return null;
+  return s.promise.then(() => {}, () => {});
+}
+
+/** True while the run this call belongs to is armed and has not reached its
+ *  settle point: the server armed it from a verified payment, its handler is
+ *  still running, and its first paid upstream call will settle that payment.
+ *  False for every other run (never armed, the settle point reached, or the
+ *  handler ended). A refusal of our own making answered to one leg of such a
+ *  run would be a charged failure if another leg then settles, so the pace
+ *  holds it (src/tools/sec-rate.js). False with no reader registered. */
+export function settleArmedHere() {
+  let r = null;
+  if (ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  return !!s && s.armed === true && !s.promise;
+}
 
 /** Record the settlement this request's settle point made. */
 export function markSettledFirst(req, info) {
@@ -114,7 +170,7 @@ export function settleBeforeUpstream(req = null) {
   s.promise = (async () => s.run())();
   // The refusal is read by the helper that awaits it; a second reader (a
   // later upstream call) reads the same one. Never an unhandled rejection.
-  s.promise.catch((e) => { s.refusal = e; });
+  s.promise.then(() => { s.succeeded = true; }, (e) => { s.refusal = e; s.failed = true; });
   return s.promise;
 }
 

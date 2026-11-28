@@ -375,6 +375,46 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const bad = scan(SKILL_PACKS);
   ok(bad.length === 0, `every dollar figure in pack prose is that pack's derived price${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
+// A pack's prompt, workflow and page copy hold example amounts too (a loan of
+// $300,000, a $100k threshold), so there the rule reads the price-shaped ones:
+// a figure under one dollar, and any figure in a sentence that states a
+// budget. Each must equal the pack's own PACK_PRICES entry; a budget under
+// the price would have the agent following the prompt decline the payment.
+// A member tool's price is not typed here (its tool page carries it).
+{
+  const { ALL_SKILL_PACKS, PACK_PRICES, packPageCopy } = await import("../src/skills.js");
+  const FIGURE = /\$(\d[\d,]*(?:\.\d+)?)(?![\d,.]*\d)(?![kKmM]\b)/g;
+  const texts = (p) => {
+    const out = [["claudePrompt", p.claudePrompt], ...(p.workflow || []).map((w, i) => [`workflow[${i}]`, w])];
+    if (p.toolSlugs && !p.control) for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(["page lead", c.lead], ["page use", c.use], ...(c.steps || []).map((w, i) => [`page step ${i + 1}`, w])); }
+    return out.filter(([, t]) => t);
+  };
+  const scan = (packs) => {
+    const bad = new Set();
+    for (const p of packs) for (const [field, text] of texts(p)) for (const sentence of String(text).split(/(?<=[.!?;])\s+/)) {
+      const budget = /\bbudget\b/i.test(sentence);
+      for (const m of sentence.matchAll(FIGURE)) {
+        const n = Number(m[1].replace(/,/g, ""));
+        if (!(budget || n < 1)) continue;
+        const want = PACK_PRICES[p.slug];
+        if (!(Number.isFinite(want) && Math.abs(n - want) < 1e-9)) bad.add(`${p.slug}.${field} quotes $${m[1]} (pack price ${want === undefined ? "unknown" : `$${want}`})`);
+      }
+    }
+    return [...bad];
+  };
+  const fake = (claudePrompt, workflow = []) => [{ slug: "macro-dashboard", control: true, claudePrompt, workflow }];
+  const own = PACK_PRICES["macro-dashboard"];
+  ok(scan(fake("Return the snapshot. Budget ~$0.01 paid.")).length === 1 && scan(fake("Return it. Budget ≤ $5 even paid.")).length === 1, "control: a typed budget in a pack prompt that is not the pack price is reported");
+  ok(scan(fake("Done.", ["Cost: extract is wallet-only ($0.005); the rest is free."])).length === 1, "control: a typed tool price in a pack workflow is reported");
+  ok(scan(fake(`Budget: $${own} for the one pack call. Compare $300,000 at 6.5% with a $100k floor; expect $1896/mo.`)).length === 0, "control: the pack's own price and example amounts pass");
+  const budgets = ALL_SKILL_PACKS.filter((p) => /\bbudget\b[^.;]*\$\d/i.test(p.claudePrompt || "")).length;
+  ok(budgets >= 10, `pack prompts state ${budgets} budgets - if this hits zero the check below is vacuous`);
+  const bad = scan(ALL_SKILL_PACKS);
+  ok(bad.length === 0, `every budget and sub-dollar figure in a pack's prompt, workflow and page copy is that pack's derived price${bad.length ? ` (${bad.length}) - ${bad.join(" | ")}` : ""}`);
+  const { readFileSync: read } = await import("node:fs");
+  const src = read(new URL("../src/skills.js", import.meta.url), "utf8");
+  ok(!/[Bb]udget:? [≤~]? ?\$\d/.test(src), "no pack prompt types its budget: each reads PACK_PRICES");
+}
 
 // --- the media tiers in llms-full.txt and the "most tools" band -------------
 // The image and video paragraph typed five prices beside their routes; they

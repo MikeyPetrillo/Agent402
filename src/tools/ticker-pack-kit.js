@@ -44,6 +44,7 @@ import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { stoppedForLength, trimToCompleteBlock, reportChat, costOf, textOf } from "../report-synthesis.js";
 import { checkReportGrounding, combineGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fetchXmlText, edgarUserAgent } from "./edgar-kit.js";
+import { secPaced } from "./sec-rate.js";
 import { mapLimit } from "./map-limit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
@@ -205,10 +206,12 @@ export async function scanInfoTableForIssuer(url, state, opts = {}) {
   const fetchImpl = opts.fetchImpl || fetch;
   const reportDate = opts.reportDate;
   const maxBytes = opts.maxBytes || HOLDER_MAX_BYTES;
-  const res = await fetchImpl(url, {
+  // In its turn at the pace every SEC read shares (src/tools/sec-rate.js);
+  // the read's own timeout starts when the request does.
+  const res = await secPaced(() => fetchImpl(url, {
     headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" },
     signal: AbortSignal.timeout(opts.timeoutMs || XML_TIMEOUT_MS),
-  });
+  }));
   if (!res || !res.ok) throw new Error(`EDGAR XML HTTP ${res ? res.status : "no-response"}`);
   const dec = new TextDecoder("utf-8");
   let buf = "", bytes = 0, totalRows = 0, truncated = false;
@@ -948,6 +951,7 @@ export const TICKER_PACK_TOOLS = [
     category: "llm",
     price: TICKER_PACK_TIERS["ticker-pack"].price,
     description: "One ticker, one purchase, the full picture (model-backed). Runs the company due-diligence dossier (SEC filings, XBRL financials, grounded web research), the Form 4 insider-flow report with the actual transactions parsed, and a 13F institutional-holder sample read live off SEC EDGAR full-text search, then stitches them into ONE cited report: company, filings, insider flow, institutional holders and what to check next, with a merged source list and downloadable data appendices. Cheaper than buying the parts separately. SEC EDGAR data, not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    pageSummary: "One cited, model-backed report on a US ticker, built from three parts. It combines the company due-diligence dossier (SEC filings, XBRL financials, web research), the Form 4 insider-flow report and a 13F institutional-holder sample, with a merged source list and data appendices. SEC EDGAR data, not investment advice. Not cached.",
     tags: ["research", "due-diligence", "bundle", "sec", "edgar", "13f", "holders", "insider", "form-4", "stocks", "premium", "agentic-finance", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 90 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeTickerPackHandler("ticker-pack"),

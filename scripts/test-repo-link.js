@@ -43,7 +43,14 @@ process.env.AGENT402_REPO_URL = OVERRIDE;
 const reread = await import(`../src/repo-link.js?override=${Date.now()}`);
 ok(reread.REPO_URL === OVERRIDE, `AGENT402_REPO_URL overrides the default (got ${reread.REPO_URL})`);
 ok(reread.REPO_SLUG === "some-org/Agent402", "the slug follows the override");
-ok(reread.REPO_NAMESPACE === "io.github.some-org", "the registry namespace follows the override");
+ok(reread.REPO_NAMESPACE === "io.github.some-org", "the account namespace follows the override");
+// The MCP Registry name is the domain's, not the repository account's: moving
+// the repository does not rename the registry entry.
+{
+  const profiles = await import(`../src/org-profiles.js?override=${Date.now()}`);
+  const server = JSON.parse(readFileSync(join(ROOT, "mcp/server.json"), "utf8"));
+  ok(profiles.MCP_REGISTRY_NAME === server.name && !profiles.MCP_REGISTRY_NAME.startsWith("io.github."), `the MCP Registry name does not follow the override (${profiles.MCP_REGISTRY_NAME})`);
+}
 ok(reread.repoUrl("wiki/Security-Model") === `${OVERRIDE}/wiki/Security-Model`, "paths follow the override");
 delete process.env.AGENT402_REPO_URL;
 

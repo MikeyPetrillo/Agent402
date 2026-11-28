@@ -163,7 +163,7 @@ function whyCompareHtml() {
 
 /** The rows, each a kicker and a one-line heading on the left; on the
  * right one sentence, at most two proof links, and the full claim (with any
- * further proof links) behind "how it works". */
+ * further proof links) behind "details". */
 /** A point's text as HTML: escaped, with a `field` in backticks set as code. */
 export function whyTextHtml(text) { return esc(text).replace(/`([^`<]+)`/g, "<code>$1</code>"); }
 function whyPointsHtml() {
@@ -173,7 +173,7 @@ function whyPointsHtml() {
       <div><div class="why-k">${esc(w.kicker)}</div><h3>${esc(w.t)}</h3></div>
       <div class="why-body">
         <p>${esc(w.s)}</p>
-        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>how it works +</summary><p><strong>${esc(w.h)}</strong> ${whyTextHtml(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
+        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>details +</summary><p><strong>${esc(w.h)}</strong> ${whyTextHtml(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
       </div>
     </div>`).join("");
 }
@@ -186,9 +186,9 @@ export function whyDocsSectionHtml() {
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 22px;">${countWord(WHY_POINTS.length).replace(/^./, (c) => c.toUpperCase())} claims, each linked to the surface that proves it.</p>
       <div class="why-list">${whyPointsHtml()}
       </div>
-      <h3 id="why-compare" style="font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:34px 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>
+      <details class="doc-more" id="why-compare" style="margin-top:28px;"><summary>Side by side with the other ways in</summary>
       ${whyCompareHtml()}
-      <div style="height:44px;"></div>
+      </details>
       </section>
 `;
 }

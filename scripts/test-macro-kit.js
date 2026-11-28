@@ -165,6 +165,25 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
       ok(bg.join() === [Y - 1, Y].sort().join(), `the boot pass reads this year and last year once each, with no request (${bg.join(", ")})`);
       t0 = Date.now(); r = await h("treasury-yield-history")({ days: 250 });
       ok(r.count === 250 && Date.now() - t0 < 50 && slowReads.length === before + 2, "after the boot pass a 250-day window is served from memory");
+      // 4b. A buyer who arrives while the boot pass is still reading (a new
+      //     container, a slow source) waits on that same read and is served
+      //     from it: no second read of a year, no 503, and the next call is
+      //     served from memory.
+      _resetTreasuryYieldCacheForTest(); failWith = 0; delay = 250;
+      {
+        const from = slowReads.length;
+        startTreasuryYieldRefresh({ firstDelayMs: 0 });
+        await new Promise((res) => setTimeout(res, 60)); // the pass has started, nothing is held yet
+        const started = slowReads.slice(from).sort().join();
+        let first = null, firstErr = null;
+        t0 = Date.now();
+        try { first = await h("treasury-yield-curve")({}); } catch (x) { firstErr = x; }
+        const waited = Date.now() - t0;
+        stopTreasuryYieldRefresh();
+        ok(started === [Y - 1, Y].sort().join() && !firstErr && first?.recordDate && !first.stale && slowReads.length === from + 2 && waited < 600, `a call during the boot pass is served from that pass's read, with no read of its own (${firstErr?.statusCode ?? first?.recordDate}, ${slowReads.length - from} reads, ${waited} ms)`);
+        t0 = Date.now(); r = await h("yield-curve-spread")({});
+        ok(r?.asOf === TREASURY_YIELD_SOURCE && Date.now() - t0 < 50 && slowReads.length === from + 2, "the next call after it is served from the warm copy");
+      }
       // 5. Stale has an age limit: held rows whose last good read is older than
       //    TREASURY_YIELD_MAX_AGE_MS are not served (503, nothing charged), and
       //    the call still starts a read; under the limit they are served stale.

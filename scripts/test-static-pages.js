@@ -60,6 +60,7 @@ const PAGES = [
   { path: "/what-is-mpp", titleSubstr: "MPP" },
   { path: "/how-to-pay",  titleSubstr: "How to pay" },
   { path: "/start",       titleSubstr: "Start here" },
+  { path: "/recipes",     titleSubstr: "Things you can do" },
   { path: "/speech",      titleSubstr: "Speech" },
   { path: "/agentic-finance", titleSubstr: "Agentic Finance" },
   { path: "/docs",         titleSubstr: "Docs" },
@@ -411,7 +412,7 @@ try {
   // The hero is the agent story: no report button, no card, one primary pill.
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/start"') && /btn-primary" href="\/start">Add to your agent</.test(hero), "hero primary is Add to your agent, to /start");
-  ok(/btn-secondary" href="\/tools">Browse tools</.test(hero), "hero secondary is Browse tools");
+  ok((hero.match(/class="btn btn-[a-z]+"/g) || []).length === 1, "the hero carries one action (the nav links /tools)");
   // "Add to your agent" lands on /docs#add, which leads with the no-terminal
   // path (a custom connector in the Claude app), then the terminal lines.
   {

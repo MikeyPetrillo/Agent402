@@ -23,8 +23,8 @@ import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { AUDIO_ZDR_MODELS } from "../src/openrouter-audio-policy.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-requireUpstreamCosts("test-tts-elevenlabs");
+import { costsOrStandInFromCatalog } from "./lib/stand-in-costs.js";
+const COSTS = await costsOrStandInFromCatalog("test-tts-elevenlabs");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -64,15 +64,15 @@ for (const slug of ["tts", "tts-hd"]) {
   ok(t.chain[0] === t.model, `${slug}: the documented model is the first link`);
   for (const model of t.chain) {
     const row = upstreamCosts().speech[model];
-    ok(Number.isFinite(row) && row > 0, `${slug}: a private per-char row exists for ${model}`);
-    ok(row * t.maxChars <= price * 0.7 + 1e-12, `${slug}: ${t.maxChars} chars on ${model} stays within 70% of $${price}`);
+    COSTS.rate(`${slug}: the private per-char row for ${model}`, () => ok(Number.isFinite(row) && row > 0, `${slug}: a private per-char row exists for ${model}`));
+    COSTS.rate(`${slug}: ${model} at the cap within the margin share`, () => ok(row * t.maxChars <= price * 0.7 + 1e-12, `${slug}: ${t.maxChars} chars on ${model} stays within 70% of $${price}`));
   }
   ok(bySlug[slug].discovery.inputSchema.properties.text.description.includes(`max ${t.maxChars} chars`), `${slug}: the documented cap matches the enforced ${t.maxChars}`);
 }
 for (const [tier, t] of Object.entries(STT_TIERS)) {
   const rate = upstreamUsdPerMinute(t.diarizeModel);
-  ok(Number.isFinite(rate), `${tier}: per-minute row known for ${t.diarizeModel}`);
-  ok(t.maxMinutes * rate <= STT_MARGIN * t.priceUsd + 1e-12, `${tier}: diarized worst case within the margin bound of $${t.priceUsd}`);
+  COSTS.rate(`${tier}: the private per-minute row for ${t.diarizeModel}`, () => ok(Number.isFinite(rate), `${tier}: per-minute row known for ${t.diarizeModel}`));
+  COSTS.rate(`${tier}: the diarized worst case within the margin bound`, () => ok(t.maxMinutes * rate <= STT_MARGIN * t.priceUsd + 1e-12, `${tier}: diarized worst case within the margin bound of $${t.priceUsd}`));
 }
 
 // --- voices ----------------------------------------------------------------
@@ -412,7 +412,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
     const price = ttsQuoteUsd(slug, TTS_TIERS[slug].maxChars);
     for (const id of TTS_BACKUP_MODELS) {
       const row = upstreamCosts().speech[id];
-      ok(Number.isFinite(row) && row * TTS_TIERS[slug].maxChars <= price * 0.7 + 1e-12, `${slug}: backup ${id} fits within 70% of $${price}`);
+      COSTS.rate(`${slug}: backup ${id} within the margin share`, () => ok(Number.isFinite(row) && row * TTS_TIERS[slug].maxChars <= price * 0.7 + 1e-12, `${slug}: backup ${id} fits within 70% of $${price}`));
     }
   }
 }

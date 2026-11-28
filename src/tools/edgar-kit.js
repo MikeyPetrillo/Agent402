@@ -19,6 +19,7 @@
 //     so we use assertPublicUrl + native fetch for the EDGAR-specific UA.
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, currentBudget, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { secPaced } from "./sec-rate.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
 import { markResaleCleared } from "../resale-terms.js";
 
@@ -66,7 +67,8 @@ async function edgarGetJsonOnce(url) {
   // sockets far past whatever gate is supposed to be holding the line. A read
   // that outlives its cap is a 503 naming the upstream and the step.
   const ctx = { label: "EDGAR", step: "document", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
-  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/json" } }, ctx);
+  // In its turn at the one pace every SEC read shares (src/tools/sec-rate.js).
+  const res = await secPaced(() => upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/json" } }, ctx));
   const text = await bodyUnderDeadline(res.text(), ctx);
   if (!res.ok) {
     // 404 from data.sec.gov usually means "unknown CIK" or "no XBRL for this
@@ -654,11 +656,23 @@ export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs =
 
 // The control query's verdict: true when the index answers it with hits. A
 // kept verdict is reused within its TTL; a read in flight is shared; a read
-// that fails throws the 503 and leaves nothing kept.
+// that fails throws the 503 and leaves nothing kept. A shared read the SEC
+// pace refused (secBusy, src/tools/sec-rate.js) was judged in the scope of
+// the request that started it, which may be unpaid: a request waiting on it
+// makes its own read, judged in its own scope, so a run already paid for is
+// never answered another run's pace refusal.
 async function eftsIndexAnswering(getJson, control, cache, clock) {
   const kept = cache ? cache.get(getJson) : null;
   if (kept?.pending) {
-    try { return await kept.pending; } catch { throw eftsNotAnswering("the confirming read failed"); }
+    try { return await kept.pending; }
+    catch (e) {
+      if (!e?.secBusy) throw eftsNotAnswering("the confirming read failed");
+      let own;
+      try { own = !eftsEmpty(await getJson(eftsUrl(typeof control === "function" ? control() : control))); }
+      catch (e2) { if (e2?.secBusy) throw e2; throw eftsNotAnswering("the confirming read failed"); }
+      if (cache && !cache.get(getJson)?.pending) cache.set(getJson, { answering: own, at: clock() });
+      return own;
+    }
   }
   if (kept && clock() - kept.at < (kept.answering ? EFTS_CONTROL_YES_TTL_MS : EFTS_CONTROL_NO_TTL_MS)) return kept.answering;
   const pending = (async () => !eftsEmpty(await getJson(eftsUrl(typeof control === "function" ? control() : control))))();
@@ -803,7 +817,7 @@ async function fetchInformationTableUrl(cikInt, accession) {
 async function fetchXmlText(url) {
   const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "EDGAR", step: "XML attachment", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
-  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx);
+  const res = await secPaced(() => upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx));
   if (!res.ok) {
     if (res.status === 404) throw Object.assign(bad("EDGAR XML attachment not found (filing may not have the expected layout)", 422), { upstreamStatus: 404 });
     throw Object.assign(bad(`EDGAR XML HTTP ${res.status}`, res.status >= 500 ? 502 : 422), { upstreamStatus: res.status });
@@ -955,13 +969,16 @@ EDGAR_TOOLS.push(
       },
       output: {
         example: {
-          cik: "0000320193",
-          name: "Apple Inc.",
+          // A made-up issuer, filer and accession number: a Form 4 row names
+          // a person, so the example never shows a real one beside a filing
+          // that does not exist.
+          cik: "0000000000",
+          name: "Example Issuer Inc.",
           windowDays: 30,
           total: 8,
           returned: 8,
           trades: [
-            { accessionNumber: "0001127602-25-009999", form: "4", filedDate: "2025-11-04", cik: "0001214128", displayNames: ["COOK TIMOTHY D (CIK 0001214128)"], url: "https://www.sec.gov/Archives/edgar/data/1214128/000112760225009999/xslF345X05/wf-form4.xml", primaryDocument: "xslF345X05/wf-form4.xml" },
+            { accessionNumber: "0000000000-00-000000", form: "4", filedDate: "2025-11-04", cik: "0000000001", displayNames: ["EXAMPLE FILER A (CIK 0000000001)"], url: "https://www.sec.gov/Archives/edgar/data/1/000000000000000000/xslF345X05/wf-form4.xml", primaryDocument: "xslF345X05/wf-form4.xml" },
           ],
         },
       },

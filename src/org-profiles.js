@@ -4,12 +4,20 @@
 // the repository, the X account, our npm and PyPI packages, and our entry in
 // the MCP Registry. A third-party directory page about us is never one.
 // scripts/test-org-same-as.js fails when a module writes its own list.
-import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
 
 export const X_PROFILE_URL = "https://x.com/Agent402Tools";
 
+/** The MCP Registry namespace: the reverse DNS of agent402.tools, granted by
+ *  the proof the domain serves (src/mcp-registry-auth.js). It names the
+ *  domain, so it does not follow the repository account. */
+export const MCP_REGISTRY_NAMESPACE = "tools.agent402";
+
 /** The MCP Registry name, the same one mcp/server.json publishes. */
-export const MCP_REGISTRY_NAME = `${REPO_NAMESPACE}/agent402`;
+export const MCP_REGISTRY_NAME = `${MCP_REGISTRY_NAMESPACE}/agent402`;
+
+/** Registry search for our name (every version). */
+export const MCP_REGISTRY_SEARCH_URL = `https://registry.modelcontextprotocol.io/v0/servers?search=${MCP_REGISTRY_NAME}`;
 
 /** Our MCP Registry entry, latest version. */
 export const MCP_REGISTRY_ENTRY_URL = `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(MCP_REGISTRY_NAME)}/versions/latest`;

@@ -196,6 +196,7 @@ import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
 import { sellerReputation, sellerDeliveryRoutes, toolReputationOf, TOOL_REPUTATION_LEGEND } from "./seller-reputation.js";
+import { capabilityGap, gapNamedBy } from "./capability-gaps.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { walkBazaarPages, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
@@ -208,7 +209,8 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
+import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns, substringMatcher, arithmeticAsk } from "./query-terms.js";
+import { phraseAliasHits } from "./phrase-aliases.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -304,7 +306,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS, QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS, QUOTE_REFUSED_BACKOFF_MS, QUOTE_REFUSED_BACKOFF_MAX_MS, ROUTE_PROBE_MIN_INTERVAL_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant, revisitHintMsOf } from "./seller-load.js";
@@ -325,6 +327,7 @@ import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 import { noteTurn, timeSpan, runAsJob } from "./active-jobs.js";
+import { parsesOffLoop, parseOffLoop, inPlaceRefusal, crawlParseRecallMs, KEEP_PREVIOUS } from "./crawl-parse.js";
 import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
@@ -796,8 +799,12 @@ class IndexCache extends Map {
     // (src/seller-tool-cap.js) and then cleaned, so the route index, the
     // persist, the replica and every reader hold the same list.
     v = cleanSellerEntry(capSellerEntry(v));
+    const prev = super.get(origin);
+    // A row equal in every field to the one it replaces stays that object
+    // (see keepUnchangedRows): what readers built from it is kept with it.
+    v = keepUnchangedRows(prev, v);
     cacheVersion++;
-    routeIndexNoteSet(origin, super.get(origin), v);
+    routeIndexNoteSet(origin, prev, v);
     super.set(origin, v);
     if (listings) listingsChanged(origin);
     if (replicaObserver) replicaObserver("cache", "set", origin, v);
@@ -807,13 +814,14 @@ class IndexCache extends Map {
     if (super.has(origin)) {
       cacheVersion++;
       routeIndexNoteSet(origin, super.get(origin), null);
+      decoratedByOrigin.delete(origin);
       if (replicaObserver) replicaObserver("cache", "delete", origin);
     }
     const had = super.delete(origin);
     if (had && listings) listingsChanged(origin);
     return had;
   }
-  clear() { cacheVersion++; super.clear(); routeIndexReset(); if (replicaObserver) replicaObserver("cache", "clear"); }
+  clear() { cacheVersion++; super.clear(); routeIndexReset(); decoratedByOrigin.clear(); if (replicaObserver) replicaObserver("cache", "clear"); }
 }
 const cache = new IndexCache();
 // The Bazaar maps the router reads, observed the same way (keyed by name so
@@ -1981,7 +1989,7 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   const doCrawl = crawl || (async (o, opts) => {
     const read = await crawlSeller(o, opts);
     if (read?.heldBy && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60, heldBy: read.heldBy };
-    return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
+    return cache.get(o) || (read?.landingHeld || read?.keptPrevious ? { error: read.error } : undefined);
   });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
@@ -2065,6 +2073,16 @@ function sellerSummary(origin, v) {
 
 // Per-source state for the discovery panel on /index.
 const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origins, error }
+/** The registry sources whose last pass held a document the crawl did not
+ *  parse (KeptPrevious): their rows stand from an earlier pass. The
+ *  `crawlParse` word on /api/gateway-status reads it (src/crawl-parse.js
+ *  crawlParseStatus), so a whole-list document past the parse limit is named
+ *  rather than kept in silence. */
+export function discoveryKeptPrevious() {
+  const out = [];
+  for (const [source, st] of discoveryStatus) if (st?.keptPrevious) out.push({ source, word: st.keptPrevious });
+  return out;
+}
 // Per-origin synthesized tool list assembled directly from Bazaar resource
 // entries. Used as a fallback for sellers whose /.well-known/x402 endpoint
 // 404s (the bulk of the unhealthy cohort — they only ever published settled
@@ -2340,9 +2358,15 @@ export function isJunkOrigin(origin) {
 // independently SSRF-guarded and byte-capped — the pager just chains them.
 // Accept must say JSON: safeFetch's default Accept prefers text/html, and
 // content-negotiating registries (GoPlausible's) serve their docs page for it.
+const safeFetchDiscoveryBody = (url, opts) => safeFetch(url, opts);
+let discoveryFetchBody = safeFetchDiscoveryBody;
+/** Test seam: replace the read under the discovery fetcher, keeping its options and its parse (null restores safeFetch). */
+export function __setDiscoveryBodyFetchForTest(fn) { discoveryFetchBody = typeof fn === "function" ? fn : safeFetchDiscoveryBody; }
 async function safeFetchJson(url) {
-  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
-  return JSON.parse(html);
+  const { html } = await discoveryFetchBody(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
+  // In the crawl lane, and off the loop when long (see parseInCrawlLane): a
+  // registry's whole list is the largest document this module reads.
+  return parseInCrawlLane(html, { origin: url, doc: "registry-list" });
 }
 let discoveryFetchJson = safeFetchJson;
 /** Test seam: replace the discovery page fetcher (null restores safeFetch). */
@@ -2360,6 +2384,9 @@ export function __discoveryStateForTest() {
 /** The module internals a test needs to replay the pre-streaming fold. */
 export const __discoveryHelpersForTest = { extractOrigin, pathSellersByHost, pathSellerOwning, rollHistory, MAX_DISCOVERED_SELLERS };
 
+// Rows of a single-fetch registry list folded per crawl-lane turn (the paged
+// walk's page size).
+const DISCOVERY_FOLD_TURN_ROWS = 1000;
 async function discoverOneSource(source, selfOrigin) {
   const status = { url: source.url, fetchedAt: Date.now(), resources: 0, origins: 0, error: null };
   try {
@@ -2435,7 +2462,16 @@ async function discoverOneSource(source, selfOrigin) {
         data.data ||
         (Array.isArray(data) ? data : []);
       status.resources = list.length;
-      fold(list);
+      // A long list is folded a page's worth of rows per crawl-lane turn, as
+      // the paged walk above folds it; nothing is published until the end.
+      if (!Array.isArray(list) || list.length <= DISCOVERY_FOLD_TURN_ROWS) fold(list);
+      else {
+        const from = { origin: source.url, doc: `registry-list ${list.length}-rows` };
+        for (let i = 0; i < list.length; i += DISCOVERY_FOLD_TURN_ROWS) {
+          await crawlLaneTurn();
+          crawlWalk("registry-fold", from, () => fold(list.slice(i, i + DISCOVERY_FOLD_TURN_ROWS)));
+        }
+      }
     }
     if (toolsByOrigin) {
       // Atomic swap-in (per-origin) to avoid stale partial state mid-update.
@@ -2476,7 +2512,10 @@ async function discoverOneSource(source, selfOrigin) {
       discoveredSeeds.add(o);
     }
   } catch (e) {
+    // A registry document not parsed (KeptPrevious) ends the pass like a
+    // failed read: nothing above was swapped in, so the rows of the last pass stand.
     status.error = String(e.message || e);
+    if (e?.keptPrevious) status.keptPrevious = e.keptPrevious;
   }
   discoveryStatus.set(source.name, status);
 }
@@ -2977,7 +3016,7 @@ export function normaliseOpenapiTools(openapi, originUrl) {
 // one such document held the loop for most of a second in one turn.
 const CRAWL_SLICE_MS = 10;
 async function normaliseOpenapiToolsSliced(openapi, originUrl) {
-  return scopeRowsToSeller(await runCrawlLaneAsync(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+  return scopeRowsToSeller(await crawlWalkLaned("rows", { origin: originUrl, doc: "openapi-rows" }, normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
 }
 // ONE LANE for the crawl's sliced work. Twenty-five crawls run at once, and a
 // slice that yields with setImmediate comes back in the next loop iteration
@@ -3024,7 +3063,7 @@ function fallbackPassMeter() {
     /** A pass run in this turn: its time is one stretch. */
     sync(name, gen) { const t0 = performance.now(); const v = runSteps(gen); const d = performance.now() - t0; ms[name] += d; stretch(d); return v; },
     /** A pass run in the crawl lane: each slice is one stretch. */
-    lane(name, gen) { return runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { ms[name] += d; stretch(d); }); },
+    lane(name, gen) { return runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { ms[name] += d; stretch(d); noteTurn(`crawl-fallback ${name}`, Date.now() - d, d); }); },
     line(originUrl, listed, kept, { always = false } = {}) {
       const total = FALLBACK_PASS_NAMES.reduce((sum, n) => sum + ms[n], 0);
       if (!always && total <= FALLBACK_PASS_LOG.totalMs && !FALLBACK_PASS_NAMES.some((n) => ms[n] > FALLBACK_PASS_LOG.passMs)) return null;
@@ -3054,9 +3093,104 @@ function crawlLanePump() {
 // waiting crawl its body), and each continuation parsed its document before
 // the loop moved on: twelve multi-megabyte documents parsed back to back held
 // one iteration for about 100 ms. Through the lane an iteration parses one.
-async function parseInCrawlLane(text) {
-  await crawlLaneTurn();
-  return laneSpan("crawl-parse", () => JSON.parse(text));
+//
+// A long document is not parsed here at all: one JSON.parse is one stretch,
+// and a document of a few megabytes dense in small objects held the loop for
+// over a second. It is parsed in a child process and rebuilt on this thread a
+// piece per lane turn (src/crawl-parse.js); the value, and the error for a
+// document that is not JSON, are the ones JSON.parse gives. When the child
+// cannot do it the document is parsed here as before, and a line says so.
+// A document that ended the parser, or that is too long to parse here
+// (inPlaceRefusal: declined, or handed back by a parser that could not start,
+// timed out, is paused or stopped; CRAWL_PARSE_WORKER=off excepted), is not
+// parsed at all: this throws a KeptPrevious error, and the
+// crawl that read it keeps what it held from its last read (crawlSeller; the
+// registry pass, discoverOneSource), with one line naming the document by hash.
+// `docRef` ({ origin, doc }) names the document in the log lines only.
+async function parseInCrawlLane(text, docRef = null) {
+  let mode = "in place", longest = 0, total = 0, pieces = 1;
+  try {
+    if (parsesOffLoop(text)) {
+      const r = await parseOffLoop(text, { turn: crawlLaneTurn, span: (fn) => laneSpan("crawl-parse", fn) });
+      if (r.ok) { mode = "in pieces"; longest = r.longestMs; total = r.totalMs; pieces = r.pieces; return r.value; }
+      if (r.keep) {
+        mode = "not parsed";
+        console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: not parsed, last read kept (${r.keep})`);
+        throw new KeptPrevious(r.keep);
+      }
+      console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: parsed on the main thread (${r.reason})`);
+    } else {
+      const word = inPlaceRefusal(text);
+      if (word) {
+        mode = "not parsed";
+        console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: not parsed, last read kept (${word})`);
+        throw new KeptPrevious(word);
+      }
+    }
+    await crawlLaneTurn();
+    const t0 = performance.now();
+    try { return laneSpan("crawl-parse", () => JSON.parse(text)); }
+    finally { longest = total = performance.now() - t0; }
+  } finally {
+    if (longest >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: ${mode} longest=${Math.round(longest)}ms total=${Math.round(total)}ms pieces=${pieces}`);
+  }
+}
+/** A document the crawl does not parse (src/crawl-parse.js KEEP_PREVIOUS):
+ *  `keptPrevious` is the reason word. Every catch between the parse and the
+ *  crawl's top passes it on, as it does a LandingHeld. */
+class KeptPrevious extends Error {
+  constructor(word) { super(`document not parsed (${word}); the last read is kept`); this.keptPrevious = word; }
+}
+// One line per crawl-parse or document-walk stretch of this length or more,
+// so a long turn names its document: a short hash of the origin (the key the
+// fallback-pass line carries, never the origin), which document, its size class.
+const CRAWL_TURN_LOG = { turnMs: 100 };
+/** Test hook: the long-turn line's threshold; returns the earlier one. */
+export function __setCrawlTurnLogForTest(turnMs) { const was = CRAWL_TURN_LOG.turnMs; if (Number.isFinite(turnMs)) CRAWL_TURN_LOG.turnMs = turnMs; return was; }
+const DOC_SIZE_CLASSES = [[256 * 1024, "under-256KB"], [1024 * 1024, "256KB-1MB"], [4 * 1024 * 1024, "1-4MB"], [12 * 1024 * 1024, "4-12MB"], [64 * 1024 * 1024, "12-64MB"]];
+function docSizeClass(text) {
+  const n = typeof text === "string" ? text.length : (Number(text) || 0);
+  for (const [under, name] of DOC_SIZE_CLASSES) if (n < under) return name;
+  return "over-64MB";
+}
+function crawlDocLabel(docRef, text = docRef?.chars) {
+  const key = docRef?.origin ? createHash("sha256").update(String(docRef.origin)).digest("hex").slice(0, 8) : "--------";
+  // A walk over rows names its row count; only a document has a size class.
+  const known = typeof text === "string" || Number(text) > 0;
+  return `${key} ${docRef?.doc || "document"}${known ? ` ${docSizeClass(text)}` : ""}`;
+}
+// A walk over a parsed document (or the rows read from it) that runs in one
+// stretch: a named span, and the long-turn line when it passes the threshold.
+function crawlWalk(name, docRef, fn) {
+  const t0 = performance.now();
+  try { return laneSpan(`crawl-walk ${name}`, fn); }
+  finally { if (crawlWalkObserver) crawlWalkObserver(name, docRef); noteCrawlWalk(name, docRef, performance.now() - t0); }
+}
+let crawlWalksWhole = false;
+/** Test hook: run every laned walk whole in one lane turn (the unsliced control a suite compares against). */
+export function __setCrawlWalksWholeForTest(on) { crawlWalksWhole = on === true; }
+let crawlWalkObserver = null;
+/** Test hook: called with (name, docRef) as each walk stretch ends (a laned walk: each slice). */
+export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof fn === "function" ? fn : null; }
+function noteCrawlWalk(name, docRef, ms) {
+  if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(docRef)}: longest=${Math.round(ms)}ms`);
+}
+// The slice a laned walk is cut at. A suite that counts slices sets it to 0
+// (every step its own slice): at 10 ms the count depended on whether one
+// document's walk happened to run past 10 ms on that machine, that run.
+let crawlWalkSliceMs = CRAWL_SLICE_MS;
+/** Test hook: the laned walks' slice length in ms (0 = one step per slice); returns the earlier one. */
+export function __setCrawlWalkSliceForTest(ms) { const was = crawlWalkSliceMs; crawlWalkSliceMs = Number.isFinite(ms) && ms >= 0 ? ms : CRAWL_SLICE_MS; return was; }
+/** The same for a walk written as steps: run in the crawl lane a slice at a
+ *  time, its longest slice read against the threshold. */
+async function crawlWalkLaned(name, from, gen) {
+  if (crawlWalksWhole) { await crawlLaneTurn(); return crawlWalk(name, from, () => runSteps(gen)); }
+  let longest = 0;
+  // A slice is cut at CRAWL_SLICE_MS, but one step of the walk may run past
+  // it: a long slice is recorded under the walk's name, as a span is, so the
+  // [loop-lag] line names it (noteTurn keeps only stretches worth naming).
+  try { return await runCrawlLaneAsync(gen, crawlWalkSliceMs, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
+  finally { noteCrawlWalk(name, from, longest); }
 }
 // A crawl's synchronous stretch, timed under its name for the [loop-lag]
 // line (src/active-jobs.js): a stall inside a crawl continuation named
@@ -3181,8 +3315,11 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (base == null) return [];
   // One answer for the whole document: if anything in it is sold, rows the
   // seller left unannotated are stamped free instead of carrying no `paid`.
-  const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
+  // Each of these reads every operation, so each is a step of its own.
+  const documentDistinguishesPaidOperations = yield* openapiHasPaymentSignalSteps(openapi);
+  yield;
   logUnknownPaymentKeys(openapi, originUrl);
+  yield;
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
     // Apply the basePath unless the document already spells it out (some specs
@@ -3686,11 +3823,18 @@ export function normaliseManifestTools(manifest, originUrl, { examples = null } 
  *  operations, into the crawl-local `examples` Map, keyed by the route the
  *  OpenAPI reader gives the operation. For the unpaid quote probe only (see
  *  src/probe-example.js); never put on a row. */
-export function openapiProbeExamples(openapi, originUrl, examples) {
+export function openapiProbeExamples(openapi, originUrl, examples) { return runSteps(openapiProbeExamplesSteps(openapi, originUrl, examples)); }
+/** The same walk as steps (a yield every WALK_STEP_PATHS paths), for the crawl
+ *  lane: the paths are read in the document's order, as Object.entries reads them. */
+const WALK_STEP_PATHS = 256;
+function* openapiProbeExamplesSteps(openapi, originUrl, examples) {
   if (!(examples instanceof Map) || !openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return examples;
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return examples;
-  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
+  const paths = openapi.paths, names = Object.keys(paths);
+  for (let at = 0; at < names.length; at++) {
+    if (at && at % WALK_STEP_PATHS === 0) yield;
+    const rawPath = names[at], methods = paths[rawPath];
     if (examples.size >= MAX_PROBE_EXAMPLES) break;
     if (!methods || typeof methods !== "object" || !Object.hasOwn(methods, "post")) continue;
     const ex = openapiOperationExample(methods.post, openapi);
@@ -4546,15 +4690,24 @@ function logUnknownPaymentKeys(openapi, originUrl) {
 // value of every path item (array items included) and ignores the listing
 // filters: a priced operation that is deprecated, or on a path never listed,
 // still counts.
-export function openapiHasPaymentSignal(openapi) {
+export function openapiHasPaymentSignal(openapi) { return runSteps(openapiHasPaymentSignalSteps(openapi)); }
+/** The same reading as steps (a yield every WALK_STEP_PATHS path items), for
+ *  the crawl lane; a throw while reading reads false, as it does whole. */
+function* openapiHasPaymentSignalSteps(openapi) {
   const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : undefined;
   if (!paths) return false;
-  try {
-    return Object.values(paths).some((item) =>
-      item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething));
-  } catch {
-    return false;
+  let names;
+  try { names = Object.keys(paths); } catch { return false; }
+  for (let at = 0; at < names.length; at++) {
+    if (at && at % WALK_STEP_PATHS === 0) yield;
+    try {
+      const item = paths[names[at]];
+      if (item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething)) return true;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 // How mergeOpenapiIntoBazaar (further down) combines the two sources. The
@@ -4576,12 +4729,23 @@ export function openapiAllOperationRoutes(openapi, originUrl) {
   return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
 }
 function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
+  return runSteps(openapiAllOperationRoutesSteps(openapi, originUrl));
+}
+/** The crawl's copy: the same list, read in crawl-lane slices (a document may
+ *  hold hundreds of thousands of paths). `from` names it in the long-turn line. */
+async function openapiAllOperationRoutesSliced(openapi, originUrl, from) {
+  return scopeRowsToSeller(await crawlWalkLaned("routes", from, openapiAllOperationRoutesSteps(openapi, originUrl)), originUrl);
+}
+// One step per FALLBACK_STEP_ROWS paths; the document is read only.
+function* openapiAllOperationRoutesSteps(openapi, originUrl) {
   const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : null;
   if (!paths || typeof paths !== "object") return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base === null || base === undefined) return [];
   const declared = [];
+  let seen = 0;
   for (const rawPath of Object.keys(paths)) {
+    if (++seen % FALLBACK_STEP_ROWS === 0) yield;
     const item = paths[rawPath];
     if (item === null || typeof item !== "object") continue;
     const route = routeUnderBase(base, rawPath);
@@ -4965,6 +5129,20 @@ export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_F
   const at = Number(pw.at);
   return !(at > 0) || now - at >= windowMs;
 }
+/** Did this seller's paywall route answer our bare request with a refusal of
+ *  its shape (a 400, 415 or 422: no verdict) inside the per-route interval
+ *  (ROUTE_PROBE_MIN_INTERVAL_MS)? Asking again would read the same answer,
+ *  and until now the re-check window asked it daily. Nothing else is held
+ *  here: a passing verdict stays on the rotation (the reputation record's
+ *  paywall metric needs its samples, src/seller-reputation.js), a failed one
+ *  keeps its re-check window, and a probe of ours that did not complete or
+ *  one taken at a template path is asked again as before. */
+export function paywallShapeRefusalHeld(pw, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0) || !pw || typeof pw !== "object") return false;
+  const at = Number(pw.at);
+  if (!(at > 0) || now - at >= ROUTE_PROBE_MIN_INTERVAL_MS) return false;
+  return pw.unknown === true && Number(pw.status) > 0 && !paywallVerdictOnTemplate(pw);
+}
 /** Does THIS crawl of the origin probe its paywall? `force` is an explicit
  *  re-registration (bounded upstream by the per-origin forced-crawl window);
  *  an expired failure spends the per-cycle re-check budget; otherwise the
@@ -4975,6 +5153,9 @@ function paywallProbeTurn(prev, { force = false, now = Date.now(), tools = null 
   // Read once a week, like its price reads, whatever the rotation or an
   // expired failure would make due (readThisWeekAboveRouterCaps).
   if (tools && paywallReadThisWeekAboveRouterCaps(prev, tools, now)) return false;
+  // A check the route refused for the shape of our request is not repeated
+  // inside the per-route interval, though the re-check window comes round.
+  if (paywallShapeRefusalHeld(prev?.paywall, now)) return false;
   if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
   return paywallProbeDue();
 }
@@ -5654,79 +5835,156 @@ function clearRefusedHold(t) {
   delete t.quoteRefusals;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null } = {}) {
+// ONE ROUTE, ONE UNPAID REQUEST PASS PER INTERVAL (ROUTE_PROBE_MIN_INTERVAL_MS,
+// src/crawl-cadence.js). The rules above each bound one cause of a repeat; a
+// route that never yields a price (a server error every time, a 402 we cannot
+// read, a price that differs from the seller's documents for good) was still
+// asked again on a back-off of hours, counted in process memory, so a restart
+// began it again. Each pass is stamped on the row (unpaidAskedAt, kept across
+// a rebuild and persisted like the hold) and the scheduled crawl asks the
+// route again only once the interval has passed, with two exceptions:
+//   - a pass that got no answer of the route's own (a 5xx, a redirect, a
+//     connection that did not finish) keeps ONE retry (unpaidRetryAt), so a
+//     route that was down for one crawl is priced on the next; a first
+//     "no such route" answer keeps one after MISS_CONFIRM_MS, the read that
+//     confirms the miss;
+//   - a price the seller's documents CHANGED since the pass
+//     (unpaidAskedDeclared) and that now differs from the one held is read
+//     once: the documents moving is the seller telling us to look.
+// A registration (ignoreBudget) asks whatever the stamp says.
+const insideRouteInterval = (t, now) => {
+  const at = Number(t?.unpaidAskedAt);
+  return ROUTE_PROBE_MIN_INTERVAL_MS > 0 && at > 0 && now - at < ROUTE_PROBE_MIN_INTERVAL_MS;
+};
+/** Is this route's next scheduled unpaid request held to the interval? */
+export function routeHeldToInterval(t, now = Date.now()) {
+  if (!insideRouteInterval(t, now)) return false;
+  const retryAt = Number(t.unpaidRetryAt);
+  if (retryAt > 0 && now >= retryAt) return false;
+  if (priceDisagreesWithOrigin(t) && priceToMicroUsd(t.originDeclaredPrice) !== (Number(t.unpaidAskedDeclared) || 0)) return false;
+  return true;
+}
+// The stamp is on the row, and a crawl rebuilds its rows: carried onto the
+// current row of the same verb and route, like the hold above.
+function carryRouteAsks(tools, prevTools, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0) || !Array.isArray(prevTools) || !prevTools.length || prevTools === tools) return;
+  let asked = null;
+  for (const p of prevTools) {
+    if (!p || typeof p.route !== "string" || !insideRouteInterval(p, now)) continue;
+    (asked ||= new Map()).set(`${String(p.method || "GET").toUpperCase()} ${p.route}`, p);
+  }
+  if (!asked) return;
+  for (const t of tools) {
+    if (!t || typeof t.route !== "string") continue;
+    const p = asked.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
+    if (!p || p === t || Number(t.unpaidAskedAt) >= Number(p.unpaidAskedAt)) continue;
+    t.unpaidAskedAt = Number(p.unpaidAskedAt);
+    if (Number(p.unpaidRetryAt) > 0) t.unpaidRetryAt = Number(p.unpaidRetryAt); else delete t.unpaidRetryAt;
+    if (Number(p.unpaidAskedDeclared) > 0) t.unpaidAskedDeclared = Number(p.unpaidAskedDeclared); else delete t.unpaidAskedDeclared;
+  }
+}
+/** Stamp one unpaid request pass on its row. Returns whether the pass may
+ *  leave a retry owed: false when it was itself the retry, or the interval is off. */
+function stampRouteAsk(t, now = Date.now()) {
+  if (!(ROUTE_PROBE_MIN_INTERVAL_MS > 0)) return false;
+  const wasRetry = insideRouteInterval(t, now) && Number(t.unpaidRetryAt) > 0;
+  t.unpaidAskedAt = now;
+  delete t.unpaidRetryAt;
+  const declared = priceToMicroUsd(t.originDeclaredPrice);
+  if (declared > 0) t.unpaidAskedDeclared = declared; else delete t.unpaidAskedDeclared;
+  return !wasRetry;
+}
+
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null, laneTurn = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
   if (!Array.isArray(tools) || !tools.length) return tools;
-  dropGoneRoutes(tools, originUrl);
-  if (!tools.length) return tools;
-  carryQuoteHolds(tools, cache.get(originUrl)?.tools);
-  const postMarks = postMarksOf(tools, x402Listed);
-  const declaredFree = (t) => {
-    if (!sellerDeclaresFree(t)) return false;
-    quoteProbeStats.declaredFree++;
+  // The passes over every row before the probes (the gone-route drop, the
+  // hold and ask carries, the POST marks and, with no pass runner handed in,
+  // the candidate pick) are one stretch, timed as the span `crawl-quote-prep`
+  // so a long one names itself. The crawl hands in its lane (`laneTurn`): the
+  // stretch then takes a turn of its own instead of the tail of the pass
+  // before it, whose span it would otherwise run beside unnamed.
+  if (laneTurn) await laneTurn();
+  let postMarks = null, declaredFree, isCandidate, picked;
+  const prepared = laneSpan("crawl-quote-prep", () => {
+    dropGoneRoutes(tools, originUrl);
+    if (!tools.length) return false;
+    carryQuoteHolds(tools, cache.get(originUrl)?.tools);
+    carryRouteAsks(tools, cache.get(originUrl)?.tools);
+    postMarks = postMarksOf(tools, x402Listed);
+    declaredFree = (t) => {
+      if (!sellerDeclaresFree(t)) return false;
+      quoteProbeStats.declaredFree++;
+      return true;
+    };
+    isCandidate =
+      (t) => t
+        && typeof t.route === "string" && t.route.startsWith("/")
+        && t.seller !== LOCAL_SELLER                      // never probe ourselves
+        // The seller marks it free: nothing to read, and a probe would run it.
+        && !declaredFree(t)
+        // It answered our last probe with no 402 at all: held for days, so a
+        // seller's own limit (a daily cap, a validation error) is not asked
+        // again on every crawl. An explicit re-registration still re-asks.
+        && (ignoreBudget || !quoteProbeHeld(t))
+        // Asked inside the per-route interval, with no retry owed and no change
+        // in the seller's own price since: not asked again by the scheduled crawl.
+        && (ignoreBudget || !routeHeldToInterval(t))
+        // Already priced: nothing to learn - UNLESS the amount we hold disagrees
+        // with what the origin declared this crawl. That disagreement is exactly
+        // how a price CUT used to be invisible: a priced route was never
+        // re-probed, so the live 402 that would correct it was never fetched
+        // (reported 2026-08-29, a 10x overquote standing for nine days).
+        // A row missing EITHER the price or the networks is a candidate. This
+        // was && - both had to be missing - so a probe that learned networks
+        // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
+        // for the 7-day staleness window: networks known, price null, never
+        // probed again (measured 2026-09-01).
+        && ((!isPricedAboveZero(t.price) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
+          // An explicit re-registration ("price my catalog NOW") also re-asks
+          // every route whose price is NOT the origin's own declaration - a
+          // learned quote, or a Bazaar settlement snapshot. Issue #1365
+          // (2026-09-15): a seller made a route free, re-registered, and the
+          // 0.001 learned two weeks earlier stood because a priced row was never
+          // a candidate until its 7-day clock ran out.
+          || (ignoreBudget && isPricedAboveZero(t.price) && !isPricedAboveZero(t.originDeclaredPrice))
+          // ...and every route whose held price differs from the origin's own
+          // declaration AT ALL. The automatic crawl waits for a 2x drift
+          // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
+          // asking us to look now, and a 1.67x gap is still a wrong price.
+          || (ignoreBudget && isPricedAboveZero(t.price) && isPricedAboveZero(t.originDeclaredPrice)
+            && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
+          // ...and every route whose chains, payTo and EIP-712 domain came from
+          // a past live read. The price of an origin-priced row is the origin's
+          // own and needs no re-ask, but those three fields are the 402's, and
+          // carry-forward keeps a verified read across rebuilds, so the automatic
+          // crawl re-reads them only on the weekly networksNeedLiveVerify clock.
+          // A seller who fixed a wrong USDC domain (the fix we ask them to make,
+          // then re-register) or moved its payout wallet would otherwise keep the
+          // old observation for up to a week, with the router skipping them on it
+          // and the Base scan reading the old wallet.
+          || (ignoreBudget && Number(t.networksVerifiedAt) > 0 && Array.isArray(t.networks) && t.networks.length > 0))
+        // (An undeclared route needs no clause of its own here: the staleness
+        // tests above re-ask every priced row within the same 7 days that
+        // needsLiveProof measures, off the same timestamps.)
+        // A route observed free inside the quote window is left alone by the
+        // automatic crawl; an explicit re-registration still re-asks it.
+        && (ignoreBudget || !isObservedFree(t))
+        // A route priced above every router tier is never bought by us, so its
+        // live 402 is read once and then once a week (and on a re-registration),
+        // whatever else would make it due: a drift, a stamp from another verb.
+        && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
+        && quoteProbeVerbsFor(t, x402Listed, postMarks).length        // never PUT/PATCH/DELETE; POST only where marked paid
+        && probeDue(originUrl, `quote:${t.route}`);
+    // The registry fallback hands its pass runner in (`candidatePass`), so a
+    // long list is picked over in the crawl lane; every other caller filters here.
+    if (!candidatePass) picked = tools.filter(isCandidate);
     return true;
-  };
-  const isCandidate =
-    (t) => t
-      && typeof t.route === "string" && t.route.startsWith("/")
-      && t.seller !== LOCAL_SELLER                      // never probe ourselves
-      // The seller marks it free: nothing to read, and a probe would run it.
-      && !declaredFree(t)
-      // It answered our last probe with no 402 at all: held for days, so a
-      // seller's own limit (a daily cap, a validation error) is not asked
-      // again on every crawl. An explicit re-registration still re-asks.
-      && (ignoreBudget || !quoteProbeHeld(t))
-      // Already priced: nothing to learn - UNLESS the amount we hold disagrees
-      // with what the origin declared this crawl. That disagreement is exactly
-      // how a price CUT used to be invisible: a priced route was never
-      // re-probed, so the live 402 that would correct it was never fetched
-      // (reported 2026-08-29, a 10x overquote standing for nine days).
-      // A row missing EITHER the price or the networks is a candidate. This
-      // was && - both had to be missing - so a probe that learned networks
-      // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
-      // for the 7-day staleness window: networks known, price null, never
-      // probed again (measured 2026-09-01).
-      && ((!isPricedAboveZero(t.price) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
-        // An explicit re-registration ("price my catalog NOW") also re-asks
-        // every route whose price is NOT the origin's own declaration - a
-        // learned quote, or a Bazaar settlement snapshot. Issue #1365
-        // (2026-09-15): a seller made a route free, re-registered, and the
-        // 0.001 learned two weeks earlier stood because a priced row was never
-        // a candidate until its 7-day clock ran out.
-        || (ignoreBudget && isPricedAboveZero(t.price) && !isPricedAboveZero(t.originDeclaredPrice))
-        // ...and every route whose held price differs from the origin's own
-        // declaration AT ALL. The automatic crawl waits for a 2x drift
-        // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
-        // asking us to look now, and a 1.67x gap is still a wrong price.
-        || (ignoreBudget && isPricedAboveZero(t.price) && isPricedAboveZero(t.originDeclaredPrice)
-          && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
-        // ...and every route whose chains, payTo and EIP-712 domain came from
-        // a past live read. The price of an origin-priced row is the origin's
-        // own and needs no re-ask, but those three fields are the 402's, and
-        // carry-forward keeps a verified read across rebuilds, so the automatic
-        // crawl re-reads them only on the weekly networksNeedLiveVerify clock.
-        // A seller who fixed a wrong USDC domain (the fix we ask them to make,
-        // then re-register) or moved its payout wallet would otherwise keep the
-        // old observation for up to a week, with the router skipping them on it
-        // and the Base scan reading the old wallet.
-        || (ignoreBudget && Number(t.networksVerifiedAt) > 0 && Array.isArray(t.networks) && t.networks.length > 0))
-      // (An undeclared route needs no clause of its own here: the staleness
-      // tests above re-ask every priced row within the same 7 days that
-      // needsLiveProof measures, off the same timestamps.)
-      // A route observed free inside the quote window is left alone by the
-      // automatic crawl; an explicit re-registration still re-asks it.
-      && (ignoreBudget || !isObservedFree(t))
-      // A route priced above every router tier is never bought by us, so its
-      // live 402 is read once and then once a week (and on a re-registration),
-      // whatever else would make it due: a drift, a stamp from another verb.
-      && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
-      && quoteProbeVerbsFor(t, x402Listed, postMarks).length        // never PUT/PATCH/DELETE; POST only where marked paid
-      && probeDue(originUrl, `quote:${t.route}`);
-  // The registry fallback hands its pass runner in (`candidatePass`), so a
-  // long list is picked over in the crawl lane; every other caller filters here.
-  const picked = candidatePass ? candidatePass(filterSteps(tools, isCandidate)) : tools.filter(isCandidate);
+  });
+  if (!prepared) return tools;
+  if (candidatePass) picked = candidatePass(filterSteps(tools, isCandidate));
   const candidates = picked && typeof picked.then === "function" ? await picked : picked;
   // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
   // into a list that SHRINKS as rows price, so some rows landed in skipped
@@ -5800,6 +6058,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // Did the route answer any attempt itself (routeAnsweredItself), and was
     // any answer a 402?
     let answeredItself = false, answered402 = false;
+    // Did a request of this pass leave for the route (routeHeldToInterval)?
+    let sent = false;
     probe: for (const { target, method, body: reqBody } of probeAttemptsFor(probeOrigin, tool, { example })) {
       if (pastDeadline()) break;
       if (!verbs.has(method)) continue;
@@ -5822,6 +6082,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // Every other status still falls through to POST, because that is what
         // discovers a POST-only seller: a 404 or 405 on GET is expected there
         // and is the whole reason the second method is tried.
+        sent = true;
         note(method, String(res.status));
         statusByMethod[method] = res.status;
         (answersByMethod[method] ||= []).push(res.status);
@@ -5895,6 +6156,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // Not sent (the host's load controls held it back): nothing was asked,
         // so nothing is noted, and the pass stops for this origin.
         if (err?.sellerLoadSkip) { loadSkipped = true; break probe; }
+        // A name that did not resolve, a refused connection or a URL we do
+        // not send to reached no route; anything else may have.
+        if (!["dns", "refused", "ssrf-blocked"].includes(probeFailureCode(err))) sent = true;
         note(method, probeFailureCode(err));
         (answersByMethod[method] ||= []).push(0);
         // A body that left may have reached the handler: no second one.
@@ -5902,6 +6166,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         /* unreachable, blocked, or malformed - try the next method */
       }
     }
+    // The pass is stamped on the row; `retryOwed` is whether it may leave one
+    // retry (it was not itself the retry).
+    const retryOwed = sent ? stampRouteAsk(tool) : false;
     // The routes not reached stay candidates for the next crawl, as past a deadline.
     if (loadSkipped) break;
     if (gone) {
@@ -5957,6 +6224,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       const prior = goneMark(originUrl, own, tool.route);
       if (!prior || prior.kind !== "pending" || Date.now() - prior.at < MISS_CONFIRM_MS) {
         if (!prior || prior.kind !== "pending") markRouteGone(originUrl, own, tool.route, { kind: "pending" });
+        // The read that confirms the miss is the one retry this pass keeps.
+        if (retryOwed) tool.unpaidRetryAt = Date.now() + MISS_CONFIRM_MS;
         noteProbeOutcome(originUrl, `quote:${tool.route}`, false);
         quoteProbeStats.probed++;
         console.log(`[x402-index] live-miss (first): ${originUrl}${tool.route} answered ${own} ${statusByMethod[own]}; kept until a second miss`);
@@ -5979,6 +6248,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // that learned clears it. A 5xx or a redirect alone starts no hold.
     if (learned || freeObserved) clearRefusedHold(tool);
     else if (answeredItself && !answered402) { holdRefusedRoute(tool); quoteProbeStats.held++; }
+    // No answer of the route's own (a 5xx, a redirect, a connection that did
+    // not finish): the next crawl may ask once more inside the interval.
+    else if (!answered402 && retryOwed) tool.unpaidRetryAt = Date.now();
     quoteProbeStats.probed++;
     if (learned) quoteProbeStats.learned++;
     else if (freeObserved) quoteProbeStats.free++;
@@ -6611,10 +6883,22 @@ function noteLandingHeld(origin, host) {
 }
 /** One origin's turn in a scheduled crawl cycle: its load controls
  *  (src/seller-load.js) decide whether it is read; null when it was, else why
- *  it waits ("throttled", "budget", "landing" or "unchanged"). "landing": its
- *  documents are read from another operator's host whose landed allowance for
- *  the day is spent; the entry stays as the last completed read left it. */
+ *  it waits ("throttled", "budget", "landing" or "unchanged") or why its read
+ *  did not count (a KEEP_PREVIOUS word of src/crawl-parse.js: a document it
+ *  served was not parsed). "landing": its documents are read from another
+ *  operator's host whose landed allowance for the day is spent. Either way the
+ *  entry stays as the last completed read left it. */
 async function crawlScheduled(origin, outcome = { ours: false }) {
+  // A document of this origin was not parsed on its last read (KeptPrevious):
+  // its scheduled turns pass under the same word with no request until the
+  // parser's memory of that document ends (crawlParseRecallMs), rather than
+  // fetching and hashing a document of megabytes each cycle only to keep the
+  // entry as it is. The entry is not touched either way.
+  // A document that ended the parser is the seller's document, not a limit
+  // of ours, so its waiting turns never move the hold of the last good
+  // listing (noteTurnNotRead); one too long to parse here is our limit.
+  const keptWait = keptPreviousWait(origin);
+  if (keptWait) { if (keptWait !== KEEP_PREVIOUS.ended) noteTurnNotRead(origin); return keptWait; }
   const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
   const plan = await sellerLoad.crawlPlan(origin, { landsOn });
   if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
@@ -6622,7 +6906,60 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   sellerLoad.noteSlowRead(origin, "x402");
   const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
   if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
+  // A document not parsed: the turn passes with the entry as it was, under the reason word.
+  if (read?.keptPrevious) { if (read.keptPrevious !== KEEP_PREVIOUS.ended) noteTurnNotRead(origin); return read.keptPrevious; }
   return null;
+}
+// origin -> { word, until }: an origin whose last read held a document the
+// crawl did not parse, and until when its scheduled turns wait (crawlScheduled).
+const keptPreviousUntil = new Map();
+function noteKeptPrevious(origin, word, at = Date.now()) {
+  keptPreviousUntil.delete(origin);
+  keptPreviousUntil.set(origin, { word, until: at + Math.max(0, Number(crawlParseRecallMs()) || 0) });
+  while (keptPreviousUntil.size > LANDING_HELD_CAP) keptPreviousUntil.delete(keptPreviousUntil.keys().next().value);
+}
+// THE KEEP IS BOUNDED. origin -> { since, count }: the reads in a row whose
+// document was not parsed, from the first of them. A read that completes
+// ends the run. Once the run reaches KEPT_PREVIOUS_MAX_IN_A_ROW reads, or has
+// lasted the hold of a last good listing (CRAWL_HOLD_MS), the entry reads the
+// seller's failed read (keptPreviousExpired): its listing is no longer held,
+// so a document that keeps ending the parser cannot keep an old listing, its
+// prices and its description standing past that bound.
+const KEPT_PREVIOUS_MAX_IN_A_ROW = 3;
+const keptRuns = new Map();
+let keptBoundHoldMs = null; // a test's hold in place of CRAWL_HOLD_MS
+/** Test seam: the time bound of a run of kept reads (null restores CRAWL_HOLD_MS). */
+export function __setKeptBoundForTest(holdMs = null) { keptBoundHoldMs = holdMs; keptRuns.clear(); }
+function noteKeptRun(origin, now = Date.now()) {
+  const r = keptRuns.get(origin) || { since: now, count: 0 };
+  r.count++;
+  keptRuns.delete(origin);
+  keptRuns.set(origin, r);
+  while (keptRuns.size > LANDING_HELD_CAP) keptRuns.delete(keptRuns.keys().next().value);
+  return r;
+}
+function keptPreviousExpired(origin, word, message, now = Date.now()) {
+  const run = noteKeptRun(origin, now);
+  const holdMs = keptBoundHoldMs ?? CRAWL_HOLD_MS;
+  if (run.count < KEPT_PREVIOUS_MAX_IN_A_ROW && now - run.since < holdMs) return false;
+  const prev = cache.get(origin);
+  if (!prev || typeof prev !== "object") return false;
+  cache.set(origin, {
+    ...prev,
+    readIncomplete: undefined,
+    holdFromAt: undefined,
+    errorOurs: undefined,
+    error: `a document this origin serves was not parsed on ${run.count} reads in a row (${word}); the listing from the last completed read is no longer held: ${String(message || "").slice(0, 120)}`,
+    fetchedAt: now,
+    history: rollHistory(prev, false),
+  });
+  return true;
+}
+function keptPreviousWait(origin, now = Date.now()) {
+  const k = keptPreviousUntil.get(origin);
+  if (!k) return null;
+  if (k.until <= now) { keptPreviousUntil.delete(origin); return null; }
+  return k.word;
 }
 // When an origin's scheduled turn last passed without a read because of a
 // limit of ours (a spent day, a Retry-After, a landing allowance, the slow
@@ -6637,6 +6974,8 @@ function noteTurnNotRead(origin, at = Date.now()) {
   while (turnNotReadAt.size > LANDING_HELD_CAP) turnNotReadAt.delete(turnNotReadAt.keys().next().value);
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
+/** Test seam: when an origin's scheduled turn last passed for a limit of ours (null when never). */
+export function __turnNotReadAtForTest(originUrl) { return turnNotReadAt.get(originUrl) ?? null; }
 /** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
 export async function __runCrawlCycleForTest() { await runCrawl(); return lastCycleSummary; }
 
@@ -6912,13 +7251,14 @@ async function fallbackBody(originUrl, path, res, opts) {
 
 async function probeDoc(originUrl, path, opts, prevParsed) {
   const res = await probePath(originUrl, path, opts);
-  if (!res.notModified) return { parsed: await parseInCrawlLane(res.html), body: res.html, reused: false, finalUrl: res.finalUrl || null };
+  const from = { origin: originUrl, doc: path };
+  if (!res.notModified) return { parsed: await parseInCrawlLane(res.html, from), body: res.html, reused: false, finalUrl: res.finalUrl || null };
   // The previous document may be held packed; it is read only on a 304.
   const prevDoc = typeof prevParsed === "function" ? await prevParsed() : prevParsed;
   if (prevDoc != null) return { parsed: prevDoc, reused: true, finalUrl: res.finalUrl || null };
   rememberValidator(originUrl, path, null);
   const fresh = await probePath(originUrl, path, opts);
-  return { parsed: await parseInCrawlLane(fresh.html), body: fresh.html, reused: false, finalUrl: fresh.finalUrl || null };
+  return { parsed: await parseInCrawlLane(fresh.html, from), body: fresh.html, reused: false, finalUrl: fresh.finalUrl || null };
 }
 
 // WHAT A CRAWLED ENTRY KEEPS OF ITS MANIFEST. The parsed document is needed
@@ -6942,32 +7282,55 @@ async function packManifestBody(body) {
 // The same for an OpenAPI seller's derived rows: the next crawl needs them
 // only when /openapi.json answers 304, so between crawls they are one packed
 // buffer per seller instead of every row as heap objects.
-async function packOpenapiRows(tools, routes) {
+async function packOpenapiRows(tools, routes, originUrl = null) {
   if (!Array.isArray(tools)) return null;
-  // Serialised in a crawl-lane turn (see parseInCrawlLane): concurrent crawls'
-  // rows are not stringified back to back in one loop iteration.
-  await crawlLaneTurn();
-  try { return await gzipAsyncRaw(Buffer.from(laneSpan("crawl-pack-rows", () => JSON.stringify({ tools, routes: Array.isArray(routes) ? routes : [] })), "utf8")); } catch { return null; }
+  // Serialised in the crawl lane (see parseInCrawlLane): concurrent crawls'
+  // rows are not stringified back to back in one loop iteration,
+  // and a long list is serialised a step of rows per lane slice: the bytes are
+  // the ones JSON.stringify({ tools, routes }) gives (packedRowsSteps).
+  try { return await gzipAsyncRaw(Buffer.concat(await crawlWalkLaned("pack-rows", { origin: originUrl, doc: `${tools.length}-rows` }, packedRowsSteps(tools, Array.isArray(routes) ? routes : [])))); } catch { return null; }
 }
+/** JSON.stringify({ tools, routes }) as UTF-8 buffers, a yield every
+ *  PACK_STEP_ROWS rows: each element is serialised as JSON.stringify
+ *  serialises an array's element (a value with no JSON form reads null), so
+ *  the buffers joined are that call's bytes. */
+const PACK_STEP_ROWS = 128;
+function* packedRowsSteps(tools, routes) {
+  const out = [];
+  let text = '{"tools":[';
+  const flush = () => { out.push(Buffer.from(text, "utf8")); text = ""; };
+  for (const [open, list] of [["", tools], ['],"routes":[', routes]]) {
+    text += open;
+    for (let i = 0; i < list.length; i++) {
+      text += (i ? "," : "") + (JSON.stringify(list[i]) ?? "null");
+      if (i % PACK_STEP_ROWS === PACK_STEP_ROWS - 1) { flush(); yield; }
+    }
+  }
+  text += "]}";
+  flush();
+  return out;
+}
+/** Test hook: the packed rows' text, built in steps. */
+export function __packedRowsTextForTest(tools, routes) { return Buffer.concat(runSteps(packedRowsSteps(tools, routes))).toString("utf8"); }
 /** The previous crawl's OpenAPI rows, for a 304: unpacked from the entry, or
  *  the arrays an entry seeded by a test still holds; null when there are none
  *  (the crawl then reads the document afresh). */
-async function previousOpenapiRows(prev) {
+async function previousOpenapiRows(prev, originUrl = null) {
   if (Array.isArray(prev?.openapiTools)) return { tools: prev.openapiTools, routes: prev.openapiRoutes || [] };
   if (!Buffer.isBuffer(prev?.openapiPacked)) return null;
   try {
-    const { tools, routes } = await parseInCrawlLane((await gunzipAsync(prev.openapiPacked)).toString("utf8"));
+    const { tools, routes } = await parseInCrawlLane((await gunzipAsync(prev.openapiPacked)).toString("utf8"), { origin: originUrl, doc: "kept-openapi-rows" });
     return Array.isArray(tools) ? { tools, routes: Array.isArray(routes) ? routes : [] } : null;
-  } catch { return null; }
+  } catch (e) { if (e?.keptPrevious) throw e; return null; }
 }
 /** The previous crawl's parsed manifest, for a 304: the full document when the
  *  entry still holds one (a synthesized manifest, an entry seeded by a test),
  *  else its packed body, else null (probeDoc then reads the document afresh). */
-async function previousManifestDoc(prev) {
+async function previousManifestDoc(prev, originUrl = null) {
   const m = prev?.manifest;
   if (m && typeof m === "object" && !m.slimmed) return m;
   if (Buffer.isBuffer(prev?.manifestBody)) {
-    try { return await parseInCrawlLane((await gunzipAsync(prev.manifestBody)).toString("utf8")); } catch { return null; }
+    try { return await parseInCrawlLane((await gunzipAsync(prev.manifestBody)).toString("utf8"), { origin: originUrl, doc: "kept-manifest" }); } catch (e) { if (e?.keptPrevious) throw e; return null; }
   }
   return null;
 }
@@ -7027,18 +7390,30 @@ function oncePerCrawl() {
  *  were, the cycle's tally does not count it, and `{ landingHeld, error }` is
  *  returned. The validators kept during it are dropped, so the next read
  *  derives every document afresh rather than pairing a 304 with an entry this
- *  crawl never wrote. */
+ *  crawl never wrote. A crawl that read a document the crawl does not parse
+ *  (KeptPrevious) is the same: `{ keptPrevious, error }`, the entry untouched. */
 async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
   let read = true;
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
   catch (e) {
+    if (e?.keptPrevious) {
+      // A document this crawl read was not parsed (KeptPrevious): the entry
+      // stays exactly as the last read left it (an origin with none stays
+      // unlisted), and like a read not sent this is no read: no tally, no
+      // history, and the validators go so the next read derives afresh.
+      read = false;
+      clearValidatorsFor(originUrl);
+      noteKeptPrevious(originUrl, e.keptPrevious);
+      const expired = keptPreviousExpired(originUrl, e.keptPrevious, e.message);
+      return { keptPrevious: e.keptPrevious, error: String(e.message || e), ...(expired ? { keptExpired: true } : {}) };
+    }
     if (!e?.landingHeld) throw e;
     read = false;
     clearValidatorsFor(originUrl);
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
+  finally { if (read) { keptPreviousUntil.delete(originUrl); keptRuns.delete(originUrl); crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
@@ -7056,7 +7431,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Throwing here drops straight into the fallback chain below, which is the
     // same path a genuine 404 takes - so coverage is identical, we just stop
     // asking a question we already know the answer to.
-    const manifestDoc = await probeDoc(originUrl, WELL_KNOWN_PATH, { maxBytes: MAX_MANIFEST_BYTES }, () => previousManifestDoc(prev));
+    const manifestDoc = await probeDoc(originUrl, WELL_KNOWN_PATH, { maxBytes: MAX_MANIFEST_BYTES }, () => previousManifestDoc(prev, originUrl));
     const manifest = manifestDoc.parsed;
     // Kept for the next crawl's 304 only when the origin can send one; a 304
     // confirms the document the previous crawl kept.
@@ -7094,11 +7469,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     let openapiHash = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
-      const prevRows = res.notModified ? await previousOpenapiRows(prev) : null;
+      const prevRows = res.notModified ? await previousOpenapiRows(prev, originUrl) : null;
       if (prevRows) {
         openapiTools = prevRows.tools;
         openapiRoutes = prevRows.routes;
-        openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes);
+        openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes, originUrl);
         tools = openapiTools;
         openapiHash = undefined;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
@@ -7110,16 +7485,17 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
           text = (await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html;
         }
         openapiHash = bodyHash(text);
-        const body = await parseInCrawlLane(text);
+        const from = { origin: originUrl, doc: "/openapi.json", chars: text.length };
+        const body = await parseInCrawlLane(text, from);
         openapi = body;
         openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
-        openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
-        openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes);
+        openapiRoutes = await openapiAllOperationRoutesSliced(openapi, originUrl, from);
+        openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes, originUrl);
         tools = openapiTools;
-        openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
+        openapiExamples = await crawlWalkLaned("examples", from, openapiProbeExamplesSteps(openapi, originUrl, new Map()));
       }
     } catch (e) {
-      if (e?.landingHeld) throw e;
+      if (e?.landingHeld || e?.keptPrevious) throw e;
       /* manifest-only seller — fine */
     }
 
@@ -7142,9 +7518,15 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // The registry's rows as they stand now: every pass reads this one list,
     // as it did when the passes ran in one turn.
     const registryRows = bazaarToolsByOrigin.get(originUrl) || [];
-    tools = await manifestPass(() => mergeOpenapiIntoBazaar(tools, registryRows, {
-      allRoutes: openapiRoutes || [],
-    }));
+    // A pass over a long list (past FALLBACK_PASS_TURN_ROWS rows: the rows are
+    // read before the tool cap) runs as steps in the crawl lane, a slice at a
+    // time, as the registry fallback's passes do; a short one runs whole.
+    const stepsPass = (name, rows, steps, whole) => (rows > FALLBACK_PASS_TURN_ROWS
+      ? crawlWalkLaned(name, { origin: originUrl, doc: `${rows}-rows` }, steps())
+      : manifestPass(whole));
+    tools = await stepsPass("merge", tools.length + registryRows.length,
+      () => mergeOpenapiIntoBazaarSteps(tools, registryRows, { allRoutes: openapiRoutes || [] }),
+      () => mergeOpenapiIntoBazaar(tools, registryRows, { allRoutes: openapiRoutes || [] }));
     // The manifest is folded in LAST and by pathname, so it can only add
     // endpoints nobody else reported or enrich ones already known. It can
     // never add a second row for an endpoint we already list — see
@@ -7159,18 +7541,29 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     probeExampleMemo.set(originUrl, "manifest", probeExamples);
     mergeProbeExamples(probeExamples, openapiExamples);
     probeExampleMemo.set(originUrl, "openapi", openapiExamples);
-    tools = await manifestPass(() => dropUnvouchedNonProductRoutes(dropDeclaredFreeEndpoints(tools, manifest), registryRows.map((t) => t.route)));
+    tools = await stepsPass("vouch", tools.length,
+      () => dropUnvouchedNonProductRoutesSteps(dropDeclaredFreeEndpoints(tools, manifest), registryRows.map((t) => t.route)),
+      () => dropUnvouchedNonProductRoutes(dropDeclaredFreeEndpoints(tools, manifest), registryRows.map((t) => t.route)));
     // Which routes the seller's own documents name; the rest must prove
     // themselves live (see stampDeclared / needsLiveProof).
     const declaredRows = await manifestPass(() => normaliseManifestTools(manifest, originUrl));
-    await manifestPass(() => stampDeclared(tools, [...declaredRows, ...(openapiRoutes || []), ...(openapiTools || [])]));
+    await stepsPass("stamp", tools.length,
+      () => stampDeclaredSteps(tools, [...declaredRows, ...(openapiRoutes || []), ...(openapiTools || [])]),
+      () => stampDeclared(tools, [...declaredRows, ...(openapiRoutes || []), ...(openapiTools || [])]));
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
-    tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));
+    tools = await stepsPass("carry", tools.length,
+      () => carryForwardLearnedQuotesSteps(tools, prev),
+      () => carryForwardLearnedQuotes(tools, prev));
     // The routes the seller's x402 manifest lists: a paywall marker for the
     // probe's POST rule (sellerMarksPaid).
     const x402Listed = x402ListedRoutes(manifestRows);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled, x402Listed });
+    // A long list's candidates are picked in the crawl lane, as the registry
+    // fallback picks them: the pick reads every row before the tool cap.
+    const candidatePass = tools.length > FALLBACK_PASS_TURN_ROWS
+      ? (gen) => crawlWalkLaned("quote-pick", { origin: originUrl, doc: `${tools.length}-rows` }, gen)
+      : null;
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled, x402Listed, candidatePass, laneTurn: crawlLaneTurn });
     // Not this seller's turn: carry the last reading forward rather than
     // dropping it — null must mean "never probed", not "not probed today".
     const paywall = await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled });
@@ -7230,9 +7623,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Outcome recording moved into probePath, which records every path it
     // fetches. Recording again here would double-count the manifest failure
     // and deepen its backoff twice per cycle.
-    // A read that was not sent (LandingHeld) ends the crawl with nothing
-    // changed; crawlSeller answers for it.
-    if (e?.landingHeld) throw e;
+    // A read that was not sent (LandingHeld), or a document not parsed
+    // (KeptPrevious), ends the crawl with nothing changed; crawlSeller answers for it.
+    if (e?.landingHeld || e?.keptPrevious) throw e;
     // No manifest this crawl (or the read failed): the origin is back on the
     // normal cycle, so a seller who fixes or publishes one is read promptly.
     await sellerLoad.resetRevisit(originUrl, "listing-failure");
@@ -7250,7 +7643,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // is kept as it was (crawlHoldsLastGood).
     let oursFailed = crawlReadFailureIsOurs(e);
     const noteFallback = (path, err) => {
-      if (err?.landingHeld) throw err;
+      if (err?.landingHeld || err?.keptPrevious) throw err;
       if (crawlReadFailureIsOurs(err)) oursFailed = true;
       fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
     };
@@ -7277,8 +7670,10 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     };
     try {
       const openapiRes = await fetchOpenapi({ conditional: false });
-      const parsed = await parseInCrawlLane(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
-      if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
+      const text = await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES });
+      const from = { origin: originUrl, doc: "/openapi.json", chars: typeof text === "string" ? text.length : 0 };
+      const parsed = await parseInCrawlLane(text, from);
+      if (bazaarTools.length || await crawlWalkLaned("signal", from, openapiHasPaymentSignalSteps(parsed))) {
         openapi = parsed;
         openapiTools = await normaliseOpenapiToolsSliced(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
@@ -7301,8 +7696,10 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     if (!openapiTools.length) {
       try {
         const agentsRes = await probePath(originUrl, "/agents.json", { maxBytes: MAX_OPENAPI_BYTES, conditional: false });
-        const parsed = await parseInCrawlLane(await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES }));
-        if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
+        const text = await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES });
+        const from = { origin: originUrl, doc: "/agents.json", chars: typeof text === "string" ? text.length : 0 };
+        const parsed = await parseInCrawlLane(text, from);
+        if (bazaarTools.length || await crawlWalkLaned("signal", from, openapiHasPaymentSignalSteps(parsed))) {
           const fromAgents = await normaliseOpenapiToolsSliced(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
@@ -7338,7 +7735,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // FALLBACK_PASS_TURN_ROWS runs each pass in the crawl lane, a slice at a
     // time; the passes, their inputs and order are as before. A small list
     // runs them in this turn.
-    const allRoutes = openapi ? openapiAllOperationRoutes(openapi, originUrl) : [];
+    const allRoutes = openapi ? await openapiAllOperationRoutesSliced(openapi, originUrl, { origin: originUrl, doc: openapiPath || "/openapi.json" }) : [];
     const listed = bazaarTools.length + openapiTools.length;
     const laned = listed > FALLBACK_PASS_TURN_ROWS;
     const passTurn = laned ? crawlLaneTurn : null;
@@ -7373,11 +7770,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         if (laned) await meter.lane("carry", carrySteps); else meter.sync("carry", carrySteps);
       }
       // Crawl-local, as on the manifest path: the probe body only.
-      const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
+      const probeExamples = openapi ? await crawlWalkLaned("examples", { origin: originUrl, doc: openapiPath || "/openapi.json" }, openapiProbeExamplesSteps(openapi, originUrl, new Map())) : null;
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled,
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled, laneTurn: crawlLaneTurn,
         candidatePass: (gen) => { meter.rows(tools.length); return laned ? meter.lane("quotes", gen) : meter.sync("quotes", gen); } });
       // A cut listing: rows a live probe just dropped are replaced from the
       // rows not yet taken, and the total is the kept rows plus the listed
@@ -11110,6 +11507,133 @@ function decorationContext(v, fold = newDecorationFold(v)) {
   const home = /^https?:\/\//i.test(String(v.manifest?.homepage || "")) ? String(v.manifest.homepage) : null;
   return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home, name: sellerOrigin ? servedSellerNameOn(v, v.manifest?.name, sellerOrigin) : null, health: healthScore(v) };
 }
+// ---- kept rows ------------------------------------------------------------------
+// A crawl stores new row objects for a seller whose documents did not change
+// (a 304, or the same body), and every reader keyed on row identity (the
+// decorated pool, a row's statics, the route index postings, the directory's
+// screen) then built its part again: a cycle with no changed document passed
+// gigabytes through the old generation and freed them, and the collections that
+// paid for it stalled the loop. Each layer now keeps what it built when its
+// input is the same: IndexCache.set keeps the previous row object for a row
+// that is equal to it in every field (keepUnchangedRows), decoration keeps the
+// decorated copy whose every field the fresh one would repeat, and the route
+// index moves a kept row's postings to the new entry instead of posting it again
+// (routeIndexAddEntry). A row with any field changed is built again at each layer.
+const SAME_DEPTH_MAX = 64; // deeper than any listing nests; past it, "not the same"
+const plainProto = (o) => { const p = Object.getPrototypeOf(o); return p === Object.prototype || p === null; };
+// Values a store's row compare may still read (keepUnchangedRows sets it for
+// its own walk; everywhere else it is unbounded). Past it, "not the same".
+let compareLeft = Infinity;
+/** Equal as stored and served: the same keys in the same order, equal values all the
+ *  way down (Object.is for scalars). Anything but plain objects and arrays is
+ *  equal only to itself. */
+function sameValue(a, b, depth = 0) {
+  if (--compareLeft < 0) return false;
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || depth >= SAME_DEPTH_MAX) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i], depth + 1)) return false;
+    return true;
+  }
+  if (Array.isArray(b) || !plainProto(a) || !plainProto(b)) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i];
+    if (k !== kb[i] || !sameValue(a[k], b[k], depth + 1)) return false;
+  }
+  return true;
+}
+/** Same own keys in the same order, each value the same one (Object.is). */
+function sameShallow(a, b) {
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i] || !Object.is(a[ka[i]], b[ka[i]])) return false;
+  return true;
+}
+const KEEP_GIVE_UP = 64;
+// The values one store compares at most. A store runs in its caller's turn,
+// and 5,000 rows each carrying a large input schema compared whole held it
+// 30 to 40 ms; this many values is about 2 ms. Rows past it are stored as the
+// new rows (built again at each layer, as a changed row is), never kept
+// uncompared.
+const KEEP_COMPARE_VALUES = 60_000;
+const rowKeyOf = (t) => (t && typeof t === "object" ? `${t.method} ${t.route}` : "");
+let rowsKept = 0, serviceKeysKept = 0, rowsCompareCut = 0; // test counters
+/** The entry as stored, with each row equal to the previous entry's row for the
+ *  same place (or the same method and route) replaced by that previous row
+ *  object; the list itself is the previous one when every row is. The rows are
+ *  equal in every field, so every reader sees the same entry either way. */
+function keepUnchangedRows(prev, v) {
+  const was = prev?.tools, now = v?.tools;
+  if (!Array.isArray(was) || !Array.isArray(now) || was === now || !was.length || !now.length) return v;
+  let out = null, byKey = null, kept = 0, misses = 0;
+  // A list whose rows changed stops being compared once KEEP_GIVE_UP rows in a
+  // row differ and none matched: a store's turn then costs a few rows, not
+  // two walks of a list that kept nothing. Rows are looked up by method and
+  // route only when the list grew or shrank (rows moved place).
+  const shifted = now.length !== was.length;
+  compareLeft = KEEP_COMPARE_VALUES;
+  try {
+    for (let i = 0; i < now.length; i++) {
+      if (!kept && misses >= KEEP_GIVE_UP) break;
+      const t = now[i];
+      let k = i < was.length && sameValue(was[i], t) ? was[i] : null;
+      if (!k && shifted && t && typeof t === "object") {
+        if (!byKey) { byKey = new Map(); for (const w of was) { const key = rowKeyOf(w); if (!byKey.has(key)) byKey.set(key, w); } }
+        const w = byKey.get(rowKeyOf(t));
+        if (w !== undefined && w !== was[i] && sameValue(w, t)) k = w;
+      }
+      // Out of values: this row's answer is not known, so neither it nor any
+      // later row is kept.
+      if (compareLeft < 0) { rowsCompareCut += now.length - i; break; }
+      if (k && k !== t) { (out ||= now.slice())[i] = k; kept++; }
+      else if (!k) misses++;
+    }
+  } finally { compareLeft = Infinity; }
+  if (!out) return v;
+  rowsKept += kept;
+  // Every row the previous one, in its order: the previous list, and the
+  // entry's service key (a function of its rows alone) is the previous one's.
+  if (out.length === was.length && out.every((t, i) => t === was[i])) {
+    const next = { ...v, tools: was };
+    if (serviceKeyMemo.has(prev)) { serviceKeyMemo.set(next, serviceKeyMemo.get(prev)); serviceKeysKept++; }
+    return next;
+  }
+  return { ...v, tools: out };
+}
+// The last pool decorated for each origin's live entry, with its context.
+// A new entry's row is decorated as before and then compared with the row at
+// the same place in that pool: when every field holds the same value (so a row
+// written in place since, as a re-price writes, is decorated again) and the
+// route index can move its postings (routeIndexCanMove), the earlier copy is
+// kept. A new entry's context equal to the last one in every field is that
+// object, so a kept copy's inherited networks and domains are the values the
+// fresh copy carries. Nothing is written on the crawled rows themselves.
+const decoratedByOrigin = new Map(); // origin -> { c, pool }
+const poolCtx = new WeakMap(); // decorated pool -> the context it was decorated with (one per entry)
+function sameDecorationCtx(a, b) {
+  return a.home === b.home && a.name === b.name && Object.is(a.health, b.health) && a.hasDomains === b.hasDomains
+    && sameValue(a.sellerNets, b.sellerNets) && sameValue(a.sellerDomains, b.sellerDomains);
+}
+// What a row's statics read (computeToolStatics, routeExcludedCategory): a
+// decorated copy that holds the same values here has the same statics.
+const STATICS_INPUTS = ["name", "slug", "tags", "aliases", "description", "category", "seller", "route", "path", "url", "price"];
+let rowsDecorated = 0, decorationsKept = 0, staticsCarried = 0; // test counters
+function decorateRowKept(t, c, was, origin, pos) {
+  const fresh = decorateRow(t, c);
+  if (!was) { rowsDecorated++; return fresh; }
+  // A copy whose statics threw is never kept: kept, it would stay unserved
+  // for as long as its seller's rows stay equal.
+  if (!(was[TOOL_STATICS] || toolStaticsMemo.get(was))?.broken && sameShallow(was, fresh) && routeIndexCanMove(was, origin, pos)) { decorationsKept++; return was; }
+  rowsDecorated++;
+  // A new copy (its context changed, or a field the statics do not read):
+  // the statics carry over when every field they read is the same value.
+  const st = was[TOOL_STATICS];
+  if (st && !st.broken && STATICS_INPUTS.every((k) => Object.is(was[k], fresh[k]))) { setHidden(fresh, TOOL_STATICS, st); staticsCarried++; }
+  return fresh;
+}
 function decorateRow(t, c) {
   return {
     ...t,
@@ -11128,14 +11652,24 @@ function decorateRow(t, c) {
 const decoratePartial = new WeakMap();
 function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   const memo = remotePoolMemo.get(v);
-  if (memo) return memo;
+  if (memo) {
+    // A pool decorated while its entry was out of the cache (or before an
+    // earlier entry's) becomes the origin's last pool once it is the live one.
+    if (typeof origin === "string" && decoratedByOrigin.get(origin)?.pool !== memo && cache.get(origin) === v && poolCtx.has(memo)) decoratedByOrigin.set(origin, { c: poolCtx.get(memo), pool: memo });
+    return memo;
+  }
   let p = decoratePartial.get(v);
   try {
-    if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null }; decoratePartial.set(v, p); }
+    if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null, prev: null }; decoratePartial.set(v, p); }
     if (!p.c) {
       if (!foldDecorationContext(p.fold, until)) return null;
       p.c = decorationContext(v, p.fold);
       p.fold = null;
+      const last = typeof origin === "string" ? decoratedByOrigin.get(origin) : null;
+      if (last) {
+        if (sameDecorationCtx(last.c, p.c)) p.c = last.c;
+        p.prev = last.pool;
+      }
     }
     const tools = v.tools || [];
     for (; p.i < tools.length; p.i++) {
@@ -11146,7 +11680,8 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
       // route-execute would 402-dance against an endpoint that never
       // quotes, and "cheapest tool" rankings would fill with $0 rows.
       if (t.paid === false) continue;
-      p.out.push(decorateRow(t, p.c));
+      const pos = p.out.length;
+      p.out.push(decorateRowKept(t, p.c, p.prev ? p.prev[pos] : undefined, origin, pos));
     }
   } catch (e) {
     // One listing whose rows cannot be read fails alone: the entry is dropped
@@ -11161,6 +11696,8 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   }
   decoratePartial.delete(v);
   remotePoolMemo.set(v, p.out);
+  poolCtx.set(p.out, p.c);
+  if (typeof origin === "string" && cache.get(origin) === v) decoratedByOrigin.set(origin, { c: p.c, pool: p.out });
   return p.out;
 }
 const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
@@ -11379,7 +11916,9 @@ function routeLeavesSeller(seller, route) {
 export function _routeLeavesSellerForTest(seller, route) { return routeLeavesSeller(seller, route); }
 export function _routeLeavesSellerParsedForTest(seller, route) { return routeLeavesSellerParsed(seller, route); }
 export function _computeToolStaticsForTest(t) { return computeToolStatics(t); }
+let staticsBuilt = 0; // test counter
 function computeToolStatics(t) {
+  staticsBuilt++;
   if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
@@ -11552,29 +12091,73 @@ export function wholeTokenMatcher(term) {
 // queue, decorating and indexing the new entries. A replaced entry's postings
 // go stale rather than being removed (removing a tool from the posting of a
 // common token is O(posting)), are filtered at query time by "is this tool's
-// entry still the live one", and the whole index is rebuilt once the stale
-// share passes ROUTE_INDEX_REBUILD_STALE_SHARE - a few hundred milliseconds
-// a few times per crawl cycle, instead of on every query.
+// entry still the live one", and the posting lists are compacted once the
+// stale share passes ROUTE_INDEX_REBUILD_STALE_SHARE: each list is copied
+// without the stale rows, in slices, and nothing is tokenized again.
+//
+// A row a new entry kept (the same decorated object, at the same place in the
+// pool: see decorateRowKept) is not posted again: its home record moves to the
+// new entry, and every posting it already has serves it. So a crawl cycle in
+// which no document changed posts nothing, leaves nothing stale and compacts
+// nothing. Each entry's posted rows are counted (`rowsOf`), which is what lets a
+// compaction remove exactly the rows of the entries it set out to remove and
+// lets a move be refused for a row a compaction may have removed anywhere: such
+// a row is posted again as a copy of its own, never twice as one object.
 // ---------------------------------------------------------------------------
 const ROUTE_INDEX_REBUILD_STALE_SHARE = 0.15;
 const ROUTE_INDEX_TERM_CACHE_MAX = 4096;
 const routeIdx = {
   postings: new Map(), // token -> tool[] (decorated remote pool objects)
   indexed: new WeakSet(), // entries whose pool is in `postings`
-  indexedTools: 0,
-  staleTools: 0,
+  indexedTools: 0, // rows counted under an entry in rowsOf (live and stale)
+  staleTools: 0, // of those, rows counted under a replaced or deleted entry
   pending: new Map(), // origin -> entry awaiting indexing
   termCache: new Map(), // long term -> matching vocabulary tokens
   builds: 0,
   queryStamp: 0, // per-query dedupe stamp written onto each tool's home record
-  shadow: null, // background rebuild in progress (see routeIndexStartShadow)
+  shadow: null, // background compaction in progress (see routeIndexStartShadow)
   partial: null, // live entry being indexed across slices { origin, v, pos }
+  gen: 0, // the postings map's generation: a home record from another one is not posted here
+  rowsOf: new Map(), // entry -> { origin, n, broken, dead }: the rows posted (or moved) under it, and of those the ones whose statics threw
+  unmovable: new Set(), // entries a compaction is removing (or removed part of): their rows never move
+  rowsMoved: 0, rowsPosted: 0, rowsCopied: 0, // test counters
 };
 function routeIndexNoteSet(origin, prev, next) {
   if (prev === next) return;
-  if (prev && routeIdx.indexed.has(prev)) { routeIdx.staleTools += (remotePoolMemo.get(prev) || []).length; routeIdx.indexed.delete(prev); }
-  if (next && typeof next === "object") { routeIdx.pending.set(origin, next); routeIndexScheduleDrain(); }
+  if (prev && routeIdx.indexed.has(prev)) routeIdx.indexed.delete(prev);
+  // The replaced entry's rows are stale until a compaction removes them, or
+  // until the entry that replaced it moves them (they are then live again).
+  const rec = prev ? routeIdx.rowsOf.get(prev) : null;
+  if (rec && !rec.dead) { rec.dead = true; routeIdx.staleTools += rec.n; }
+  if (rec) routeIndexForgetIfBare(prev, rec);
+  if (next && typeof next === "object") routeIdx.pending.set(origin, next);
   else routeIdx.pending.delete(origin);
+  // A deletion too: the drain's last turn checks the stale share.
+  routeIndexScheduleDrain();
+}
+// A replaced entry none of whose rows is in a posting list any more (every
+// posted row moved to the entry that replaced it, or it posted none: no paid
+// rows, or only rows whose statics threw) leaves the counts now. Its record
+// was the last thing holding it, and a cycle with nothing stale runs no
+// compaction to remove it, so each unchanged cycle kept every replaced entry
+// (its documents and bodies included) reachable.
+function routeIndexForgetIfBare(v, rec) {
+  if (!rec.dead || rec.n !== rec.broken || routeIdx.unmovable.has(v)) return;
+  routeIdx.indexedTools -= rec.n; routeIdx.staleTools -= rec.n;
+  routeIdx.rowsOf.delete(v);
+}
+// An origin whose newest entry is still to be indexed: its older entry's rows
+// may yet be moved to it, so a compaction leaves them.
+const routeIndexAwaiting = (origin) => routeIdx.pending.has(origin) || routeIdx.partial?.origin === origin;
+// Can this decorated row's postings serve the entry being indexed at `pos` for
+// `origin`? Yes when it was never posted in this generation; when it was, only
+// if it was posted for the same origin at the same place, under an entry that
+// is still counted and that no compaction is removing (so every posting it
+// was given is still there).
+function routeIndexCanMove(t, origin, pos) {
+  const h = t[TOOL_HOME];
+  if (!h || h.gen !== routeIdx.gen) return true;
+  return h.origin === origin && h.pos === pos && routeIdx.rowsOf.has(h.v) && !routeIdx.unmovable.has(h.v);
 }
 // The crawler replaces entries one at a time as its fetches land. Draining
 // them in the background, in short slices, keeps the pending queue near empty,
@@ -11620,8 +12203,11 @@ function routeIndexReset() {
   routeIdx.staleTools = 0;
   routeIdx.pending.clear();
   routeIdx.termCache.clear();
-  routeIdx.shadow = null; // an in-flight background rebuild is abandoned
+  routeIdx.shadow = null; // an in-flight compaction is abandoned
   routeIdx.partial = null;
+  routeIdx.gen++;
+  routeIdx.rowsOf.clear();
+  routeIdx.unmovable.clear();
 }
 // Continue the live index's partly indexed entry until `until`. Returns true
 // when the entry is finished (or no longer live), false when time ran out.
@@ -11630,37 +12216,58 @@ function routeIndexAdvancePartial(until = Infinity) {
   if (!p) return true;
   if (cache.get(p.origin) !== p.v) { routeIdx.partial = null; return true; }
   let next;
-  try { next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until); }
+  try { next = routeIndexAddEntry(p.origin, p.v, p.pos, until); }
   catch (e) { routeIndexEntryBroken(p.origin, p.v, e); routeIdx.partial = null; return true; }
   if (next !== -1) { p.pos = next; return false; }
   routeIdx.partial = null;
-  if (routeIdx.shadow) routeIdx.shadow.late.push([p.origin, p.v]);
   routeIdx.termCache.clear();
   return true;
-}
-function newRouteIndexShard() {
-  return { postings: new Map(), indexed: new WeakSet(), indexedTools: 0 };
 }
 // Index one entry's tools from `from`, stopping (and returning the position to
 // resume at) once `until` passes; returns -1 when the entry is complete. The
 // time check sits inside the entry because one seller can carry thousands of
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
-function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
+function routeIndexAddEntry(origin, v, from = 0, until = Infinity) {
   const pool = decorateRemoteToolsStep(v, until, origin);
   if (!pool) return from; // decoration ran out of time: resume here next slice
-  const { postings } = target;
+  const { postings, gen, rowsOf } = routeIdx;
+  let rec = rowsOf.get(v);
+  if (!rec) { rec = { origin, n: 0, broken: 0, dead: cache.get(origin) !== v }; rowsOf.set(v, rec); }
   for (let pos = from; pos < pool.length; pos++) {
     // A clock read per tool (it costs far less than one tool's statics): with
     // 64 tools between reads, tools of long seller-written text let a 12 ms
     // slice run several times its length.
     if (pos > from && until !== Infinity && performance.now() >= until) return pos;
-    const t = pool[pos];
-    const st = toolStatics(t, origin);
-    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
+    let t = pool[pos];
     // The home record is a property of the tool (its entry and position in
-    // that entry's pool), the same whichever shard indexes it.
-    t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
+    // that entry's pool).
+    const h = t[TOOL_HOME];
+    if (h && h.gen === gen && h.v === v) continue; // posted for this entry already
+    const st = toolStatics(t, origin);
+    rec.n++; routeIdx.indexedTools++;
+    if (rec.dead) routeIdx.staleTools++;
+    if (st.broken) { rec.broken++; brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
+    if (h && h.gen === gen) {
+      if (routeIndexCanMove(t, origin, pos)) {
+        // Kept from the entry it replaced: every posting it has serves it.
+        const was = rowsOf.get(h.v);
+        was.n--; routeIdx.indexedTools--;
+        if (was.dead) routeIdx.staleTools--;
+        const left = h.v;
+        h.v = v;
+        routeIdx.rowsMoved++;
+        routeIndexForgetIfBare(left, was);
+        continue;
+      }
+      // Posted under an entry whose rows may be partly removed: a copy of its
+      // own is posted (the pool takes the copy), never the same object twice.
+      const copy = { ...t };
+      setHidden(copy, TOOL_STATICS, st);
+      t = pool[pos] = copy;
+      routeIdx.rowsCopied++;
+    }
+    if (!setHidden(t, TOOL_HOME, { origin, v, pos, gen })) continue;
     // Tokens of the haystack (name, description, category, tags) plus those
     // of every scored name (slug, aliases, name-as-slug), deduplicated per
     // tool so one tool sits once in each posting.
@@ -11670,12 +12277,12 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
       const list = postings.get(tok);
       if (list) list.push(t); else postings.set(tok, [t]);
     }
+    routeIdx.rowsPosted++;
   }
   // Primes the alias-set memo off the query path, inside the same time budget:
   // out of time, the entry resumes past its last tool and finishes the key.
   if (!primeServiceKey(v, until)) return pool.length;
-  target.indexed.add(v);
-  target.indexedTools += pool.length;
+  routeIdx.indexed.add(v);
   return -1;
 }
 /** Build the /api/route candidate index now instead of on the first query.
@@ -11685,74 +12292,82 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
  *  warm start, past the post-listen stall. Idempotent: a built index is a
  *  no-op here, and a later mutation still drains on the next query. */
 export function warmRouteIndex() { routeIndexSync({ sync: true }); return routeIdx.indexedTools; }
-// A pool this small rebuilds inline (a few ms); a larger one rebuilds in the
-// background, in slices, while the current index keeps answering.
+// A pool this small rebuilds inline (a few ms); a larger one is compacted in
+// the background, in slices, while the current index keeps answering.
 const ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS = 20000;
 const ROUTE_INDEX_SLICE_MS = 12;
 // Every crawl cycle (30 min) replaces every entry, so the stale share passes
-// its threshold three or four times per cycle. A synchronous rebuild of the
-// prod pool is ~1 s here and 2 s+ on prod, and it ran INSIDE whichever buyer
-// query tripped it - blocking every other request, payment relays included,
-// for that long. The rebuild now runs as a shadow index filled in slices of
-// ~12 ms between event-loop turns; queries keep reading the current index
-// (its stale postings are filtered by liveness, as always) until the shadow
-// is complete and swapped in.
-// Test hook: the next background rebuild's finish throws this once.
+// its threshold three or four times per cycle when the documents changed. A
+// synchronous rebuild of the prod pool is ~1 s here and 2 s+ on prod, and it
+// ran INSIDE whichever buyer query tripped it - blocking every other request,
+// payment relays included, for that long. The stale rows are now removed by a
+// compaction run in slices of ~12 ms between event-loop turns; queries keep
+// reading the posting lists (each list a compaction rewrites is replaced by
+// its copy, so a query part way through a list keeps the array it read).
+// A shadow index that tokenized and posted every live row again ran here
+// until 2026-11-28: its new lists were most of the old generation each crawl
+// cycle passed through and freed.
+// Test hook: the next compaction's finish throws this once.
 let shadowFinishFaultForTest = null;
 export function _setShadowFinishFaultForTest(err) { shadowFinishFaultForTest = err || null; }
 function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
-  const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], li: 0, cur: null };
+  // The entries whose rows this pass removes: replaced or deleted ones whose
+  // origin has no newer entry still to index (that entry may move them),
+  // dropped ones, and any an abandoned pass removed part of.
+  const drop = new Set(routeIdx.unmovable);
+  for (const [v, rec] of routeIdx.rowsOf) {
+    if (isBrokenEntry(v) || (cache.get(rec.origin) !== v && !routeIndexAwaiting(rec.origin))) drop.add(v);
+  }
+  for (const v of drop) routeIdx.unmovable.add(v);
+  const shadow = { drop, tokens: [...routeIdx.postings.keys()], i: 0, cur: null };
   routeIdx.shadow = shadow;
-  // Each slice runs contained (a throw an entry's step did not catch is
-  // counted under route-index-shadow, that entry is dropped and the build
-  // goes on with the next); a throw inside one entry's step drops that entry.
+  // Each slice runs contained: a throw abandons the pass (the lists it
+  // rewrote stay rewritten, the entries it was removing stay unmovable and the
+  // next pass removes them), and clears routeIdx.shadow so a later pass starts.
   const step = contained("route-index-shadow", () => {
     if (routeIdx.shadow !== shadow) return; // reset or superseded
-    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
     let clean = false;
     try {
-      while (performance.now() < until) {
+      const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+      const postings = routeIdx.postings;
+      let checks = 0;
+      while (shadow.i < shadow.tokens.length) {
         if (!shadow.cur) {
-          // The snapshot first, then the entries the live index took while
-          // the shadow was filling (`late`), each in slices: carried over in
-          // the finish's one turn they held the loop for all of them at once.
-          let origin, v;
-          if (shadow.i < shadow.entries.length) [origin, v] = shadow.entries[shadow.i++];
-          else if (shadow.li < shadow.late.length) [origin, v] = shadow.late[shadow.li++];
-          else break;
-          if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
-          shadow.cur = { origin, v, pos: 0 };
+          const tok = shadow.tokens[shadow.i];
+          const list = postings.get(tok);
+          if (!list) { shadow.i++; continue; }
+          shadow.cur = { tok, list, j: 0, out: null };
         }
-        let next;
-        try { next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until); }
-        catch (e) { routeIndexEntryBroken(shadow.cur.origin, shadow.cur.v, e); shadow.cur = null; continue; }
-        if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
+        const c = shadow.cur;
+        // A long list runs across slices; the drain may append to it between
+        // them (live rows), and those are read too.
+        for (; c.j < c.list.length; c.j++) {
+          const t = c.list[c.j];
+          if (drop.has(t[TOOL_HOME]?.v)) { if (!c.out) c.out = c.list.slice(0, c.j); }
+          else if (c.out) c.out.push(t);
+          if ((++checks & 4095) === 0 && performance.now() >= until) { c.j++; break; }
+        }
+        if (c.j < c.list.length) break; // out of time inside this list
+        if (c.out && postings.get(c.tok) === c.list) { if (c.out.length) postings.set(c.tok, c.out); else postings.delete(c.tok); }
+        shadow.cur = null; shadow.i++;
+        if (performance.now() >= until) break;
       }
       clean = true;
     } finally {
-      if (!clean) {
-        if (shadow.cur) { const c = shadow.cur; shadow.cur = null; brokenEntries.add(c.v); noteBrokenListing(c.origin, ROUTE_INDEX_DRAIN_THREW); }
-        if (routeIdx.shadow === shadow) setImmediate(step);
-      }
+      if (!clean && routeIdx.shadow === shadow) routeIdx.shadow = null;
     }
-    if (shadow.cur || shadow.i < shadow.entries.length || shadow.li < shadow.late.length) { setImmediate(step); return; }
-    // The finish. A throw here abandons this build (the live index keeps
-    // answering) and clears routeIdx.shadow, which gates every later rebuild:
-    // left set, no rebuild would ever start again. contained() counts it.
-    let stale = 0;
-    // The finish is unsliced: timed as its own span for the [loop-lag] line.
+    if (shadow.cur || shadow.i < shadow.tokens.length) { setImmediate(step); return; }
+    // The finish: the removed entries leave the counts. A throw here abandons
+    // the pass and clears routeIdx.shadow, which gates every later pass: left
+    // set, no compaction would ever start again. contained() counts it.
     const finishAt = Date.now(), finishT0 = performance.now();
     try {
       if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
-      // Entries the current index took from `pending` while the shadow was
-      // being filled were set after its snapshot: carry the live ones over.
-      for (const [origin, v] of shadow.late) {
-        if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
-        try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
-      }
-      for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
-        if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+      for (const v of drop) {
+        const rec = routeIdx.rowsOf.get(v);
+        if (rec) { routeIdx.indexedTools -= rec.n; if (rec.dead) routeIdx.staleTools -= rec.n; routeIdx.rowsOf.delete(v); }
+        routeIdx.unmovable.delete(v);
       }
     } catch (e) {
       if (routeIdx.shadow === shadow) routeIdx.shadow = null;
@@ -11760,29 +12375,25 @@ function routeIndexStartShadow() {
     } finally {
       noteTurn("route-index-shadow-finish", finishAt, performance.now() - finishT0);
     }
-    routeIdx.postings = shadow.postings;
-    routeIdx.indexed = shadow.indexed;
-    routeIdx.indexedTools = shadow.indexedTools;
-    routeIdx.staleTools = stale;
     routeIdx.termCache.clear();
     routeIdx.shadow = null;
     routeIdx.builds++;
   });
   setImmediate(step);
 }
-/** Test hook: start a background rebuild now (the stale-share rule starts the real ones). */
+/** Test hook: start a compaction now (the stale-share rule starts the real ones). */
 export function _routeIndexStartShadowForTest() { routeIndexStartShadow(); }
 // Stale rows were cleared only by routeIndexSync, which only a route query on
 // this thread and the boot warm-up call. With a router worker loaded this
 // thread answers no queries, so every crawl cycle's replaced entries piled up
 // as stale rows (and the old entries they hold) until the heap ran out. The
-// drain that indexes a crawl's changes now starts the same shadow rebuild.
+// drain that indexes a crawl's changes now starts the same compaction.
 function routeIndexCompactIfStale() {
-  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  const total = routeIdx.indexedTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) routeIndexStartShadow();
 }
 function routeIndexSync({ sync = false, drain = true } = {}) {
-  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  const total = routeIdx.indexedTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) {
     if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
       routeIndexReset();
@@ -11793,7 +12404,10 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
       }
       return;
     }
-    routeIndexStartShadow();
+    // While entries wait to be indexed the rows they replaced may move to
+    // them, so the pass would remove few of them: the drain starts it once
+    // nothing waits (routeIndexCompactIfStale).
+    if (!routeIdx.pending.size && !routeIdx.partial) routeIndexStartShadow();
   }
   // A query does not index the backlog: a peer pull or a crawl burst can leave
   // thousands of entries pending, and draining them here held the event loop
@@ -11806,9 +12420,8 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
     if (cache.get(origin) !== v) continue; // replaced again before we got to it
-    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed (a swapped-in shadow took it), or dropped
+    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed, or dropped
     try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
-    if (routeIdx.shadow) routeIdx.shadow.late.push([origin, v]);
   }
   routeIdx.pending.clear();
   routeIdx.termCache.clear(); // new vocabulary may match a cached term
@@ -11845,7 +12458,41 @@ function routeIndexTokensFor(term, short) {
   return out;
 }
 export function _routeIndexStatsForTest() {
-  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
+  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, entriesCounted: routeIdx.rowsOf.size, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
+}
+/** Test hook: the postings read whole. `duplicates` counts a row held twice in
+ *  one list; `missing` a live row (an indexed live entry's, statics intact)
+ *  without its home record there or absent from a list of one of its tokens;
+ *  `staleRefs` a reference whose home entry is not the live one. */
+export function _routeIndexAuditForTest() {
+  let refs = 0, duplicates = 0, staleRefs = 0, homeless = 0, missing = 0, liveRows = 0;
+  const member = new Map();
+  for (const [tok, list] of routeIdx.postings) {
+    const set = new Set(list);
+    duplicates += list.length - set.size;
+    refs += list.length;
+    member.set(tok, set);
+    for (const t of list) { const h = t[TOOL_HOME]; if (!h) homeless++; else if (cache.get(h.origin) !== h.v) staleRefs++; }
+  }
+  for (const [origin, v] of cache) {
+    if (!v || typeof v !== "object" || !routeIdx.indexed.has(v)) continue;
+    const pool = remotePoolMemo.get(v) || [];
+    for (let pos = 0; pos < pool.length; pos++) {
+      const t = pool[pos], st = toolStatics(t, origin);
+      if (st.broken) continue;
+      liveRows++;
+      const h = t[TOOL_HOME];
+      if (!h || h.v !== v || h.pos !== pos || h.origin !== origin) { missing++; continue; }
+      const toks = new Set(splitTokens(st.hay));
+      for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
+      for (const tok of toks) if (!member.get(tok)?.has(t)) { missing++; break; }
+    }
+  }
+  return { refs, duplicates, staleRefs, homeless, missing, liveRows, tokens: routeIdx.postings.size };
+}
+/** Test hook: what the layers built and kept (counters since boot). */
+export function _rowReuseStatsForTest() {
+  return { flatRowsKept, serviceKeysKept, rowsKept, rowsCompareCut, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
@@ -12010,6 +12657,10 @@ const yieldToLoop = () => new Promise((r) => setImmediate(r));
 // thread, so a caller's CPU budget is charged while the query runs, not only
 // when it ends (a burst of queries would otherwise all pass a budget check
 // that none of them had charged yet).
+// Test hook: a query's steps, driven by the suite, and how many queries have
+// read their view of the cache (so a suite can stop one right after it has).
+let routeQueryViews = 0;
+export function _routeQueryStepsForTest(args) { return { steps: routeQuerySteps({ ...args, drainBacklog: false }), views: () => routeQueryViews }; }
 export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null } = {}) {
   // In this thread a backlog is scanned, never indexed inline (see routeIndexSync).
   const steps = routeQuerySteps({ ...args, drainBacklog: false });
@@ -12049,6 +12700,18 @@ const ROUTE_DECORATE_SLICE_MS = 6;
 // whose handler rejects must answer 500 alone and leave the next request whole).
 let routeQueryFaultForTest = null;
 export function _setRouteQueryFaultForTest(err) { routeQueryFaultForTest = err || null; }
+// Whether a row is NAMED for a capability gap (its slug or name), read once
+// per row record and gap: a record's slug and name never change, and a gap
+// query otherwise re-reads every scored row on each pass.
+const gapNamedMemo = new Map(); // gap id -> WeakMap(row record -> boolean)
+function rowNamedForGap(gap, t) {
+  let memo = gapNamedMemo.get(gap.id);
+  if (!memo) gapNamedMemo.set(gap.id, (memo = new WeakMap()));
+  let v = memo.get(t);
+  if (v === undefined) { v = gapNamedBy(gap, t.slug, t.name); memo.set(t, v); }
+  return v;
+}
+
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   if (routeQueryFaultForTest) { const e = routeQueryFaultForTest; routeQueryFaultForTest = null; throw e; }
   const q = String(query || "").slice(0, 500);
@@ -12057,7 +12720,22 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // Scored without filler words (src/query-terms.js withoutFiller); the
   // whole query's words still decide which compound slugs it covers.
   const queryWords = queryTerms(q, { max: 32 });
-  const terms = withoutFiller(queryWords);
+  // Arithmetic written in words ("5 plus 7", src/query-terms.js) names the
+  // calculator: the expression's own words are its values and are not scored.
+  const arithmetic = arithmeticAsk(q);
+  const baseTerms = arithmetic ? [...withoutFiller(queryWords).filter((t) => t !== arithmetic.term && !arithmetic.words.includes(t)), arithmetic.term] : withoutFiller(queryWords);
+  // Phrase aliases of this host's tools the query writes out whole
+  // (src/phrase-aliases.js); null for nearly every query.
+  const phraseHits = phraseAliasHits(q);
+  // A capability this host's catalog does not offer (src/capability-gaps.js;
+  // null for nearly every query). Its lookup words join the scored terms, so
+  // a row NAMED for the capability is a candidate however the query worded
+  // it ("where is this IP located" reaches a row named geoip). A lookup word
+  // the query already writes, whole or inside a longer word, is not added: a
+  // query that says "geolocation" scores exactly as it always has. The
+  // verdict and the order are decided after the sort, below.
+  const gap = capabilityGap(q);
+  const terms = gap && baseTerms.length ? [...baseTerms, ...gap.terms.filter((t) => !baseTerms.some((b) => b.includes(t)))] : baseTerms;
   const termSet = new Set(queryWords);
   // The ceiling has to announce itself. ?top=100 returned 25 rows with
   // `count: 25` and nothing else, so a caller reads "25 matched" where the truth
@@ -12118,7 +12796,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // unbounded loop bound (CodeQL js/loop-bound-injection, 2026-09-18).
   const nTerms = Math.min(terms.length, 32);
   const shortTerm = Array.from({ length: nTerms }, (_, k) => !(terms[k].length >= 3 || isCjkTerm(terms[k])));
-  const hitTerm = Array.from({ length: nTerms }, (_, k) => (shortTerm[k] ? wholeTokenMatcher(terms[k]) : (str) => str.includes(terms[k])));
+  const hitTerm = Array.from({ length: nTerms }, (_, k) => (shortTerm[k] ? wholeTokenMatcher(terms[k]) : substringMatcher(terms[k])));
   // Coinbase-measured 30-day unique payers per seller, read once per seller per
   // query instead of once per sort COMPARISON: on a pool where a common term
   // matches tens of thousands of rows, the comparator ran bazaarQualityFor()
@@ -12184,9 +12862,10 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         if (i === partsOnly) {
           if (covered[i] && nameParts[i][0].includes(term)) s = 10;
         } else if (n === term || (covered[i] && (nameToks[i].includes(term) || (nameParts[i] && nameParts[i].some((p) => p !== null && p.includes(term)))))) s = 10;
-        else if (short ? nameToks[i].includes(term) : n.includes(term)) s = 4;
+        else if (short ? nameToks[i].includes(term) : hit(n)) s = 4;
         if (s > slugScore) slugScore = s;
       }
+      if (phraseHits !== null && slugScore < 10 && t.seller === LOCAL_SELLER && phraseHits.get(st.slug)?.has(term)) slugScore = 10;
       if (slugScore) { score += slugScore; mSlug += slugScore; }
       if (hit(name)) { score += 2; mName += 2; }
       if (hit(hay)) { score += 1; mText += 1; }
@@ -12217,8 +12896,10 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // ties resolve) and the ones the index does not hold yet. The async driver
     // may let a crawl or the drain write between slices; nothing written after
     // this line changes what this query ranks.
-    const liveOrder = [...cache.values()];
+    const liveOrder = [], liveAt = new Map();
+    for (const [o, v] of cache) { liveOrder.push(v); liveAt.set(o, v); }
     const live = new Set(liveOrder);
+    routeQueryViews++;
     const unindexed = routeIndexUnindexedLive(); // entry -> origin, scanned whole
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
@@ -12256,9 +12937,18 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
           const home = t[TOOL_HOME];
           if (!home || seen.has(t)) continue;
           seen.add(t);
-          if (unindexed.has(home.v) || !okOf(home.v, home.origin)) continue;
-          let arr = byEntry.get(home.v);
-          if (!arr) byEntry.set(home.v, (arr = []));
+          // A row a newer entry kept moves its home there; to a query that
+          // read the cache before that, it is still the row of the entry it
+          // read (that entry's pool holds it at the same place).
+          let hv = home.v;
+          if (!live.has(hv)) {
+            const at = liveAt.get(home.origin);
+            if (!at || remotePoolMemo.get(at)?.[home.pos] !== t) continue;
+            hv = at;
+          }
+          if (unindexed.has(hv) || !okOf(hv, home.origin)) continue;
+          let arr = byEntry.get(hv);
+          if (!arr) byEntry.set(hv, (arr = []));
           arr.push(t);
         }
       }
@@ -12357,6 +13047,24 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     for (let r = sortSteps.next(); !r.done; r = sortSteps.next()) { routeSortYields++; yield; }
     if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef, categoryExcluded });
   }
+  // A CAPABILITY GAP (src/capability-gaps.js), the one case where the order
+  // or the verdict differs from the plain ranking. Rows NAMED for the
+  // capability (slug or name; a description never counts, so text a listing
+  // adds to its description cannot take the pick) go first, in their ranked
+  // order. With none, the answer is a miss: every row weak, and a hint that
+  // says which capability no row offers. Nothing of it is memoized: it is
+  // read from the sorted rows on every pass, a memo hit included.
+  let ranked = scored, gapNamed = 0;
+  if (gap) {
+    const named = [], rest = [];
+    for (let i = 0; i < scored.length; i++) {
+      (rowNamedForGap(gap, scored[i][1]) ? named : rest).push(scored[i]);
+      if ((i & 2047) === 2047) yield;
+    }
+    gapNamed = named.length;
+    if (gapNamed) ranked = named.concat(rest);
+  }
+  const gapMiss = !!gap && scored.length > 0 && gapNamed === 0;
 
   // Per-seller diversity cap (M6, "Five Attacks on x402" Attack IV — Sybil /
   // metadata capture). Ranking is already sorted best-first; naively taking the
@@ -12384,7 +13092,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // Skipped entirely for include=local, where there is only one seller by
   // definition and a per-seller cap would just truncate the answer to a third.
   const capApplies = inc !== "local";
-  for (const entry of scored) {
+  for (const entry of ranked) {
     if (picked.length >= k) break;
     const seller = entry[1].seller;
     if (!capApplies) { picked.push(entry); continue; }
@@ -12520,11 +13228,15 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       ...(external ? { untrustedContent: true, source: t.seller } : {}),
     };
   });
+  if (gapMiss) for (const r of results) r.weak = true;
   return {
     query: q, include: inc, count: results.length, sellers: sellersSeen.size, results,
     // `count` and `sellers` keep their exact meaning and their exact values -
     // renaming a live field is a second, worse break. These ride alongside.
     ...partialFields(scored.length, results.length),
+    // Only on a query that asks for a capability in src/capability-gaps.js.
+    ...(gap && scored.length ? { capabilityGap: gap.id, capabilityGapCovered: !gapMiss } : {}),
+    ...(gapMiss ? { weakMatches: true, hint: `no row here is named for ${gap.label}, so none of these results does it` } : {}),
     // Matching routes the router lists but never buys (src/route-category.js),
     // absent when there are none.
     ...(categoryExcluded ? { categoryExcluded } : {}),
@@ -13012,17 +13724,30 @@ function* interleaveSteps(rows) {
 /** Test hook: the directory's interleave as steps (src/x402-index.js interleaveSteps). */
 export function _interleaveStepsForTest(rows) { return interleaveSteps(rows); }
 
-function flatRowsForEntry(origin, v, self, seen, out) {
+// The rows the last flatten built for each origin. A rebuild builds every row
+// again and keeps the earlier row at the same place when the two are equal in
+// every field: a directory rebuilt while a crawl runs then holds the rows it
+// already held (and their search text) instead of a second full set, and the
+// one it builds is dropped young.
+let flatRowsByOrigin = new Map();
+let flatRowsKept = 0; // test counter
+function flatRowsForEntry(origin, v, self, seen, out, next = null) {
   // Same bar as /api/index/register.
   if (!directoryListsEntry(origin, v, self)) return;
   const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
+  const was = flatRowsByOrigin.get(origin), mine = [];
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(flatRowOf(origin, t, sellerName));
+    let row = flatRowOf(origin, t, sellerName);
+    const w = was ? was[mine.length] : undefined;
+    if (w && sameValue(w, row)) { row = w; flatRowsKept++; }
+    mine.push(row);
+    out.push(row);
   }
+  if (next && mine.length) next.set(origin, mine);
 }
 /** Whether an origin's rows belong in the third-party directory at all (the
  *  bar flatRowsForEntry applies before it reads any tool). */
@@ -13139,12 +13864,14 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
   }
   const out = [];
   const seen = new Set();
-  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out);
-  return finishFlat(out, self);
+  const next = new Map();
+  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out, next);
+  return finishFlat(out, self, next);
 }
 let flatBuilds = 0;
-function finishFlat(out, self) {
+function finishFlat(out, self, next) {
   flatBuilds++;
+  flatRowsByOrigin = next;
   // No sort: every consumer groups or counts (interleaveBySeller orders the
   // rows itself), and a 100k-row sort was most of a rebuild's longest turn.
   flatCache = { at: Date.now(), rows: out, self };
@@ -13159,13 +13886,14 @@ function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
     try {
       const out = [];
       const seen = new Set();
+      const next = new Map();
       let until = performance.now() + 8;
       for (const [origin, v] of [...cache.entries()]) {
-        flatRowsForEntry(origin, v, self, seen, out);
+        flatRowsForEntry(origin, v, self, seen, out, next);
         if (performance.now() >= until) { await yieldTurn(); until = performance.now() + 8; }
       }
       await yieldTurn();
-      return finishFlat(out, self);
+      return finishFlat(out, self, next);
     } finally { flatRebuild = null; }
   })();
   return flatRebuild;

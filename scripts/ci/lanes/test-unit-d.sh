@@ -17,6 +17,12 @@ t node scripts/test-monitor-scheduler.js
 t node scripts/test-tempo-transfers.js
 # Route-and-execute (SOR executing surface — resolution, caps, receipts — offline)
 t node scripts/test-route-execute.js
+# Capability gaps (one list for find, the router and route-execute: an IP geolocation task is a miss unless a row is named for it; every other task ranks and runs as before - offline)
+t node scripts/test-capability-gaps.js
+# Router terms: "add" is not read inside "address"; every other term keeps the substring rule (offline)
+t node scripts/test-route-term-false-friends.js
+# Phrase aliases and arithmetic in words: a phrase scores its tool only when the query writes it whole; "5 plus 7" is the calculator's (offline)
+t node scripts/test-phrase-aliases.js
 # Status page store (unobserved days are never uptime; stale is never operational — offline)
 t node scripts/test-status-store.js
 # Status page reads at scale (two million rows: the page is byte-identical to the whole-table reads, every history-independent read is an index search, the kept count equals
@@ -431,6 +437,10 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
+# MCP Registry namespace proof check (the publish jobs' reader of /.well-known/mcp-registry-auth, against a stub: offline)
+t node scripts/test-registry-proof-check.js
+# The MCP Registry name is the domain's everywhere; the earlier name stays only on a listed line (offline)
+t node scripts/test-registry-name.js
 # Stripe Link canary (run by hand from the operator's machine on the Link CLI's local session, scripts/link-canary-local.sh): reads every CLI answer shape, says why it stops, never hands a token to the CLI, and the wrapper's flags and refusals (offline)
 t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)

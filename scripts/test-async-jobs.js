@@ -26,8 +26,8 @@ import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
 import { generateKeyPairSync } from "node:crypto";
 import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
-requireUpstreamCosts("test-async-jobs");
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
+const COSTS = costsOrStandIn("test-async-jobs");
 
 let pass = 0, fail = 0, proc = null, facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "async-jobs-"));

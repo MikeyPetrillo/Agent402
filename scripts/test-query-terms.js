@@ -103,6 +103,21 @@ ok(withoutFiller(queryTerms("api")).join() === "api", "a query of filler alone k
   cache.clear();
 }
 
+// --- arithmetic written in words: a shape, never the operator word alone -------------
+{
+  const { arithmeticAsk, ARITHMETIC_TOOL } = await import("../src/query-terms.js");
+  ok(typeof arithmeticAsk === "function" && ARITHMETIC_TOOL === "calc", "arithmeticAsk names the calculator");
+  for (const [q, words] of [["5 plus 7", "5,plus,7"], ["What is 5 PLUS 7?", "5,plus,7"], ["seven plus five", "seven,plus,five"], ["10 minus 3", "10,minus,3"], ["6 times 7", "6,times,7"],
+    ["twelve multiplied by three", "twelve,multiplied,by,three"], ["5   plus\t7", "5,plus,7"], ["2.5 plus 4", "2,5,plus,4"]]) {
+    const a = arithmeticAsk?.(q);
+    ok(a?.term === "calc" && a.words.join() === words, `"${q}" is an expression (${a ? a.words.join(" ") : "none"})`);
+  }
+  for (const q of ["plus", "plus tier", "route execute plus", "5 plus", "plus 7", "a plus b", "c plus plus", "sun times", "3 times a day", "minus sign", "v1.5 plus 2", "5 plus 7days", "1,000 plus 5", "x5 plus 7", "5 plus 7,5", ""]) {
+    ok(arithmeticAsk?.(q) === null, `"${q}" is no expression`);
+  }
+  ok(arithmeticAsk?.(null) === null && arithmeticAsk?.({ toString: 1 }) === null && arithmeticAsk?.(57) === null, "a value that is no string is no expression");
+}
+
 // --- /api/find: a catalog tool tagged in Chinese ------------------------------------
 {
   const catalog = {

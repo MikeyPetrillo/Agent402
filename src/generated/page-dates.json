@@ -7,69 +7,71 @@
     "src/agentic-finance.js": "2026-11-23",
     "src/api-explorer.js": "2026-11-18",
     "src/base-no-gas.js": "2026-11-23",
-    "src/blog.js": "2026-11-26",
-    "src/changelog.js": "2026-11-27",
-    "src/company.js": "2026-11-24",
+    "src/blog.js": "2026-11-27",
+    "src/changelog.js": "2026-11-28",
+    "src/company.js": "2026-11-27",
     "src/contribute.js": "2026-11-12",
-    "src/crawler-page.js": "2026-11-26",
+    "src/crawler-page.js": "2026-11-27",
     "src/credits-page.js": "2026-11-23",
     "src/decide-page.js": "2026-11-24",
     "src/glossary.js": "2026-11-24",
-    "src/guides.js": "2026-11-26",
-    "src/how-to-pay.js": "2026-11-24",
-    "src/human-reports-page.js": "2026-11-24",
+    "src/guides.js": "2026-11-27",
+    "src/how-to-pay.js": "2026-11-27",
+    "src/human-reports-page.js": "2026-11-27",
     "src/index-tools-page.js": "2026-11-23",
-    "src/integration-pages.js": "2026-11-26",
-    "src/learn.js": "2026-11-24",
+    "src/integration-pages.js": "2026-11-27",
+    "src/learn.js": "2026-11-27",
     "src/ledger-catalog.js": "2026-11-23",
-    "src/ledger-docs.js": "2026-11-24",
-    "src/ledger-home.js": "2026-11-24",
+    "src/ledger-docs.js": "2026-11-28",
+    "src/ledger-home.js": "2026-11-27",
     "src/ledger-integrations.js": "2026-11-24",
     "src/ledger-leaderboard.js": "2026-11-21",
     "src/ledger-pricing.js": "2026-11-24",
     "src/managed-agents-page.js": "2026-11-24",
-    "src/market-page.js": "2026-11-24",
+    "src/market-page.js": "2026-11-27",
     "src/markets.js": "2026-11-23",
     "src/monitors-page.js": "2026-11-20",
     "src/mpp-market-page.js": "2026-11-21",
-    "src/pages.js": "2026-11-26",
+    "src/pages.js": "2026-11-28",
     "src/playground.js": "2026-11-23",
     "src/press-page.js": "2026-11-18",
-    "src/programmatic-pages.js": "2026-11-24",
+    "src/programmatic-pages.js": "2026-11-27",
     "src/programmatic-seeds.js": "2026-08-22",
     "src/proof.js": "2026-11-18",
     "src/quickstart.js": "2026-11-24",
-    "src/revenue-live.js": "2026-11-24",
+    "src/recipes-page.js": "2026-11-28",
+    "src/revenue-live.js": "2026-11-27",
     "src/scorecard.js": "2026-11-18",
     "src/sdk-playground.js": "2026-11-18",
-    "src/search-landings.js": "2026-11-24",
-    "src/security-page.js": "2026-11-24",
-    "src/sell.js": "2026-11-26",
-    "src/seo.js": "2026-11-26",
-    "src/server.js": "2026-11-26",
-    "src/skill-md.js": "2026-11-24",
-    "src/skills.js": "2026-11-26",
+    "src/search-landings.js": "2026-11-27",
+    "src/security-page.js": "2026-11-27",
+    "src/sell.js": "2026-11-27",
+    "src/seo.js": "2026-11-28",
+    "src/server.js": "2026-11-28",
+    "src/skill-md.js": "2026-11-27",
+    "src/skill-page-copy.js": "2026-11-27",
+    "src/skills.js": "2026-11-27",
     "src/speech-page.js": "2026-11-22",
     "src/stable-error-code.js": "2026-11-20",
-    "src/start-page.js": "2026-11-23",
-    "src/status.js": "2026-11-24",
+    "src/start-page.js": "2026-11-28",
+    "src/status.js": "2026-11-27",
     "src/tollbooth-landing.js": "2026-11-17",
     "src/tools/a2a-card.js": "2026-11-24",
     "src/tools/action-gate-kit.js": "2026-08-11",
     "src/tools/agent-kit.js": "2026-10-06",
-    "src/tools/alchemy-data-kit.js": "2026-11-24",
+    "src/tools/alchemy-data-kit.js": "2026-11-27",
     "src/tools/answer-cap.js": "2026-11-19",
     "src/tools/api-kit.js": "2026-11-13",
-    "src/tools/attest-kit.js": "2026-11-24",
+    "src/tools/attest-kit.js": "2026-11-27",
     "src/tools/audit-report-kit.js": "2026-11-20",
     "src/tools/b20-kit.js": "2026-11-21",
     "src/tools/b2b-enrich-kit.js": "2026-11-21",
     "src/tools/barcode-kit.js": "2026-11-09",
-    "src/tools/browser-measure-kit.js": "2026-11-23",
-    "src/tools/bundle-kit.js": "2026-11-24",
+    "src/tools/browser-measure-kit.js": "2026-11-27",
+    "src/tools/bundle-kit.js": "2026-11-27",
     "src/tools/calendar-kit.js": "2026-11-09",
     "src/tools/captcha-kit.js": "2026-10-14",
-    "src/tools/cdp-kit.js": "2026-11-26",
+    "src/tools/cdp-kit.js": "2026-11-27",
     "src/tools/chain-kit.js": "2026-11-24",
     "src/tools/chain-rpc-kit.js": "2026-11-23",
     "src/tools/child-env.js": "2026-11-10",
@@ -77,13 +79,14 @@
     "src/tools/coingecko-endpoint.js": "2026-11-19",
     "src/tools/coingecko-rate.js": "2026-11-24",
     "src/tools/compression-kit.js": "2026-09-10",
+    "src/tools/content-filter.js": "2026-11-27",
     "src/tools/contract-kit.js": "2026-11-24",
     "src/tools/convert-gen.js": "2026-09-25",
-    "src/tools/crawl-kit.js": "2026-11-24",
+    "src/tools/crawl-kit.js": "2026-11-27",
     "src/tools/crypto-hash-kit.js": "2026-10-29",
-    "src/tools/crypto-kit.js": "2026-11-24",
-    "src/tools/crypto-markets-kit.js": "2026-11-24",
-    "src/tools/crypto-screens-kit.js": "2026-11-24",
+    "src/tools/crypto-kit.js": "2026-11-27",
+    "src/tools/crypto-markets-kit.js": "2026-11-27",
+    "src/tools/crypto-screens-kit.js": "2026-11-27",
     "src/tools/crypto-signals-kit.js": "2026-11-23",
     "src/tools/cve-kit.js": "2026-11-24",
     "src/tools/data-kit.js": "2026-11-26",
@@ -99,18 +102,18 @@
     "src/tools/domain-availability-kit.js": "2026-11-23",
     "src/tools/dossier-kit.js": "2026-11-26",
     "src/tools/dub-kit.js": "2026-11-24",
-    "src/tools/edgar-13f-datasets.js": "2026-11-15",
-    "src/tools/edgar-kit.js": "2026-11-24",
+    "src/tools/edgar-13f-datasets.js": "2026-11-27",
+    "src/tools/edgar-kit.js": "2026-11-28",
     "src/tools/email-guard-html.js": "2026-10-20",
-    "src/tools/email-guard-kit.js": "2026-11-23",
+    "src/tools/email-guard-kit.js": "2026-11-27",
     "src/tools/email-guard-mime.js": "2026-11-23",
     "src/tools/embed-kit.js": "2026-11-21",
-    "src/tools/enrich-kit.js": "2026-11-26",
+    "src/tools/enrich-kit.js": "2026-11-28",
     "src/tools/exchange-calendars.js": "2026-11-24",
     "src/tools/extract.js": "2026-11-23",
     "src/tools/feedback-kit.js": "2026-11-24",
     "src/tools/fetch-guard.js": "2026-11-24",
-    "src/tools/filing-watch-kit.js": "2026-11-24",
+    "src/tools/filing-watch-kit.js": "2026-11-27",
     "src/tools/finance-kit.js": "2026-11-26",
     "src/tools/finance-math-kit.js": "2026-11-08",
     "src/tools/flights-kit.js": "2026-11-24",
@@ -129,29 +132,30 @@
     "src/tools/html-worker.js": "2026-11-09",
     "src/tools/hyperliquid-shared.js": "2026-11-24",
     "src/tools/image-child.js": "2026-11-09",
-    "src/tools/image-gen-kit.js": "2026-11-24",
+    "src/tools/image-gen-kit.js": "2026-11-27",
     "src/tools/image-headers.js": "2026-11-12",
     "src/tools/image-kit.js": "2026-11-23",
     "src/tools/image-ops.js": "2026-11-19",
     "src/tools/image-pool.js": "2026-11-26",
     "src/tools/image-size.js": "2026-11-23",
     "src/tools/image-worker.js": "2026-11-26",
-    "src/tools/insider-flow-kit.js": "2026-11-24",
+    "src/tools/insider-flow-kit.js": "2026-11-27",
     "src/tools/ipo-report-kit.js": "2026-11-21",
     "src/tools/judge-kit.js": "2026-11-24",
-    "src/tools/kit.js": "2026-11-23",
-    "src/tools/kit2.js": "2026-11-26",
+    "src/tools/kit.js": "2026-11-27",
+    "src/tools/kit2.js": "2026-11-27",
     "src/tools/lazy-deps.js": "2026-11-22",
-    "src/tools/lending-rates-kit.js": "2026-11-24",
-    "src/tools/linkedin-article-kit.js": "2026-11-24",
+    "src/tools/lending-rates-kit.js": "2026-11-27",
+    "src/tools/linkedin-article-kit.js": "2026-11-27",
     "src/tools/llm-context-kit.js": "2026-11-21",
     "src/tools/llm-gateway-kit.js": "2026-11-26",
     "src/tools/llm-gemini-kit.js": "2026-11-24",
-    "src/tools/llm-images-fast-kit.js": "2026-11-26",
+    "src/tools/llm-images-fast-kit.js": "2026-11-28",
     "src/tools/llm-kit.js": "2026-11-26",
-    "src/tools/llm-messages-kit.js": "2026-11-24",
-    "src/tools/llm-responses-kit.js": "2026-11-24",
-    "src/tools/loop-gate-kit.js": "2026-11-21",
+    "src/tools/llm-messages-kit.js": "2026-11-27",
+    "src/tools/llm-responses-kit.js": "2026-11-27",
+    "src/tools/lookback-stats.js": "2026-11-27",
+    "src/tools/loop-gate-kit.js": "2026-11-27",
     "src/tools/macro-kit.js": "2026-11-24",
     "src/tools/mailbox-provider.js": "2026-11-21",
     "src/tools/map-limit.js": "2026-10-29",
@@ -159,13 +163,13 @@
     "src/tools/markdown-render.js": "2026-11-09",
     "src/tools/markdown-worker.js": "2026-11-10",
     "src/tools/market-calendar-data.js": "2026-11-24",
-    "src/tools/mcp-package-kit.js": "2026-11-24",
+    "src/tools/mcp-package-kit.js": "2026-11-27",
     "src/tools/media-kit.js": "2026-11-23",
     "src/tools/memory.js": "2026-11-13",
     "src/tools/mev-and-l2-kit.js": "2026-11-24",
     "src/tools/moderate-kit.js": "2026-11-21",
     "src/tools/network-kit.js": "2026-11-23",
-    "src/tools/network-kit2.js": "2026-11-26",
+    "src/tools/network-kit2.js": "2026-11-27",
     "src/tools/nft-market-kit.js": "2026-11-24",
     "src/tools/ocr-kit.js": "2026-11-24",
     "src/tools/office-kit.js": "2026-11-21",
@@ -187,40 +191,41 @@
     "src/tools/pii-redact.js": "2026-11-23",
     "src/tools/prediction-market-kit.js": "2026-11-21",
     "src/tools/price-feed-kit.js": "2026-11-23",
-    "src/tools/price-webhook-kit.js": "2026-11-22",
+    "src/tools/price-webhook-kit.js": "2026-11-27",
     "src/tools/provenance.js": "2026-11-24",
     "src/tools/rdap-registry-limits.js": "2026-11-23",
     "src/tools/recall-report-kit.js": "2026-11-24",
-    "src/tools/redact-chat-kit.js": "2026-11-23",
+    "src/tools/redact-chat-kit.js": "2026-11-27",
     "src/tools/redact.js": "2026-11-23",
     "src/tools/regex-worker.js": "2026-11-22",
     "src/tools/render-static.js": "2026-11-23",
     "src/tools/render.js": "2026-11-23",
     "src/tools/research-deep-kit.js": "2026-11-24",
     "src/tools/robots-gate.js": "2026-11-26",
-    "src/tools/route-execute.js": "2026-11-26",
+    "src/tools/route-execute.js": "2026-11-27",
     "src/tools/safe-regex.js": "2026-10-21",
     "src/tools/sanctions-core.js": "2026-11-12",
     "src/tools/sanctions-kit.js": "2026-11-24",
     "src/tools/search.js": "2026-11-24",
-    "src/tools/seller-dossier.js": "2026-11-24",
+    "src/tools/sec-rate.js": "2026-11-28",
+    "src/tools/seller-dossier.js": "2026-11-27",
     "src/tools/seller-payability-kit.js": "2026-11-24",
     "src/tools/seller-trust.js": "2026-11-22",
     "src/tools/sentence-ends.js": "2026-11-09",
-    "src/tools/skill-runner.js": "2026-11-26",
-    "src/tools/solana-intel-kit.js": "2026-11-24",
+    "src/tools/skill-runner.js": "2026-11-28",
+    "src/tools/solana-intel-kit.js": "2026-11-27",
     "src/tools/sql-guard-kit.js": "2026-11-23",
     "src/tools/sql-guard.js": "2026-08-27",
-    "src/tools/stats-kit.js": "2026-10-29",
+    "src/tools/stats-kit.js": "2026-11-27",
     "src/tools/stock-provider.js": "2026-11-26",
     "src/tools/stt-kit.js": "2026-11-24",
     "src/tools/summarize-kit.js": "2026-11-26",
     "src/tools/text-analysis-kit.js": "2026-11-09",
-    "src/tools/ticker-pack-kit.js": "2026-11-24",
-    "src/tools/token-brief-kit.js": "2026-11-26",
+    "src/tools/ticker-pack-kit.js": "2026-11-27",
+    "src/tools/token-brief-kit.js": "2026-11-27",
     "src/tools/token-facts.js": "2026-11-24",
-    "src/tools/token-risk-kit.js": "2026-11-25",
-    "src/tools/token-safety-kit.js": "2026-11-24",
+    "src/tools/token-risk-kit.js": "2026-11-27",
+    "src/tools/token-safety-kit.js": "2026-11-27",
     "src/tools/tool-namespaces.js": "2026-09-10",
     "src/tools/ttl-dedupe.js": "2026-10-14",
     "src/tools/tts-kit.js": "2026-11-24",
@@ -232,13 +237,13 @@
     "src/tools/vat-numbers.js": "2026-11-22",
     "src/tools/wallet-balances-rpc.js": "2026-11-23",
     "src/tools/weather-calc-kit.js": "2026-11-21",
-    "src/tools/weather-kit.js": "2026-11-23",
+    "src/tools/weather-kit.js": "2026-11-27",
     "src/tools/weather-plan-kit.js": "2026-11-23",
     "src/tools/weather-probability-kit.js": "2026-11-23",
     "src/tools/web-kit.js": "2026-11-23",
     "src/tools/wikipedia-suggest.js": "2026-11-24",
     "src/tools/x-data-kit.js": "2026-11-24",
-    "src/tools/x402-kit.js": "2026-11-24",
+    "src/tools/x402-kit.js": "2026-11-27",
     "src/tools/xml-dom-ops.js": "2026-11-22",
     "src/transparency.js": "2026-11-23",
     "src/trust-page.js": "2026-11-24",
@@ -264,17 +269,17 @@
     "wiki/Configuration.md": "2026-11-23",
     "wiki/Content-Pipeline.md": "2026-11-22",
     "wiki/Contributing.md": "2026-11-23",
-    "wiki/Credits.md": "2026-11-23",
+    "wiki/Credits.md": "2026-11-27",
     "wiki/Decide.md": "2026-11-24",
     "wiki/Embeddings.md": "2026-11-06",
     "wiki/FAQ.md": "2026-11-24",
-    "wiki/Getting-Started.md": "2026-11-24",
+    "wiki/Getting-Started.md": "2026-11-27",
     "wiki/Home.md": "2026-11-24",
     "wiki/Image-Gen.md": "2026-11-12",
     "wiki/Ink.md": "2026-11-06",
     "wiki/LLM-Gateway.md": "2026-11-26",
     "wiki/LLM-Proxy.md": "2026-11-26",
-    "wiki/MCP-Connector.md": "2026-11-24",
+    "wiki/MCP-Connector.md": "2026-11-28",
     "wiki/Memory-and-Coordination.md": "2026-10-11",
     "wiki/Operations.md": "2026-11-24",
     "wiki/Pay-per-crawl-Walkthrough.md": "2026-11-24",
@@ -290,18 +295,18 @@
     "wiki/Self-Hosting.md": "2026-11-26",
     "wiki/Seller-Reputation.md": "2026-11-21",
     "wiki/Sessions-and-Channels.md": "2026-11-22",
-    "wiki/Skill-Packs.md": "2026-11-26",
+    "wiki/Skill-Packs.md": "2026-11-27",
     "wiki/Solana.md": "2026-11-23",
     "wiki/Stellar.md": "2026-11-24",
     "wiki/TTS.md": "2026-11-24",
     "wiki/Tempo.md": "2026-11-23",
     "wiki/Tollbooth-for-Agencies.md": "2026-10-15",
-    "wiki/Tool-Catalog.md": "2026-11-26",
+    "wiki/Tool-Catalog.md": "2026-11-27",
     "wiki/Troubleshooting.md": "2026-11-23",
     "wiki/Upgrading.md": "2026-11-23",
     "wiki/Why-Pay-Here.md": "2026-11-24",
     "wiki/agent402-client.md": "2026-11-23",
-    "wiki/x402-Index-and-Router.md": "2026-11-24",
+    "wiki/x402-Index-and-Router.md": "2026-11-27",
     "wiki/x402-Leaderboard.md": "2026-11-21"
   },
   "filesFirst": {
@@ -329,7 +334,7 @@
     },
     "/blog/pay-per-call-tools-on-arc": {
       "published": "2026-10-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/blog/proof-of-work-free-tier": {
       "published": "2026-06-23",
@@ -345,7 +350,11 @@
     },
     "/guides/agent-hosts": {
       "published": "2026-08-27",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
+    },
+    "/guides/agent-to-agent-payments": {
+      "published": "2026-11-27",
+      "modified": "2026-11-28"
     },
     "/guides/buying-at-volume": {
       "published": "2026-11-07",
@@ -377,7 +386,7 @@
     },
     "/guides/sell-your-api-over-x402": {
       "published": "2026-06-13",
-      "modified": "2026-11-23"
+      "modified": "2026-11-27"
     },
     "/guides/smart-order-router": {
       "published": "2026-07-23",
@@ -397,7 +406,7 @@
     },
     "/guides/x402-in-5-minutes": {
       "published": "2026-06-13",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/guides/x402-payments-toolkit": {
       "published": "2026-06-14",
@@ -441,7 +450,7 @@
     },
     "/integrations/mcp": {
       "published": "2026-09-24",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/integrations/openai": {
       "published": "2026-09-24",
@@ -473,7 +482,7 @@
     },
     "/learn/mcp-payments": {
       "published": "2026-09-24",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/learn/mpp": {
       "published": "2026-09-24",
@@ -489,7 +498,7 @@
     },
     "/skills/any-to-markdown": {
       "published": "2026-06-22",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/api-health": {
       "published": "2026-07-04",
@@ -521,7 +530,7 @@
     },
     "/skills/contact-verify": {
       "published": "2026-07-04",
-      "modified": "2026-07-24"
+      "modified": "2026-11-27"
     },
     "/skills/content-extraction": {
       "published": "2026-06-19",
@@ -537,11 +546,11 @@
     },
     "/skills/crypto-dossier": {
       "published": "2026-07-04",
-      "modified": "2026-07-24"
+      "modified": "2026-11-27"
     },
     "/skills/crypto-research": {
       "published": "2026-06-20",
-      "modified": "2026-10-11"
+      "modified": "2026-11-27"
     },
     "/skills/decode-blob": {
       "published": "2026-06-20",
@@ -565,7 +574,7 @@
     },
     "/skills/document-intel": {
       "published": "2026-06-21",
-      "modified": "2026-10-13"
+      "modified": "2026-11-27"
     },
     "/skills/domain-age": {
       "published": "2026-07-04",
@@ -573,7 +582,7 @@
     },
     "/skills/domain-intel": {
       "published": "2026-07-04",
-      "modified": "2026-11-23"
+      "modified": "2026-11-27"
     },
     "/skills/earnings-deep-dive": {
       "published": "2026-07-06",
@@ -585,7 +594,7 @@
     },
     "/skills/email-deliverability": {
       "published": "2026-06-19",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/email-security": {
       "published": "2026-07-04",
@@ -617,7 +626,7 @@
     },
     "/skills/fraud-signals": {
       "published": "2026-06-21",
-      "modified": "2026-11-26"
+      "modified": "2026-11-27"
     },
     "/skills/fx-monitor": {
       "published": "2026-07-04",
@@ -649,7 +658,7 @@
     },
     "/skills/link-preview": {
       "published": "2026-06-21",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/loan-comparison": {
       "published": "2026-06-21",
@@ -665,7 +674,7 @@
     },
     "/skills/macro-context": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/macro-dashboard": {
       "published": "2026-07-29",
@@ -673,7 +682,7 @@
     },
     "/skills/macro-economics": {
       "published": "2026-06-19",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/macro-snapshot": {
       "published": "2026-11-24",
@@ -689,7 +698,7 @@
     },
     "/skills/media-pipeline": {
       "published": "2026-06-21",
-      "modified": "2026-08-31"
+      "modified": "2026-11-27"
     },
     "/skills/nft-portfolio": {
       "published": "2026-07-04",
@@ -721,15 +730,15 @@
     },
     "/skills/price-monitor": {
       "published": "2026-06-23",
-      "modified": "2026-10-14"
+      "modified": "2026-11-27"
     },
     "/skills/regulatory-watch": {
       "published": "2026-06-21",
-      "modified": "2026-11-10"
+      "modified": "2026-11-27"
     },
     "/skills/schema-evolution": {
       "published": "2026-06-21",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/schema-guard": {
       "published": "2026-07-14",
@@ -737,7 +746,7 @@
     },
     "/skills/search-and-cite": {
       "published": "2026-06-21",
-      "modified": "2026-11-24"
+      "modified": "2026-11-27"
     },
     "/skills/sec-filings-deep-dive": {
       "published": "2026-06-20",
@@ -749,7 +758,7 @@
     },
     "/skills/seo-audit": {
       "published": "2026-07-03",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/ssl-audit": {
       "published": "2026-07-04",
@@ -757,7 +766,7 @@
     },
     "/skills/status-snapshot": {
       "published": "2026-06-22",
-      "modified": "2026-10-07"
+      "modified": "2026-11-27"
     },
     "/skills/structured-scrape": {
       "published": "2026-06-20",
@@ -773,7 +782,7 @@
     },
     "/skills/text-hygiene": {
       "published": "2026-06-21",
-      "modified": "2026-08-30"
+      "modified": "2026-11-27"
     },
     "/skills/timezone-planner": {
       "published": "2026-07-04",
@@ -797,7 +806,7 @@
     },
     "/skills/user-onboarding": {
       "published": "2026-06-21",
-      "modified": "2026-10-13"
+      "modified": "2026-11-27"
     },
     "/skills/wallet-audit": {
       "published": "2026-07-04",
@@ -809,11 +818,11 @@
     },
     "/skills/weather-brief": {
       "published": "2026-06-23",
-      "modified": "2026-11-16"
+      "modified": "2026-11-27"
     },
     "/skills/webhook-intake": {
       "published": "2026-07-14",
-      "modified": "2026-11-08"
+      "modified": "2026-11-27"
     },
     "/skills/world-data": {
       "published": "2026-07-04",
@@ -1054,6 +1063,7 @@
     "iban-validate": "src/tools/kit.js",
     "ics-parse": "src/tools/kit2.js",
     "id-validate": "src/tools/validate-more-kit.js",
+    "image-animate": "src/tools/llm-images-fast-kit.js",
     "image-convert": "src/tools/image-kit.js",
     "image-crop": "src/tools/image-kit.js",
     "image-dominant-color": "src/tools/image-kit.js",
@@ -1135,6 +1145,7 @@
     "moving-average": "src/tools/stats-kit.js",
     "multi-search": "src/tools/search.js",
     "my-usage": "src/tools/usage-kit.js",
+    "name-records": "src/tools/enrich-kit.js",
     "next-holidays": "src/tools/holidays-kit.js",
     "nft-collection": "src/tools/nft-market-kit.js",
     "nft-floor": "src/tools/nft-market-kit.js",

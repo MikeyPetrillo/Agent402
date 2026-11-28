@@ -165,6 +165,18 @@
       "top": "calc"
     },
     {
+      "q": "add two numbers",
+      "top": "calc"
+    },
+    {
+      "q": "sum of two numbers",
+      "top": "calc"
+    },
+    {
+      "q": "add days to a date",
+      "top": "add-time"
+    },
+    {
       "q": "convert weights and verify them against a 3 stone threshold",
       "top": "unit-convert"
     },
@@ -297,6 +309,14 @@
     {
       "q": "what is my ip",
       "top": "ip-info"
+    },
+    {
+      "q": "reverse dns for an ip address",
+      "top": "ip-info"
+    },
+    {
+      "q": "coin snapshot",
+      "top": "coin-profile"
     },
     {
       "q": "what is the price of ethereum",
@@ -486,6 +506,22 @@
       "top": [
         "receipt-verify"
       ]
+    },
+    {
+      "q": "bitcoin volatility last 90 days",
+      "top": "crypto-history"
+    },
+    {
+      "q": "what is 5 plus 7",
+      "top": "calc"
+    },
+    {
+      "q": "seven plus five",
+      "top": "calc"
+    },
+    {
+      "q": "current ethereum price",
+      "top": "crypto-price"
     }
   ],
   "gaps": [
@@ -495,6 +531,11 @@
     "check a pgp signature on a file",
     "transpose a midi file up two semitones",
     "ip geolocation for an address",
-    "geolocate an ip address"
+    "geolocate an ip address",
+    "ip geolocation",
+    "geolocate ip",
+    "historical coin price",
+    "coin snapshot on a date",
+    "bitcoin price on 2021-01-01"
   ]
 }

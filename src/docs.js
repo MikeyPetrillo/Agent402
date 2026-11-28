@@ -205,7 +205,7 @@ export function renderSidebar(currentSlug) {
   const apiActive = currentSlug === "__api__" ? " active" : "";
   parts.push(`<div class="ml-docs-side-h">Reference</div>
 <ul class="ml-docs-side-ul">
-  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API reference (every route)</a></li>
+  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API reference</a></li>
   <li><a class="ml-docs-side-a" href="/openapi.json">OpenAPI JSON</a></li>
   <li><a class="ml-docs-side-a" href="/llms.txt">llms.txt</a></li>
   <li><a class="ml-docs-side-a" href="/api/pricing">Pricing</a></li>
@@ -295,14 +295,18 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-side-a:hover { background:var(--card); }
   .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
   .ml-docs-side-hidden { display:none !important; }
-  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
-  /* Tool rows: slug, description, price. The text columns may shrink below their longest token (minmax(0,..)) and break inside it, so no slug or word widens the page; the price keeps its own width. At phone width the description takes its own line under the slug and price. */
-  .ml-docs-api-row { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr) max-content;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
-  .ml-docs-api-row > div { min-width:0; }
-  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere; }
-  .ml-docs-api-row .desc { color:var(--muted);overflow-wrap:anywhere; }
-  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700;white-space:nowrap; }
-  @media (max-width:700px){ .ml-docs-api-row { grid-template-columns:minmax(0,1fr) max-content;gap:4px 14px; } .ml-docs-api-row .desc { grid-column:1 / -1;grid-row:2; } }
+  /* The reference list: a path, then what it holds; on a phone the note takes its own line. */
+  .ml-docs-reflist { list-style:none;padding:0;margin:18px 0;border-top:1px solid var(--hairline); }
+  .ml-docs-main .ml-docs-reflist li { display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:4px 18px;padding:10px 0;border-bottom:1px solid var(--hairline);margin:0; }
+  .ml-docs-reflist li > a, .ml-docs-reflist li > span { min-width:0;overflow-wrap:break-word; }
+  .ml-docs-reflist li > span { color:var(--muted); }
+  .ml-docs-main td > code { overflow-wrap:break-word; }
+  @media (max-width:640px){ .ml-docs-main .ml-docs-reflist li { grid-template-columns:minmax(0,1fr); } }
+  .ml-docs-main td.ml-docs-api-n { text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums; }
+  /* The category table fits a phone: a long category name wraps and its key sits on the line under it. Its name cells carry the first-cell floor inline, so the chrome's reading-width pass (site-chrome.js, for prose cells) leaves these short labels alone. */
+  .ml-docs-main .ml-docs-api-t td:first-child > a { white-space:normal; }
+  .ml-docs-main .ml-docs-api-t th { white-space:normal; }
+  @media (max-width:640px){ .ml-docs-main .ml-docs-api-t td:first-child > code { display:table;margin-top:4px; } }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
@@ -409,46 +413,47 @@ export function docsPage(baseUrl, slug) {
   );
 }
 
-// One price format for the reference column: at least two decimals, three
-// below a cent ("$0.003", "$0.01", "$3.30"); the catalog's own strings mix
-// precisions ("$0.01" beside "$0.010", "$3.3").
-function apiPrice(p) {
-  if (p === 0) return "free";
-  const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, ""));
-  if (p == null || p === "" || !Number.isFinite(n)) return "-";
-  return "$" + (n > 0 && n < 0.01 ? n.toFixed(3) : n.toFixed(2));
-}
-
-// API reference: flat catalog grouped by category. Built from the live tool
-// list rather than a frozen markdown page, so it stays in sync with whatever
-// the server actually exposes.
-export function docsApi(baseUrl, catalog) {
+// API reference: where each machine-readable reference lives, how a call is
+// made, and the catalog's categories with their tool counts, read from the
+// live tool list. Each tool's own description, schema, example and price live
+// on its /tools page, in /openapi.json and in /api/pricing; this page points
+// there rather than printing the catalog a second time.
+// `categories`: { key: { label } } for the categories that have a /tools page.
+export function docsApi(baseUrl, catalog, categories = {}) {
   const byCat = new Map();
   for (const t of catalog) {
     const cat = t.category || "uncategorized";
-    if (!byCat.has(cat)) byCat.set(cat, []);
-    byCat.get(cat).push(t);
+    byCat.set(cat, (byCat.get(cat) || 0) + 1);
   }
   const cats = [...byCat.keys()].sort();
-  const sections = cats.map((cat) => {
-    const tools = byCat.get(cat).slice().sort((a, b) => (a.slug || "").localeCompare(b.slug || ""));
-    const rows = tools.map((t) => {
-      const slug = esc(t.slug || t.route || "");
-      const desc = esc((t.description || "").replace(/\s+/g, " ").trim().slice(0, 220));
-      const price = apiPrice(t.price);
-      return `<div class="ml-docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
-    }).join("");
-    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:var(--fs-sm);font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
-  }).join("\n");
+  const refs = [
+    ["/openapi.json", "OpenAPI spec of every route: input schema and price per operation."],
+    ["/api/pricing", "Every route's price and free-tier flag, and the payment rails, as JSON."],
+    ["/tools", "The catalog by category, with one page per tool and its live example."],
+    ["/llms.txt", "A plain-text overview of the service for language models."],
+    ["/api/find?q=<task>", "The best tool for a task, with its input schema and price."],
+    ["/docs/api/explorer", "Try any route in the browser."],
+  ];
+  const refRows = refs.map(([path, what]) => {
+    const href = path.replace(/\?.*$/, path.startsWith("/api/find") ? "?q=extract+a+web+page" : "");
+    return `<li><a href="${esc(href)}"><code>${esc(path)}</code></a><span>${esc(what)}</span></li>`;
+  }).join("");
+  const catRows = cats.map((cat) => {
+    const label = categories[cat]?.label;
+    const name = label ? `<a href="/tools/category/${esc(cat)}">${esc(label)}</a>` : esc(cat);
+    return `<tr><td style="min-width:8em;">${name} <code>${esc(cat)}</code></td><td class="ml-docs-api-n">${byCat.get(cat)}</td></tr>`;
+  }).join("");
 
   const body = `<h1>API Reference</h1>
-<p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, the hosted MCP connector (<code>/mcp</code>), or the <code>agent402-mcp</code> npm server (both on <a href="/docs/MCP-Connector">MCP connector</a>).</p>
+<p class="muted">The catalog is served live as machine-readable references; this page points to each one. Call any tool over HTTP, the hosted MCP connector (<code>/mcp</code>) or the <code>agent402-mcp</code> npm server (both on <a href="/docs/MCP-Connector">MCP connector</a>).</p>
+<ul class="ml-docs-reflist">${refRows}</ul>
+<h2>Categories</h2>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>
-${sections}`;
+<div class="ml-docs-tw"><table class="ml-docs-api-t"><thead><tr><th>Category and key</th><th style="text-align:right;">Tools</th></tr></thead><tbody>${catRows}</tbody></table></div>`;
   return shell(
     baseUrl,
     "API Reference",
-    `Full Agent402 API catalog: ${catalog.length} tools across ${cats.length} categories. Machine-readable at /openapi.json and /llms.txt.`,
+    `Agent402 API reference: ${catalog.length} tools across ${cats.length} categories, described in /openapi.json, /api/pricing and /llms.txt.`,
     "/docs/api",
     body,
     "__api__"

@@ -13,11 +13,11 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1148 variables in 114 groups.
+1155 variables in 116 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [INK](#ink) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNDING](#funding) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [INK](#ink) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPEN](#open) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -280,6 +280,7 @@ holds it.
 | `CRAWL_GLOBAL_MAX` | Crawl global maximum. | `2` | `src/tools/crawl-kit.js` |
 | `CRAWL_ORIGINS_PER_OPERATOR` | Crawl origins per operator. | `4` | `src/x402-index.js` |
 | `CRAWL_OUR_SIDE_CONTROL_URLS` | Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer. |  | `src/our-side-control.js` |
+| `CRAWL_PARSE_WORKER` | Set to off to parse every crawled document on the serving thread (the parse only: the crawl's long-list passes and the registry fold still run as lane steps); unset, a document of 256 KB or more is parsed in a child process with its own heap limit and rebuilt a piece per turn. Off is also the only setting under which a document of 16 M characters or more is parsed on the serving thread: unset, such a document the child cannot parse (it cannot start, times out, is paused or stopped, or declines it) is not parsed and the last read is kept. |  | `src/crawl-parse.js` |
 | `CRAWL_SLOW_ORIGINS` | Crawl slow origins. |  | `src/crawl-cadence.js` |
 
 ## CREDITS
@@ -434,6 +435,7 @@ holds it.
 | `FACILITATOR_GAS_FRESH_MS` | Facilitator gas fresh, in milliseconds. |  | `src/robinhood-order.js`, `src/tool-failure-monitor.js` |
 | `FACILITATOR_GAS_MIN_SETTLEMENTS` | Facilitator gas minimum settlements. |  | `src/facilitator-gas.js` |
 | `FACILITATOR_GAS_PER_SETTLEMENT` | Facilitator gas per settlement. |  | `src/facilitator-gas.js` |
+| `FACILITATOR_LOW_BALANCE_XLM` | The Stellar facilitator's low-water line in XLM, which the funding runway fits the facilitator's trail against (default 1, the facilitator's own default). |  | `src/stellar-facilitator-status.js` |
 | `FACILITATOR_PUBLIC_INDEX_CHAINS` | Facilitator public index chains. |  | `src/facilitator-public-index.js` |
 | `FACILITATOR_PUBLIC_INDEX_NAME` | Facilitator public index name. |  | `src/facilitator-public-index.js` |
 | `FACILITATOR_PUBLIC_INDEX_POLICY_URL` | Facilitator public index policy URL. |  | `src/facilitator-public-index.js` |
@@ -472,7 +474,16 @@ holds it.
 | --- | --- | --- | --- |
 | `FREE_ALERTS` | Free alerts. |  | `src/server.js` |
 | `FREE_ALERTS_SECRET` | Free alerts secret (a credential, set on the host). |  | `src/server.js` |
-| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 11 more |
+| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 12 more |
+
+## FUNDING
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
+| `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
+| `FUNDING_RUNWAY_DAYS` | How many days ahead the operator view's fundingRunway word looks: a wallet whose fitted spend reaches its low-water line within it reads low-soon (default 3). A warning only. |  | `src/changelog.js`, `src/funding-runway.js` |
+| `FUNDING_WATCH_ADDRESSES` | Wallets the server does not spend from whose public balance the funding runway also reads (the wallets the scheduled paid checks spend from): a comma list of label:chain:address:lineUsd, chain base or tempo, at most 8 entries. Read by address only, at most once per wallet per 30 minutes; shown on the operator view's fundingRunway as watch:<label>. Unset: nothing is read. A malformed entry is ignored with one boot line. A warning only. |  | `src/changelog.js`, `src/funding-watch.js` |
 
 ## FUNNEL
 
@@ -702,6 +713,7 @@ holds it.
 | `MCP_OAUTH_EMAIL_CODE_TTL_SECONDS` | Life of an emailed connector sign-in code, in seconds. | `600` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REFRESH_TTL_DAYS` | Life of a connector refresh token, in days (each use rotates it). | `30` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REQUEST_TTL_MINUTES` | Life of a started connector sign-in, in minutes (a card purchase in the middle included). | `60` | `src/mcp-oauth.js` |
+| `MCP_REGISTRY_AUTH_PROOF` | The MCP Registry proof record for this domain's server namespace (one line: v=MCPv1; k=ed25519; p=<base64 public key>), served as text at /.well-known/mcp-registry-auth. A public key, not a secret. Unset, or not a proof record, the route answers 404. |  | `src/mcp-registry-auth.js` |
 | `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 
 ## MEMORY
@@ -788,6 +800,14 @@ holds it.
 | `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word (1 when unset: the first refusal raises it). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds (0 when unset: no span is asked for). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query waits up to the send-slot reach (about 3 s) for a place, then is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
+
+## OPEN
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
+| `OPEN_METEO_BOOT_READ` | off skips the one keyed weather read made shortly after boot (it sets the openMeteo status word without a buyer's call); never made in FREE_MODE or without the key. |  | `src/tools/weather-kit.js` |
+| `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 
 ## OPENROUTER
 
@@ -1097,6 +1117,7 @@ holds it.
 | `ROUTE_JUDGE_REFUSE_CONFIDENCE` | Route judge refuse confidence. | `0.9` | `src/tool-judge.js` |
 | `ROUTE_JUDGE_TIE_MIN` | Route judge tie minimum. | `0.15` | `src/tool-judge.js` |
 | `ROUTE_JUDGE_TIMEOUT_MS` | Route judge timeout, in milliseconds. | `4000` | `src/tool-judge.js` |
+| `ROUTE_PROBE_MIN_INTERVAL_DAYS` | Least days between two scheduled unpaid price reads of one seller route, and before a paywall check that the route refused for the shape of the request is repeated (default 7, at most 30; off or 0 removes the interval). |  | `src/crawl-cadence.js` |
 
 ## ROUTER
 
@@ -1630,8 +1651,6 @@ holds it.
 | `FLIGHT_SELLERS_JSON` | Flight sellers JSON. |  | `src/server.js` |
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRONT_DOOR_402` | Adds the front-door block to a first-contact 402 body; off unless set to on. |  | `src/server.js` |
-| `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
-| `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
 | `GATED_RAIL_HISTORY_FILE` | Gated rail history file path. | `/data/gated-rail-history.json` | `src/gated-rail-history.js` |
 | `GA_MEASUREMENT_ID` | Analytics measurement id. |  | `src/ledger-chrome.js` |
 | `GITHUB_TOKEN` | GitHub token (a credential, set on the host); the github-repo tool sends it to lift the keyless rate limit. |  | `src/tools/enrich-kit.js` |
@@ -1681,8 +1700,6 @@ holds it.
 | `OPENAI_API_KEY` | Openai API key (a credential, set on the host). |  | `src/tools/embed-kit.js`, `src/tools/image-gen-kit.js`, `src/tools/judge-kit.js` and 4 more |
 | `OPENAI_DECISIONS_URL` | Openai decisions URL. | `https://api.openai.com/v1/decisions` | `src/tools/judge-kit.js` |
 | `OPENFDA_API_KEY` | Openfda API key (a credential, set on the host). |  | `src/tools/gov-kit.js` |
-| `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
-| `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 | `OPERATOR_AUTH_FAIL_ALERT` | Failed operator-token attempts per hour before the guessing alarm pages. | `100` | `src/server.js` |
 | `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/operator-session-limits.js` |
 | `OWED_ESCALATE_DAYS` | Owed escalate, in days. |  | `src/tempo-push-debts.js` |
@@ -1695,7 +1712,7 @@ holds it.
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |
 | `RATE_LIMIT_MAX_KEYS` | Rate limit maximum keys. |  | `src/rate-limit.js` |
-| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 3 more |
+| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 4 more |
 | `RDAP_REGISTRY_DAILY_MAX` | Lookups whois and domain-availability send to one registry's RDAP service per UTC day, per process (default 1000; off lifts it). A lookup past it answers a retryable 503 and is not sent. |  | `src/tools/rdap-registry-limits.js` |
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |

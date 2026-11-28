@@ -1161,6 +1161,17 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off.",
   },
   {
+    // The crawl's document parser (crawlParse, src/crawl-parse.js):
+    // registry-kept pages (a registry's whole-list document was not parsed
+    // on its last pass, so its rows stand from an earlier pass); ok,
+    // fallback, paused and off clear (fallback and paused end by
+    // themselves); unknown and absent do neither. Title and body match heartbeat.yml's.
+    title: "Scheduled check needs review: crawl-parse",
+    verdict: ({ gateway: b }) => wordVerdict(b.crawlParse?.status, ["registry-kept"], ["ok", "fallback", "paused", "off"]),
+    body: () =>
+      "/api/gateway-status reports crawlParse.status=registry-kept: a registry's whole-list document was not parsed on its last pass (too long to parse here, or it ended the parser), so the sellers it lists stand as an earlier pass left them and its newer rows are not read. The operator view of /api/gateway-status names the source (crawlParse.registriesKept). Read the crawl parse line for that registry in the server log, then decide whether the registry can be read in pages or the parser's heap limit should rise (src/crawl-parse.js). Auto-closes when the word reads ok, fallback, paused or off.",
+  },
+  {
     title: "Scheduled check needs review: state-database",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

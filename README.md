@@ -15,12 +15,12 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/docs#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.17.1`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.17.2`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
-[![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fio.github.MikeyPetrillo%252Fagent402%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/io.github.MikeyPetrillo%2Fagent402/versions/latest)
+[![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Ftools.agent402%252Fagent402%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/tools.agent402%2Fagent402/versions/latest)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
 [![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -123,13 +123,13 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
-🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Hosted MCP connector](https://agent402.tools/integrations/mcp)** (`https://agent402.tools/mcp`)
+🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402)** · 🧩 **[Hosted MCP connector](https://agent402.tools/integrations/mcp)** (`https://agent402.tools/mcp`)
 
 ## Run it yourself in 30 seconds
 
 Pick whichever fits. They are all free and need no wallet:
 
-**1. Zero install - add the hosted connector to Claude** (claude.ai → Settings → Connectors → Add custom connector):
+**1. Zero install - add the hosted connector to Claude** (claude.ai → Customize → Connectors → Add → Add custom connector):
 
 ```
 https://agent402.tools/mcp
@@ -140,8 +140,8 @@ The pure-CPU tools run free there. A wallet-only tool is payable in the same cal
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.17.1
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.17.1
+npx -y agent402-mcp@0.17.2
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.17.2
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -212,12 +212,12 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Weather** | `weather-current`, `weather-daily`, `weather-hourly`, `weather-history`, `weather-air-quality` by coordinates or place name; `weather-probability`, `weather-market-brackets`, `weather-market-board` (ensemble probabilities); `weather-window`, `weather-thresholds`; free calculators `heat-index-calc`, `aqi-calc`, `degree-days-calc`, `wmo-weather-code` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
 | **Calendars & business days** | `public-holidays`, `bank-holidays`, `school-holidays`, `next-holidays`, `long-weekends` (with bridge days), `country-business-days` (check, add, count, region-aware), `business-day-planner` (first common business day across countries); `settlement-calendar` (ACH, Fedwire, SEPA, SEPA Instant, CHAPS settlement dates from each rail's published operating days); `market-calendar` (open, close and holidays for NYSE, the London Stock Exchange, Xetra, JPX and HKEX; calendar facts only, no market data, not affiliated with the exchanges). Holiday data by [Nager.Date](https://nagerholidays.com), used under a sponsorship held for this service; a commercial self-host needs its own sponsorship |
-| **Finance & crypto** | `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
+| **Finance & crypto** | `crypto-price`/`crypto-market`/`crypto-trending`/`crypto-global`, and `crypto-history` (look-back statistics computed from a coin's history: return, volatility, drawdown; not a price feed) (CoinGecko) |
 | **Crypto derivatives** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth) - $0.001 to $0.003 a call, no exchange account |
 | **DeFi, venues & stablecoins (computed answers)** | `lending-rates` (Aave v3 and Compound v3 supply and borrow rates read from the contracts), `funding-screener` (one coin's funding across every listed venue), `stablecoin-depeg-watch` (USD stablecoins off peg now, over 24 hours and 7 days), `exchange-spread` (each venue's deviation from a coin's cross-venue median price), `dex-pool-health`, `dex-volume-board`, `defi-screener`, `chain-board` - $0.005 a call |
 | **Solana token intel** | `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price` - markets and prices for any mint |
-| **Crypto market coverage** | `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
-| **Indexed chain data** | `asset-transfers` (filtered transfer history), `token-balances`, `token-allowance`, `tx-receipt` (decoded transfers), `block-receipts`, `token-price-history` - indexed reads across the major EVM chains, no node and no key of your own |
+| **Crypto market coverage** | `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history` (what changed since a date), `coin-ohlc` (candle statistics) and `coin-market-chart-range` (statistics for any window), each computed here and answered without the series, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
+| **Indexed chain data** | `asset-transfers` (filtered transfer history), `token-balances`, `token-allowance`, `tx-receipt` (decoded transfers), `block-receipts` - indexed reads across the major EVM chains, no node and no key of your own; `token-price-history` answers look-back statistics computed from a token's price history (return, volatility, drawdown), not the series |
 | **Site crawling** | `site-map` (enumerate a site's URLs) and `site-crawl` (breadth-first crawl to clean markdown, robots-respecting, hard page/depth/time budgets) - the deterministic pair behind any "read this whole site" task |
 | **Macro (US agencies + more)** | `us-macro-series` (90 common series IDs read from the agencies that publish them: BLS, BEA, the Treasury, the Federal Reserve Board and the New York Fed), yield curve, treasury, fiscal, Fed funds, CPI, unemployment, Sahm rule, ECB FX, World Bank |
 | **SEC EDGAR** | ticker→CIK, filing list, 10-K/10-Q text, XBRL frames, insider transactions, 13F holdings, IPO calendar, full-text search |
@@ -289,7 +289,7 @@ price per call whatever the length.
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
 | `POST /v1/images/pro` | $0.05 | higher-fidelity text-to-image, one picture a call |
 | `POST /v1/images/edits` | $0.02 | edit an image with a prompt, OpenAI `images.edit` wire: one to four PNG or JPEG references in, one JPEG out |
-| `POST /v1/videos/generations` | $0.20 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
+| `POST /v1/videos/generations` | $0.25 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
 | `POST /v1/audio/transcriptions` | $0.03 | speech-to-text, OpenAI transcription wire: multipart `file` in, transcript out, recordings up to four minutes |
 | `POST /v1/pro/audio/transcriptions` | $0.10 | the same model for recordings up to ten minutes |
 | `POST /v1/audio/speech` | $0.06 | text-to-speech, OpenAI `audio.speech.create()` wire - up to 2,000 chars in, raw mp3 (default) or pcm bytes out, five-model failover chain |
@@ -698,7 +698,7 @@ working tools, so you don't have to build the catalog yourself.
   non-custodial on the payment tools (your agent signs with its own key and we hold no crypto
   balance for it; prepaid card credits are a held balance and are named as one).
 
-Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
+Published for the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=tools.agent402/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar).
 
 **Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
@@ -750,6 +750,23 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `adapters/` | Drop-in tools for every framework in the adapter table above (npm, plus `langchain-py` on PyPI for LangChain/CrewAI Python) |
 | `wiki/` | Source for the [GitHub wiki](https://github.com/MikeyPetrillo/Agent402/wiki) (CI-synced) |
 | `scripts/` | Tests, demos, ops tooling |
+
+## Official packages and endpoints
+
+<!-- official-surfaces:start (generated by scripts/gen-official-surfaces.js --write) -->
+These are the official Agent402.tools packages and endpoints, published by Cardhavok LLC (doing business as Havok Holdings LLC).
+
+- **Site:** [agent402.tools](https://agent402.tools)
+- **Hosted MCP connector:** `https://agent402.tools/mcp`
+- **Source:** [github.com/MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402)
+- **MCP Registry name:** `tools.agent402/agent402`
+- **npm:** [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider), [`agent402-actions-plugin`](https://www.npmjs.com/package/agent402-actions-plugin), [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools), [`agent402-client`](https://www.npmjs.com/package/agent402-client), [`agent402-dev-kit-tools`](https://www.npmjs.com/package/agent402-dev-kit-tools), [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling), [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools), [`agent402-mcp`](https://www.npmjs.com/package/agent402-mcp), [`agent402-messages-tools`](https://www.npmjs.com/package/agent402-messages-tools), [`agent402-model-provider`](https://www.npmjs.com/package/agent402-model-provider), [`agent402-runner-tools`](https://www.npmjs.com/package/agent402-runner-tools), [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools), [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools), [`agent402-tollbooth`](https://www.npmjs.com/package/agent402-tollbooth)
+- **npm, earlier names:** [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) (now `agent402-action-provider`), [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) (now `agent402-stream-tools`), [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) (now `agent402-messages-tools`), [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) (now `agent402-dev-kit-tools`), [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) (now `agent402-structured-tools`), [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) (now `agent402-function-tools`), [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) (now `agent402-runner-tools`), [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) (now `agent402-function-calling`), [`agent402-openclaw`](https://www.npmjs.com/package/agent402-openclaw) (now `agent402-model-provider`), [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) (now `agent402-agent-loop-tools`), [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402) (now `agent402-actions-plugin`)
+- **PyPI:** [`agent402-structured-tools`](https://pypi.org/project/agent402-structured-tools/)
+- **PyPI, earlier names:** [`agent402-langchain`](https://pypi.org/project/agent402-langchain/) (now `agent402-structured-tools`)
+
+The same list is shown at [agent402.tools/company#official](https://agent402.tools/company#official) and served as data in [/.well-known/x402](https://agent402.tools/.well-known/x402) (field `official`).
+<!-- official-surfaces:end -->
 
 ## Ownership and licensing
 

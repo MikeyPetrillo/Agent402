@@ -12,10 +12,7 @@
 //
 //   node scripts/test-tool-page-content.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { paramLimits, toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
@@ -26,7 +23,6 @@ import { requestExampleOf } from "../src/openapi-request.js";
 const stripTags = (s) => stripTagsWith(s, "");
 
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
 let proc = null;
 const fail = (m) => { console.error("FAIL:", m); if (proc) proc.kill("SIGKILL"); process.exit(1); };
@@ -39,7 +35,6 @@ ok(paramLimits({ enum: ["md5", "sha256"], default: "sha256" }, "sha256") === "On
 ok(paramLimits({ minimum: 1, maximum: 100 }, 5) === "From 1 to 100. The example sends <code>5</code>.", "a range and the example's value");
 ok(paramLimits({ maxLength: 10 }, "<b>") === "Up to 10 characters. The example sends <code>&lt;b&gt;</code>.", "an example value is escaped");
 ok(paramLimits({ type: "string", description: "x" }) === "" && paramLimits(null) === "", "a field with no constraint adds nothing");
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 const mainOf = (html) => (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || [, html])[1];
 const titleOf = (html) => decode((html.match(/<title>([^<]*)<\/title>/) || [])[1] || "");
@@ -234,6 +229,25 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
     ok(creditsSalesEnabled() ? /AGENT402_CREDITS_KEY/.test(note) : /AGENT402_CREDITS_KEY issued earlier/.test(note), "MCP note: the credits clause follows the sales switch");
     const ib = decode(stripTags(toolPage("https://example.test", { ...plain, identityBound: true }, [])));
     ok(!/from an AGENT402_CREDITS_KEY|or from AGENT402_CREDITS_KEY/.test(ib), "MCP note: no credits clause on an identity-bound tool");
+    // A tool no credits key pays (identity-bound, or one that buys from an
+    // outside seller with our wallet) names no credits key in its MCP note,
+    // which would contradict its own fact line.
+    const noteOf = (def) => decode(stripTags((toolPage("https://example.test", def, []).match(/From an MCP client[\s\S]*?<p class="tp-sub">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    ok(/pays from a wallet/.test(noteOf(plain)) && /AGENT402_CREDITS_KEY/.test(noteOf(plain)), "MCP note: an ordinary paid tool names the wallet and the credits key");
+    for (const [what, extra] of [["identity-bound", { identityBound: true }], ["flagged as buying from an outside seller", { paysThirdPartySeller: true }], ["that spends our wallet before settlement", { spendsOwnWallet: true }]]) {
+      const n = noteOf({ ...plain, ...extra });
+      ok(/pays from a wallet\.$/.test(n) && !/AGENT402_CREDITS_KEY/.test(n), `MCP note: no credits key on a tool ${what} (${n.slice(-60)})`);
+    }
+  }
+  // A lead cut to its budget ends at a clause boundary, with every parenthesis closed, never inside a phrase.
+  {
+    const leadOfPage = (description) => decode(stripTags((toolPage("https://example.test", { ...plain, description }, []).match(/<p class="tp-lead">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    const long = "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup, no card on file, no monthly plan, no minimum spend and no contract of any kind at all.";
+    const lead = leadOfPage(long);
+    ok(/\.\.\.$/.test(lead) && /(accepted rail\)|no API key|no signup|no card on file|no monthly plan)\.\.\.$/.test(lead), `a cut lead ends at a clause boundary (${lead.slice(-50)})`);
+    ok((lead.match(/\(/g) || []).length === (lead.match(/\)/g) || []).length, "a cut lead closes every parenthesis it opens");
+    const flat = leadOfPage(`${Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ")}.`);
+    ok(/word\d+\.\.\.$/.test(flat), "a sentence with no clause boundary is still cut at a word");
   }
   ok(displayPrice("$3.3") === "$3.30" && displayPrice("$0.010") === "$0.01" && displayPrice("$0.001") === "$0.001" && displayPrice("$0.500") === "$0.50" && displayPrice("$2") === "$2.00", "displayPrice: one display form for catalog prices");
   {
@@ -262,17 +276,12 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
 }
 
 // ---- 2 + 3. Booted: every catalog page. ----
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: "ignore",
-});
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  const srv = await bootServer({ stores: "tool-page-content", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } });
+  proc = srv.child;
+  const BASE = srv.url;
+  ok(srv.port > 0, "server booted");
 
   for (const slug of ["html-entities", "html-links", "html-select", "html-to-markdown", "html-strip"]) {
     const html = await (await fetch(`${BASE}/tools/${slug}`)).text();
@@ -280,6 +289,16 @@ try {
     ok(!/<a href=\\?"x\\?"/.test(html), `/tools/${slug}: no live link from an example string`);
   }
 
+  // The served pages: a route-execute tier says credits and cards do not pay
+  // it and names no credits key; an ordinary paid tool names one.
+  {
+    const noteIn = (html) => decode(stripTags((html.match(/From an MCP client[\s\S]*?<p class="tp-sub">([\s\S]*?)<\/p>/) || [])[1] || ""));
+    const tier = await (await fetch(`${BASE}/tools/route-execute`)).text();
+    ok(/prepaid credits and cards do not pay it/.test(decode(stripTags(tier))), "/tools/route-execute: the fact line says credits and cards do not pay it");
+    ok(/pays from a wallet\.$/.test(noteIn(tier)) && !/AGENT402_CREDITS_KEY/.test(noteIn(tier)), `/tools/route-execute: the MCP note names no credits key (${noteIn(tier).slice(-70)})`);
+    const normal = await (await fetch(`${BASE}/tools/extract`)).text();
+    ok(/AGENT402_CREDITS_KEY/.test(noteIn(normal)), "/tools/extract: the MCP note names the credits key");
+  }
   const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
   const list = (Array.isArray(pricing) ? pricing : pricing.tools || pricing.endpoints || []).filter((t) => t.slug);
   ok(list.length >= 400, `catalog listed (${list.length})`);

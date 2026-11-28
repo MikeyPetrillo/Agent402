@@ -3,6 +3,7 @@
 // has no accounts, so there is genuinely little to say.
 import { PAYMENT_REFUSAL_RETENTION_DAYS } from "./payment-refusals.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { legalSummaryBox, legalJumpList, LEGAL_SUMMARY_CSS } from "./legal-summary.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { scorecardPublishesTx } from "./scorecard.js";
 
@@ -137,7 +138,8 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-27.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-28.</p>
+<!--lg-top-->
 </section>
 
 <section>
@@ -170,7 +172,7 @@ the stores are protected are summarized at <a href="/trust">/trust</a>. A busine
 through the service can ask for our Data Processing Addendum at <a href="mailto:${esc(COMPANY_MAILBOXES.operator)}">${esc(COMPANY_MAILBOXES.operator)}</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
-<h2>What we process, and why</h2>
+<h2 id="what-we-process">What we process, and why</h2>
 <ul>
   <li><b>Tool inputs.</b> The data you send to a tool (text to hash, a URL to render, …) is processed
   in memory to compute the response. It is not stored, except in these cases:
@@ -465,7 +467,7 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li><b>Free email alerts.</b> If you enter an email on a free report page to be told when a company, fund, domain or product changes, we store that address, the subject you chose and the dates we checked and emailed, and we send you a confirmation link first: nothing is watched and nothing else is sent until you click it. Alert emails go out at most once a day, only when something changed, through the same transactional provider, and every one carries a one-click unsubscribe link that ends the alert and stops all email. We do not use the address for anything else and do not share it.</li>
 </ul>
 
-<h2>Third parties</h2>
+<h2 id="third-parties">Third parties</h2>
 <ul>
   <li>Tools that fetch external URLs (<code>extract</code>, <code>render</code>, <code>screenshot</code>, …)
   contact those sites from our server with the URL you provided. Tools that read a third-party data
@@ -509,13 +511,13 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li>${publicIndexNoSaleText()}</li>
 </ul>
 
-<h2>The MCP connector (${baseUrl}/mcp)</h2>
+<h2 id="mcp-connector">The MCP connector (${baseUrl}/mcp)</h2>
 <p>The hosted connector takes no account. An unpaid call carries no identity beyond the connecting IP,
 which is used for rate limiting and the hashed records described above. A paid call (over x402 or MPP)
 also carries the paying wallet's address, which is recorded as it is for any paid call to the HTTP API.
 Tool calls made through it are processed exactly like the HTTP API.</p>
 
-<h2>Retention</h2>
+<h2 id="retention">Retention</h2>
 <p>Operational logs are kept by our hosting provider for 30 days. Rate-limit counters
 expire with their window (one hour, or 24 hours for the free trial's daily allowance). Memory-tool data
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
@@ -555,7 +557,7 @@ email, memory and ledger records) to separate object storage, and each copy is d
 after ${backupKeepDays()} days. A deletion you ask for therefore reaches the last backup that still holds
 the record within ${backupKeepDays()} days.</p>
 
-<h2>Your rights (EU, UK and Switzerland)</h2>
+<h2 id="your-rights">Your rights (EU, UK and Switzerland)</h2>
 <p>If you are in the European Economic Area, the United Kingdom or Switzerland, the controller of the data described
 on this page is <strong>Cardhavok LLC</strong>, doing business as <strong>Havok Holdings LLC</strong>
 (see <a href="/company">/company</a>). Our legal bases are: the contract you enter by paying, for a paid
@@ -581,18 +583,18 @@ operated from the United States, and the data described here is processed and st
 which the model operator serving the call may process in another country (the model provider's listing names
 each operator).</p>
 
-<h2>Children</h2>
+<h2 id="children">Children</h2>
 <p>The service is for people 18 and older (see the <a href="/terms">terms</a>) and is not directed at
 children. We do not knowingly collect anything from anyone under 13; if you believe a child has sent us
 an email address or other information, write to the address below and we will delete it.</p>
 
-<h2>Abuse &amp; legal requests</h2>
+<h2 id="abuse">Abuse &amp; legal requests</h2>
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained
 on a blocklist for as long as needed to enforce the block. We disclose information and preserve
 records in response to valid legal process, and report content where the law requires it. Requests
 and abuse reports: <a href="mailto:help@agent402.tools">help@agent402.tools</a>.</p>
 
-<h2>Operator &amp; contact</h2>
+<h2 id="contact">Operator &amp; contact</h2>
 <p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${repoUrl("issues")}" rel="noopener">GitHub issues</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
@@ -601,5 +603,20 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withUpstreamKeyDate(withDirectUpstreamDate(withPublicIndexDate(withCreditsSalesDate(body)))) });
+  // The short version, each sentence said in full in the section it names,
+  // and the jump list read from the sections themselves.
+  const summary = legalSummaryBox([
+    "Calling a tool needs no account.",
+    "Data you send to a tool is processed in memory and not stored, except in the cases listed under What we process.",
+    "Neither the page counter nor Google Analytics loads in the EU, the EEA, the UK or Switzerland until you choose Allow, and the Global Privacy Control signal keeps both off.",
+    "A paid call records the paying wallet's address.",
+    "Tools that read an outside source send it what the lookup needs; the providers are listed under Third parties.",
+    "Everything we keep, and for how long, is listed under Retention.",
+    `In the EEA, the UK and Switzerland you can ask for access, correction or erasure at <a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month.`,
+    "The service is for people 18 and older.",
+    "This summary does not replace the full text below, which governs.",
+  ]);
+  const page = body.replace("<!--lg-top-->", `${summary}\n${legalJumpList(body)}`);
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss: extraCss + LEGAL_SUMMARY_CSS, body: withUpstreamKeyDate(withDirectUpstreamDate(withPublicIndexDate(withCreditsSalesDate(page)))) });
 }

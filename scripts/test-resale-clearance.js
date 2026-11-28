@@ -29,7 +29,7 @@ const kits = await Promise.all([
   "weather-kit.js", "weather-plan-kit.js", "weather-probability-kit.js", "bundle-kit.js", "data-kit.js", "gov-kit.js",
   "holidays-kit.js", "crypto-screens-kit.js", "crypto-kit.js", "macro-kit.js", "edgar-kit.js", "network-kit.js", "kit.js",
   "sql-guard-kit.js", "sanctions-kit.js", "kit2.js", "email-guard-kit.js",
-  "cdp-kit.js", "x-data-kit.js", "derivatives-kit.js", "enrich-kit.js", "chain-kit.js", "search.js", "crypto-markets-kit.js",
+  "cdp-kit.js", "x-data-kit.js", "derivatives-kit.js", "enrich-kit.js", "chain-kit.js", "search.js", "crypto-markets-kit.js", "alchemy-data-kit.js",
 ].map((f) => import(`../src/tools/${f}`)));
 const defs = new Map();
 for (const mod of kits) for (const v of Object.values(mod)) if (Array.isArray(v)) for (const d of v) if (d && typeof d === "object" && typeof d.slug === "string" && typeof d.handler === "function" && !defs.has(d.slug)) defs.set(d.slug, d);
@@ -43,6 +43,8 @@ const CLEARED = [
   "weather-forecast", "weather-alerts",
   "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar",
   "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", "token-diligence", "stablecoin-peg",
+  // Look-back statistics computed from the market source's series (cleared; on no third party's list).
+  "crypto-history", "coin-history", "coin-ohlc", "coin-market-chart-range",
   "fx-rate", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates",
   "edgar-13f-dataset-head", "edgar-13f-datasets", "edgar-13f-holdings", "edgar-company-concept", "edgar-company-facts", "edgar-company-lookup", "edgar-filings", "edgar-recent-ipos", "edgar-search", "edgar-xbrl-frame", "edgar-insider-trades", "filings-brief",
   "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls",
@@ -135,7 +137,10 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
 // PUBLIC published example read, at any depth, for a field on the shared
 // raw-field denylist (R.RAW_MARKET_FIELDS); none may carry one, and none needs
 // a resale trim (markRefAnswer) to be clean. The kits' suites drive the
-// handlers themselves through the same list.
+// handlers themselves through the same list. A tool that computes its answer
+// from a historical series (R.COMPUTED_SERIES_SLUGS) is read for the series
+// field names too (R.RAW_SOURCE_FIELDS: bars, points, a window's first, last,
+// high and low), whatever its source.
 {
   const CLASS = "[source figure in a computed answer]";
   const keysAt = (v, path = "", acc = []) => { if (Array.isArray(v)) v.forEach((x) => keysAt(x, `${path}[]`, acc)); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { const at = path ? `${path}.${k}` : k; acc.push([k, at]); keysAt(x, at, acc); } return acc; };
@@ -150,9 +155,21 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
     ok(hits.length === 0, `${CLASS} ${d.slug}: the public example carries no source figure (${hits.join(", ") || "none"}${hits.length ? "; answer a share, ratio, deviation, percentile, rank, band or score instead" : ""})`);
     ok(typeof d.refAnswer !== "function", `${CLASS} ${d.slug}: no resale trim is needed (the public answer is the resold one)`);
   }
+  // The look-back tools: marked computed, and no series field in the example.
+  const denySeries = new Set(R.RAW_SOURCE_FIELDS);
+  ok(R.COMPUTED_SERIES_SLUGS.every((s) => Object.hasOwn(R.WITHDRAWN_SOURCE_FIELDS, s)) && R.RAW_MARKET_FIELDS.every((k) => denySeries.has(k)) && ["bars", "points", "first", "last", "high", "low"].every((k) => denySeries.has(k) && !deny.has(k)), `${CLASS} the series denylist holds the market one and the series field names`);
+  for (const slug of R.COMPUTED_SERIES_SLUGS) {
+    const d = defs.get(slug);
+    const pub = d?.discovery?.output?.example;
+    ok(d?.resale === R.RESALE_COMPUTED && pub && Object.keys(pub).length > 3, `${CLASS} ${slug}: marked computed, with a published example to read`);
+    const hits = keysAt(pub).filter(([k]) => denySeries.has(k)).map(([, p]) => p);
+    ok(hits.length === 0, `${CLASS} ${slug}: the public example carries no source figure or series field (${hits.join(", ") || "none"})`);
+    ok(typeof d?.refAnswer !== "function" && Object.hasOwn(R.WITHDRAWN_SOURCE_FIELDS, slug), `${CLASS} ${slug}: needs no resale trim and names the fields it withdrew`);
+  }
+  ok(defs.get("token-price-history")?.resaleCleared !== true && R.resaleClearanceRefusal(defs.get("token-price-history")) === NOT_CLEARED, `${CLASS} token-price-history is computed and carries no clearance for resale through a third party`);
   // Every withdrawn top-level field is a denylisted one and is gone from the example.
   for (const [slug, fields] of Object.entries(R.WITHDRAWN_SOURCE_FIELDS)) {
-    ok(fields.every((k) => deny.has(k)) && fields.every((k) => !(k in (defs.get(slug)?.discovery?.output?.example || {}))), `${CLASS} ${slug}: each withdrawn field (${fields.join(", ")}) is on the denylist and out of the example`);
+    ok(fields.every((k) => denySeries.has(k)) && fields.every((k) => !(k in (defs.get(slug)?.discovery?.output?.example || {}))), `${CLASS} ${slug}: each withdrawn field (${fields.join(", ")}) is on the denylist and out of the example`);
   }
   // CONTROLS: the guard reads something. A source figure planted deep in a
   // copy of one example is found at its path; the barred raw pass-through

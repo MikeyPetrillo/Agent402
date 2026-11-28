@@ -23,7 +23,8 @@
 //      the index may not drop, add or re-weight a single row.
 //   3. MAINTENANCE: a replaced entry's new rows are found and its old rows are
 //      not; a deleted entry vanishes; cache.clear() empties the pool; the
-//      stale-share rebuild fires and stays correct; a candidate reached only
+//      stale-share rebuild fires and stays correct; a re-crawl with no row
+//      changed posts nothing again and compacts nothing; a candidate reached only
 //      through its description, its alias, its name-in-slug-form or a short
 //      whole-token term is still found (the completeness the exactness proof
 //      relies on); the local pool memo tracks a catalog rebuilt by identity.
@@ -308,22 +309,44 @@ const cache = _cacheForTests();
     cache.delete(big); cache.delete(big2);
   }
 
-  // A full re-crawl (every entry replaced) rebuilds the index in the background:
-  // no single event-loop turn blocks for the rebuild, answers stay right during
-  // it, and the rebuilt index carries no stale rows.
+  // Waits for the drain and any compaction it starts.
+  const settled = async () => {
+    await new Promise((r) => setTimeout(r, 5)); // the drain's turn, which may start a compaction
+    for (let i = 0; i < 20000; i++) {
+      const s = _routeIndexStatsForTest();
+      if (!s.pending && !s.partial && !s.rebuilding) return s;
+      await new Promise((r) => setImmediate(r));
+    }
+    return _routeIndexStatsForTest();
+  };
+  // A full re-crawl in which no row changed (every entry and every row a new
+  // object, equal to the last): each row is kept as the object it replaced, its
+  // postings serve the new entry, and nothing goes stale, so no compaction runs.
   {
+    const ranked = () => routeQuery({ query: "json to csv", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}|${r.score}`);
+    const was = ranked(); // past the share (the sellers deleted above), this query starts their compaction
+    const before = await settled();
     for (const [o, v] of [...cache]) cache.set(o, { ...v, tools: (v.tools || []).map((t) => ({ ...t })) });
+    const st = await settled();
+    ok(st.builds === before.builds && st.staleTools === before.staleTools && st.indexedTools === before.indexedTools, `a re-crawl with every row unchanged leaves nothing stale and compacts nothing (builds ${before.builds} -> ${st.builds}, stale ${before.staleTools} -> ${st.staleTools}, rows ${before.indexedTools} -> ${st.indexedTools})`);
+    ok(JSON.stringify(ranked()) === JSON.stringify(was), "...and ranks exactly as before it");
+  }
+  // A full re-crawl that changed every row compacts the index in the
+  // background: no single event-loop turn blocks for it, answers stay right
+  // during it, and the compacted index carries no stale rows.
+  {
+    const b0 = _routeIndexStatsForTest().builds;
+    for (const [o, v] of [...cache]) cache.set(o, { ...v, tools: (v.tools || []).map((t) => ({ ...t, recrawled: 1 })) });
     const during = routeQuery({ query: "json to csv", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}|${r.score}`);
-    ok(_routeIndexStatsForTest().rebuilding, "past the stale share on a prod-sized pool the rebuild runs in the background");
     const meter = gapMeter();
-    await _routeIndexSettledForTest();
+    const st = await settled();
     await new Promise((r) => setTimeout(r, 10));
     const { worst, worstWall } = meter.stop();
-    const st = _routeIndexStatsForTest();
-    ok(!st.rebuilding && st.staleTools === 0 && st.indexedTools > 100000, `the background rebuild completed with no stale rows (${st.indexedTools} live, ${st.staleTools} stale)`);
-    ok(worst < REBUILD_GAP.ms, `no event-loop turn blocked for the rebuild (worst gap ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${REBUILD_GAP.note}; a synchronous rebuild is ~1 s here)`);
+    ok(st.builds > b0, `past the stale share on a prod-sized pool the index is compacted in the background (builds ${b0} -> ${st.builds})`);
+    ok(!st.rebuilding && st.staleTools === 0 && st.indexedTools > 100000, `the compaction completed with no stale rows (${st.indexedTools} live, ${st.staleTools} stale)`);
+    ok(worst < REBUILD_GAP.ms, `no event-loop turn blocked for the re-crawl's indexing and compaction (worst gap ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${REBUILD_GAP.note}; a synchronous rebuild is ~1 s here)`);
     const after = routeQuery({ query: "json to csv", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}|${r.score}`);
-    ok(JSON.stringify(during) === JSON.stringify(after), "the ranking during the rebuild equals the ranking after it");
+    ok(JSON.stringify(during) === JSON.stringify(after), "the ranking during the compaction equals the ranking after it");
   }
   cache.clear();
 }

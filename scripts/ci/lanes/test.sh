@@ -13,6 +13,8 @@ t node scripts/test-leak-guard.js
 t node scripts/test-tool-error-redaction.js
 # Weather kit: keyed Open-Meteo hosts and apikey only with the key, a keyed 429 is an uncharged 503 with no public-host fallback, no key in errors or logs (offline)
 t node scripts/test-open-meteo-keyed.js
+# Weather kit: one keyed read after boot moves the openMeteo word; none in FREE_MODE or without the key (offline)
+t node scripts/test-open-meteo-boot-read.js
 # Paid-canary verdict (pages on real buying breaks, warns on upstream)
 t node scripts/test-paid-canary.js
 # derivatives kit (offline)
@@ -37,6 +39,8 @@ t node scripts/test-ecosystem-category.js
 t node scripts/test-token-brief-kit.js
 # crypto-markets kit (offline)
 t node scripts/test-crypto-markets-kit.js
+# look-back statistics of the price-history tools: no source value in an answer (offline)
+t node scripts/test-lookback-stats.js
 # CoinGecko host and key header per COINGECKO_API_TIER, every calling kit (offline)
 t node scripts/test-coingecko-endpoint.js
 # Offline suites that stub an upstream pass with every real name lookup refused (the address guard's resolver; booted servers inherit the preload)

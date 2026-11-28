@@ -37,6 +37,8 @@ t node scripts/test-settle-first.js
 t node scripts/test-settle-first-routes.js
 # The refusal record for the gates that answer on their own: a Tempo credential, a credits key and an x402 settle refusal, one count each; a clean paid call records nothing (paid-wires rig)
 t node scripts/test-payment-refusals-gates.js
+# A Tempo push transfer is paid before its handler: its run is never answered the SEC pace's 503, a pull request is, a missing, forged or claimed credential never reaches the handler, and the mark is not kept by a keep-alive socket (paid-wires rig)
+t node scripts/test-tempo-push-pace.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
 # OUSD on the Tempo MPP rail: the name resolves in every reader, USDC.e stays the first challenge, an OUSD pull credential verifies and settles, and it is refused where TEMPO_CURRENCY does not list it (boots a paid server - offline)

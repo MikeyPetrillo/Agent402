@@ -41,8 +41,8 @@ if (process.env.SPEND_WORDS_CHILD) {
   console.warn = () => {};
   // The direct upstream's day books the upstream's own reported charge, so it needs no table.
   if (job.kit !== "direct") {
-    const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-    requireUpstreamCosts("test-spend-words-shared-redis");
+    const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+    const COSTS = costsOrStandIn("test-spend-words-shared-redis");
   }
   let kit;
   if (job.kit === "direct") {
@@ -95,8 +95,8 @@ if (!String(process.env.REDIS_URL || "").trim()) {
   process.exit(0);
 }
 {
-  const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-  requireUpstreamCosts("test-spend-words-shared-redis");
+  const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+  const COSTS = costsOrStandIn("test-spend-words-shared-redis");
 }
 const { STATUS_READ_MS } = await import("../src/daily-ceilings.js");
 

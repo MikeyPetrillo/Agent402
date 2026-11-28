@@ -55,6 +55,10 @@ const REQUIRED = [
   ["openai", "gpt-image-2.6-flare"], ["openai", "gpt-image-2.6-sunburst"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
+  // The image-to-video route (llm-images-fast-kit.js ANIMATE_COST_KEY): the
+  // video model's 4 s silent 720p clip with a first frame, its own row so
+  // either input mode reprices by one table edit.
+  ["media", "google/veo-3.1-lite:first-frame"],
   // The /api/tts backup that is not a /v1/audio/speech link (tts-kit.js);
   // also a model a buyer can name on /v1/audio/speech (speech-additions.js).
   ["speech", "mistralai/voxtral-mini-tts-3-0"],

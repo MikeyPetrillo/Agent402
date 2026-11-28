@@ -633,6 +633,15 @@ function describe(tierSlug) {
   return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base + dflt;
 }
 
+/** The tiers whose route page shows a text of its own (`pageSummary`): the
+ *  first sentence of their description does not fit a page lead whole. The
+ *  catalog description is unchanged (scripts/test-description-length.js). */
+export const RESPONSES_PAGE_SUMMARY_TIERS = Object.freeze(["v1-chat-nano", "v1-chat", "v1-chat-pro"]);
+function pageSummaryOf(tierSlug) {
+  const t = TIERS[tierSlug];
+  return `Responses-format chat over x402: point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Compatible with the OpenAI Responses wire format. Same models, caps and price as this tier's /chat/completions route. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes, server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).${t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel}; the price does not change.` : ""}`;
+}
+
 export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([tierSlug, path]) => ({
   route: `POST ${path}`,
   name: `Responses ${TIER_LABEL[tierSlug]} (Responses wire format)`,
@@ -640,6 +649,7 @@ export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([
   category: "llm",
   price: priceString(tierSlug),
   description: describe(tierSlug),
+  ...(RESPONSES_PAGE_SUMMARY_TIERS.includes(tierSlug) ? { pageSummary: pageSummaryOf(tierSlug) } : {}),
   tags: tierSlug === "v1-chat-metered" ? ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "codex", "gateway", "metered", "pay-per-token"] : ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "gateway"],
   ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredResponsesQuoteUsd(body).usd, fromInput: { input: "hi", max_output_tokens: 16 } } : {}),
   // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).

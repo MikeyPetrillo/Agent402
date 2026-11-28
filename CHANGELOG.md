@@ -4,6 +4,201 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.18.0 - 2026-11-28
+
+### 2026-11-28 (Shorter pages, clearer answers)
+Site:
+- Tool pages are shorter: a short lead, one line per fact under "Errors and
+  behavior", and related tools and skill packs as linked names.
+- A tool page's lead ends at a sentence or clause boundary; on a phone an
+  address or hash in its parameter table breaks at the line's end, and the
+  price badge never starts a wrapped line with its separator dot.
+- Skill pack pages list their tools in a table with each tool's route; the
+  full pack text is still served to agents by the API and MCP.
+- Skill pack prompts state each pack's budget as its listed price and each
+  tool's proof-of-work eligibility as listed.
+- /changelog shows the 30 most recent entries; older entries moved to
+  /changelog/archive. /docs/api is a short index of the API references.
+- Long pages such as the changelog archive bind their line wraps in short
+  turns, on first load and on resize, so the page stays responsive while it
+  finishes.
+- The home page, /sell and /docs open with short answers and keep detail one
+  tap away; /status shows rails in a table; the Transactions page (/revenue)
+  leads with its figures.
+- /privacy and /terms open with a summary and a jump list and are dated
+  2026-11-28; the full text below them is unchanged and governs.
+- Two new pages: SEC Form 4 insider trades by API at /insider-trades-api,
+  and a guide to agent-to-agent payments over x402 at
+  /guides/agent-to-agent-payments, whose sample sets a per-call ceiling.
+- A new page at /crypto-history-stats-api covers the routes that answer a
+  coin's history as computed figures, not a price series.
+- /company lists the official Agent402.tools packages and endpoints; the
+  same list is in the README and in /.well-known/x402 (field `official`).
+- /start has an "On your phone" path: add the connector from a phone's
+  browser, use it in the Claude app, and check it with one free first
+  prompt; both connector steps name the Customize, then Connectors menu.
+- The FAQ answers "Is it free?", "Do I need crypto?", "Does it work on my
+  phone?" and "Is my data safe?".
+- New page /recipes: prompts to copy into an AI app, each with the tool it
+  runs and its catalog price.
+- The FAQ's data answer matches /privacy: a tool's input goes to the outside
+  source the lookup needs, and a model-backed tool's input goes to its model
+  provider.
+- /start and /recipes offer card payment only while a card offer is on sale;
+  with the credits connector off, /recipes says paid recipes run from a
+  computer with a wallet.
+- /start notes that on Team and Enterprise plans an Owner adds the
+  connector.
+- /terms asks that a generated clip of a real person have that person's
+  consent and be disclosed as AI-generated, and that a buyer ask the same of
+  its own users.
+Index:
+- The index crawler sends one seller route at most one unpaid price
+  request a week. Inside that week it asks once more only after a server
+  error, a redirect or no answer, to confirm a not-found answer from a
+  route the seller's documents do not list, or when the price those
+  documents state has changed. Registering again still reads at once, the
+  paywall check (one request to a seller's cheapest paid route, on a
+  rotation across the index) keeps its own schedule, and /crawler says the
+  same.
+- A large document read from a seller or a registry is parsed in a separate
+  process with its own memory limit and rebuilt in short steps, so a crawl
+  of a multi-megabyte catalog no longer delays other requests; a document
+  that ends that parser, or is too large to parse safely (also when that
+  parser is unavailable), is not parsed by the server, the seller's or
+  registry's previous listing is kept unchanged, and a seller's scheduled
+  crawl does not fetch it again for up to a day (registering again still
+  reads at once).
+Tools:
+- /v1/videos/generations has a higher list price, shown on /api/pricing and
+  in its 402.
+- ip-info is named "IP address type and reverse DNS"; its route and answer
+  are unchanged, and /api/find answers a reverse DNS or PTR lookup search
+  with it.
+- An image prompt the provider's content filter stops answers 422 with
+  reason `content_filtered`, in place of the earlier 400 or 502; a provider
+  outage keeps its 5xx answer, and an overloaded or rate-limited provider is
+  read as an outage, not a filtered prompt.
+- Tool pages for the tools with the longest descriptions show a shorter
+  summary, while their listings and API descriptions are unchanged.
+- crypto-history, coin-ohlc and coin-market-chart-range answer look-back
+  statistics computed from a coin's history (return, volatility, drawdown
+  with its dates, best and worst day, distance from the window's high and
+  low, trend, candle statistics) and no longer return the price series or
+  candles.
+- coin-history answers what changed since a date in place of the dated price
+  snapshot.
+- token-price-history answers the same look-back statistics for a token and
+  no longer returns price points.
+- EDGAR tools, reports and pages share one pace of at most 8 requests a
+  second to the SEC's hosts, with turns shared across callers; an EDGAR tool
+  call whose read cannot get its turn in time answers 503 with Retry-After,
+  at once when its place cannot be reached, and is not charged on x402; a
+  run whose payment is final before it runs starts ahead of the line and is
+  never refused by the pace, and a read that arrives while its payment is
+  settling waits for that outcome first.
+- New: `POST /api/image-animate` turns a still picture (PNG or JPEG, sent as
+  base64, a data: URL or an https URL) and a motion prompt into one silent
+  4-second 720p clip that opens on the picture, model-backed and priced flat
+  per clip.
+- Video generation answers 422 with reason `content_filtered` when the
+  provider's filter refuses the request at submit, not only when a job
+  fails.
+- New: `name-records` returns, for a name, the creator, publisher, first
+  appearance and other statements Wikidata records, the US trademark serial
+  numbers it records with links to their USPTO record pages, and the Commons
+  file page's recorded author, license and restriction tags, plus an
+  exact-copy Commons match for an uploaded image; each record carries its
+  source link and read time, and the answer makes no determination of
+  ownership or permitted use.
+- cert-transparency waits up to 18 seconds for its certificate log across
+  all of a call's reads, so a slow but healthy log is served where it used
+  to answer a retryable error.
+- A ticker pack whose payment is settled before its work no longer fails
+  because one of its report legs met this server's own pace of EDGAR reads.
+- A skill pack with no successful step names each failed step in the
+  answer's `pack` and `failedSteps` fields.
+- Image-to-video and text-to-video calls end inside the payment's own time,
+  the picture's download included; a clip cut off by that time is kept for
+  the same request to collect.
+- Image-to-video refuses a picture whose pixel data cannot be read, before
+  anything is sent to the provider, and its content-filter answer on a
+  finished job says to change the prompt or the picture.
+- name-records and wikidata-entity make one Wikimedia read per host at a
+  time across all callers, taking fair turns so one caller's burst never
+  refuses another's read.
+API:
+- /api/find, /api/route and route-and-execute read a task that asks for IP
+  geolocation, in phrasings such as "which country is this IP in" and for
+  the time zone or local time of an IP too, as a miss (`capabilityGap` names
+  it) unless a listed tool is named for it; every other query is answered as
+  before. route-and-execute, with `include:"external"` as well, answers 404
+  for such a task without running or charging anything.
+- /api/find and /api/route no longer read the query word "add" inside
+  "address", so a calculator task is not matched to address tools, and "add
+  two numbers" is answered with the calculator.
+- /api/find, /api/route and route-and-execute read a task that asks only for
+  a coin's price on a past date as a miss (`capabilityGap` names it) unless
+  a listed tool is named for it; a task that names anything else, a date
+  that names the current year or a later one, or a month with no year, is
+  answered as before.
+- route-and-execute answers 400 naming the missing fields when a call to a
+  chat completion lacks the fields the seller requires and no other
+  candidate can take it, before any purchase.
+- route-and-execute no longer asks a chat-room message route for `model` and
+  `messages`.
+- /api/find and /api/route answer "current bitcoin price" (and btc,
+  ethereum, eth) with crypto-price and a coin's volatility ("bitcoin
+  volatility last 90 days") with crypto-history; a query that holds only one
+  word of those phrases is ranked as before.
+- /api/find and /api/route read arithmetic written in words ("5 plus 7",
+  "seven minus five", "6 times 7") as the calculator's task; "plus" or
+  "times" outside an expression is ranked as before.
+- /api/find, /api/route and route-and-execute read a task that asks only for
+  a stock's price history as a miss (`capabilityGap: "stock-price-history"`)
+  while no stock history tool is listed, unless a listed tool is named for
+  it; route-and-execute answers 404 without running or charging anything,
+  and every other query is answered as before.
+- On the hosted connector, a paid tool asked without payment and a free tool
+  past its limit say what to do next, with a link that opens on a phone, and
+  every limit says when it resets.
+- /llms.txt names the image routes whose payment can settle before their work; a video
+  route never is.
+- A self-hosted FREE_MODE server's free-limit message names only the limit
+  and when it resets.
+Operations:
+- The operator view of /api/gateway-status shows a projected-runway word for
+  each spending and fee wallet whose balance a low-balance alarm already
+  reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held
+  steady while a wallet sits at the mark; it can also watch wallets the
+  server does not spend from, read by public address
+  (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.
+- /api/gateway-status carries a `crawlParse` word for the crawl's document
+  parser; a registry whose whole list could not be parsed reads
+  `registry-kept` and pages one issue.
+- A seller whose document keeps ending the parser stops having its previous
+  listing kept after three such reads or six hours, and its entry reads as
+  the seller's failed read.
+- Reads of SEC filings share one pace across the server's processes, so a
+  deploy's overlap stays under the SEC's rate.
+- A crawl cycle in which no seller's documents changed no longer rebuilds
+  the route index or the directory, so the full collections that stalled
+  requests during crawls run less often.
+- The router's seller index frees each replaced listing after a crawl in
+  which nothing changed, finds a listing again once a read error clears, and
+  bounds the row compare inside one store.
+Packages:
+- agent402-mcp 0.17.2 is published for the MCP Registry under
+  tools.agent402/agent402, a name verified against the agent402.tools
+  domain; the earlier name stays resolvable and is being marked deprecated
+  with a pointer to it.
+
+### 2026-11-28 (Tool page payment sentence)
+Site:
+- On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a tool page
+  shows the sentence about calls paid before they run only on the routes
+  that can be paid first.
+
 ## v2.17.1 - 2026-11-27
 
 ### 2026-11-27 (Stellar refund proof)

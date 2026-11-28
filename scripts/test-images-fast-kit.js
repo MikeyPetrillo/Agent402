@@ -7,6 +7,14 @@
 // 502, filtered -> 422 content_filtered, timeout -> 504, off-host polling URL never followed), and parking:
 // keyed on the EVM payer, claimed once, released on every terminal error.
 //
+// Two halves. The rate checks (every link has a bound in the private table,
+// each bound within the margin share of its tier price, the video worst case)
+// read real rates and need the private table: without it they fail under CI
+// and are the only part skipped locally. Every other check needs A bound, not
+// the real one: without the table they run on stand-in bounds derived from
+// each tier's own listed price, so the 422 content_filtered answers, the
+// outage answers and the price constants are checked on every run.
+//
 //   node scripts/test-images-fast-kit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
@@ -21,10 +29,13 @@ const {
 } = await import("../src/tools/llm-images-fast-kit.js");
 const { MARGIN, IMAGES_MODEL, LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-images-fast-kit");
+const { costsOrStandInFromCatalog } = await import("./lib/stand-in-costs.js");
 // Bounds come from the private table; mocked upstream bills are derived from
-// them so no real rate is typed here.
+// them so no real rate is typed here. Without the table the bounds are the
+// stand-ins of scripts/lib/stand-in-costs.js: a share of the cheapest tier
+// price each model is sold at, under the margin and different for every
+// model, so a check that tells two links apart by their bill still does.
+const COSTS = await costsOrStandInFromCatalog("test-images-fast-kit");
 const KLEIN3 = "black-forest-labs/flux-3-image-klein";
 const RECRAFT = "recraft/recraft-v4.1-flash", MAI = "microsoft/mai-image-2.6-flash";
 const linkOf = (tier, model) => IMAGE_TIERS[tier].chain.find((l) => l.model === model);
@@ -41,15 +52,17 @@ const throws = async (fn, frag, m) => { let e = null; try { await runAsRouteCall
 const lastGatewayEvent = () => _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
 
 // ---- registration / pricing ----
-ok(IMAGES_FAST_TOOLS.length === 4, "four tools exported");
+ok(IMAGES_FAST_TOOLS.length === 5, "five tools exported");
 ok(bySlug("v1-images-edit")?.route === `POST ${IMAGES_EDIT_PATH}` && bySlug("v1-images-edit").price === "$0.020" && IMAGES_EDIT_PATH === "/v1/images/edits", "edit route at POST /v1/images/edits (OpenAI's path), $0.020");
 ok(bySlug("v1-images-fast")?.route === `POST ${IMAGES_FAST_PATH}` && bySlug("v1-images-fast").price === "$0.020", "fast tier at POST /v1/images/fast, $0.020");
 ok(bySlug("v1-images-pro")?.route === `POST ${IMAGES_PRO_PATH}` && bySlug("v1-images-pro").price === "$0.050", "pro tier at POST /v1/images/pro, $0.050");
-ok(bySlug("v1-videos")?.route === `POST ${VIDEOS_PATH}` && bySlug("v1-videos").price === "$0.200", "video tier at POST /v1/videos/generations, $0.200");
+ok(bySlug("v1-videos")?.route === `POST ${VIDEOS_PATH}` && bySlug("v1-videos").price === "$0.250", "video tier at POST /v1/videos/generations, $0.250");
 ok(IMAGES_FAST_TOOLS.every((t) => t.discovery?.bodyType === "json" && t.discovery.input?.prompt && t.discovery.inputSchema?.required?.includes("prompt") && typeof t.handler === "function" && t.category === "llm"), "every tool carries a json discovery example with a prompt and a handler");
 ok(IMAGES_FAST_TOOLS.every((t) => !/\u2014/.test(t.description + t.name)), "no em dashes in tool copy");
 for (const [tier, t] of Object.entries(IMAGE_TIERS)) {
   ok(t.chain.length >= 1 && t.chain.every((l) => l.model && l.provider && linkBounds(l) && l.listed?.unit), `${tier}: every link has a provider pin, a bound and a listed-price check`);
+  // The same bound read from the private table: a link with no row there cannot be sold.
+  COSTS.rate(`${tier}: every link has its row in the private table`, () => ok(t.chain.every((l) => linkBounds(l)), `${tier}: every link has its row in the private table`));
   // Compare NUMBERS, not trimmed strings: a chain of trailing-zero replaces is
   // both fragile ("$10" would become "$1") and reads as a sanitizer.
   // v1-images is the flagship /v1/images/generations route, whose tool lives in the gateway kit.
@@ -70,9 +83,11 @@ for (const tier of ["v1-images-fast", "v1-images-pro"]) {
 }
 ok(IMAGE_TIERS["v1-images-edit"].chain[0].params.resolution === "1K" && IMAGE_TIERS["v1-images-edit"].chain[0].params.aspect_ratio === undefined, "edit link pinned to 1K, aspect left to the reference");
 const table = mediaMarginTable();
-ok(table.length === 9 && table.every((r) => withinMargin(r.price, r.worst)), `margin: every link's bound is within the margin share of its tier price (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+ok(table.length === 10, `the margin table lists every link and both video tiers (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+// Rate check: the table's own bounds against the prices. Stand-in bounds are within the margin by construction and prove nothing here.
+COSTS.rate("every link's bound within the margin share of its tier price", () => ok(table.every((r) => withinMargin(r.price, r.worst)), "margin: every link's bound is within the margin share of its tier price"));
 ok(!withinMargin(1, MARGIN + 0.000001) && withinMargin(1, MARGIN), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");
-ok(VW > 0 && VW <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
+COSTS.rate("the video worst case within its bound", () => ok(VW > 0 && VW <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound"));
 
 // ---- image validation ----
 ok(validateImageTierRequest({ prompt: " a fox " }, "v1-images-fast").prompt === "a fox", "prompt trims and validates");
@@ -175,6 +190,57 @@ process.env.OPENROUTER_API_KEY = "test-key";
   calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), [RECRAFT]: () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), [KLEIN3]: () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }) };
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "Upstream error: prompt rejected", "upstream 4xx on every link -> 502 carrying the upstream message");
   ok(e?.statusCode === 502 && calls.length === 3, "…every link tried, 502 (settlement cancelled)");
+  // The provider's content filter stopped the prompt on every link (its code
+  // on the error object, or wording that says the content was refused by the
+  // filter): a 422 with reason content_filtered, the rule the video route uses.
+  {
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const { refusalReason } = await import("../src/refusal-reason.js");
+    const allLinks = (err, status = 400) => ({ "black-forest-labs/flux.2-pro": () => ({ status, json: { error: err } }), "black-forest-labs/flux.2-klein-4b": () => ({ status, json: { error: err } }), [KLEIN3]: () => ({ status, json: { error: err } }), [RECRAFT]: () => ({ status, json: { error: err } }) });
+    for (const [err, label] of [[{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code"],
+      [{ message: "Your request was rejected by the safety system.", code: 400 }, "safety-system refusal wording"],
+      [{ message: "x", type: "content_policy_violation" }, "a content-policy type"],
+      // No moderation code: only the "rejected as a result of our safety system" wording decides.
+      [{ message: "Your request was rejected as a result of our safety system." }, "only the as-a-result-of wording, no code"],
+      [{ message: "Content was filtered. Rephrase the prompt and try again." }, "a filter message that says try again"]]) {
+      calls = []; perModel = allLinks(err);
+      const f = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "content filter stopped this prompt", `image filtered (${label}) on every link -> 422`);
+      ok(f?.statusCode === 422 && f.contentFiltered === true && calls.length === 3, `…${label}: 422 marked contentFiltered, every link tried`);
+      ok(toolErrorFields(f).reason === "content_filtered" && refusalReason(f.message, 422, f) === "content_filtered", `…${label}: reason and telemetry class content_filtered`);
+      ok(String(f.message).includes(" Nothing was charged. Rephrase the prompt"), `…${label}: the shared not-charged sentence, then what to change`);
+    }
+    // A 200 body that carries the filter's error and no image is the same verdict.
+    calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 200, json: { error: { message: "blocked", code: "content_filter" } } }), [KLEIN3]: () => ({ status: 502, json: {} }), [RECRAFT]: () => ({ status: 502, json: {} }) };
+    const f2 = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "content filter stopped", "a 200 error body naming the filter, then outages -> 422");
+    ok(f2?.statusCode === 422, "…422");
+    // One link filtered, another drew it: served, no refusal.
+    calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "no", code: "moderation_blocked" } } }) };
+    const served = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
+    ok(served?.model === KLEIN3 && calls.length === 2, "a link's filter refusal still walks the chain, and the next link's image is served");
+    calls = []; perModel = allLinks({ message: "blocked", code: "moderation_blocked" });
+    const fp = await throws(() => bySlug("v1-images-pro").handler({ prompt: "a desk" }), "content filter stopped", "pro tier: filtered on every link -> 422");
+    ok(fp?.statusCode === 422 && fp.contentFiltered === true, "…pro 422 contentFiltered");
+    // The image tiers settle first for some payers (SETTLE_FIRST_SLUGS): the
+    // same 422 then goes out through the settled-first body, charged with the
+    // same-payment retry and the refund status, its reason kept.
+    {
+      const { settledFirstFailureBody } = await import("../src/settle-first-body.js");
+      const body = JSON.parse(settledFirstFailureBody(JSON.stringify({ error: fp.message, ...toolErrorFields(fp) }), { transaction: "0x" + "ab".repeat(32), origin: "https://agent402.tools" }));
+      ok(body.reason === "content_filtered" && body.charged === true && body.refundOwed === true && body.retry === "same-payment" && typeof body.refundStatusUrl === "string" && !/Nothing was charged/.test(body.error), "settled first: the 422 keeps content_filtered and reads charged, same-payment retry, refund status");
+    }
+    // Outage wording that names the filter service is not a filtered prompt:
+    // it keeps today's 502, so a working prompt is never sent back to be rephrased.
+    for (const [err, status] of [[{ message: "Content moderation service is temporarily unavailable" }, 400], [{ message: "Safety system timed out, please retry" }, 400],
+      [{ message: "upstream content-filter returned 500", code: "content_filter" }, 400], [{ message: "Safety system overloaded" }, 400], [{ message: "prompt rejected by safety" }, 400],
+      // An outage worded as a rejection, with and without a moderation code: an outage marker wins.
+      [{ message: "Request rejected by the moderation system: service overloaded" }, 400], [{ message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" }, 400],
+      [{ message: "Rejected by our safety system: at capacity, try again later" }, 400], [{ message: "Blocked by the moderation system: rate limit exceeded" }, 400],
+      [{ message: "blocked", code: "moderation_blocked" }, 503], [{ message: "blocked", code: "moderation_blocked" }, 429]]) {
+      calls = []; perModel = allLinks(err, status);
+      let x = null; try { await bySlug("v1-images-fast").handler({ prompt: "a fox" }); } catch (y) { x = y; }
+      ok(x && x.statusCode !== 422 && !x.contentFiltered && toolErrorFields(x).reason === undefined && [502, 503].includes(x.statusCode), `not a filter verdict keeps its status (${status} ${JSON.stringify(err).slice(0, 50)} -> ${x?.statusCode})`);
+    }
+  }
   calls = []; perModel = { "black-forest-labs/flux.2-pro": () => ({ status: 503, json: {} }) };
   const out3 = await bySlug("v1-images-pro").handler({ prompt: "a desk" });
   ok(calls.length === 2 && calls[1].body.model === KLEIN3 && calls[1].body.resolution === "1K" && calls[1].body.aspect_ratio === "1:1" && calls[1].body.provider.only[0] === "black-forest-labs" && out3.model === KLEIN3, "pro failover pins FLUX 3 Image Klein at 1K square on its provider");
@@ -276,7 +342,7 @@ await throws(() => validateVideosRequest({ prompt: "x".repeat(2001) }), "Prompt 
 
 // ---- video handler (stubbed fetch): submit -> poll -> download ----
 const MP4 = Buffer.from("\0\0\0 ftypisom-fake-mp4-bytes");
-function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, failError, submitId = "job1" } = {}) {
+function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, submitError = { message: "bad" }, failError, submitId = "job1" } = {}) {
   let contentCalls = 0, pollCalls = 0;
   let polls = 0; const seen = { submit: null, submits: 0, polls: [], content: null };
   globalThis.fetch = async (url, init = {}) => {
@@ -285,7 +351,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
       seen.submit = { url: u, body: JSON.parse(init.body), auth: init.headers?.Authorization };
       seen.submits++;
       const j = { id: submitId, polling_url: pollingUrl ?? `${OPENROUTER_VIDEOS_URL}/${submitId}`, status: "pending" };
-      return { ok: submitStatus < 400, status: submitStatus, text: async () => JSON.stringify(submitStatus < 400 ? j : { error: { message: "bad" } }) };
+      return { ok: submitStatus < 400, status: submitStatus, text: async () => JSON.stringify(submitStatus < 400 ? j : { error: submitError }) };
     }
     if (u.includes("/content")) {
       seen.content = { url: u, auth: init.headers?.Authorization };
@@ -335,6 +401,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
     [{ message: "Request rejected", code: "moderation_blocked" }, "a moderation code on the error object"],
     [{ message: "Your prompt was flagged by the safety filter", code: "invalid_request" }, "a safety-filter message"],
     [{ message: "x", type: "content_policy_violation" }, "a content-policy type"],
+    [{ message: "Your request was rejected as a result of our safety system." }, "only the as-a-result-of wording, no code"],
   ];
   for (const [failError, label] of filtered) {
     installVideoFetch({ statuses: ["failed"], failError });
@@ -353,12 +420,21 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
   // it stays a 502, so the buyer is never told to rephrase a working prompt.
   for (const failError of [{ message: "blocked by policy" }, "Internal error while rendering", { message: "quota", code: "server_error" },
     "Content moderation service is temporarily unavailable", "Safety system timed out, please retry", { message: "Internal error in content filter" }, { message: "upstream content-filter returned 500", code: "content_filter" },
-    "Content moderation service degraded", "Safety system overloaded"]) {
+    "Content moderation service degraded", "Safety system overloaded",
+    // An outage worded as a rejection: an outage marker wins over the rejection wording, code or no code.
+    "Request rejected by the moderation system: service overloaded", { message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" },
+    "Rejected by our safety system: at capacity, try again later", "Request rejected by the moderation system: timeout"]) {
     installVideoFetch({ statuses: ["failed"], failError });
     const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "failed upstream", `a failure that names no filter stays 502 (${JSON.stringify(failError).slice(0, 40)})`);
     ok(e?.statusCode === 502 && !e.contentFiltered && toolErrorFields(e).reason === undefined, "…502, no content_filtered reason");
   }
   ok(!toolErrorFields(Object.assign(new Error("x"), { statusCode: 502, contentFiltered: true })).reason, "content_filtered rides only on a 422");
+  // A submit the filter refuses: text-to-video takes no picture, so the answer
+  // names only the prompt (image-animate's wording is in test-image-animate.js).
+  installVideoFetch({ submitStatus: 400, submitError: { message: "Your prompt violates our safety policy", code: "content_policy_violation" } });
+  const sub = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "content filter stopped this request", "a submit the filter refuses -> 422");
+  ok(sub?.statusCode === 422 && sub.contentFiltered === true && toolErrorFields(sub).reason === "content_filtered", "…422 content_filtered");
+  ok(/Nothing was charged\. Rephrase the prompt and try again\.$/.test(String(sub?.message)) && !/picture|image/i.test(String(sub?.message)), `…v1-videos names the prompt and no picture (${sub?.message})`);
 }
 // Parking is keyed on the signed EVM payer (payerFromRequest): a request with
 // no such identity never parks or resumes, so two buyers sending the same

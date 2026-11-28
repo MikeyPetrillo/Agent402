@@ -13,6 +13,7 @@ import { ERC8004_IDENTITY_REGISTRY, erc8004AgentId } from "./tools/a2a-card.js";
 import { companyPostalLine } from "./email.js";
 import { mppOffered } from "./site-org.js";
 import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
+import { OFFICIAL_SENTENCE, OFFICIAL_DATA_PATH, OFFICIAL_LIST_CSS, OFFICIAL_EARLIER_NOTE_HTML, officialSurfacesRows } from "./official-surfaces.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
 // The business's public contact points, by role: the help address for
 // support, billing, legal and abuse, the security address for vulnerability
@@ -70,6 +71,18 @@ export function companyPage(baseUrl) {
     <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${[["/trust", "Trust"], ["/press", "Press kit"], ["https://havok.holdings", "havok.holdings"], [REPO_URL, "Source"], ["https://x.com/Agent402Tools", "X"]].map(([href, label]) => `<a href="${esc(href)}" style="display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
 </section>`;
+  // The official packages and endpoints (src/official-surfaces.js): the one
+  // list the discovery manifest and the README also carry.
+  const officialRow = `
+<section id="official" style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
+  <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
+    <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">Official packages</h2>
+    <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${esc(OFFICIAL_SENTENCE)}</p>
+    <table class="co-contacts co-official" style="border-collapse:collapse;max-width:820px;margin:0 0 14px;"><tbody>${officialSurfacesRows().map(([k, v]) => `<tr><th scope="row">${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>
+    <p style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${OFFICIAL_EARLIER_NOTE_HTML}</p>
+    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;"><a href="${OFFICIAL_DATA_PATH}" style="display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">The list as data →</a></div></div>
+  </div>
+</section>`;
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
@@ -81,8 +94,9 @@ export function companyPage(baseUrl) {
 ${row("What we sell", `Per-call tools and metered models to AI agents, paid in USDC over x402 and MPP. Finished, cited reports (${esc(usd0(lo))} to ${esc(usd0(hi))}) and monitors (${esc(monUsd)} a month) to people, by card. An open-source pay-per-crawl gate, the tollbooth, for site owners who want to charge crawlers and agents for their content.`, [["/reports", "Reports"], ["/pricing", "Pricing"], ["/wholesale", "Wholesale"], ["/tollbooth", "Tollbooth"]])}
 ${row("Proof", `Uptime from two outside observers at /status. Every settled transaction by rail and wire at /revenue. Metered receipts against their quotes at /proof. Material disclosures with on-chain receipts at /transparency. The status, transaction and receipt figures are computed from observations and ledgers; the disclosures link to the on-chain records they describe.`, [["/status", "Status"], ["/revenue", "Transactions"], ["/proof", "Receipts"], ["/transparency", "Disclosures"]])}
 ${row("Security", `Non-custodial on the payment rails (a buyer signs with their own key and no customer key or crypto balance is held; prepaid card credits are a held balance, stated plainly), open source end to end, with vulnerability disclosure, safe harbor, the data inventory and the controls in the serving path and on the code stated on one page.`, [["/security", "Security"], ["/privacy", "Privacy"], ["/terms", "Terms"]])}
-${row("Entity", `${LEGAL_ENTITY_SENTENCE}, a North Carolina limited liability company. D-U-N-S number 142233542. Company site: <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">havok.holdings</a>. Operator of agent402.tools and publisher of the agent402 npm packages (author field on every package).`, [["https://havok.holdings", "havok.holdings"], ["https://www.npmjs.com/package/agent402-mcp", "npm"]])}
+${row("Entity", `${LEGAL_ENTITY_SENTENCE}, a North Carolina limited liability company. <span class="ml-nowrap">D-U-N-S</span> number 142233542. Company site: <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">havok.holdings</a>. Operator of agent402.tools and publisher of the agent402 npm packages (author field on every package).`, [["https://havok.holdings", "havok.holdings"], ["https://www.npmjs.com/package/agent402-mcp", "npm"]])}
 ${row("Identity", identityText, [["/.well-known/agent-registration.json", "registration"], ["/.well-known/agent-card.json", "agent card"]])}
+${officialRow}
 <div id="contact"></div>
 ${contactRow}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 48px;">
@@ -108,6 +122,8 @@ ${ledgerFooterCompact()}`;
 .co-submit:hover{opacity:.85}
 .co-contacts th{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);font-weight:700;text-align:left;vertical-align:top;padding:6px 22px 6px 0;white-space:nowrap}
 .co-contacts td{font-size:var(--fs-lg);line-height:1.55;color:var(--muted);padding:4px 0}
+.co-official td{font-size:var(--fs-base);overflow-wrap:break-word}
+${OFFICIAL_LIST_CSS}
 @media (max-width:600px){.co-contacts tr{display:block;padding:6px 0}.co-contacts th,.co-contacts td{display:block;padding:0}}`;
   const jsonLd = [
     { "@type": "Organization", "@id": `${baseUrl}/#org`, name: "Havok Holdings LLC", legalName: LEGAL_ENTITY_NAME, duns: "142233542", foundingLocation: { "@type": "Place", address: { "@type": "PostalAddress", addressRegion: "NC", addressCountry: "US" } }, url: "https://havok.holdings", sameAs: ["https://havok.holdings", ...ORG_SAME_AS], brand: { "@type": "Brand", name: "Agent402", alternateName: "Agent402.Tools", url: baseUrl }, contactPoint: [{ "@type": "ContactPoint", contactType: "customer support", email: op, telephone: COMPANY_PHONE.tel }, { "@type": "ContactPoint", contactType: "security", email: sec }, { "@type": "ContactPoint", contactType: "billing support", email: op }, { "@type": "ContactPoint", contactType: "investor relations", email: co }, { "@type": "ContactPoint", contactType: "partnerships", email: co }], telephone: COMPANY_PHONE.tel },

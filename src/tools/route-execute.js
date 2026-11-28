@@ -29,6 +29,7 @@ import { FILLER_TERMS } from "../query-terms.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
+import { capabilityGap, gapNamedBy, capabilityGapLabel } from "../capability-gaps.js";
 import { judgeTool, decide, orderByJudgment, CRITERION_NAME_MAX, CRITERION_DESC_MAX, CRITERION_TAG_MAX, CRITERION_TAGS_MAX } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
@@ -167,6 +168,50 @@ export function contractFieldsMissing(ext, params, err) {
 }
 
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
+// A chat completion seller cannot answer without its chat fields: a call that
+// leaves one out is the caller's input, known before any seller is paid.
+//
+// A seller is a chat completion only by a real signal: its route ends
+// /chat/completions; or it ends /messages AND its listing says chat (its
+// category on a POST route, or a declared request contract on one that names
+// `messages` or `model`). A bare /messages suffix is also a mailbox or an SMS route, which
+// takes other fields and is never asked for these.
+//
+// The fields asked for are the seller's own when it declares them: the chat
+// fields (model, messages, prompt, input) its request contract requires, so
+// a seller that requires only `prompt` is not asked for `messages`, and one
+// with a default model is not asked for `model`. With no declared body
+// fields, an OpenAI-shaped route needs `model` and `messages`. Null when
+// nothing is missing or the route is not a chat completion.
+const CHAT_COMPLETIONS_PATH_RE = /\/chat\/completions\/?$/i;
+const MESSAGES_PATH_RE = /\/messages\/?$/i;
+// A model category, never the bare word "chat": a chat room's message list
+// and a route that posts to a chat channel carry that word too.
+const CHAT_CATEGORY_RE = /^(?:llm|llms|chat[ _-]completions?|inference|language[ _-]models?|text[ _-]generation)$/i;
+const CHAT_FIELDS = ["model", "messages", "prompt", "input"];
+const topField = (k) => (typeof k === "string" ? k.split(/[.[]/)[0] : "");
+export function chatFieldsMissing(ext, params) {
+  let path = "";
+  try { path = new URL(String(ext?.url || "")).pathname; } catch { return null; }
+  const contract = ext?.requestContract;
+  const requiredBody = Array.isArray(contract?.required?.body) ? contract.required.body.map(topField).filter(Boolean) : [];
+  const optionalBody = Array.isArray(contract?.optional?.body) ? contract.optional.body.map(topField).filter(Boolean) : [];
+  let chat = CHAT_COMPLETIONS_PATH_RE.test(path);
+  // The Messages wire is a POST: a GET at /messages reads a list.
+  if (!chat && MESSAGES_PATH_RE.test(path) && String(ext?.method || "POST").toUpperCase() === "POST") {
+    chat = CHAT_CATEGORY_RE.test(String(ext?.category || "").trim())
+      || (Array.isArray(ext?.tags) && ext.tags.some((t) => typeof t === "string" && CHAT_CATEGORY_RE.test(t.trim())))
+      || [...requiredBody, ...optionalBody].some((k) => k === "messages" || k === "model");
+  }
+  if (!chat) return null;
+  const have = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+  const present = (f) => (f === "messages" ? Array.isArray(have.messages) && have.messages.length > 0
+    : f === "model" ? typeof have.model === "string" && !!have.model.trim()
+    : Object.hasOwn(have, f) && have[f] != null && have[f] !== "");
+  const wanted = requiredBody.length ? CHAT_FIELDS.filter((f) => requiredBody.includes(f)) : ["model", "messages"];
+  const missing = wanted.filter((f) => !present(f));
+  return missing.length ? missing : null;
+}
 
 // Tools the executor refuses to dispatch regardless of price:
 // - identity-bound (memory* AND my-usage): wallet-keyed — the tool reads the
@@ -289,6 +334,21 @@ export function routeMatchOrder(task, candidates, { group = () => 0 } = {}) {
   const share = best * JUDGED_OVERRIDE_MIN_SHARE;
   kept.sort((a, b) => (a.g - b.g) || ((a.s >= share ? 0 : 1) - (b.s >= share ? 0 : 1)) || (a.i - b.i));
   return { items: kept.map((x) => x.r), dropped: rows.length - kept.length, floor, best, share };
+}
+
+// A GAP TASK BUYS ONLY A ROW NAMED FOR IT. A task that asks for a capability
+// on the gap list (src/capability-gaps.js) is a miss on /api/find and
+// /api/route unless a row is named for the capability, slug or name. The
+// external leg holds the same rule: of the outside candidates for such a
+// task, only one named for the capability may be judged, probed or bought,
+// whatever a judge or a description says. Any other task: the list as given
+// (the same array), so nothing else changes.
+export function gapNamedCandidates(task, candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const gap = capabilityGap(task);
+  if (!gap) return { items: list, dropped: 0, gap: null };
+  const items = list.filter((c) => gapNamedBy(gap, c?.slug, c?.name));
+  return { items, dropped: list.length - items.length, gap };
 }
 
 /** What the outside-seller judge reads of one candidate: the seller's host,
@@ -679,6 +739,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
           let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null; let warmingChain = null;
+          // Candidates set aside because the task asks for a capability none
+          // of them is named for (gapNamedCandidates), here or in the resolver.
+          let gapSetAside = 0; let gapAsked = null;
           for (const c of chains) {
             // A seller list still loading (a cold catalog) is waited on for
             // at most what this payment's window has left less the reserve
@@ -686,7 +749,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             const catalogWaitMs = windowBudgetMs != null ? Math.max(0, remainingMs() - CATALOG_WAIT_RESERVE_MS) : null;
             const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, catalogWaitMs, ...(target ? { onlyUrl: target } : {}) });
             if (found && found.__gateDrops?.byReason?.catalog_warming) warmingChain = warmingChain || c;
-            const list = Array.isArray(found) ? found : (found ? [found] : []);
+            const named = gapNamedCandidates(input.task, Array.isArray(found) ? found : (found ? [found] : []));
+            const list = named.items;
+            if (named.gap) { gapAsked = named.gap; gapSetAside += named.dropped + Number(found?.__gateDrops?.byReason?.capability_gap || 0); }
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
@@ -704,6 +769,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms). Nothing was spent.${notChargedOn(req)} Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
+          }
+          // A gap task with outside matches and none of them named for the
+          // capability: the uncharged 404 the own-catalog path answers, before
+          // any booking, signature or spend reservation.
+          if (!candidateList.length && gapAsked && gapSetAside > 0) {
+            traceStep(req, "capability_gap", { gap: gapAsked.id, setAside: gapSetAside });
+            throw bad(`No outside seller here does that task: ${gapSetAside} matched those words and none of them is named for ${capabilityGapLabel(gapAsked.id)}. Nothing was bought.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
           traceStep(req, "candidates", { chain, list: candidateList.map((c) => ({ origin: c.seller, url: c.url, lane: c.unproven ? "unproven" : "proven", price: c.price })) });
@@ -793,6 +865,16 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             console.warn(`[sor] refusing ${chain} candidate ${ext.seller}: it is paid at this host's own wallet ${ownPayout.slice(0, 10)}…`);
             traceStep(req, "skip", { origin: ext.seller, reason: "own_wallet" });
             lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent.${notChargedOn(req)}`, 409);
+            if (hasNext) continue; throw lastErr;
+          }
+          // A chat completion seller asked without the chat fields it needs
+          // (chatFieldsMissing): the caller's input, known before any booking
+          // or signature. The next candidate is tried; with none left the
+          // answer is 400 naming the fields (nothing bought, nothing charged).
+          const chatMissing = chatFieldsMissing(ext, params);
+          if (chatMissing) {
+            traceStep(req, "skip", { origin: ext.seller, reason: "chat_fields_missing" });
+            lastErr = Object.assign(bad(`That task routes to a chat completion, which needs ${chatMissing.map((f) => `params.${f}`).join(" and ")}; this call did not send ${chatMissing.length > 1 ? "them" : "it"}. Nothing was spent.${notChargedOn(req)} Add ${chatMissing.length > 1 ? "them" : "it"} and retry.`, 400), { missing: chatMissing });
             if (hasNext) continue; throw lastErr;
           }
           const extWire = ext.wire || "x402";
@@ -1138,7 +1220,18 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         }
 
         // Default: resolve the best in-budget tool from THIS host's catalog.
-        const { results } = findTools(catalog, input.task, { k: 10, baseUrl });
+        const found = findTools(catalog, input.task, { k: 10, baseUrl });
+        const { results } = found;
+        // A capability this catalog does not offer (src/capability-gaps.js,
+        // the list /api/find and /api/route read) and no matching tool is
+        // named for: nothing is run, so a buyer is never sold a tool that
+        // only shares the task's common words ("ip geolocation" is not
+        // ip-info's). The same uncharged 404 as the judged refusal below;
+        // every other task goes on exactly as before.
+        if (results.length && found.capabilityGap && found.capabilityGapCovered === false) {
+          const hasExternal = externalEnabled() && !!resolveExternal;
+          throw bad(`No tool in this catalog does that task: none of them offers ${capabilityGapLabel(found.capabilityGap)}. Nothing was run.${notChargedOn(req)} ${hasExternal ? `With include:"external" an outside x402 seller is bought for it only when one is named for ${capabilityGapLabel(found.capabilityGap)}: /api/route?q=<task>&include=external lists them.` : "Try /api/find?q=<task>."}`, 404);
+        }
         // find's eligible candidates, in find's order (top 5 go to the judge).
         const eligible = [];
         for (const r of results) {

@@ -1,13 +1,14 @@
 // Machine Ledger: the home page ("Agent402 Ledger"), Aug 2026 revamp, trimmed
-// 2026-11 to five blocks: hero (what it is, two actions, the live payments
-// panel), the two doors (agents: endpoints, prices and the free tier; people:
+// 2026-11 to five blocks: hero (what it is, three proof points, one action,
+// the live payments panel), the two doors (agents: a first call, endpoints,
+// prices and the free tier; people:
 // reports and monitors), three short claims with the chain marks, a two-line
 // sell block, and a short FAQ. The full "Why pay here" rows and the comparison
 // table live on /docs#why; the seller board on /leaderboard; the demand lanes
 // on /tools/bestsellers; the proof-of-work demo on /playground.
 
 import { siteOrgLd } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { whyHomeClaims, WHY_POINTS } from "./why.js";
 import { decideConfig } from "./decide/config.js";
 import { toolList, priceWords } from "./pages.js";
@@ -112,7 +113,7 @@ export function cardPayClause({ credits = creditsSalesEnabled(), storefront = hu
 }
 
 /** The social card's subtitle and rail tag (/card.png, /card.svg): the card
- *  clause is scoped by cardPayClause, like the meta description. */
+ *  clause is scoped by cardPayClause. */
 export function socialCardText(toolCount, opts) {
   const card = cardPayClause(opts);
   return {
@@ -122,13 +123,17 @@ export function socialCardText(toolCount, opts) {
   };
 }
 
-/** The home meta description: the snippet most listings copy, so its card
- *  clause is scoped by cardPayClause. */
+/** The home meta description: the snippet a search result shows. It leads
+ *  with payments and trust, as the title does, and the catalog is the
+ *  supporting clause. The receipt clause follows receiptsServed() and is scoped
+ *  as the lead sentence scopes it; it offers nothing by card, so no card switch
+ *  can make it untrue. It names MPP only when `mpp` is on (the page's own
+ *  switch); the title keeps both wires on every boot. */
 export function homeDescription(opts) {
-  const card = cardPayClause(opts);
-  const pay = card === "or by card" ? "; any tool also by card" : card ? `; ${card}` : "";
   const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
-  return `${receipts ? "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt" : "Find, pay for and verify paid calls over x402 and MPP"}. 500+ tools on the same rails${pay}.`;
+  // MPP is named only on a boot that offers it, as the lead sentence does.
+  const mpp = opts && "mpp" in opts ? Boolean(opts.mpp) : true;
+  return `Payments and trust: agents find, pay for and verify paid calls over x402${mpp ? " and MPP" : ""}${receipts ? "; signed receipts on successful direct calls" : ", with no API key or account"}. 500+ tools on the same rails.`;
 }
 
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
@@ -147,13 +152,16 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // instead of rendering a frame the browser would refuse.
   const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
   const figures = (Array.isArray(proof) ? proof : []).filter((f) => f && f.value);
+  // Three proof points at most in the hero: the median latency is read on the
+  // paid-call figure's answer step below, so the hero draws the others.
+  const heroFigures = figures.filter((f) => f.key !== "latency").slice(0, 3);
   // The revenue tag and the footnote speak to the paid figure, so they show only beside it.
-  const paidShown = hasExternal && figures.some((f) => f.key === "paid");
+  const paidShown = hasExternal && heroFigures.some((f) => f.key === "paid");
   const heroFootnote = paidShown && ownTestPurchases > 0 ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--faint);margin:0;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
   const proofMeta = ["Agent402", ...(paidShown ? [`$${Number(external.usd || 0).toFixed(2)} external revenue`] : [])];
-  const proofHtml = figures.length
+  const proofHtml = heroFigures.length
     ? `<div class="hm-own-wrap" style="display:flex;flex-direction:column;gap:12px;padding-top:22px;border-top:1px solid var(--hairline);"><div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0;">${proofMeta.map((t) => `<span>${esc(t)}</span>`).join("")}</div>
-          <div class="hm-own" style="--hm-own-n:${figures.length};">${figures.map((f) => `<a class="hm-own-fig" id="hm-own-${esc(f.key)}" href="${esc(f.href)}" data-as-of="${esc(f.asOf)}" title="as of ${esc(f.asOf)}"><span class="hm-own-v">${esc(f.value)}</span><span class="hm-own-l">${esc(f.label)}</span></a>`).join("")}</div>
+          <div class="hm-own" style="--hm-own-n:${heroFigures.length};">${heroFigures.map((f) => `<a class="hm-own-fig" id="hm-own-${esc(f.key)}" href="${esc(f.href)}" data-as-of="${esc(f.asOf)}" title="as of ${esc(f.asOf)}"><span class="hm-own-v">${esc(f.value)}</span><span class="hm-own-l">${esc(f.label)}</span></a>`).join("")}</div>
           ${heroFootnote}</div>`
     : "";
   // The lead sentence (src/positioning.js) with the wires this server offers
@@ -178,11 +186,11 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   const routerChains = routerPayChains();
 
   const canonical = baseUrl + "/";
-  // Title <= 70 and description <= 155 (the shell trims, but the homepage
+  // Title <= 60 and description 120 to 155 (the shell trims, but the homepage
   // snippet is written to fit so nothing is cut). Counts stay evergreen.
-  const title = `Agent402: payment and trust layer for agentic commerce on x402 and MPP`;
+  const title = `Agent402: payments and trust for AI agents on x402 and MPP`;
   // The exact live count (fmtNum(count)) stays out of the snippet on purpose: marketing counts are evergreen.
-  const description = homeDescription({ receipts });
+  const description = homeDescription({ receipts, mpp });
 
   const orgLd = siteOrgLd(baseUrl);
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "Agent402 - applied layer of Agentic Finance"], url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };
@@ -244,6 +252,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-door-agents strong { color: var(--on-panel); font-weight: 600; }
 .hm-door-people p { color: var(--muted); }
 .hm-door-people strong { color: var(--ink); font-weight: 600; }
+/* The shorter card ends under its own buttons: it takes its content's height, so no empty band opens above them beside the taller card. */
+.hm-door-people { align-self: start; }
+.hm-door-people .hm-door-act { margin-top: 0; }
 .hm-door .ml-ticks { margin: 0; }
 .hm-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 18px; color: var(--muted); }
 .hm-marks a { color: var(--muted); display: inline-flex; padding: 2px 8px; border: 1px solid var(--hairline); font-family: var(--font-mono); font-size: var(--fs-xs); text-decoration: none; white-space: nowrap; }
@@ -284,10 +295,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
         <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(categoryLine({ mpp }))}</h1>
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
-        <p class="hm-support" style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Pay over x402${mpp ? ", MPP" : ""} or proof of work: an x402 payment settles after a successful answer, and a charged failure is booked and repaid against the chain record. ${esc(SUPPORT_LINE.replace(/\.$/, ""))}, beside an <a href="/marketplace" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">index of outside x402 sellers</a> and a router that buys from proven ones.</p>
+        <p class="hm-support" style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">An x402 payment settles after a successful answer. ${esc(SUPPORT_LINE)}</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="btn btn-primary" href="/start">Add to your agent</a>
-          <a class="btn btn-secondary" href="/tools">Browse tools</a>
         </div>
         <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
           ${railCountLabel ? `<span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>` : ""}
@@ -321,7 +331,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
     <div class="hm-obsidian hm-door hm-door-agents on-panel">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);">For agents</div>
       <h2 class="hm-h2" style="font-size:var(--fs-2xl);color:var(--on-panel);">Find a tool, pay the 402, get JSON.</h2>
-      <p><strong>One free call</strong> finds the tool for any task. Pay per request in <strong>${esc(RAILS_SHORT)}</strong>, or over <strong>MPP</strong>${tempoMarkHtml ? ", natively on Tempo" : ""}. <strong>No API key.</strong> Connect over <a href="/guides/agent-hosts" ${panelLink}>MCP</a> or HTTP; machines read <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>.</p>
+      <p><strong>One free call</strong> finds the tool for any task. Pay per request in <strong>${esc(RAILS_SHORT)}</strong>, or over <strong>MPP</strong>${tempoMarkHtml ? ", natively on Tempo" : ""}. <strong>No API key.</strong></p>
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># find the tool for a task: its input schema and its price (free)
+</span>curl "${esc(baseUrl)}/api/find?q=whois+lookup"
+<span style="color:var(--on-panel-faint);"># or connect any MCP client to
+</span>${esc(baseUrl)}/mcp`, { label: "terminal", name: "the first call", html: true, wrap: true, size: "xs" })}
+      <p>Machines read <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>; every host's setup is in <a href="/guides/agent-hosts" ${panelLink}>the host guide</a>.</p>
       <div class="hm-ptable" style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius);overflow:hidden;font-size:var(--fs-sm);">
         <a href="/tools/v1-chat-metered" ${rowStyle}><span>POST /v1/metered/chat/completions</span><span ${priceStyle}>from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
         <a href="/api/find?q=whois" ${rowStyle}><span>GET /api/find?q=</span><span ${priceStyle}>free</span></a>
@@ -369,7 +384,7 @@ ${paidCallHtml ? `<section id="paid-call" style="max-width:1180px;margin:0 auto;
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <h2 class="hm-h2">Sell to agents.</h2>
   ${sectionMeta(["free listing", "nothing deducted", "buyer wallet → your wallet"], "margin:10px 0 14px;")}
-  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API and the router can send agents your way; it pays you on ${esc(routerChains.map(chainDisplayName).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
+  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API on the <a href="/marketplace" style="color:var(--ink);">open seller index</a> and the router can send agents your way; it pays you on ${esc(routerChains.map(chainDisplayName).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">everything for sellers → /sell</a></div>
 </section>
 

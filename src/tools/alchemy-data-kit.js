@@ -28,8 +28,10 @@
 //   block-receipts      alchemy_getTransactionReceipts for one block (a single
 //                       250-CU read instead of N x 15 CU), summarised + rows
 //                       capped.
-//   token-price-history Alchemy Prices API historical series by symbol or by
-//                       contract+network, interval 5m/1h/1d with span caps.
+//   token-price-history statistics computed here from the Alchemy Prices API
+//                       historical series (by symbol or contract+network,
+//                       interval 5m/1h/1d with span caps); the series itself
+//                       is never returned.
 //   wallet-transfers-multichain one Multichain Transfers read (data API,
 //                       beta): a wallet's transfers on up to 5 networks,
 //                       merged newest first, with each network's own state
@@ -57,6 +59,8 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET
 import { takeHardCap, releaseHardCap, releaseHardCapRefused, hardCapError, neverReachedUpstream } from "../upstream-hard-caps.js";
 import { currentDispatchCaller } from "../dispatch-caller.js";
 import { scanCoverage } from "../partial-answer.js";
+import { lookbackStats, dailyStats, windowOf, METHOD_SUMMARY, METHOD_DAILY, METHOD_CLOSE, lookbackOptional } from "./lookback-stats.js";
+import { markResaleComputed } from "../resale-terms.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget (block-receipts reads the head, then the receipts;
@@ -105,6 +109,8 @@ const RECEIPT_MAX_CONTRACTS = 50;
 const BLOCK_RECEIPTS_MAX_ROWS = 300;
 const BLOCK_RECEIPTS_DEFAULT_ROWS = 100;
 const PRICE_HISTORY_MAX_POINTS = 1000;
+const PRICE_HISTORY_METHOD = `${METHOD_SUMMARY.replace(/^summary\./, "")} Here the summary figures (changePct to fromLowPct) sit at the top level. ${METHOD_DAILY} ${METHOD_CLOSE}`;
+const PRICE_HISTORY_WITHDRAWN = "points[], first, last, high and low are withdrawn (raw source series); changePct is unchanged, and fromHighPct and fromLowPct place the last observation against the window's high and low.";
 // Span caps per interval (ms). Measured live 2026-08-22: 5m over 2h, 1h over
 // 10d, 1d over 4d all answer; these caps keep every response under ~750 points.
 const PRICE_INTERVALS = {
@@ -886,17 +892,20 @@ export const ALCHEMY_DATA_TOOLS = [
   },
 
   // =========================================================================
-  // token-price-history
+  // token-price-history: statistics computed from the price series (the
+  // series itself is never returned; src/tools/lookback-stats.js).
   // =========================================================================
   {
     route: "POST /api/token-price-history",
-    name: "Token price history (USD)",
+    name: "Token price history statistics (USD)",
     slug: "token-price-history",
     category: "crypto",
     price: "$0.001",
     description:
-      "Historical USD price series for a token, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract + network, at 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) resolution. Returns the points plus first/last/high/low and the percent change over the window - the data behind 'how did this token move over the last N days' without a separate market-data subscription. 404, naming the token asked for, when the price feed holds no history for it in that window.",
-    tags: ["crypto", "price", "history", "ohlc", "usd", "token", "erc20", "chart", "timeseries"],
+      "Look-back statistics for a token's USD price, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract + network, computed here over 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) observations. Returns the percent change over the window, annualized volatility, maximum drawdown with its peak, trough and recovery times, the best and worst step and day, the last observation against the window's high and low, and a trend line. Computed answers only, not a price feed. It answers 'how did this token move over the last N days' without a separate market-data subscription or a series to process. 404, naming the token asked for, when the price feed holds no history for it in that window. Every formula is in `method`. points[], first, last, high and low are withdrawn (raw source series); changePct is unchanged, and fromHighPct and fromLowPct place the last observation against the window's high and low. Information only, not investment advice.",
+    pageSummary:
+      "Look-back statistics for a token's USD price, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract and network. Computed here over 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) observations: the percent change over the window, annualized volatility, maximum drawdown with its peak, trough and recovery times, the best and worst step and day, the last observation against the window's high and low, and a trend line. Computed answers only, not a price feed. 404, naming the token, when the price feed holds no history for it in that window. Every formula is in `method`. Information only, not investment advice.",
+    tags: ["crypto", "price", "history", "statistics", "usd", "token", "erc20", "volatility", "drawdown"],
     discovery: {
       bodyType: "json",
       input: { contract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", network: "ethereum", interval: "1d", days: 7 },
@@ -912,11 +921,11 @@ export const ALCHEMY_DATA_TOOLS = [
         },
       },
       output: {
+        optional: lookbackOptional({ activity: null }),
         example: {
           symbol: null, contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", network: "ethereum", currency: "usd",
           interval: "1d", startTime: "2026-08-15T12:00:00.000Z", endTime: "2026-08-22T12:00:00.000Z",
-          count: 7, first: 0.99966, last: 0.99971, high: 0.99982, low: 0.99951, changePct: 0.005,
-          points: [{ t: "2026-08-16T00:00:00Z", price: 0.99966 }],
+          count: 7, changePct: 0.005, volatilityPct: 0.3127, maxDrawdownPct: -0.031, fromHighPct: -0.011, fromLowPct: 0.02,
           source: "alchemy", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -933,25 +942,27 @@ export const ALCHEMY_DATA_TOOLS = [
       const body = symbol ? { symbol, ...win } : { network: network.pricesId, address: contract, ...win };
       const r = await pricesApi("tokens/historical", body, { notFound: symbol ? `Symbol "${symbol}" is not in the price feed` : `No price feed for ${contract} on ${network.name}` });
       const raw = Array.isArray(r?.data) ? r.data : [];
-      const points = [];
+      // The observations the statistics are computed over; none is returned.
+      const times = [], values = [];
       for (const p of raw) {
-        const price = Number(p?.value);
-        if (!Number.isFinite(price) || typeof p?.timestamp !== "string") continue;
-        points.push({ t: p.timestamp, price });
-        if (points.length >= PRICE_HISTORY_MAX_POINTS) break;
+        const price = Number(p?.value), t = typeof p?.timestamp === "string" ? Date.parse(p.timestamp) : NaN;
+        if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(t)) continue;
+        times.push(t); values.push(price);
+        if (times.length >= PRICE_HISTORY_MAX_POINTS) break;
       }
-      if (!points.length) throw bad(symbol ? `No price history for "${symbol}" in that window` : `No price history for ${contract} on ${network.name} in that window`, 404);
-      const first = points[0].price, last = points[points.length - 1].price;
-      let high = -Infinity, low = Infinity;
-      for (const p of points) { if (p.price > high) high = p.price; if (p.price < low) low = p.price; }
+      if (!times.length) throw bad(symbol ? `No price history for "${symbol}" in that window` : `No price history for ${contract} on ${network.name} in that window`, 404);
+      const look = lookbackStats(times, values);
       return {
         symbol: symbol ?? (typeof r?.symbol === "string" ? r.symbol : null),
         contract, network: network?.name ?? null,
         currency: typeof r?.currency === "string" ? r.currency : "usd",
         interval: win.interval, startTime: win.startTime, endTime: win.endTime,
-        count: points.length, first, last, high, low,
-        changePct: first ? Number((((last - first) / first) * 100).toFixed(4)) : null,
-        points,
+        count: times.length,
+        // The summary figures sit at the top level here, where changePct always was.
+        ...look.summary,
+        window: windowOf(times), drawdown: look.drawdown, extremes: look.extremes, steps: look.steps, trend: look.trend, daily: dailyStats(times, values),
+        method: PRICE_HISTORY_METHOD,
+        withdrawn: PRICE_HISTORY_WITHDRAWN,
         source: SOURCE, fetchedAt: nowIso(),
       };
     },
@@ -1099,6 +1110,11 @@ export const __test = {
   TRANSFERS_MAX_COUNT, TRANSFERS_MAX_CONTRACTS, BALANCES_MAX_CONTRACTS, BLOCK_RECEIPTS_MAX_ROWS, RECEIPT_MAX_TRANSFERS,
   METADATA_CACHE_MAX_ENTRIES, PRICE_INTERVALS,
 };
+
+// token-price-history answers statistics computed here and never the price
+// series it reads (src/resale-terms.js "computed"). It carries no clearance
+// for resale through a third party.
+markResaleComputed(ALCHEMY_DATA_TOOLS, ["token-price-history"]);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(ALCHEMY_DATA_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

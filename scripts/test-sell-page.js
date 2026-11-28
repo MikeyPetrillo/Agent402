@@ -113,9 +113,12 @@ ok(!/never off the roster|on the next pass/.test(text), "listing and registratio
 
 // --- FAQ ----------------------------------------------------------------
 ok(html.includes("What does it cost to list?"), "seller FAQ renders");
-ok((html.match(/<article/g) || []).length >= 6, "at least six FAQ questions render as full prose articles");
+ok((html.match(/<article/g) || []).length >= 6, "at least six FAQ questions render, each an article");
+// Short answers first: each answer is one click away, and the #earn answer the
+// cost panel links is served open.
+ok((html.match(/<article[^>]*><details class="sl-faq"( open)?><summary>/g) || []).length === (html.match(/<article/g) || []).length && /<article id="earn"[^>]*><details class="sl-faq" open>/.test(html), "each FAQ answer is a details under its question, and #earn is open");
 {
-  const visible = [...html.matchAll(/<article[^>]*><h3[^>]*>([^<]*)<\/h3>/g)].map((m) => decodeEntities(m[1]));
+  const visible = [...html.matchAll(/<article[^>]*><details[^>]*><summary><h3[^>]*>([^<]*)<\/h3>/g)].map((m) => decodeEntities(m[1]));
   const faqLd = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1])).find((n) => n["@type"] === "FAQPage");
   ok(faqLd && JSON.stringify(faqLd.mainEntity.map((q) => q.name)) === JSON.stringify(visible), "FAQPage JSON-LD lists exactly the visible questions, in order");
 }
@@ -181,6 +184,11 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   const { normaliseManifestTools } = await import("../src/x402-index.js");
   const { MANIFEST_EXAMPLE_ORIGIN } = await import("../src/sell.js");
   ok(html.includes('id="manifest"') && text.includes("What the crawler reads"), "the page has a What the crawler reads section");
+  {
+    // One sentence and a link in view; the manifest rules and the example are optional detail.
+    const sec = html.slice(html.indexOf('id="manifest"'), html.indexOf("</section>", html.indexOf('id="manifest"')));
+    ok(/href="\/crawler"/.test(sec) && /<details class="sl-details"[^>]*>\s*<summary>Manifest format, with an example<\/summary>[\s\S]*Only routes on the origin you register are listed[\s\S]*data-name="an example manifest"[\s\S]*<\/details>/.test(sec), "the crawler section links /crawler and keeps the manifest rules and example one click away");
+  }
   ok(text.includes("Only routes on the origin you register are listed. An entry that names another host is skipped, so one site cannot list another's endpoints."), "the page states the same-origin rule");
   ok(text.includes("register that host as its own seller"), "the page says a backend on another host registers as its own seller");
   ok(text.includes("/.well-known/x402") && text.includes("resources array") && text.includes("/openapi.json") && text.includes("/agents.json") && text.includes("/llms.txt"), "the page names the manifest path, its array and the fallback documents");

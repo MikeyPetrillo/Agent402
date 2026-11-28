@@ -158,19 +158,19 @@ for (const [slug, args, label] of [
     }
     ok(calls.length === 0, "crypto-market: a refused screen reads nothing");
 
-    // crypto-history leads with its summary.
+    // crypto-history answers statistics computed from the series, never the series.
     fresh();
     const H = 3_600_000, t = 1_790_000_000_000;
-    cg = () => res(200, { prices: [[t, 100], [t + H, 120], [t + 2 * H, 90], [t + 3 * H, 130]], market_caps: [], total_volumes: [] });
+    cg = () => res(200, { prices: [[t, 100], [t + H, 120], [t + 2 * H, 90], [t + 3 * H, 130]], market_caps: [[t, 1000], [t + H, 1200], [t + 2 * H, 900], [t + 3 * H, 1300]], total_volumes: [[t, 10], [t + H, 20], [t + 2 * H, 30], [t + 3 * H, 40]] });
     const hist = await h("crypto-history")({ coin: "bitcoin", days: "1" });
     const rets = [Math.log(1.2), Math.log(0.75), Math.log(130 / 90)];
     const mean = rets.reduce((a, b) => a + b, 0) / 3;
     const vol = +(Math.sqrt(rets.reduce((a, x) => a + (x - mean) ** 2, 0) / 2) * Math.sqrt(8760) * 100).toFixed(4);
     const s = hist.summary;
-    ok(s.first === 100 && s.last === 130 && s.high === 130 && s.low === 90 && s.changePct === 30, "crypto-history: summary first/last/high/low/changePct");
+    ok(s.changePct === 30 && s.fromHighPct === 0 && s.fromLowPct === 44.4444 && !["first", "last", "high", "low"].some((k) => k in s), "crypto-history: summary changePct and the last observation against the window's high and low, with no value of the series");
     ok(s.maxDrawdownPct === -25 && s.volatilityPct === vol, `crypto-history: max drawdown and hourly volatility annualized over 365 days (${s.maxDrawdownPct}, ${s.volatilityPct} vs ${vol})`);
-    const keys = Object.keys(hist);
-    ok(keys.indexOf("summary") < keys.indexOf("bars") && hist.count === 4, "crypto-history: the summary comes before the series");
+    ok(!("bars" in hist) && hist.count === 4 && hist.window.observations === 4 && hist.window.spacing === "1h" && hist.drawdown.peakAt === new Date(t + H).toISOString() && hist.drawdown.recoveredAt === new Date(t + 3 * H).toISOString(), "crypto-history: no series in the answer; the window and the drawdown name times only");
+    ok(hist.activity.marketCapChangePct === 30 && hist.activity.volumeChangePct === 300 && hist.steps.count === 3 && /not investment advice/.test(hist.method) && /withdrawn \(raw source series\)/.test(hist.withdrawn), "crypto-history: activity and steps are computed; the answer carries its method and what was withdrawn");
 
     // stablecoin-peg: deviations, shares and bands computed here; no source
     // figure per coin (price, 24h high and low, market cap) on any surface,
@@ -229,12 +229,12 @@ await live("crypto-market", { limit: 10, currency: "usd" },
     typeof r.coins[0].turnoverPct === "number" && r.coins[0].athDrawdownPct <= 0,
   "crypto-market top 10 usd");
 
-// 7-day BTC history — exercises symbol→id resolution + the prices/caps/volumes
-// triple-zip. CoinGecko returns ~168 hourly points for 7d; assert >24 to ride
+// 7-day BTC history: exercises symbol→id resolution and the statistics
+// computed over the prices/caps/volumes series. CoinGecko returns ~168 hourly points for 7d; assert >24 to ride
 // out any sparse-data hiccup.
 await live("crypto-history", { coin: "BTC", days: 7, currency: "usd" },
-  (r) => r.coin === "bitcoin" && r.currency === "usd" && Array.isArray(r.bars) && r.bars.length > 24 && r.bars.every((b) => typeof b.price === "number") &&
-    typeof r.summary?.volatilityPct === "number" && r.summary.maxDrawdownPct <= 0,
+  (r) => r.coin === "bitcoin" && r.currency === "usd" && !("bars" in r) && r.count > 24 && r.window?.observations > 24 &&
+    typeof r.summary?.volatilityPct === "number" && r.summary.maxDrawdownPct <= 0 && typeof r.summary.fromHighPct === "number" && typeof r.daily?.upDaySharePct === "number",
   "crypto-history BTC 7d");
 
 // Trending — exercises /search/trending; should always return non-empty

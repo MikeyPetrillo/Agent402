@@ -981,6 +981,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   const X402 = "an x402 verify or settle refusal: only an x402 payment meets it, and nothing settled";
   const GATE = "a gate's refusal before any handler runs or any payment settles: true for every caller it answers";
   const POLICY = "a description stating policy with its rail (and the settle-first sentence where the route can settle first)";
+  const POLICY_AND_SUMMARY = `${POLICY}, and the tool's pageSummary stating the same policy for its page`;
   const LOG = "an operator log or ledger line, never sent to a buyer";
   // file -> [lines that type the claim, why]. The count is pinned, so a new
   // typed claim in a listed file fails here until it is converted or counted.
@@ -1026,7 +1027,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     ["src/plan-sketch.js", [1, POLICY]],
     ["src/refund-lookup.js", [1, POLICY]],
     ["src/search-landings.js", [1, POLICY]],
-    ["src/settlement-footnote.js", [1, POLICY]],
+    ["src/settlement-footnote.js", [2, POLICY]],
     ["src/what-is-mpp.js", [1, POLICY]],
     ["src/gateway-nanopayments.js", [1, LOG]],
     ["src/payment-verify.js", [1, LOG]],
@@ -1034,13 +1035,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     ["src/tempo-buyer.js", [1, LOG]],
     ["src/x402-buyer.js", [3, LOG]],
     ["src/tools/weather-kit.js", [1, LOG]],
-    ["src/tools/attest-kit.js", [1, POLICY]],
+    ["src/tools/attest-kit.js", [2, POLICY_AND_SUMMARY]],
     ["src/tools/cdp-kit.js", [1, "SQL_WALK_CHARGE, the walk's billing rule in its description, with the Tempo exception"]],
     ["src/tools/dub-kit.js", [1, POLICY]],
     ["src/tools/image-gen-kit.js", [2, POLICY]],
-    ["src/tools/llm-images-fast-kit.js", [2, POLICY]],
-    ["src/tools/price-webhook-kit.js", [1, POLICY]],
-    ["src/tools/redact-chat-kit.js", [1, POLICY]],
+    ["src/tools/llm-images-fast-kit.js", [3, POLICY]],
+    ["src/tools/price-webhook-kit.js", [2, POLICY_AND_SUMMARY]],
+    ["src/tools/redact-chat-kit.js", [2, POLICY_AND_SUMMARY]],
     ["src/tools/search.js", [1, POLICY]],
     ["src/tools/decide-kit.js", [2, "the decide-execute description (scoped to x402; Tempo is not offered for a long-running route) and UNKNOWN_DECISION_MESSAGE, the exact sentence, also the pre-payment 404 server.js answers"]],
     ["src/tools/llm-gateway-kit.js", [4, "three descriptions scoped to x402 or carrying the Tempo exception, and inputTooLargeError's metered branch: the exact sentence, never a step (dispatchable refuses a def.quote tool), also the pre-payment refusal answered through withPushException"]],
@@ -1086,20 +1087,20 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/search-landings.js": "1f5673d60270",
     "src/server.js": "ec5a19844841",
     "src/settle-compliance.js": "681d7db3bda8",
-    "src/settlement-footnote.js": "e70e62457c89",
+    "src/settlement-footnote.js": "ea911a42a05a",
     "src/stripe-unconfirmed-readback.js": "0d1626729a57",
     "src/svm-facilitator-split.js": "3afac15f3c3a",
     "src/svm-funding-refusal.js": "c00679c3beff",
     "src/tempo-buyer.js": "1407c610e202",
-    "src/tools/attest-kit.js": "0a7ec988cee1",
+    "src/tools/attest-kit.js": "243d4273ba49",
     "src/tools/cdp-kit.js": "a081d5aac2f7",
     "src/tools/decide-kit.js": "c75892754664",
     "src/tools/dub-kit.js": "1dd69d7461ab",
-    "src/tools/image-gen-kit.js": "6880524cbf4f",
+    "src/tools/image-gen-kit.js": "9d54f4f59a97",
     "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
-    "src/tools/llm-images-fast-kit.js": "cadc38100665",
-    "src/tools/price-webhook-kit.js": "80b132972db7",
-    "src/tools/redact-chat-kit.js": "cfc201c0b1d5",
+    "src/tools/llm-images-fast-kit.js": "c2200acafd8f",
+    "src/tools/price-webhook-kit.js": "55e2ba78b2cf",
+    "src/tools/redact-chat-kit.js": "ba08a3d3c1a1",
     "src/tools/search.js": "aa3228d46d93",
     "src/tools/weather-kit.js": "0b0bfd77c1f2",
     "src/verify-hint.js": "0bdb69dae5ad",
@@ -1355,6 +1356,28 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
+  }
+  // ...and so does every FIELD text of such a tool (an input or output
+  // field's description is read by the same agents as the description): a
+  // field that says a call is not charged carries the sentence beside it.
+  {
+    const sft = await import("../src/settle-first-tools.js");
+    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS, ...sft.SETTLE_FIRST_REPORT_TOOLS];
+    const bareFields = [];
+    let fieldClaims = 0;
+    const walk = (o, path, depth) => {
+      if (depth > 12) return;
+      if (typeof o === "string") {
+        if (/\bnot charged\b/i.test(o)) { fieldClaims++; if (!o.includes(fam.SETTLE_FIRST_MARK)) bareFields.push(path); }
+      } else if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) walk(v, `${path}.${k}`, depth + 1);
+    };
+    for (const t of tools) walk(t.discovery, t.slug, 0);
+    ok(fieldClaims >= 3 && bareFields.length === 0, `every settle-first tool's field text that says a call is not charged carries the settle-first sentence (${fieldClaims} field claim(s)${bareFields.length ? `; bare: ${bareFields.slice(0, 4).join(", ")}` : ""})`);
+    const probe = [];
+    const walkProbe = (o) => { if (typeof o === "string") { if (/\bnot charged\b/i.test(o) && !o.includes(fam.SETTLE_FIRST_MARK)) probe.push(o); } else if (o && typeof o === "object") for (const v of Object.values(o)) walkProbe(v); };
+    walkProbe({ inputSchema: { properties: { moderation: { description: "a refused prompt is not charged on x402." } } } });
+    walkProbe({ inputSchema: { properties: { moderation: { description: `a refused prompt is not charged on x402. ${fam.SETTLE_FIRST_TEXT}` } } } });
+    ok(probe.length === 1, "CONTROL: the field check fails a bare claim and passes one that carries the sentence");
   }
   // A per-route job sentence ("payment settles only on a delivered result")
   // carries the sentence on a route that may settle first, and only there:

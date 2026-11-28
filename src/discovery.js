@@ -26,7 +26,9 @@ import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cadence.js";
 
-import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
+import { MCP_REGISTRY_SEARCH_URL } from "./org-profiles.js";
+import { officialSurfacesDocument } from "./official-surfaces.js";
 import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
@@ -122,6 +124,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     selfHostable: true,
     license: "AGPL-3.0-or-later",
     maintainer: MAINTAINER,
+    // The official packages and endpoints (src/official-surfaces.js): the same
+    // list /company shows, whatever host serves this manifest.
+    official: officialSurfacesDocument(),
     // Programmatic buyers get their terms notice here, in llms.txt, and on
     // /v1/models - use of the service constitutes acceptance (see /terms).
     termsOfService: `${baseUrl}/terms`,
@@ -269,7 +274,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       remoteConnector: `${baseUrl}/mcp`,
       remoteNote: "Streamable HTTP, no auth - paste into any MCP host that accepts a custom remote connector. Pure-CPU tools run free (rate-limited).",
       package: "agent402-mcp",
-      registry: `https://registry.modelcontextprotocol.io/v0/servers?search=${REPO_NAMESPACE}/agent402`,
+      registry: MCP_REGISTRY_SEARCH_URL,
     },
     machineReadable: {
       openapi: `${baseUrl}/openapi.json`,

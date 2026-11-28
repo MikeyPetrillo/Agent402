@@ -194,9 +194,18 @@ const { load: loadYaml } = await import("js-yaml");
 const jobs = loadYaml(wf).jobs || {};
 const runsOf = (j) => (j.steps || []).map((s) => String(s.run || ""));
 const holdsIdToken = ([, j]) => j.permissions && j.permissions["id-token"] === "write";
+// npm's trusted publishers name the environment, so the publish credential is
+// an id-token minted INSIDE it: exactly one job, publish. One other job holds
+// an id-token outside every environment (registry-earlier-name, for an MCP
+// Registry login that reads the repository owner claim); npm refuses that
+// token, and the job is held to every rule below except the registry-url one.
 const credentialJobs = Object.entries(jobs).filter(holdsIdToken).map(([n]) => n);
-ok(credentialJobs.length === 1 && credentialJobs[0] === "publish",
-  `exactly one job holds id-token: write, and it is publish (found: ${credentialJobs.join(", ") || "none"})`);
+const inEnvironment = credentialJobs.filter((n) => jobs[n].environment !== undefined);
+ok(inEnvironment.length === 1 && inEnvironment[0] === "publish",
+  `exactly one job holds id-token: write inside an environment, and it is publish (found: ${inEnvironment.join(", ") || "none"})`);
+ok(credentialJobs.slice().sort().join(",") === "publish,registry-earlier-name",
+  `the id-token holders are publish and registry-earlier-name (found: ${credentialJobs.join(", ") || "none"})`);
+ok(!runsOf(jobs["registry-earlier-name"] || {}).some((r) => r.split("\n").some((l) => !/^\s*#/.test(l) && /\bnpm publish\b|\bnpx\s/.test(l))), "registry-earlier-name runs no npm publish and no npx");
 for (const name of credentialJobs) {
   const j = jobs[name];
   // An install of anything but the npm CLI itself (pinned, --ignore-scripts)
@@ -220,8 +229,9 @@ for (const name of credentialJobs) {
       ok(/@\d+\.\d+\.\d+$/.test(m[1]), `${name}: npx runs an exactly pinned package (${m[1]})`);
     }
   }
-  ok((j.steps || []).some((s) => s.with && s.with["registry-url"]),
+  if (name === "publish") ok((j.steps || []).some((s) => s.with && s.with["registry-url"]),
     `${name}: setup-node declares registry-url (npm publish resolves the registry from it)`);
+  else ok(!(j.steps || []).some((s) => s.with && s.with["registry-url"]), `${name}: no registry-url (it publishes nothing to npm)`);
 }
 // The gate job: the tests still run, somewhere without the credential, and the
 // credential job cannot start unless they SUCCEEDED (a skipped gate is not a

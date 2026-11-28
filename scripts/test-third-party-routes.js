@@ -4,6 +4,7 @@
 // definitions carry the flag and that both card-funded gates receive it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripElements } from "./lib/html-text.js";
 import { paysThirdParty } from "../src/third-party-routes.js";
 
 let failed = 0;
@@ -100,7 +101,41 @@ ok(/const cardFunded = req\?\.creditsSettling === true \|\| req\?\.stripeSettlin
 ok(!/by credits or card/.test(decide), "decide-execute's description no longer offers credits or a card");
 // The surfaces that describe what a credits key pays read the same flag or name the exclusion.
 const pages = src("pages.js");
-ok(/tool\.identityBound \|\| paysThirdParty\(tool\) \? \[\] : \["a prepaid credits key"\]/.test(pages) && /paysThirdParty\(tool\) \? " It buys from an outside seller with our wallet/.test(pages), "tool pages do not offer credits on a third-party route");
+ok(/tool\.identityBound \|\| paysThirdParty\(tool\) \? \[\] : \["a credits key"\]/.test(pages) && /paysThirdParty\(tool\) \? " It buys from an outside seller with our wallet/.test(pages), "tool pages read the predicate where they name what pays a route");
+// The rendered page, not only its source: every route in the class is
+// rendered with credits sales on and off, and nothing in its head or <main>
+// offers a credits key or a card. The one sentence that names them says they
+// do not pay it. A route outside the class is the control: its page offers
+// the key, so the reader below is proven to find an offer.
+{
+  const { toolPage, toolList } = await import("../src/pages.js");
+  const offers = (html) => {
+    const own = html.slice(0, html.indexOf("</head>")) + html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+    const text = stripElements(stripElements(own, ["script"], " ", (m) => /ld\+json/.test(m)), ["style"])
+      // The share image's meta name and address hold the word and offer nothing.
+      .replace(/twitter:card|\/tools\/[a-z0-9-]+\/card\b/g, " ")
+      .replace(/prepaid credits and cards do not pay it\./g, " ");
+    return [...text.matchAll(/[^.<>]{0,60}(?:credits?[ -]key|card-credits|AGENT402_CREDITS_KEY|a402_|\/credits\b|prepaid|\bcards?\b)[^.<>]{0,40}/gi)].map((m) => m[0].trim());
+  };
+  const tiers = EXEC_TIERS.map((tier) => buildRouteExecuteTool({ getCatalog: () => ({}), tier }));
+  const plain = { route: "GET /api/sample", name: "Sample", slug: "sample-read", category: "web", price: "$0.01", description: "Reads a page.", tags: [], discovery: { inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, input: { url: "https://example.com" }, output: { example: { ok: true } } } };
+  const flagged = { ...plain, route: "GET /api/sample-buy", slug: "sample-buy", paysThirdPartySeller: true };
+  const spender = { ...plain, route: "GET /api/sample-spend", slug: "sample-spend", spendsOwnWallet: true };
+  const saved = process.env.CREDITS_SALES;
+  try {
+    for (const sales of ["on", ""]) {
+      if (sales) process.env.CREDITS_SALES = sales; else delete process.env.CREDITS_SALES;
+      const render = (def) => toolPage("https://x.test", toolList({ [def.route]: def })[0], [], {});
+      for (const def of [...tiers, flagged, spender]) {
+        const html = render(def);
+        const found = offers(html);
+        ok(paysThirdParty(def) && found.length === 0, `${def.slug} page (credits sales ${sales || "off"}): no credits key and no card anywhere${found.length ? ` (${found.slice(0, 2).join(" | ")})` : ""}`);
+        ok(/prepaid credits and cards do not pay it\./.test(html), `${def.slug} page (credits sales ${sales || "off"}): says credits and cards do not pay it`);
+      }
+      ok(offers(render(plain)).length > 0, `control (credits sales ${sales || "off"}): a route outside the class offers the key, and the reader finds it`);
+    }
+  } finally { if (saved === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = saved; }
+}
 ok(/the operations that buy from an outside seller/.test(pages), "openapi's credits scheme names the excluded operations");
 ok(/except the ones that buy from an outside seller/.test(src("seo.js")), "llms.txt names the excluded routes");
 // llms.txt's decide line renders only while /api/decide is in the catalog (a

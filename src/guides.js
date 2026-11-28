@@ -69,6 +69,7 @@ const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
 import { articleDates } from "./page-dates.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 
@@ -152,6 +153,9 @@ function resolveGuideTokens(text, catalog) {
       if (w.mpp) return "answer with their MPP payment challenge instead of a result: an MCP client that pays MPP settles it in the same call";
       return "answer with payment setup instead of a result";
     })
+    // {{receiptClause}}: the signed-receipt sentences, led by a space, only
+    // while this boot signs receipts (receiptsServed); nothing otherwise.
+    .replace(/\{\{receiptClause\}\}/g, () => receiptsServed() ? ` A settled 200 also carries \`${RECEIPT_HEADER}\`: a receipt this server signs (EdDSA over Ed25519) over the method, path, request and answer digests, the price, rail, network, payer and settlement. The public keys are at [${RECEIPT_KEYS_PATH}](${RECEIPT_KEYS_PATH}), and \`POST ${RECEIPT_VERIFY_PATH}\` checks a receipt against them for free.` : "")
     .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
     .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
     // The router's other chains, read from route-execute (its fixed map plus
@@ -313,7 +317,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.17.1\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.17.2\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -1146,7 +1150,103 @@ quote yourself: \`curl -i -X POST http://localhost:3000/api/summarize\` answers
 
 The entire stack described here - paywall, PoW tier, MCP servers, CI, even the
 on-chain customer detector - is in
-[one repo](${REPO_URL}) you can fork.
+[one repo](${REPO_URL}) you can fork. The buying agent's side, step by step:
+[agent-to-agent payments over x402](/guides/agent-to-agent-payments).
+`,
+  },
+  {
+    slug: "agent-to-agent-payments",
+    metaDescription: "How one AI agent pays another agent's HTTP endpoint with x402: the 402 quote, the signed payment header, settlement and the receipt.",
+    title: "Agent-to-agent payments over x402",
+    description:
+      "How one AI agent pays another agent's HTTP endpoint with x402: the 402 answer, the signed payment header, settlement and the receipt, with code for both sides.",
+    md: `
+An agent that sells a service runs an HTTP endpoint. An agent that buys it
+holds a wallet. [x402](https://x402.org) is the payment between them: the price
+travels in one HTTP answer and the payment in the next request, with no
+account, invoice or API key on either side.
+
+## The four steps
+
+1. **The quote.** The buying agent calls the endpoint and gets
+   \`402 Payment Required\`. The \`PAYMENT-REQUIRED\` header (base64 JSON) lists
+   \`accepts\`: each one a scheme, a network, an amount in the asset's atomic
+   units, the asset, the seller's \`payTo\` address and how long the offer holds.
+2. **The signed payment.** The buyer picks one accept and signs it. On an EVM
+   chain with the \`exact\` scheme that is an EIP-3009 transfer authorization for
+   that amount to \`payTo\`; nothing moves yet. It sends the same request again
+   with the signature in the \`PAYMENT-SIGNATURE\` header.
+3. **Settlement.** The seller's server checks the signature through a
+   facilitator, runs the work, and has the facilitator submit the transfer on
+   chain. The x402 Express middleware settles only an answer below 400.
+4. **The receipt.** The answer carries \`PAYMENT-RESPONSE\`: whether it
+   settled, the transaction, the network and the payer. Either agent can look
+   the transaction up on chain.
+
+## The buying agent
+
+Any x402 client does steps 1, 2 and 4. With the open-source x402 packages:
+
+\`\`\`js
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+import { Agent402 } from "agent402-client";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+// The ceiling per call: this client signs no quote above five cents.
+new Agent402({ maxPerCallUsd: 0.05 }).guardX402Client(client);
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+const res = await payFetch("https://agent402.tools/api/extract", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ url: "https://example.com" }),
+});
+console.log(res.headers.get("payment-response"), await res.json());
+\`\`\`
+
+That call costs {{price:extract}}. Give the buying agent its own wallet with a
+small balance, and a ceiling per call in code, as above, so it signs only a quote at or
+under that ceiling. [Create an agent wallet](/guides/create-agent-wallet) shows how to make one.
+
+## The selling agent
+
+The selling agent puts a paywall in front of its route: a price, a network and
+its own \`payTo\` address. [Sell your API over x402](/guides/sell-your-api-over-x402)
+has the Express example; an existing site can charge agents per request with
+[agent402-tollbooth](/tollbooth).
+
+## How one agent finds the other
+
+An agent publishes what it does and how it is paid in files another agent can
+read before the first call. Agent402 serves an A2A agent card at
+[/.well-known/agent-card.json](/.well-known/agent-card.json) (the agent, its
+skills and its transport) and its x402 offers at
+[/.well-known/x402](/.well-known/x402). [/api/find](/api/find?q=extract%20a%20web%20page)
+turns a task into a route, an input schema and a price.
+
+## Receipts and verification on Agent402
+
+When Agent402 is the selling agent, it settles a paid call after the answer
+and only on success, and the answer carries the \`PAYMENT-RESPONSE\` header
+like any x402 seller's. ${SETTLE_FIRST_SENTENCE}{{receiptClause}} To check that
+a transaction paid a given address at least a given amount, the
+[x402-verify](/tools/x402-verify) tool ({{price:x402-verify}}) reads it on
+chain.
+
+Agent402 also buys from other agents for one: the
+[router](/guides/smart-order-router) takes one payment, buys the result
+from an outside x402 seller and sells it to you with a receipt.
+
+## Read further
+
+The x402 specification is at [x402.org](https://x402.org). For MPP (Machine
+Payments Protocol) and how it sits beside x402, see
+[x402 and MPP](/guides/x402-and-mpp). The headers step by step:
+[how x402 works](/learn/x402).
 `,
   },
   {
@@ -2061,7 +2161,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.2
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2075,7 +2175,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2098,7 +2198,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2327,7 +2427,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2353,7 +2453,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2380,7 +2480,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2418,7 +2518,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2442,7 +2542,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.17.1"]
+args = ["-y", "agent402-mcp@0.17.2"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2486,7 +2586,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.1"],
+      "args": ["-y", "agent402-mcp@0.17.2"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }

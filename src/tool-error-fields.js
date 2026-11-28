@@ -1,6 +1,7 @@
 // The machine-readable fields a tool error carries into its JSON answer,
 // shared by every writer of a catalog error so none drops one.
 import { coverReasonOf, spendRuleOf } from "./refusal-reason.js";
+import { redactSecrets } from "./tools/redact.js";
 const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
 /**
@@ -55,6 +56,9 @@ export function toolErrorFields(err) {
     // A spend ceiling of ours paused routing (src/external-spend-guard.js
     // SPEND_RULES): the fixed reason and the rule that refused.
     ...(spendRuleOf(err) ? { reason: "routing_paused", rule: spendRuleOf(err) } : {}),
+    // A skill pack none of whose steps succeeded (src/tools/skill-runner.js):
+    // the pack and each failed step, bounded.
+    ...(packFailureOf(err) || {}),
     // A caller-named URL its site's robots.txt disallows for our fetch token
     // (src/tools/robots-gate.js): the fixed reason, the rule that decided it
     // and the robots.txt it came from, both bounded printable text.
@@ -68,11 +72,20 @@ export function toolErrorFields(err) {
     ...(err?.contentFiltered === true && Number(err?.statusCode) === 422 ? { reason: "content_filtered" } : {}),
     // A buyer's own upstream key the upstream refused (src/upstream-key.js).
     ...(err?.upstreamKeyRefused === true && [401, 403].includes(Number(err?.statusCode)) ? { reason: "upstream_key_refused" } : {}),
+    // The request fields a caller left out (route-execute's chat completion
+    // check): at most eight field names.
+    ...(missingFieldsOf(err) ? { missing: missingFieldsOf(err) } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };
 }
 
+const FIELD_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function missingFieldsOf(err) {
+  const m = err?.missing;
+  if (Number(err?.statusCode) !== 400 || !Array.isArray(m) || !m.length || m.length > 8) return null;
+  return m.every((f) => typeof f === "string" && FIELD_NAME_RE.test(f)) ? [...m] : null;
+}
 const ROBOTS_RULE_RE = /^(Allow|Disallow): [\x20-\x7e]{0,190}$/;
 const ROBOTS_URL_RE = /^https?:\/\/[\x21-\x7e]{1,300}\/robots\.txt$/;
 function robotsFieldsOf(err) {
@@ -84,6 +97,34 @@ function robotsFieldsOf(err) {
   };
 }
 const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
+const PACK_STEPS_MAX = 40, PACK_STEP_ERROR_CHARS = 400;
+const ATTRIBUTION_RE = /^[a-z][a-z-]{0,23}$/;
+/**
+ * { pack, failedSteps } of a skill pack's all-steps-failed error, or null.
+ * Each step: { slug, as?, statusCode, error, attribution?, upstreamStatus?,
+ * blocked?, starved?, after? }. `attribution` is the step's tool's own word
+ * for whose failure it was (src/upstream-deadline.js). A step whose input was
+ * mapped from the output of earlier steps of the chain that had failed
+ * (`after`) is `blocked` when that input could not be built, so its handler
+ * was never called, and `starved` when the handler was called with what
+ * could be built and did not serve it. Text is bounded and slugs are checked, so
+ * nothing but what the step's own answer would carry rides here.
+ */
+export function packFailureOf(err) {
+  if (typeof err?.pack !== "string" || !HINT_RE.test(err.pack) || !Array.isArray(err?.failedSteps) || !err.failedSteps.length) return null;
+  const slugOk = (v) => typeof v === "string" && HINT_RE.test(v);
+  const failedSteps = err.failedSteps.slice(0, PACK_STEPS_MAX).filter((s) => s && slugOk(s.slug)).map((s) => ({
+    slug: s.slug,
+    ...(slugOk(s.as) ? { as: s.as } : {}),
+    ...(Number.isInteger(s.statusCode) ? { statusCode: s.statusCode } : {}),
+    // Scrubbed like the answer's own message (src/tools/redact.js).
+    error: String(redactSecrets(String(s.error ?? "")) ?? "").slice(0, PACK_STEP_ERROR_CHARS),
+    ...(typeof s.attribution === "string" && ATTRIBUTION_RE.test(s.attribution) ? { attribution: s.attribution } : {}),
+    ...(Number.isInteger(s.upstreamStatus) ? { upstreamStatus: s.upstreamStatus } : {}),
+    ...(s.blocked === true || s.starved === true ? { [s.blocked === true ? "blocked" : "starved"]: true, after: (Array.isArray(s.after) ? s.after : []).filter(slugOk).slice(0, 8) } : {}),
+  }));
+  return failedSteps.length ? { pack: err.pack, failedSteps } : null;
+}
 const isAmount = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER;
 const NETWORK_RE = /^[a-z0-9]{3,8}:[A-Za-z0-9._=-]{1,64}$/; // CAIP-2
 const FIX_RE = /^[\x20-\x7e]{1,400}$/;

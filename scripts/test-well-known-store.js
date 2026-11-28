@@ -35,6 +35,7 @@ ok(!validWellKnownPath("a b"), "space rejected");
 
 throws(() => registerWellKnown("x402", { a: 1 }), "dedicated route", "reserved name x402 refused at write time");
 throws(() => registerWellKnown("security.txt", "x"), "dedicated route", "reserved name security.txt refused");
+throws(() => registerWellKnown("mcp-registry-auth", "x", "text/plain"), "dedicated route", "reserved name mcp-registry-auth refused (its setting serves it)");
 // Every /.well-known document a dedicated route serves is reserved: the
 // conformance document and the receipt key document (src/receipt-signing.js).
 {

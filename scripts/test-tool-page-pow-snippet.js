@@ -12,20 +12,16 @@
 //
 //   node scripts/test-tool-page-pow-snippet.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
 let proc = null;
 const fail = (m) => { console.error("FAIL:", m); if (proc) proc.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; if (process.env.VERBOSE) console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
 function leadingZeroBits(buf) {
@@ -44,13 +40,14 @@ function solve(challenge, difficulty) {
   throw new Error("solver gave up");
 }
 
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
+// The origin the server is told it is served at (BASE_URL): a page's snippet
+// names it. Each published request is sent, path and query unchanged, to the
+// port the server bound.
+const SITE = "http://pow-snippet.test";
 const scratch = mkdtempSync(join(tmpdir(), "a402-pow-snippet-"));
-proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: {
-    ...process.env,
+try {
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  const srv = await bootServer({ stores: "pow-snippet", env: {
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network",
@@ -58,18 +55,14 @@ proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     X402_INDEX_CRAWL: "off",
     X402_ECONOMY_DB: join(scratch, "economy.db"),
     POW_DIFFICULTY: "8",
-    BASE_URL: BASE,
-    PORT: String(PORT),
+    BASE_URL: SITE,
     FREE_MODE: "",
     AGENT402_MCP_MAX_PER_MIN: "999999",
-  },
-  stdio: process.env.VERBOSE ? "inherit" : "ignore",
-});
-
-try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "paid-mode server booted");
+  } });
+  proc = srv.child;
+  const BASE = srv.url;
+  if (process.env.VERBOSE) console.log(srv.log());
+  ok(srv.port > 0, "paid-mode server booted");
 
   const pow = await (await fetch(`${BASE}/api/pow`)).json();
   const powSlugs = new Set(pow.eligibleTools || []);
@@ -84,12 +77,12 @@ try {
     const m = html.match(/await fetch\(&quot;([^&]*(?:&amp;[^&]*)*?)&quot;, \{ method: &quot;GET&quot;, headers: \{ &quot;X-Pow-Solution&quot;/);
     ok(!!m, `/tools/${t.slug}: page carries a GET proof-of-work snippet`);
     const url = decode(m[1]);
-    ok(url.startsWith(`${BASE}${t.path}`), `/tools/${t.slug}: snippet targets the tool path (${url})`);
+    ok(url.startsWith(`${SITE}${t.path}`), `/tools/${t.slug}: snippet targets the tool path (${url})`);
     if (url.includes("?")) withQuery.push(t.slug);
 
     const c = await (await fetch(`${BASE}/api/pow/challenge?slug=${encodeURIComponent(t.slug)}`)).json();
     const n = solve(c.challenge, c.difficulty);
-    const r = await fetch(url, { method: "GET", headers: { "X-Pow-Solution": c.token + ":" + n } });
+    const r = await fetch(BASE + url.slice(SITE.length), { method: "GET", headers: { "X-Pow-Solution": c.token + ":" + n } });
     const body = await r.text();
     ok(r.status === 200, `/tools/${t.slug}: the published snippet request answers 200 (got ${r.status}: ${body.slice(0, 160)})`);
   }

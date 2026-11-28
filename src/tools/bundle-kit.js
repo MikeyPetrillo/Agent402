@@ -26,7 +26,7 @@ import { bad as weatherBad, resolveLocation, WEATHER_TOOLS } from "./weather-kit
 import { WEATHER_PLAN_TOOLS } from "./weather-plan-kit.js";
 import { WEATHER_PROBABILITY_TOOLS } from "./weather-probability-kit.js";
 import { EDGAR_TOOLS } from "./edgar-kit.js";
-import { CRYPTO_MARKETS_TOOLS } from "./crypto-markets-kit.js";
+import { CRYPTO_MARKETS_TOOLS, COIN_CANDLES_LEG } from "./crypto-markets-kit.js";
 import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
@@ -44,6 +44,10 @@ export const BUNDLE_CEILING_MS = 45_000;
 
 const LEG_TOOLS = [...WEATHER_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...EDGAR_TOOLS, ...CRYPTO_MARKETS_TOOLS];
 const legBySlug = new Map(LEG_TOOLS.map((t) => [t.slug, t]));
+// The public coin-ohlc route answers candle statistics, never candles; the
+// candles a brief computes over come from the kit's in-process candle read,
+// at the same price, pacing and budget.
+legBySlug.set(COIN_CANDLES_LEG.slug, COIN_CANDLES_LEG);
 /** A leg tool's catalog entry (its handler and its price). */
 export function legTool(slug) {
   const t = legBySlug.get(slug);
@@ -511,7 +515,7 @@ async function tokenDiligence(input, ctx) {
       flagged: rows.filter((r) => r.flags.length).map((r) => ({ id: r.id, flags: r.flags })),
     },
     rows,
-    method: "byMarketCap orders the coins by market cap (the order only); supply.circulatingShare is circulating supply over the maximum supply (or the total where no maximum is set); turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; return1yPct is the change from the first to the last one-year candle close; maxDrawdown1yPct is the largest fall from a running high to a later candle's low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
+    method: "byMarketCap orders the coins by market cap (the order only); supply.circulatingShare is circulating supply over the maximum supply (or the total where no maximum is set); turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; return1yPct is the change from the first one-year candle's open to the last one-year candle's close; maxDrawdown1yPct is the largest fall from a running high to a later candle's low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
     pricing: pricingFields(rows.length, TOKEN_DILIGENCE_LEGS),
     source: "computed from CoinGecko coin profiles and OHLC candles",
     credits: [COINGECKO_ATTRIBUTION],

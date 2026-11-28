@@ -38,6 +38,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
+import { servedChangelogText, CHANGELOG_PATHS } from "./lib/changelog-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -425,8 +426,10 @@ try {
   ok(advice.test(row?.description || "") && /HTTPS only/.test(row?.description || ""), "the github-repo description carries the advice");
   const privacy = await fetch(`${B}/privacy`).then((r) => r.text());
   const termsOn = (await fetch(`${B}/terms`).then((r) => r.text())).replace(/\s+/g, " ");
-  ok(termsOn.includes("If you send your own key for another service with a call, you confirm that the key is yours to use, that the other service's terms allow this use, and that you are responsible for the key and for the calls made with it. A key you send is one of the inputs you send; <a href=\"/privacy\">/privacy</a> says what we do with it.</li>") && !/We use it only for that call|do not store it/.test(termsOn) && termsOn.includes(`last updated ${uk.UPSTREAM_KEY_TERMS_DATE}.`), "/terms carries the clause and its date while the switch is on");
-  const changelogOn = await fetch(`${B}/changelog`).then((r) => r.text());
+  // The page prints the later of its own date and the clause's (withUpstreamKeyDate).
+  const termsOwn = (readFileSync(new URL("../src/terms.js", import.meta.url), "utf8").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1] || "";
+  ok(termsOn.includes("If you send your own key for another service with a call, you confirm that the key is yours to use, that the other service's terms allow this use, and that you are responsible for the key and for the calls made with it. A key you send is one of the inputs you send; <a href=\"/privacy\">/privacy</a> says what we do with it.</li>") && !/We use it only for that call|do not store it/.test(termsOn) && termsOn.includes(`last updated ${uk.UPSTREAM_KEY_TERMS_DATE > termsOwn ? uk.UPSTREAM_KEY_TERMS_DATE : termsOwn}.`), `/terms carries the clause and the later of its date and the page's own (${termsOwn}) while the switch is on`);
+  const changelogOn = await servedChangelogText(B); // the page and its archive
   ok(changelogOn.includes("X-Agent402-Upstream-Key"), "/changelog carries the entry while the switch is on");
   const viewOn = await fetch(`${B}/__operator/upstream-key.json`, { headers: { "X-Operator-Token": OP } }).then((r) => r.json());
   ok(viewOn.enabled === true, "the operator view says the switch is on");
@@ -494,13 +497,13 @@ ok(files.length > 0 && leaks(stored).length === 0, `no stored record carries it 
     ok(long.status === 402 && bad.status === 402 && clear.status === 402 && long.pr === plain.pr && bad.pr === plain.pr, `off: an oversized, a malformed and a plain-HTTP header are each answered the ordinary 402 (${long.status}, ${bad.status}, ${clear.status})`);
     // No surface mentions it.
     const surfaces = {};
-    for (const p of ["/llms.txt", "/llms-full.txt", "/openapi.json", "/privacy", "/terms", "/changelog", "/api/pricing", "/tools/github-repo", "/api/github-repo/docs", "/.well-known/x402"]) { const r = await fetch(`${B}${p}`); surfaces[p] = r.status === 200 ? await r.text() : ""; }
+    for (const p of ["/llms.txt", "/llms-full.txt", "/openapi.json", "/privacy", "/terms", ...CHANGELOG_PATHS, "/api/pricing", "/tools/github-repo", "/api/github-repo/docs", "/.well-known/x402"]) { const r = await fetch(`${B}${p}`); surfaces[p] = r.status === 200 ? await r.text() : ""; }
     // (An older changelog item's "bring your own upstream key" is about self-hosting, not this header.)
     const WORDS = /Upstream-Key|upstream_key|Bring your own (?:key\b|GitHub)|your own (?:GitHub token|key for another service)|own-key price/i;
     const named = Object.entries(surfaces).filter(([, t]) => WORDS.test(t)).map(([p]) => p);
-    ok(surfaces["/llms.txt"].length > 500 && surfaces["/openapi.json"].length > 500 && surfaces["/terms"].length > 500 && surfaces["/changelog"].length > 500 && surfaces["/tools/github-repo"].length > 500 && named.length === 0, `off: no surface mentions the feature (${named.map((p) => `${p}: ${(surfaces[p].match(WORDS) || [])[0]} @ ${surfaces[p].slice(Math.max(0, surfaces[p].search(WORDS) - 70), surfaces[p].search(WORDS) + 50).replace(/\s+/g, " ")}`).join(" || ") || "none"})`);
+    ok(surfaces["/llms.txt"].length > 500 && surfaces["/openapi.json"].length > 500 && surfaces["/terms"].length > 500 && CHANGELOG_PATHS.every((p) => surfaces[p].length > 500) && surfaces["/tools/github-repo"].length > 500 && named.length === 0, `off: no surface mentions the feature (${named.map((p) => `${p}: ${(surfaces[p].match(WORDS) || [])[0]} @ ${surfaces[p].slice(Math.max(0, surfaces[p].search(WORDS) - 70), surfaces[p].search(WORDS) + 50).replace(/\s+/g, " ")}`).join(" || ") || "none"})`);
     ok(!WORDS.test(row?.description || "x") && /Unknown repos return 404\.$/.test(row?.description || ""), "off: the github-repo description ends where it did before the feature");
-    ok(/last updated 2026-11-25\./.test(surfaces["/terms"]), "off: /terms keeps its own date");
+    ok(/last updated 2026-11-28\./.test(surfaces["/terms"]), "off: /terms keeps its own date");
     const view = await fetch(`${B}/__operator/upstream-key.json`, { headers: { "X-Operator-Token": OP } }).then((r) => r.json());
     ok(view.enabled === false && view.counts?.removedWhileOff >= 5 && view.counts?.applied === 0 && view.counts?.malformed === 0 && view.counts?.tooLong === 0 && view.counts?.inClear === 0, `off: the operator view says off, and only removals are counted (${JSON.stringify(view.counts)})`);
   } finally {

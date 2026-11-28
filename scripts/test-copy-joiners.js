@@ -17,13 +17,16 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 const browser = await chromium.launch();
 try {
-  for (const [path, width] of [["/how-to-pay", 375], ["/", 375], ["/docs", 1440]]) {
+  // Each page is one where the widow pass edits text at that width (the
+  // control below): the copy handler is site-wide, so any such page reads it.
+  // The home page's short lead leaves it nothing to join at 375 px.
+  for (const [path, width] of [["/how-to-pay", 375], ["/pricing", 375], ["/docs", 1440]]) {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     await page.goto(`${BASE}${path}`, { waitUntil: "load" });
     await page.waitForTimeout(300);
     const r = await page.evaluate(() => {
       // The element the widow pass edited most: the one whose text holds the most joiners.
-      const els = [...document.querySelectorAll("main a, main p, main li")].filter((e) => /[⁠ ]/.test(e.textContent));
+      const els = [...document.querySelectorAll("main a, main p, main li")].filter((e) => /[⁠ ]/.test(e.textContent) && !e.closest("details:not([open])"));
       els.sort((a, b) => (b.textContent.match(/[⁠ ]/g) || []).length - (a.textContent.match(/[⁠ ]/g) || []).length);
       const el = els[0];
       if (!el) return { found: false };

@@ -35,7 +35,8 @@ catalog without that check.
   `dex-volume-board`, `defi-screener`, `chain-board`); Solana token markets (pairs, search, trending, prices);
   computed technical indicators and a whole-market pulse
   ($0.002 to $0.004); indexed EVM chain reads (transfers, balances, allowances,
-  decoded receipts, block receipts, token price history); whole-site crawling
+  decoded receipts, block receipts) and look-back statistics computed from a
+  token's price history; whole-site crawling
   (`site-map` $0.005, `site-crawl` $0.02); and page change detection
   (`page-change` $0.004).
 - **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum One, Monad, Celo,

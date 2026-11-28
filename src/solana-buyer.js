@@ -19,6 +19,7 @@ import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { OUR_SOLANA_WALLETS } from "./revenue-live.js";
+import { noteFundingReading } from "./funding-runway.js";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const SOLANA_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -527,6 +528,7 @@ export async function svmBuyerStatus({ fetchImpl = fetch } = {}) {
     const accounts = await rpcCall("getTokenAccountsByOwner", [address, { mint: USDC_MINT }, { encoding: "jsonParsed" }], { fetchImpl });
     const usd = Number(accounts?.value?.[0]?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
     const low = Number(process.env.SOLANA_UPSTREAM_BUYER_LOW_USD || "0.5");
+    noteFundingReading("solana", usd, low);
     return { status: usd < low ? "low" : "ok", asset: "USDC", chain: SOLANA_CAIP2 };
   } catch {
     return { status: "unknown", asset: "USDC", chain: SOLANA_CAIP2 };

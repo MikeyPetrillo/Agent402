@@ -197,6 +197,8 @@ t node scripts/test-crawl-revisit.js
 t node scripts/test-crawl-own-limits.js
 # Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
 t node scripts/test-quote-weekly.js
+# One route gets one unpaid price read per interval whatever makes it due, one retry after no answer, one passing paywall check; a week of crawls on a fake clock (offline)
+t node scripts/test-route-probe-interval.js
 # An origin whose documents moved to another seller is counted on its own day; the seller they land on keeps its day and its crawl (offline)
 t node scripts/test-crawl-redirect-budget.js
 # 300 origins behind one landing host are read in turn, oldest read first, one after another; a held crawl casts no tally vote and its turn reads landing (offline)
@@ -221,6 +223,16 @@ t node scripts/test-offload-stalls.js
 t node scripts/test-fallback-crawl-turn.js
 # A crawl cycle on a production-sized index (discovery, two full cycles, the MPP crawl) holds no turn long: one crawl's step per loop iteration, the route index's slices on time (offline)
 t node scripts/test-crawl-cycle-turns.js
+# The same cycle on a heap of 1.5 GB of live rows, with long documents and registries: our own turns bounded and named outside marking collections, new slices counted, sliced equals whole, readers see whole entries (offline; a child process with its own heap flags)
+t node scripts/test-crawl-cycle-heap-turns.js
+# A document at the crawl's size cap is parsed in a child process and rebuilt a piece per lane turn: turn bound, same entry as the in-place path, invalid and over-size as before, parser failures fall back (offline)
+t node scripts/test-crawl-parse-off-loop.js
+# No document under the crawl's byte caps ends the server through its parser: shapes searched for heap per character, run at the caps under the image's NODE_OPTIONS (offline)
+t node scripts/test-crawl-parse-contained.js
+# A document too long to parse in place is not parsed in place when the parser cannot start, times out, is paused or stopped; CRAWL_PARSE_WORKER=off still parses it (offline)
+t node scripts/test-crawl-parse-large-fallback.js
+# An origin whose document the crawl did not parse waits out the parser's memory of it: scheduled turns make no request, explicit crawls still read, the entry is kept (offline)
+t node scripts/test-crawl-kept-backoff.js
 # Ledger and index figures behind the stalled routes build across turns
 t node scripts/test-stall-routes.js
 t node scripts/test-manifest-input-schema.js
@@ -238,6 +250,8 @@ t node scripts/test-ci-gating.js
 # A sharded lane runs every script it names in exactly one shard (dry run of every shard, mutated copies must fail)
 t node scripts/test-ci-shards.js
 t node scripts/test-port-hygiene.js
+# A whole-suite skip fails under CI when its dependency is missing; a split suite runs its rate-free checks without the table (offline)
+t node scripts/test-no-silent-skips.js
 # A suite starts this Node (process.execPath), never the first node on PATH (offline)
 t node scripts/test-spawn-exec-path.js
 # Every suite that reaches src/ takes a stats store of its own with its first import
@@ -302,6 +316,7 @@ t node scripts/test-terms-model-outputs.js
 t node scripts/test-x402-trending.js
 # ticker pack kit (offline)
 t node scripts/test-ticker-pack-kit.js
+t node scripts/test-ticker-pack-pace.js
 t node scripts/test-dossier-inputs.js
 t node scripts/test-report-inputs.js
 # The research plan must never collapse silently into a one-search report.

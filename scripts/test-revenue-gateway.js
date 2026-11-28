@@ -87,7 +87,7 @@ await check("batched sales join the external figures with an off-chain label", (
   assert.ok(Math.abs(s.allTimeExternalAllUsd - (s.allTimeExternalWithTempoUsd + 0.03)) < 1e-6);
   assert.equal(railThroughput({ allTime: s }).total, s.allTimeInboundCount + 3, "throughput counts each batched settlement once");
   const text = flat(page(s));
-  assert.match(text, /3 external payments · \$0\.04 revenue, all-time x402 rails and Tempo MPP settled on-chain, plus Circle Gateway batched payments settled off chain/);
+  assert.match(text, /3 external payments · \$0\.04 revenue, all-time settled on-chain \(x402 rails \+ Tempo MPP\), plus Circle Gateway batched off chain/);
   assert.match(text, /Circle Gateway batched: 3 transactions, 2 external, \$0\.030 external\. Settled off chain at Circle Gateway and withdrawn on chain separately/);
   assert.doesNotMatch(text, /Gateway balance/i, "no Gateway balance on the public page");
 });

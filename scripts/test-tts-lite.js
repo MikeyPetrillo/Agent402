@@ -7,9 +7,9 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { TTS_TOOLS, TTS_TIERS } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandInFromCatalog } from "./lib/stand-in-costs.js";
 import { isHost } from "./lib/url-host.js";
-requireUpstreamCosts("test-tts-lite");
+const COSTS = await costsOrStandInFromCatalog("test-tts-lite");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const bySlug = Object.fromEntries(TTS_TOOLS.map((t) => [t.slug, t]));
@@ -32,9 +32,9 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(cap === 800, `the lite cap is 800 chars (cut from 2,000 on 2026-09-18 when Kokoro gained a dearer endpoint we cannot route away from; got ${cap})`);
   const worst = upstreamCosts().speech[kokoro.id] * cap;
   ok(price === 0.005, `the lite tier is $0.005 (got ${lite.price})`);
-  ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is within the margin rule on $${price}`);
+  COSTS.rate("the lite worst case at the cap within the margin rule", () => ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is within the margin rule on $${price}`));
   // The premium tier is quoted from the text: compare the same text at the lite cap.
-  ok(worst * 10 < full.quote({ text: "x".repeat(cap) }), "and an order of magnitude under the premium tier's quote for the same text");
+  COSTS.rate("the lite worst case against the premium quote", () => ok(worst * 10 < full.quote({ text: "x".repeat(cap) }), "and an order of magnitude under the premium tier's quote for the same text"));
 }
 
 // --- the contract: same shape in, same shape out ---------------------------

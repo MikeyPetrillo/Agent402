@@ -1132,7 +1132,7 @@ function percentile(sorted, p) {
 
 const math = [
   {
-    route: "POST /api/calc", name: "Calculator", slug: "calc", aliases: ["divide", "fraction", "divided-by", "calculate", "calculator"], category: "math", price: "$0.001",
+    route: "POST /api/calc", name: "Calculator", slug: "calc", aliases: ["add-two-numbers", "sum-two-numbers", "subtract", "divide", "fraction", "divided-by", "calculate", "calculator"], category: "math", price: "$0.001",
     description: "Safely evaluate an arithmetic expression (+ - * / % ^ and parentheses). No code execution - a real parser, not eval.",
     tags: ["calc", "math", "expression", "arithmetic"],
     discovery: { bodyType: "json", input: { expr: "2 + 3 * (4 - 1) ^ 2" }, inputSchema: { properties: { expr: { type: "string", maxLength: 1000 } }, required: ["expr"] }, output: { example: { result: 29 } } },
@@ -1412,7 +1412,7 @@ const time = [
     },
   },
   {
-    route: "POST /api/add-time", name: "Date arithmetic", slug: "add-time", category: "time", price: "$0.001",
+    route: "POST /api/add-time", name: "Date arithmetic", slug: "add-time", aliases: ["add-days"], category: "time", price: "$0.001",
     description: 'Add (or subtract) a duration to a date. duration like "2d", "-3h", "1w 2d", "90m". Returns the resulting UTC ISO timestamp.',
     tags: ["date", "add", "duration", "time", "arithmetic"],
     discovery: { bodyType: "json", input: { date: "2026-06-11T12:00:00Z", duration: "2d 3h" }, inputSchema: { properties: { date: { description: "Base date (default now)" }, duration: { type: "string", maxLength: 100, description: 'e.g. "2d", "-3h", "1w"' } }, required: ["duration"] }, output: { example: { result: "2026-06-13T15:00:00.000Z" } } },

@@ -27,6 +27,8 @@ paths:
   - "src/solana-leaderboard.js"
   - "src/board-refresh-slots.js"
   - "src/upstream-budgets.js"
+  - "src/funding-runway.js"
+  - "src/funding-watch.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
   - "src/upstream-cap-refusals.js"
@@ -227,6 +229,34 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   heartbeat and the status probe page on both under "Scheduled check needs review: offsite-backup", closed on
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
+- **Funding runway:** `src/funding-runway.js` keeps a trail of the balance figures each low-water
+  reader already takes (the Base and other EVM buyer chains, Solana, Algorand, Tempo, the
+  subscription sponsor, the Stellar facilitator in XLM; at most one reading per wallet per 30
+  minutes, 24 hours kept, the `funding-runway` state document), fits the spend per day by least
+  squares and reads `low-soon` when the line is reached within `FUNDING_RUNWAY_DAYS` (default 3),
+  `unknown` under four readings or six hours of span, `low` under the line. The fit has four
+  rules (the module header): a rise above 5% of the room over the line is a top-up and starts a
+  new stretch (the stretches share one slope, days left count from the real latest balance); the
+  spend is the smallest of the fits over the whole window and each half, so one buy alone
+  projects nothing; a drain still running (the trailing readings each lower than the one before,
+  at least four of them over six hours) is fitted the same way over its own stretch and the
+  larger spend is used, so a drain that began on a flat trail is read early; and the word holds, in at `FUNDING_RUNWAY_DAYS` and out only past 1.5 times
+  it on the whole-window fit (`clearDays` on the view; the held word is stored with the trail). A wallet with no
+  reading inside the window (a chain turned off, a key removed) leaves the report and the stored
+  document, so its `unknown` never holds the whole word. The Stellar
+  facilitator's line is `FACILITATOR_LOW_BALANCE_XLM` (default 1), the facilitator's own. Operator view only
+  (`fundingRunway` on `/api/gateway-status`, with the figures); it makes no chain read, pages
+  nothing, moves no money and leaves every alarm word as it was (`scripts/test-funding-runway.js`).
+  `FUNDING_WATCH_ADDRESSES` (`src/funding-watch.js`; unset = no reads) adds wallets the server does
+  not spend from, the ones the scheduled paid checks spend from and only CI reads: a comma list of
+  `label:chain:address:lineUsd` (chain `base` or `tempo`, at most 8), read by public address
+  through the server's own Base and Tempo balance readers, never with a key. A read of
+  `/api/gateway-status` starts the reads that are due and awaits none; each wallet is read at
+  most once per 30 minutes (a failed read retries after 5), and reads `watch:<label>` on the
+  operator runway (`unknown` until read, with its own `line`). The line is the operator's copy of
+  that wallet's CI mark, so a changed mark is a variable edit. A malformed entry is ignored with
+  one boot line that names the variable and the entry's position only. CI cannot do this itself:
+  a run sees one balance and keeps no trail between runs.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. A rail card on `/status` whose newest reading is more
   than `RAIL_PEER_LAG_MS` (6 hours) behind the newest rail reading (left out of the latest paid
@@ -248,7 +278,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   shared store the word reads the shared day total and a refusal mark held to 00:00 UTC, so a
   fresh process on a capped day reads capped, and unknown, which does neither, until its first
   shared read; the free share alone reads ok; closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
-  forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
+  forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback: the public lanes, tried first by
+  design for recent ranges, or the configured keyed list served most recent reads; idle does
   neither, and reads idle until five recent reads are in, so one failure after a deploy never
   pages), `speechUpstream` cooling (ok, probing: the cool-down ended and the next call tries the
   primary link, so a quiet service does not hold the page open; closes on the second clear read in
@@ -256,13 +287,28 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on),
   `directUpstreamSpend` high and `directUpstreamBalance` exhausted (ok, off; unknown and starting
-  do neither; alarms only, see gateway.md; rolling back past them leaves an open issue to close by
+  do neither: starting is this process before its first direct answer or balance refusal, so it
+  holds after a deploy until a call takes the direct link; alarms only, see gateway.md; rolling back past them leaves an open issue to close by
   hand), `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
   off: the MPP subscription engine is configured but did not build at boot, including an installed
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
-  `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: a keyed Open-Meteo request was
-  refused, by 401, 403 or a 400 whose reason names the key or a plan, in the last 15 minutes;
-  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503), `mppReconcile.run`
+  `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: the last keyed
+  outcome of an Open-Meteo API in this process was a refusal, two in a row by 401, 403 or a 400
+  whose reason names a plan, or one 400 naming the key; `openMeteoStatus` in
+  `src/tools/weather-kit.js`; buyers got an uncharged 503. The word changes on the next keyed
+  outcome, never with time: unknown, from boot until the first one, does neither. The first
+  outcome after boot is the server's own: `scheduleOpenMeteoBootRead`, started from the listen
+  callback, makes one keyed forecast read `OPEN_METEO_BOOT_READ_DELAY_MS` (15 s) after the server
+  listens, under an 8 s timeout, through the same request builder, fetch guard and refusal rule as
+  a buyer's call, so its outcome moves the word as a buyer's would (ok; refused on a 400 naming the
+  key; one refusal toward two on a 401, 403 or plan 400; no change on a timeout or 5xx). A read
+  that did not succeed is tried once more 30 s later, then nothing until the next boot. Never in
+  FREE_MODE, without the key, or with `OPEN_METEO_BOOT_READ=off`; unref'd timers, off the request
+  path, so boot and /health never wait on it (`scripts/test-open-meteo-boot-read.js`). No pager
+  changed: refused pages as before. `directUpstreamBalance` has no such read: its word turns on a
+  served direct answer or a 402 balance refusal, the only authenticated call the code makes there
+  is the paid chat call, and the model listing the price book already reads at boot takes no key
+  (that read feeds `directUpstream`), so starting still holds until a call takes the direct link), `mppReconcile.run`
   stale (the daily MPP reconciliation has not finished a run for 36 hours, a run that throws not
   counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
   close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first

@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (9 scripts, one process each)
+# @step 1: Offline suites (10 scripts, one process each)
 # /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
 t node scripts/test-route-envelope.js
 # Tool correctness regressions (20 wrong-answer bugs from the review; boots free-mode, TZ=UTC)
@@ -15,6 +15,8 @@ t node scripts/test-find-ranking.js
 t node scripts/test-find-direction.js
 # /api/find: past find-misses a catalog tool answers rank it first and read as served (scripts/fixtures/find-misses.json)
 t node scripts/test-find-misses-corpus.js
+# Tool page text: a page summary fits 120 words with a short first sentence and keeps the description's credits and markings; listings keep the full description (booted, free mode)
+t node scripts/test-description-length.js
 # /api/find and catalog.find: a search with the operator token records no find-miss; Vary and no-store on the header (booted)
 t node scripts/test-find-operator-quiet.js
 # /.well-known/search: GET and QUERY rank as /api/find, Markdown, 400/405/413/415, wish and limit shared with /api/find, page head tags (booted)
@@ -27,6 +29,8 @@ t node scripts/test-openapi-schemas.js
 t node scripts/test-mcp-prompts.js
 # MCP outer transport limits (R-11 — per-IP cap + concurrency ceiling bound floods before server/transport allocation — spawns child)
 t node scripts/test-mcp-limits.js
+# A paid tool asked with no payment and a free tool past its limit on the hosted connector say the next step with a link that opens on a phone (/start#phone and /start#fund, or the credits connector sign-in only while credits are on sale and the sign-in is on), the limit says when it resets in words, the transport 429 too (two FREE_MODE boots, port 0)
+t node scripts/test-refusal-next-step.js
 # Hosted connector bounds: a free answer past the size ceiling is cut to valid JSON with answerBound fields, catalog.search holds its row maximum for any limit, a refusing limiter
 t node scripts/test-mcp-answer-bound.js
 # Hosted connector and revenue view error text: a configured key or a database URL's password an error quotes never reaches an answer, the reason stays (offline, bare express + mountMcp)
@@ -39,14 +43,14 @@ t node scripts/test-mcp-x402-connector.js
 t node scripts/test-mcp-x402-structured.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
-# Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
+# Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical but for a paid refusal's next-step sentence; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth.js
 # Connector sign-in pages as a person and a screen reader meet them: one h1 per step and on the error page, error lines with role=alert tied to their field and in the error color after the cascade, a lockout that disables the code form and offers a new code, Allow before Deny, the balance page linked, no key named (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth-pages.js
 # Class guard, per-key limits: every spelling of an address or mailbox is one key, every limiter in src/ registered with its identity, and the limiters batches 6 and 7 touched hold their bound rotated across a /64, a /48, mailbox spellings and payment headers, sequentially and in parallel (offline, bare express, port 0)
 t node scripts/test-limiter-identity.js
 
-# @step 2: Offline suites (21 scripts, one process each)
+# @step 2: Offline suites (22 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
 t node scripts/test-llms-txt.js
 # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
@@ -54,6 +58,8 @@ t node scripts/test-llms-link.js
 # Copy about paying on the hosted MCP connector names the wires that boot takes in the call and no other: /llms.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp and the agent-hosts guide against the connector's own instructions, descriptions, payment.info and first ask, on a paid boot with MPP, a paid boot without, and FREE_MODE; static trees name x402 wherever they name MPP on the connector (three boots, stub facilitator)
 t node scripts/test-connector-pay-copy.js
 t node scripts/test-start-page.js
+# /recipes: prompts to copy, each tool linked, free exactly for proof-of-work tools and every paid price the catalog's (never typed), model-backed labeled, the paid line reads the credits switch; on a FREE_MODE boot each prompt's tool answers through /mcp (free ones run, paid ones name the printed price), and the page is in the sitemap, /llms.txt and the page dates
+t node scripts/test-recipes-page.js
 # No third-party seller host or counterparty name in any tracked file (hashed list)
 t node scripts/test-no-third-party-names.js
 # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
@@ -68,6 +74,8 @@ t node scripts/test-no-url-pathname.js
 t node scripts/test-changelog-parity.js
 # A changelog entry about something a switch sells is on /changelog and its feed only while the switch is on.
 t node scripts/test-changelog-switched.js
+# /changelog shows the recent entries and /changelog/archive every older one, by month; the archive is linked, served and in the sitemap with a lastmod (port-0 boot)
+t node scripts/test-changelog-archive.js
 # The release job cuts package.json's version from its changelog section when no release exists; the top heading is that version (offline, stub gh)
 t node scripts/test-github-release.js
 # The wiki mirror publishes from main only (push trigger and job guard)
@@ -96,6 +104,8 @@ t node scripts/test-reputation-wording.js
 t node scripts/test-listing-screen-hints.js
 # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
 t node scripts/test-well-known-store.js
+# Official packages and endpoints: the list equals the repository's published packages, /company, /.well-known/x402 and README carry it; the MCP Registry proof route follows its setting (boots free-mode)
+t node scripts/test-official-surfaces.js
 # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
 t node scripts/test-reliability-envelope.js
 # PostHog analytics proxy abuse controls (R-17 — method allowlist + per-IP cap before the upstream call — spawns child)

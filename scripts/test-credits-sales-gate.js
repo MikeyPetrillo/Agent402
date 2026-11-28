@@ -29,7 +29,7 @@ async function rpc(method, params) {
 const callText = async (name, args) => JSON.stringify((await rpc("tools/call", { name, arguments: args }))?.result || {});
 async function keySurfaces() {
   const get = (path) => fetch(`${B}${path}`).then((r) => r.text());
-  const llms = await get("/llms-full.txt"), skill = await get("/skill.md"), pricing = await get("/pricing"), howToPay = await get("/how-to-pay");
+  const llms = await get("/llms-full.txt"), skill = await get("/skill.md"), pricing = await get("/pricing"), howToPay = await get("/how-to-pay"), security = await get("/security");
   const search = await callText("catalog.search", { query: "whois domain", limit: 30 });
   const find = await callText("catalog.find", { task: "look up the whois record of a domain" });
   const describe = await callText("server.describe", {});
@@ -40,6 +40,7 @@ async function keySurfaces() {
     ["SKILL.md body", skill, "a prepaid credits key already issued also works", "a prepaid credits key also works"],
     ["/pricing gateway note", pricing, "A credits key already issued also works as the API key.", ">A credits key also works as the API key."],
     ["/how-to-pay install lines", howToPay, "# a credits key already issued works there too", "# a credits key works there too"],
+    ["/security disclosure scope", security, "the prepaid credits gate (for keys already issued), the card front door", "the prepaid credits gate, the card front door"],
     ["MCP catalog.search access", search, "or a prepaid credits key already issued as AGENT402_CREDITS_KEY", "or a prepaid credits key as AGENT402_CREDITS_KEY"],
     ["MCP catalog.find usage", find, "a prepaid credits key already issued).", "(a wallet, or a prepaid credits key)."],
     ["MCP server.describe paidAccess", describe, "or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client", "or a prepaid credits key (AGENT402_CREDITS_KEY), or any x402 HTTP client"],

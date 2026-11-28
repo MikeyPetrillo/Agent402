@@ -83,8 +83,8 @@ const rowsOf = (O) => idx._cacheForTests().get(O)?.tools || [];
     ok(quoteReads() - before === 0, `crawl ${crawl} inside the week sends no price read (${quoteReads() - before})`);
   }
   ok(rowsOf(O).length === ROUTES.length && rowsOf(O).every((t) => t.networks?.length === 2 && Number(t.networksVerifiedAt) > 0), "the rows keep both chains and their verification stamp");
-  // A week on: every stamp eight days old.
-  for (const t of rowsOf(O)) for (const k of ["networksVerifiedAt", "quoteObservedAt", "liveProvenAt"]) if (Number(t[k]) > 0) t[k] -= 8 * DAY;
+  // A week on: every stamp eight days old (the route's last unpaid request included).
+  for (const t of rowsOf(O)) for (const k of ["networksVerifiedAt", "quoteObservedAt", "liveProvenAt", "unpaidAskedAt"]) if (Number(t[k]) > 0) t[k] -= 8 * DAY;
   before = quoteReads();
   await idx.__crawlSellerForTest(O);
   ok(quoteReads() - before === ROUTES.length, `a week on, each route is read again (${quoteReads() - before})`);

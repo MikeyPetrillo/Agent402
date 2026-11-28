@@ -16,6 +16,7 @@
 // to them, so a header change that cost one of those fails here.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import net from "node:net";
+import { generateKeyPairSync } from "node:crypto";
 import { bootPaidServer } from "./lib/paid-boot.js";
 
 let passed = 0, failed = 0;
@@ -30,7 +31,9 @@ const exposed = (r) => (r.headers.get("access-control-expose-headers") || "").to
 const TOKEN = "header-surfaces-operator-token-0123456789";
 // The referral gate (/ref/<slug>) is on, against a facilitator this suite never reaches.
 const REFERRAL_ENV = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2" };
-const srv = await bootPaidServer({ label: "header-surfaces", env: { AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "", ...REFERRAL_ENV } });
+// The MCP Registry proof route (src/mcp-registry-auth.js) is on, with a public key made here.
+const REGISTRY_PROOF = `v=MCPv1; k=ed25519; p=${generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64")}`;
+const srv = await bootPaidServer({ label: "header-surfaces", env: { AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "", MCP_REGISTRY_AUTH_PROOF: REGISTRY_PROOF, ...REFERRAL_ENV } });
 const J = { "content-type": "application/json" };
 const get = async (path, init = {}) => {
   const r = await fetch(srv.url + path, { redirect: "manual", signal: AbortSignal.timeout(30_000), ...init });
@@ -171,7 +174,7 @@ try {
   }
 
   // Static documents, whatever their type.
-  for (const path of ["/llms.txt", "/openapi.json", "/robots.txt", "/sitemap.xml", "/.well-known/x402", "/.well-known/security.txt", "/js/ga-loader.js", "/health"]) {
+  for (const path of ["/llms.txt", "/openapi.json", "/robots.txt", "/sitemap.xml", "/.well-known/x402", "/.well-known/security.txt", "/.well-known/mcp-registry-auth", "/js/ga-loader.js", "/health"]) {
     const { r } = await get(path);
     const h = (n) => r.headers.get(n);
     ok(r.status === 200 && missingAlways(h).length === 0, `${path}: 200 with the always-on headers (${r.status}; ${missingAlways(h).join(", ") || "all"})`);

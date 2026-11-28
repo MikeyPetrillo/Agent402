@@ -1085,6 +1085,29 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
+      # The crawl's document parser (crawlParse, src/crawl-parse.js):
+      # registry-kept pages (a registry's whole-list document was not parsed
+      # on its last pass, so its rows stand from an earlier pass); ok,
+      # fallback, paused and off clear; unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Crawl parse check (alarm when a registry list is held from an earlier pass)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.crawlParse.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "crawlParse: $STATUS"
+          TITLE="Scheduled check needs review: crawl-parse"
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "registry-kept" ]; then
+            if [ -z "$EXISTING" ]; then
+              node scripts/check-issue.js --title "$TITLE" --trust-owner || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "fallback" ] || [ "$STATUS" = "paused" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
+          fi
+
       # The MPP reconciler's own run word (mppReconcile.run,
       # src/mpp-reconcile.js): stale pages (no run has finished inside its
       # gap, so the mismatch words read unknown and page nothing); ok and

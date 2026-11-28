@@ -377,7 +377,7 @@ try {
   ok(Buffer.isBuffer(entry.openapiPacked) && !("openapiTools" in entry) && !("openapiRoutes" in entry), `seller c keeps its OpenAPI rows packed (${entry.openapiPacked?.length} bytes), no row arrays`);
   const routesBefore = entry.tools.map((t) => `${t.method} ${t.route}`).sort().join(",");
   // Forget what the first crawl learned, so the second must probe again.
-  for (const t of entry.tools) { t.networks = []; t.price = null; delete t.lastProbedAt; delete t.livePrice; delete t.probedAt; }
+  for (const t of entry.tools) { t.networks = []; t.price = null; delete t.lastProbedAt; delete t.livePrice; delete t.probedAt; delete t.unpaidAskedAt; }
   idx.clearOriginProbeState(c.origin);
   idx.rememberValidator(c.origin, "/openapi.json", ETAG);
   idx.rememberValidator(c.origin, "/.well-known/x402", ETAG);

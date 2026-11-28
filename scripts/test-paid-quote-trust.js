@@ -493,15 +493,15 @@ try {
       let n = 0; while (lz(createHash("sha256").update(`${ch.challenge}:${n}`).digest()) < ch.difficulty) n++;
       return `${ch.token}:${n}`;
     };
-    let firstAt = null, served = 0, limited = null, sentAt = 0, gotAt = 0;
+    let firstAt = null, served = 0, limited = null, limitedBody = "", sentAt = 0, gotAt = 0;
     for (let i = 0; i < 25 && !limited; i++) {
       const sol = await solve();
       sentAt = Date.now();
       const r = await fetch(`${B}/api/uuid`, { headers: from(ip, { "x-pow-solution": sol || "none" }) });
       gotAt = Date.now();
-      await r.arrayBuffer();
+      const text = await r.text();
       if (r.status === 200 && r.headers.get("x-pow-accepted") === "true") { served++; firstAt ??= [sentAt, gotAt]; }
-      else if (r.status === 429) limited = r;
+      else if (r.status === 429) { limited = r; limitedBody = text; }
       else break;
     }
     ok(served === 20 && !!limited, `20 redemptions a minute are served, the next is refused 429 (served ${served}, ${limited ? "refused" : "never refused"})`);
@@ -510,6 +510,10 @@ try {
     const hi = firstAt ? Math.max(1, Math.ceil((firstAt[1] + 60_000 - sentAt) / 1000)) : NaN;
     ok(/^[1-9][0-9]*$/.test(wait || "") && Number(wait) >= lo && Number(wait) <= hi, `the redemption 429 carries Retry-After, the seconds until the first redemption leaves the minute (${wait} in ${lo}..${hi})`);
     ok(limited?.headers.get("x-pow-rate-limited") === "true", "and says it is the proof-of-work limit");
+    // Its message says when the limit resets, in the same seconds, and links the wallet setup (src/next-step-copy.js).
+    let said = null;
+    try { said = JSON.parse(limitedBody); } catch { said = null; }
+    ok(new RegExp(`resets in ${wait} seconds?\\.`).test(String(said?.error || "")) && String(said?.error || "").includes("/start#fund"), `and its message says when it resets and where to set up a wallet (${String(said?.error || "").slice(0, 160)})`);
   }
   // A paid call that ends in a 4xx is not charged and trusts nothing: one the
   // handler refuses (settlement canceled) and one whose settle is refused.

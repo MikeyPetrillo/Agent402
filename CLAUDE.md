@@ -101,6 +101,22 @@ LLC: credit the entity, never a personal name.
   is judged and queried in one canonical form), `src/tools/mailbox-provider.js` (email-validate's
   `mailboxProvider`, from the MX hosts already read), `src/tools/price-webhook-kit.js` (the
   `price-webhook` catalog entry).
+- `src/official-surfaces.js` (the official packages and endpoints: /company, `official` in
+  `/.well-known/x402` and the README section, from `src/generated/official-packages.json`; after
+  adding, renaming or removing a published package run `node scripts/gen-official-surfaces.js --write`),
+  `src/mcp-registry-auth.js` (`/.well-known/mcp-registry-auth`, on while `MCP_REGISTRY_AUTH_PROOF` holds
+  a proof record; `scripts/test-official-surfaces.js`).
+- `src/legal-summary.js` (the summary box and jump list that open /privacy and /terms; each page
+  writes its own sentences), `src/skill-page-copy.js` (a skill pack page's short lead, when-to-use
+  line and steps; the pack's full text stays the agent's copy), `src/tools/content-filter.js`
+  (whether a provider's error is a content-filter verdict: the 422 `content_filtered` rule the video
+  and image routes share), `src/funding-runway.js` (an early `low-soon` word for the spending and
+  fee wallets, from the readings the low-water alarms take; `.claude/rules/ops.md`).
+- `src/capability-gaps.js` (tasks the catalog does not do: one named list that `/api/find`,
+  `/api/route` and route-and-execute read, so a query in a family is a miss unless a row is named
+  for it; `.claude/rules/index-router.md`), `src/tools/sec-rate.js` (one pace for every request
+  this process starts to the SEC's hosts), `src/tools/lookback-stats.js` (the statistics the
+  price-history tools answer in place of a source's series).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),
@@ -141,6 +157,8 @@ LLC: credit the entity, never a personal name.
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.
+- A tool with a long description may set `pageSummary` (optional): a shorter text that only its `/tools/<slug>` page shows, with every
+  credit, disclaimer and model-backed marking of the description; every listing keeps `description` (`scripts/test-description-length.js`).
 - A tool whose answer is bytes (the `{ __binary, contentType }` sentinel) declares `mimeType`, the type its published example
   returns; listings, `/openapi.json` and `/api/pricing` read it (`src/tool-media-type.js`, `scripts/test-bazaar-contracts.js`).
 - A tool that reaches the network on its own example is in `WALLET_ONLY_SLUGS` (`src/pow.js`), the
@@ -149,6 +167,10 @@ LLC: credit the entity, never a personal name.
   shared read helper, or other tools' handlers as a bundle product does) writes the hosts in its own
   definition as a literal `upstreamHosts: [...]`; a sweep excuses its upstream's refusal only against
   the runner's direct read of a declared host (`scripts/lib/upstream-outage.js`).
+- A skill pack (`src/tools/skill-runner.js`) declares, as a literal `upstreamHosts` beside its mode, the hosts
+  its steps' tools declare (`scripts/test-skill-pack-steps.js` holds the two equal). Its all-steps-failed
+  answer carries `pack` and `failedSteps` in fields (`src/tool-error-fields.js`), and a sweep excuses it only
+  when every step judged on its own answer is excused against a host the pack declares (`packOutageVerdict`).
 - A bundle product (`src/tools/bundle-kit.js`) holds one read per upstream host per unit at a time,
   runs a leg the source rate-limited (its 429) once, and starts no further unit after it; a leg
   helper that answers the source's 429 in its own words marks the error `throttled`. Its published
@@ -213,6 +235,22 @@ LLC: credit the entity, never a personal name.
 - A list answer that is a page or a capped sample says so in fields (`src/partial-answer.js`),
   not only in a prose note.
 - Before adding a data source, read its terms.
+- A read of an SEC host goes through `src/tools/sec-rate.js` (`SEC_STARTS_PER_SECOND_TOTAL` starts in any
+  rolling second, shared across replicas and, with the shared store, across a deploy's overlapping
+  processes by presence, `createSecPresence`): it paces our outbound reads, with turns fair across callers
+  (`src/caller-turns.js`), and refuses nobody for how many came before; a read that cannot get its turn
+  inside its bounded wait answers 503 with Retry-After, at once when the pace cannot reach its place in
+  that wait, and a read of a run already paid for (settle first) is never refused by it; a read of a run
+  armed to settle that has not reached its settle point is held where it would be refused and judged
+  again at its place (`scripts/test-sec-rate.js`, `scripts/test-ticker-pack-pace.js`).
+- A new refusal or miss rule is a narrow named list with controls that prove every other request
+  is answered exactly as before: a capability gap is a family in `CAPABILITY_GAPS` with an `asks`,
+  a `covers` and a case with controls in `scripts/test-capability-gaps.js`.
+- The scheduled crawl sends one seller route at most one unpaid price read per
+  `ROUTE_PROBE_MIN_INTERVAL_DAYS` (default 7; `src/crawl-cadence.js`, printed on /crawler;
+  `scripts/test-route-probe-interval.js`).
+- Page-length budgets count words with one module, `scripts/lib/page-words.js` (its named modes
+  are pinned by `scripts/test-page-words.js`); a budget test never carries a counter of its own.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
 - Public copy: first-party and affirmative, no competitor names, no em dashes, US spelling
@@ -274,6 +312,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   PR opened: the owner re-requests it, or passes `--no-strix`, the owner's explicit override).
 - A merge to `main` is not a package release: check `npm view <pkg> version` against the local
   `package.json`.
+- `[publish]` runs npm (the `publish` job, before the deploy) and then the MCP Registry
+  (`publish-registry`, after the deploy; nothing waits on it): the name `tools.agent402/agent402` is
+  granted on the proof production serves (`MCP_REGISTRY_AUTH_PROOF` on Railway, read first by
+  `scripts/registry-proof-check.js`) and the login reads the environment secret
+  `MCP_REGISTRY_PRIVATE_KEY` (environment `agent402 / production`); the earlier name is marked
+  moved there (`scripts/test-registry-name.js`, `scripts/test-ci-gating.js`).
 - The deploy job's "Bazaar listing validation on the new build" step (after Verify, keys blanked)
   runs `scripts/bazaar-validate.js` against production up to three times a minute apart: a clean
   run passes, an INVALID run with no clean run fails the job, three unreadable runs warn
@@ -381,6 +425,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   a port-0 boot and a drifted stub, and `mcp-clients.yml` runs it against production every 6
   hours (`MCP_CHECK_TARGET=prod`), paging one issue.
 - A skipped integration test is not coverage: under `CI`, a missing dependency must fail.
+  `scripts/test-no-silent-skips.js` scans every suite for a whole-suite skip with no CI check
+  beside it; its exception list may only shrink.
 - An offline suite imports `scripts/lib/offline-stores.js` FIRST (before any `src/` module): it
   clears `REDIS_URL`, `STATE_DATABASE_URL` and the journal switch, which modules read once at
   import, so a developer's shell never puts the suite on a shared backend. A suite that boots a
@@ -486,3 +532,8 @@ variable whose source of truth is Railway (`scripts/test-ci-secretless-install.j
 The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_ALERT_USD`
 (Railway; `0` or `off` turns it off; `src/direct-upstream-spend.js`): an alarm only, it never
 refuses, caps or reroutes a call.
+`FUNDING_RUNWAY_DAYS` (default 3; `src/funding-runway.js`) is how far ahead the operator view's
+`fundingRunway` word looks: `low-soon` when a wallet's fitted spend reaches its low-water line in that time.
+`FUNDING_WATCH_ADDRESSES` (Railway; unset = off; `src/funding-watch.js`) adds wallets the server does not
+spend from (the scheduled paid checks' wallets) to that runway, read by public address only: a comma list
+of `label:chain:address:lineUsd` (chain `base` or `tempo`). No key for a watched wallet is ever set on the server.

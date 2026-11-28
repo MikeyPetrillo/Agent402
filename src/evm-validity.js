@@ -53,11 +53,14 @@ export const CLIENT_SLACK_SECONDS = 60;
 /** @x402/core's default, and the value every route here advertises. */
 export const DEFAULT_MAX_TIMEOUT_SECONDS = 300;
 
-const MEDIA_SLUGS = new Set(["v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos"]);
+const MEDIA_SLUGS = new Set(["v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos", "image-animate"]);
 /** Measured run time (seconds) a route needs before its settlement can happen. */
 export const EVM_RUN_SECONDS = Object.freeze({
   ...Object.fromEntries([...EXPENSIVE_COMPOSITE_SLUGS].filter((s) => !MEDIA_SLUGS.has(s)).map((s) => [s, 180])),
   "v1-videos": 240,
+  // The same poll window after a picture read under its own 15 s bound;
+  // the floor is capped by the client slack either way.
+  "image-animate": 240,
   "image-gen-premium": 75,
   // The thirty-minute transcription tier (listed only with TRANSCRIBE_LONG=on):
   // the fetch (25 s), the decode (60 s) and the upstream cap (140 s), in

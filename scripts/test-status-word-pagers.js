@@ -171,6 +171,8 @@ const NEW_WORDS = [
   ["Scheduled check needs review: referral-settlement", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
   // The weather kit's keyed Open-Meteo reads (src/tools/weather-kit.js).
   ["Scheduled check needs review: weather-keyed-reads", "openMeteo", ["refused"], ["ok", "off"], ["unknown"]],
+  // The crawl's document parser: a registry list held from an earlier pass (src/crawl-parse.js).
+  ["Scheduled check needs review: crawl-parse", "crawlParse", ["registry-kept"], ["ok", "fallback", "paused", "off"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
@@ -955,6 +957,7 @@ await rm(dir, { recursive: true, force: true });
     loopLag: "a flag ({ watching }), not a status word; event-loop stalls page through the heartbeat's serving health check on the operator surface",
     mppEvmDomainFallback: "a flag ({ enabled }), not a status word; its hold schedule stays on the operator view",
     inflightCover: "operator view only: the in-flight coverage counts behind coverageReads, which pages",
+    fundingRunway: "operator view only: a forecast from readings the low-water words already take, each of which pages on its own word (src/funding-runway.js)",
   };
   const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const start = server.indexOf('app.get("/api/gateway-status"');

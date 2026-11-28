@@ -45,16 +45,16 @@
 // Part 2 also checks the lasting-effect list against the booted catalog.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import "./lib/credits-guards-table.js"; // a random test credits table (src/credits-guards.js): without one every charge reads flagged
-import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-hangup-settlement");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-hangup-settlement");
 import { join } from "node:path";
 import express from "express";
 import { randomBytes } from "node:crypto";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 // Part 1 drives the IN-PROCESS budget: its calls are synchronous and inject
 // their own clocks, and it resets the module between cases. A REDIS_URL in
 // the caller's environment would put the module in shared mode at import,
@@ -645,8 +645,8 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 
 // ---------------------------------------------------------------- part 2
 
-const [PORT, FAC_PORT, OR_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+// The server's address, set by each boot (port 0, read back: scripts/lib/boot-server.js).
+let B = null;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const TX = `0x${"5e".repeat(32)}`;
 const OP = "test-hangup-operator-token-0123456789";
@@ -675,7 +675,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 // Stub OpenRouter: counts requests and counts its own inbound requests that
 // were closed before it answered (an upstream call we cut off).
@@ -702,7 +703,8 @@ orStub = createServer((req, res) => {
     send(404, { error: { message: "not stubbed" } });
   });
 });
-await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
+await new Promise((r) => orStub.listen(0, "127.0.0.1", r));
+const OR_PORT = orStub.address().port;
 
 // Budgets small enough to spend inside one run: $0.10 per wallet and per IP,
 // $0.40 for the service, over a day. The nano tier is $0.003, the image tiers
@@ -711,8 +713,12 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // The abandoned records persist across a restart (a deploy is a restart):
 // case m stops this server gracefully and boots a second one on the same file.
 const HANGUP_FILE = join(TMP, "hangup-forgiveness.json");
-const bootServer = () => spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+// One set of stores for both boots: the restart in case m reads what the first server kept.
+const STORES = ownStoreEnv("hangup-settlement");
+// Ready is the health poll at each boot, so the helper waits for the listening line only.
+const startServer = async () => {
+  const srv = await bootServer({ stores: false, readyPath: null, args: ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hold-json-preload.js"],
+  env: { ...STORES, TRUST_PROXY_HOPS: "1", SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
@@ -734,11 +740,14 @@ const bootServer = () => spawn(process.execPath, ["--import", "./scripts/lib/ope
     LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_TEST_HOLD_JSON: "1" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+  });
+  proc = srv.child;
+  B = srv.url;
+  keepLog(srv.log());
+  proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+};
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 500)); } };
-proc = bootServer();
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+await startServer();
 const logSince = (i) => serverLog.slice(i).join("\n");
 
 // The operator surface is rate limited per client IP (30 a minute); this test
@@ -1347,8 +1356,7 @@ try {
     proc.kill("SIGTERM");
     ok(await Promise.race([exited.then(() => true), sleep(90_000).then(() => false)]), "m. the first server exits on SIGTERM");
     const logAt = serverLog.length;
-    proc = bootServer();
-    proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+    await startServer();
     let back = false;
     for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { back = true; break; } } catch { /* booting */ } await sleep(500); }
     ok(back, "m. the second server booted on the same forgiveness file");

@@ -5,7 +5,10 @@
 // same object the connector's own instructions print, so a new connector URL
 // or package version reaches this page with no edit here. Only apps with a
 // path this server's own docs give step by step are listed (Claude desktop,
-// Claude Code, Cursor).
+// Claude Code, Cursor), plus the phone path: the same custom connector, added
+// from the phone's browser and used in the Claude app. Its steps follow the
+// app publisher's own connector documentation, and its first prompt runs a
+// free tool, so a phone user sees the connection work with no wallet.
 //
 // Each offer reads the switch that sells it: the card report line only while
 // the storefront is on (humanCheckoutEnabled), the credits line only while
@@ -37,7 +40,16 @@ const entry = (server) => `"agent402": ${JSON.stringify(server, null, 2)}`;
 // A command wraps at its spaces only: each token is held whole (a browser
 // would otherwise break after a hyphen, splitting --transport or -s), and a
 // token wider than the card scrolls inside its block. The copied text is unchanged.
-const block = (text, name) => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) => `<span class="st-tok">${t}</span>`)}</code>`, { html: true, name, wrap: true, style: "margin:auto 0 0" });
+const block = (text, name, style = "margin:auto 0 0") => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) => `<span class="st-tok">${t}</span>`)}</code>`, { html: true, name, wrap: true, style });
+
+// The first prompt a new connection is checked with: it asks for one free tool
+// (a slug on the free list, run by the hosted connector with no wallet;
+// scripts/test-start-page.js runs it through a local /mcp).
+export const START_FIRST_PROMPT = { slug: "hash", input: { text: "hello" }, text: "Use Agent402 to get the SHA-256 hash of the word hello." };
+export const START_PHONE_ID = "phone";
+// The menu path in the Claude desktop app and on claude.ai, as the app's own
+// connector documentation gives it; /docs prints this step for both.
+export const CONNECTOR_MENU_STEP = "In the sidebar, open Customize, then Connectors. Choose Add, then Add custom connector, name it Agent402 and paste this address:";
 
 /**
  * The apps this page names, each with its one step, read from the install hints.
@@ -47,14 +59,29 @@ const block = (text, name) => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) =
  * Otherwise the step is the hosted connector, whose tools without a wallet are
  * the free ones; a wallet pays through the npm server (walletSetup).
  */
+// Claude's Team and Enterprise plans: an Owner adds a custom connector for the
+// organization (Organization settings, Connectors), and members connect to it.
+export const START_TEAM_NOTE = "On Team and Enterprise plans, an Owner adds the connector.";
+
 export function startApps(baseUrl, { connector = false } = {}) {
   const install = mcpInstallHints(baseUrl);
   const credits = `${baseUrl}${CREDITS_CONNECTOR_PATH}`;
   const url = connector ? credits : install.hostedUrl;
   return [
-    { id: "claude-desktop", name: "Claude desktop", step: "In Settings, open Connectors, choose Add custom connector, name it Agent402 and paste this address:", copy: url },
-    { id: "claude-code", name: "Claude Code", step: "Run this in a terminal:", copy: connector ? install.claudeCodeHosted.replace(install.hostedUrl, credits) : install.claudeCodeHosted },
+    {
+      id: START_PHONE_ID, name: "On your phone", copyName: "the connector address",
+      step: "In your phone's browser, sign in at claude.ai and open Customize, then Connectors. Choose Add, then Add custom connector, name it Agent402 and paste this address:",
+      copy: url,
+      after: connector ? "Choose Continue, then Add, and sign in with your email when Claude asks." : "Choose Continue, then Add.",
+      then: `In the Claude app, select + in a chat and find Agent402 under Connectors. ${connector
+        ? "A card pays for most paid tools from your credits balance, and the free tools run there too."
+        : "The free tools run from your phone with no wallet; paid tools run from a computer with a wallet (below)."}`,
+      promptLabel: "Ask this to check the connection:",
+      prompt: START_FIRST_PROMPT.text,
+    },
+    { id: "claude-desktop", name: "Claude desktop", step: CONNECTOR_MENU_STEP, copy: url },
     { id: "cursor", name: "Cursor", step: "In ~/.cursor/mcp.json, add this agent402 entry under mcpServers:", copy: entry(connector ? { url: credits } : install.cursorMcpJson.mcpServers.agent402) },
+    { id: "claude-code", name: "Claude Code", step: "Run this in a terminal:", copy: connector ? install.claudeCodeHosted.replace(install.hostedUrl, credits) : install.claudeCodeHosted },
   ];
 }
 
@@ -87,7 +114,8 @@ export function walletSetup(baseUrl) {
 export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
-  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step. See what runs with no wallet, then pay by card or with USDC on Base.";
+  // The card clause reads the same switches as the body's card offers.
+  const description = `Add Agent402 to Claude desktop, Claude Code, Cursor or Claude on your phone. See what runs with no wallet, then pay ${storefront || credits ? "by card or " : ""}with USDC on Base.`;
   const tools = Object.values(catalog || {}).filter((d) => d && d.slug);
   const powCount = tools.filter(isComputePayable).length;
   const reportRange = storefront ? cardReportPriceRange(HUMAN_PRODUCTS) : null;
@@ -96,20 +124,38 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const wallet = walletSetup(baseUrl);
   const explorer = CHAIN_PAGES.base.explorerUrl;
   const hosted = mcpInstallHints(baseUrl).hostedUrl;
-  const card = (a) => `<div id="${esc(a.id)}" class="st-card" style="display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);border-radius:var(--radius);padding:18px 20px;">
+  const stepHtml = (a) => esc(a.step).replace(esc("~/.cursor/mcp.json"), code("~/.cursor/mcp.json")).replace("claude_desktop_config.json", code("claude_desktop_config.json"));
+  const CARD = 'class="st-card" style="display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);border-radius:var(--radius);padding:18px 20px;"';
+  // An app card's block follows its sentence; a wallet card's block sits on the row's shared baseline.
+  const card = (a, blockStyle) => a.prompt ? `<div id="${esc(a.id)}" ${CARD}>
         <h3 ${H3}>${esc(a.name)}</h3>
-        <p ${P}>${esc(a.step).replace(esc("~/.cursor/mcp.json"), code("~/.cursor/mcp.json")).replace("claude_desktop_config.json", code("claude_desktop_config.json"))}</p>
-        ${block(a.copy, `${a.name} setup`)}
+        <div class="st-cols">
+          <div>
+            <p ${P}>${stepHtml(a)}</p>
+            ${block(a.copy, a.copyName, "margin:0 0 12px")}
+            <p ${P}>${esc(a.after)}</p>
+          </div>
+          <div>
+            <p ${P}>${esc(a.then)}</p>
+            <p class="st-ask" style="color:var(--ink);font-size:var(--fs-base);font-weight:600;line-height:1.6;margin:0 0 8px;">${esc(a.promptLabel)}</p>
+            ${block(a.prompt, "the first prompt", "margin:0")}
+          </div>
+        </div>
+      </div>` : `<div id="${esc(a.id)}" ${CARD}>
+        <h3 ${H3}>${esc(a.name)}</h3>
+        <p ${P}>${stepHtml(a)}</p>
+        ${block(a.copy, `${a.name} setup`, blockStyle)}
       </div>`;
-  const appCards = apps.map(card).join("\n      ");
-  const walletCards = wallet.apps.map(card).join("\n      ");
+  const appCards = apps.map((a) => card(a, "margin:0")).join("\n      ");
+  const walletCards = wallet.apps.map((a) => card(a)).join("\n      ");
 
-  const appsLead = viaCredits
-    ? `<p class="ml-measure" ${P}>This address pays for paid tools from a credits balance you buy by card: the app asks you to sign in with your email, and you set a daily cap. Free tools run there too. To use only the free tools, give the app ${code(hosted)} instead.</p>`
-    : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`;
+  const appsLead = (viaCredits
+    ? `<p class="ml-measure" ${P}>This address pays for most paid tools from a credits balance you buy by card: the app asks you to sign in with your email, and you set a daily cap. Free tools run there too. To use only the free tools, give the app ${code(hosted)} instead.</p>`
+    : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`)
+    .replace("</p>", ` ${esc(START_TEAM_NOTE)}</p>`);
 
   const noWallet = [
-    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
+    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a> or <a href="/recipes" ${A}>things you can do</a>.</li>` : "",
     reportRange ? `<li><strong>Reports by card.</strong> Finished, model-backed reports at <a href="/reports" ${A}>/reports</a>, ${esc(reportRange.text)} by card.</li>` : "",
     credits ? `<li><strong>Credits by card.</strong> Prepaid credits at <a href="/credits" ${A}>/credits</a>: ${viaCredits ? "the connector above pays from your balance after an email sign-in, and " : ""}a credits key pays for most paid tools with no wallet.</li>` : "",
   ].filter(Boolean).join("\n        ");
@@ -135,7 +181,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     </section>`;
 
   const pageLd = { "@context": "https://schema.org", "@type": "HowTo", name: title, description, url: canonical, author: siteOrgRef(baseUrl),
-    step: [...apps, ...wallet.apps].map((a) => ({ "@type": "HowToStep", name: a.name, text: `${a.step} ${a.copy}` })) };
+    step: [...apps, ...wallet.apps].map((a) => ({ "@type": "HowToStep", name: a.name, text: [a.step, a.copy, ...(a.prompt ? [a.after, a.then, a.promptLabel, a.prompt] : [])].join(" ") })) };
 
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
@@ -144,7 +190,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     <section id="apps" style="margin-bottom:56px;">
       <h2 ${H2}>${viaCredits ? "Add Agent402 and pay by card" : "Add Agent402 to your app"}</h2>
       ${appsLead}
-      <div class="st-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;">
+      <div class="st-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;">
       ${appCards}
       </div>
     </section>
@@ -161,7 +207,10 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   ${ledgerFooterCompact()}`;
 
   // The copy buttons are this page's only body buttons, and a newcomer taps them
-  // on a phone: each is a 44px target.
-  const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}.st-tok{white-space:nowrap}@media (max-width:900px){.st-grid{grid-template-columns:minmax(0,1fr)!important}}`;
+  // on a phone: each is a 44px target. The phone card is the first row, its
+  // browser steps beside its app steps; the one-line terminal command has the
+  // last row to itself, so no card is stretched to a taller neighbor. At phone
+  // width everything stacks.
+  const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}.st-tok{white-space:nowrap}#${START_PHONE_ID},#claude-code{grid-column:1/-1}.st-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px}@media (max-width:900px){.st-grid,.st-cols{grid-template-columns:minmax(0,1fr)!important}}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: START_PATH, jsonLd: [pageLd], extraCss, body });
 }

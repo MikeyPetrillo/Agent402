@@ -15,7 +15,8 @@
 // Booted half (the REAL server in paid mode, Stripe answered by a local stub,
 // mail captured by a local sink, every other egress refused):
 //   - switch off: every sign-in route is 404 and unauthenticated /mcp answers
-//     byte for byte what the switch-on boot answers
+//     byte for byte what the switch-on boot answers, but for a paid tool's
+//     next-step sentence, which names the credits connector only with it on
 //   - metadata (RFC 9728, RFC 8414), dynamic registration and its refusals
 //   - authorize: PKCE S256 only, exact redirect_uri, state required, an
 //     unknown app or return address never redirected to
@@ -162,6 +163,7 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
 process.env.CREDITS_SALES = "on"; process.env.MCP_OAUTH = "on";
 const BASE_TABLE = guardsTable();
 const { createMcpOAuth } = await import("../src/mcp-oauth.js");
+const { connectorNextStep } = await import("../src/next-step-copy.js");
 const { SKIP_UPDATE } = await import("../src/json-document.js");
 const { createMemoryLimits } = await import("../src/shared-limits.js");
 const { default: express } = await import("express");
@@ -742,14 +744,32 @@ const B = srv.url;
 const SITE = "https://agent402.tools";
 const same = { "sec-fetch-site": "same-origin" };
 try {
-  // Unauthenticated /mcp: the same bytes as the switch-off boot.
+  // Unauthenticated /mcp: the same bytes as the switch-off boot, but for one
+  // sentence the owner switches on with it: a paid tool's refusal ends with
+  // its next step, which names the credits connector only while the sign-in
+  // sells it (src/next-step-copy.js). That sentence is set aside by its exact
+  // text on each side, asserted to be the wording of its own state, and every
+  // other byte, status and header still has to match.
+  const NEXT = { off: connectorNextStep(SITE, { connector: false }), on: connectorNextStep(SITE, { connector: true, creditsPay: true }) };
+  const timesIn = (t, sentence) => t.split(sentence).length - 1;
+  const withoutNext = (t, sentence) => t.split(sentence).join("<next step>");
+  const onAnswers = [];
   for (let i = 0; i < UNAUTH_PROBES.length; i++) {
     const r = await mcp(B, UNAUTH_PROBES[i]);
-    ok(r.status === offAnswers[i].status && normalize(r.text) === normalize(offAnswers[i].text) && headerSet(r.headers) === headerSet(offAnswers[i].headers), `switch on: unauthenticated /mcp ${UNAUTH_PROBES[i].method}${i >= 2 ? ` (${UNAUTH_PROBES[i].params.arguments.slug})` : ""} answers as with the switch off (status, headers, body)`);
+    onAnswers.push(r);
+    const label = `switch on: unauthenticated /mcp ${UNAUTH_PROBES[i].method}${i >= 2 ? ` (${UNAUTH_PROBES[i].params.arguments.slug})` : ""}`;
+    const offText = normalize(offAnswers[i].text), onText = normalize(r.text);
+    const nOff = timesIn(offText, NEXT.off), nOn = timesIn(onText, NEXT.on);
+    // Only the paid tool's refusal carries a next step; every other probe holds neither sentence.
+    const refusal = UNAUTH_PROBES[i].params?.arguments?.slug === "sql-guard";
+    ok(refusal ? nOff >= 1 && nOn === nOff && timesIn(onText, NEXT.off) === 0 && timesIn(offText, NEXT.on) === 0 : nOff + nOn + timesIn(onText, NEXT.off) + timesIn(offText, NEXT.on) === 0,
+      `${label}: ${refusal ? `the next step names the credits connector with the switch on and the wallet with it off (${nOn}/${nOff})` : "carries no next-step sentence"}`);
+    ok(r.status === offAnswers[i].status && withoutNext(onText, NEXT.on) === withoutNext(offText, NEXT.off) && headerSet(r.headers) === headerSet(offAnswers[i].headers), `${label} answers as with the switch off (status, headers, body${refusal ? " but its next step" : ""})`);
   }
   ok((await (await fetch(`${B}/privacy`)).text()).includes('id="connected-apps"'), "switch on: the privacy page says what a connected app keeps");
   const otherBearer = await mcp(B, UNAUTH_PROBES[2], { token: "sk-something-else" });
-  ok(normalize(otherBearer.text) === normalize(offAnswers[2].text), "a bearer that is not ours passes untouched");
+  // Read as no credential at all: the answer this boot gives the unauthenticated call.
+  ok(otherBearer.status === onAnswers[2].status && normalize(otherBearer.text) === normalize(onAnswers[2].text), "a bearer that is not ours passes untouched");
 
   // ---- metadata ----
   const asm = await (await fetch(`${B}/.well-known/oauth-authorization-server`)).json();

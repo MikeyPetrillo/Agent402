@@ -77,7 +77,9 @@ const full = homeProofFigures({
   ok(/>99\.951%</.test(fig("uptime")) && /href="\/status"/.test(fig("uptime")) && fig("uptime").includes(`data-as-of="${new Date(AT.u).toISOString()}"`), "uptime is served with its value, its /status link and its as-of");
   ok(/>1,234</.test(fig("paid")) && /external payments/.test(fig("paid")) && fig("paid").includes(`data-as-of="${new Date(AT.e).toISOString()}"`), "external payments are served with their value and as-of");
   ok(new RegExp(`>${RAILS.length}<`).test(fig("chains")) && fig("chains").includes(`data-as-of="${new Date(AT.c).toISOString()}"`), "chains live are served from the count given, with an as-of");
-  ok(/>212 ms</.test(fig("latency")) && fig("latency").includes(`data-as-of="${new Date(AT.l).toISOString()}"`), "median latency is served with its as-of");
+  // Three proof points in the hero: the median latency is read on the
+  // paid-call figure's answer step instead of a fourth hero figure.
+  ok(fig("latency") === "" && (h.match(/class="hm-own-fig"/g) || []).length === 3 && /data-pc-m="latency">p50 212 ms</.test(ledgerHomePage("https://agent402.tools", { ...catalog, "GET /api/answer": { name: "Answer", slug: "answer", category: "search", price: "$0.01", description: "Cited answer", tags: [] } }, {}, {}, [], { proof: full })), "the hero draws three figures; the median latency is on the paid-call figure");
   {
     // The figures sit in the pitch column, before the live panel, so the panel keeps the live
     // view's height and the headline is not centered beside a taller column.

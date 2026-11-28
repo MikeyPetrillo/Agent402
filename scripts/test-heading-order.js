@@ -15,7 +15,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // Every page a human lands on from the nav or a link in copy.
 const PAGES = ["/", "/reports", "/monitors", "/quickstart", "/pricing", "/docs", "/marketplace",
   "/leaderboard", "/revenue", "/sell", "/tools", "/proof", "/company", "/security",
-  "/transparency", "/privacy", "/terms", "/faq", "/credits", "/markets", "/skills"];
+  "/transparency", "/privacy", "/terms", "/faq", "/credits", "/markets", "/skills",
+  "/insider-trades-api", "/crypto-history-stats-api", "/guides/agent-to-agent-payments", "/recipes"];
 
 // Ranges of raw-text elements, found by SCANNING rather than by pattern.
 //

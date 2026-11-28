@@ -194,6 +194,12 @@ function auditSubdomains(args, prior) {
   return [...new Set(subs)].sort((x, y) => x.split(".").length - y.split(".").length || x.localeCompare(y));
 }
 
+// A pack reads its sources through its steps' handlers. Where a step's tool
+// declares the hosts it reads (a literal `upstreamHosts` in its definition),
+// the pack declares them too, as a literal list beside its mode: the union of
+// its steps' declared hosts (scripts/test-skill-pack-steps.js holds the two
+// equal). A sweep excuses a pack's source-side failure only against a host
+// the pack itself declares (scripts/lib/upstream-outage.js packOutageVerdict).
 export const PACK_STEPS = {
   // ▼ Example 1: simple fanout. All tools key off one prompt arg (domain).
   // Chain: the certificate transparency log runs first and names the
@@ -203,6 +209,7 @@ export const PACK_STEPS = {
   // promised per-subdomain DNS and header checks.
   "security-audit": {
     mode: "chain",
+    upstreamHosts: ["crt.sh"],
     steps: [
       { slug: "cert-transparency", mapInput: (a) => ({ domain: a.domain }) },
       { slug: "dns-lookup",        mapInput: (a) => ({ host: a.domain, type: "A" }) },
@@ -229,6 +236,7 @@ export const PACK_STEPS = {
   // Demonstrates: prior['<slug>'].field access, default for missing data.
   "trend-analysis": {
     mode: "chain",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     steps: [
       // Equity ticker: fetch OHLCV (range from horizon arg if provided).
       // Yahoo bars come back as [{time,open,high,low,close,volume}].
@@ -307,6 +315,7 @@ export const PACK_STEPS = {
   // ▼ Example 3: premium fanout. Multiple paid-upstream tools, shared input.
   "financial-research": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     steps: [
       { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "stock-history",       mapInput: (a) => ({ symbol: a.ticker, days: sessionsFor("1y") }) },
@@ -528,6 +537,7 @@ export const PACK_STEPS = {
   // page-content red-flag scan.
   "fraud-signals": {
     mode: "chain",
+    upstreamHosts: ["crt.sh"],
     steps: [
       { slug: "whois",             mapInput: (a) => ({ domain: a.domain }) },
       { slug: "cert-transparency", mapInput: (a) => ({ domain: a.domain }) },
@@ -779,6 +789,7 @@ export const PACK_STEPS = {
   // No prompt args; the as-of date is implicit in each tool's response.
   "macro-economics": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org"],
     steps: [
       { slug: "treasury-yield-curve",  mapInput: () => ({}) },
       { slug: "yield-curve-spread",    mapInput: () => ({}) },
@@ -816,6 +827,7 @@ export const PACK_STEPS = {
   // fail the build if that ever changes).
   "macro-dashboard": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org"],
     steps: [
       { slug: "fed-funds",              mapInput: () => ({ days: 30 }) },
       { slug: "cpi-yoy",                mapInput: () => ({}) },
@@ -855,6 +867,7 @@ export const PACK_STEPS = {
   // arg is captured by the envelope, not the tool inputs.
   "macro-context": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org"],
     steps: [
       { slug: "cpi-yoy",               mapInput: () => ({}) },
       { slug: "unemployment-rate",     mapInput: () => ({ months: 6 }) },
@@ -993,6 +1006,7 @@ export const PACK_STEPS = {
   // reads prior["forecast-eval"] — the steps[] array is what matters.
   "forecasting-bake-off": {
     mode: "chain",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     steps: [
       { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, days: sessionsFor("2y") }) },
       { slug: "us-macro-series",   mapInput: (a) => ({ seriesId: a.series }) },
@@ -1224,6 +1238,7 @@ export const PACK_STEPS = {
   // 10Y yield and then re-inverted from that price to confirm it.
   "fixed-income-desk": {
     mode: "chain",
+    upstreamHosts: ["api.bls.gov"],
     steps: [
       { slug: "treasury-yield-curve", mapInput: () => ({}) },
       { slug: "yield-curve-spread",   mapInput: () => ({}) },
@@ -1309,6 +1324,7 @@ export const PACK_STEPS = {
   // Inflation check: the four recession indicators.
   "inflation-check": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org"],
     steps: [
       { slug: "cpi-yoy",           mapInput: () => ({}) },
       { slug: "fed-funds",         mapInput: () => ({}) },
@@ -1594,6 +1610,7 @@ export const PACK_STEPS = {
   // was not a bad caller input: it could never have worked for anyone.
   "macro-snapshot": {
     mode: "fanout",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     steps: [
       { slug: "us-macro-series", mapInput: () => ({ seriesId: "FEDFUNDS" }) },
       { slug: "us-macro-series", mapInput: () => ({ seriesId: "UNRATE" }) },
@@ -1852,6 +1869,7 @@ export const PACK_STEPS = {
   // by country-info.
   "locale-brief": {
     mode: "chain",
+    upstreamHosts: ["nagerholidays.com", "date.nager.at"],
     steps: [
       { slug: "country-info",     mapInput: (a) => ({ name: a.country }) },
       { slug: "public-holidays",  mapInput: (_a, p) => ({
@@ -2086,6 +2104,13 @@ async function runPack(packSlug, args, ctx) {
   const keyOf = (step) => step.as || step.slug;
   const tag = (step) => (step.as ? { as: step.as } : {});
 
+  // What is known of each failed step beyond its message, kept off the
+  // envelope: whose failure the tool said it was, and whether its input was
+  // mapped from the output of an earlier step of the chain that had failed
+  // (so there was none). The mapping reads `prior` through a view that notes
+  // each failed step's key it asks for.
+  const failureFacts = new WeakMap();
+  const failedBefore = new Set(); // chain mode: the keys of the steps that failed before this one
   const runStep = async (step) => {
     // Internal steps bypass the HTTP route, so tool_call never sees them —
     // this event is what lets cost reconciliations attribute upstream spend
@@ -2102,6 +2127,11 @@ async function runPack(packSlug, args, ctx) {
       try { applies = !!(await step.when(args, prior)); } catch { applies = true; }
       if (!applies) return { slug: step.slug, ...tag(step), ok: true, skipped: true, reason: step.skipReason || "not applicable to this input" };
     }
+    let stage = "lookup";
+    const missing = new Set(); // failed earlier steps whose output this step's mapping asked for
+    const priorView = failedBefore.size
+      ? new Proxy(prior, { get(target, key, receiver) { if (typeof key === "string" && failedBefore.has(key)) missing.add(key); return Reflect.get(target, key, receiver); } })
+      : prior;
     try {
       const handler = lookupHandler(step.slug, ctx);
       if (!handler) {
@@ -2121,10 +2151,11 @@ async function runPack(packSlug, args, ctx) {
       // coerced (an object whose toString is not a function) is the caller's
       // 400, with the arg named. Any other error here stays what it is.
       let candidates;
+      stage = "input";
       try {
         candidates = typeof step.mapInputs === "function"
-          ? await step.mapInputs(args, prior)
-          : [await step.mapInput(args, prior)];
+          ? await step.mapInputs(args, priorView)
+          : [await step.mapInput(args, priorView)];
       } catch (mapErr) {
         throw callerInputError(mapErr, args);
       }
@@ -2132,6 +2163,7 @@ async function runPack(packSlug, args, ctx) {
       if (!inputs.length) {
         throw Object.assign(new Error("no usable input for this step"), { statusCode: 424 });
       }
+      stage = "run";
       let lastErr;
       for (const input of inputs) {
         try {
@@ -2144,7 +2176,7 @@ async function runPack(packSlug, args, ctx) {
       throw lastErr;
     } catch (err) {
       capturePostHogPackStep({ pack: packSlug, slug: step.slug, ok: false, ms: Date.now() - startedAt });
-      return {
+      const failed = {
         slug: step.slug,
         ...tag(step),
         ok: false,
@@ -2153,13 +2185,27 @@ async function runPack(packSlug, args, ctx) {
         error: withoutChargeClaim(err.message),
         statusCode: err.statusCode || 500,
       };
+      failureFacts.set(failed, {
+        ...(typeof err?.attribution === "string" ? { attribution: err.attribution } : {}),
+        ...(Number.isInteger(err?.upstreamStatus) ? { upstreamStatus: err.upstreamStatus } : {}),
+        // Its input was mapped from the output of earlier steps that had
+        // failed (`after`). `blocked`: the input could not be built, so the
+        // step's handler was never called. `starved`: the handler was called
+        // with what could be built and did not serve it.
+        ...(missing.size ? { [stage === "input" ? "blocked" : "starved"]: true, after: [...missing].slice(0, 8) } : {}),
+      });
+      return failed;
     }
   };
 
   let steps;
   if (config.mode === "chain") {
     steps = [];
-    for (const s of config.steps) steps.push(await runStep(s));
+    for (const s of config.steps) {
+      const out = await runStep(s);
+      steps.push(out);
+      if (!out.ok && !out.skipped) failedBefore.add(keyOf(s));
+    }
   } else {
     steps = await Promise.all(config.steps.map(runStep));
   }
@@ -2178,9 +2224,12 @@ async function runPack(packSlug, args, ctx) {
   if (attempted.length > 0 && okCount === 0) {
     const allClientErrors = attempted.every((s) => s.statusCode >= 400 && s.statusCode < 500);
     const reasons = attempted.map((s) => `${s.slug}: ${s.error}`).join("; ");
+    // The same answer in fields (src/tool-error-fields.js packFailureOf): the
+    // pack, and each failed step with its status, its message, whose failure
+    // its tool said it was, and whether its input came from a failed step.
     throw Object.assign(
       new Error(`No step in the "${packSlug}" pack succeeded, so there is nothing to return.${notChargedHere()} ${reasons}`),
-      { statusCode: allClientErrors ? 400 : 502 }
+      { statusCode: allClientErrors ? 400 : 502, pack: packSlug, failedSteps: attempted.map((s) => ({ slug: s.slug, ...(s.as ? { as: s.as } : {}), statusCode: s.statusCode, error: s.error, ...(failureFacts.get(s) || {}) })) }
     );
   }
   // A step whose tool credits its source (a `credit` field, src/data-

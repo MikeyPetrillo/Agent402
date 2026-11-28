@@ -32,7 +32,7 @@
 // a free page must be able to decline that read.
 import { siteOrgRef } from "./site-org.js";
 import { createJsonDocument } from "./json-document.js";
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, breadcrumbLd as sharedBreadcrumbLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, breadcrumbLd as sharedBreadcrumbLd, sepRowCss } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS, INSIDER_MAX_DAYS } from "./tools/insider-flow-kit.js";
@@ -519,7 +519,7 @@ export const PROGRAMMATIC_CSS = `
 .pg-glance p{margin:0 0 10px;line-height:1.6;}
 .pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
-  .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}.pg-meta-tags{display:flex;flex-wrap:wrap;row-gap:2px}.pg-meta-tags>span{white-space:nowrap}.pg-meta-tags>span+span::before{content:"·";padding:0 8px}
+  .pg-meta{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;line-height:1.6}.pg-meta-tags{display:flex;flex-wrap:wrap;row-gap:2px}.pg-meta-tags>span{white-space:nowrap}${sepRowCss(".pg-meta-tags", 8)}
   .pg-table-wrap{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);margin-top:18px}
   .pg-table{border-collapse:collapse;width:100%;min-width:640px;font-size:var(--fs-md)}
   .pg-table th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 14px;border-bottom:1px solid var(--hairline);white-space:nowrap}
@@ -882,7 +882,7 @@ export function hubPage({ kind, baseUrl }) {
     <a class="btn btn-primary" href="/reports">Buy a report, $${esc(cardUsd(family.product))} →</a>
     <div class="pg-agent"><span>agents: ${esc(family.route)}</span> <span>with ${esc(family.agentBody(kind === "fund" ? "Berkshire Hathaway" : "AAPL"))}</span> <span>over x402 or MPP, ${esc(family.agentPrice())}</span></div>
   </div>
-  ${crossLinks([...others, { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
+  ${crossLinks([...others, ...(kind === "insider" ? [{ href: "/insider-trades-api", label: "Insider trades by API" }] : []), { href: "/reports", label: "All reports" }, { href: "/monitors", label: "Standing monitors" }])}
   <p class="pg-note">${esc(DISCLAIMER)}${h.offList ? ` ${esc(h.offList)}` : ""}</p>
 </section>`;
   return shell({

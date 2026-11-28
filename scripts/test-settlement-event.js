@@ -22,10 +22,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
 import { telemetryPayerKey } from "../src/posthog.js";
 const pk = (w) => telemetryPayerKey(w, { idSecret: "settlement-event-telemetry-secret" });
-requireUpstreamCosts("test-settlement-event");
+const COSTS = costsOrStandIn("test-settlement-event");
 
 let pass = 0, fail = 0, srv = null, facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "settlement-event-"));

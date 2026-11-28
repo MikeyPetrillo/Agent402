@@ -62,6 +62,32 @@ export const CERTSPOTTER_HOURLY_MAX = 100;
 // With crt.sh alone, a failure or an empty list inside this long is asked
 // once more.
 const CRT_RETRY_WITHIN_MS = 3000;
+// ONE WINDOW FOR THE WHOLE CALL. The log's answer time has two modes: under a
+// second, or many seconds (a healthy answer measured at 8 s; some reads get no
+// answer in a minute). A fixed cap per read sat just above the slow mode, so a
+// healthy slow answer was reported as a failure. Every read of a call now
+// shares one window: a read waits for whatever the window has left, so a
+// single slow read gets all of it and the one retry of a fast failure gets
+// the rest. The window is sized to the callers that wait on this handler, the
+// shortest first: a 20 s client limit in the example sweep and the 20 s
+// probe limit of the domain audit, the 20 s budget the keyless data kits
+// answer in (src/upstream-deadline.js HANDLER_BUDGET_MS: an answer on the
+// wire while a 30 s payment authorization can still settle), and the hosted
+// connector's request deadline behind them. Two seconds under the shortest
+// leaves room for the round trip.
+export const CERT_LOG_WINDOW_MS = 18_000;
+const certLogTiming = { windowMs: CERT_LOG_WINDOW_MS, retryWithinMs: CRT_RETRY_WITHIN_MS, hedgeMs: 1500 };
+/** Test seam: run the handler on a scaled clock. Returns the restore. */
+export function setCertLogTimingForTests(t = {}) {
+  const before = { ...certLogTiming };
+  Object.assign(certLogTiming, t);
+  return () => { Object.assign(certLogTiming, before); };
+}
+/** The 502 of a call whose window passed with no answer: the wait it names is
+ *  the window's, never a typed figure. */
+export function certLogTimeoutMessage(windowMs = certLogTiming.windowMs, logs = 1) {
+  return `The upstream cert transparency log${logs > 1 ? "s" : ""} did not respond within ${+(windowMs / 1000).toFixed(1)} s; try again later`;
+}
 const HOUR_MS = 3_600_000;
 const certspotterReads = []; // send times (ms) inside the last hour, oldest first
 export function certspotterKey(env = process.env) {
@@ -84,12 +110,15 @@ async function certTransparencyHandler(body) {
   const includeExpired = body?.includeExpired === true;
   const limit = Math.max(1, Math.min(500, Number(body?.limit) || 50));
 
-  // A JSON GET on the shared SSRF dispatcher with a hard timeout. Maps a non-ok
-  // upstream to a retryable 502 (5xx, and crt.sh's mislabelled 404 — see below)
-  // or a client 422; a timeout throws a bare AbortError.
+  // A JSON GET on the shared SSRF dispatcher, ended when the call's window
+  // (CERT_LOG_WINDOW_MS, counted from the handler's first read) passes. Maps a
+  // non-ok upstream to a retryable 502 (5xx, and crt.sh's mislabelled 404 — see
+  // below) or a client 422; the window passing throws a bare AbortError.
+  const { windowMs, retryWithinMs, hedgeMs } = certLogTiming;
+  const windowEndsAt = Date.now() + windowMs;
   async function fetchJson(url, label, extraHeaders = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
+    const timer = setTimeout(() => controller.abort(), Math.max(1, windowEndsAt - Date.now()));
     try {
       const res = await fetch(url, {
         signal: controller.signal,
@@ -150,7 +179,7 @@ async function certTransparencyHandler(body) {
     return { certs, total: certs.length };
   };
 
-  // crt.sh (richer, but chronically SLOW — routinely 8-9s even when healthy, and
+  // crt.sh (richer, but often SLOW — many seconds even when healthy, and
   // has outages) and certspotter (faster, smaller window) are two independent CT
   // logs. With a Cert Spotter key we HEDGE: fire crt.sh, and if it hasn't
   // answered within HEDGE_MS also fire certspotter (when the hour's reads
@@ -159,7 +188,7 @@ async function certTransparencyHandler(body) {
   const q = encodeURIComponent("%." + domain);
   const crtUrl = `https://crt.sh/?q=${q}&output=json${includeExpired ? "" : "&exclude=expired"}`;
   const csUrl = `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(domain)}&include_subdomains=true&expand=dns_names&expand=issuer`;
-  const HEDGE_MS = 1500;
+  const HEDGE_MS = hedgeMs;
 
   const csKey = certspotterKey();
   const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(rowsOf(rows, "crt.sh")) }));
@@ -187,13 +216,13 @@ async function certTransparencyHandler(body) {
     let err = null;
     try { result = await crtP; } catch (e) { err = e; }
     const emptyFirst = result?.total === 0;
-    if ((emptyFirst || (!result && err?.statusCode === 502)) && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+    if ((emptyFirst || (!result && err?.statusCode === 502)) && Date.now() - crtStarted < retryWithinMs) {
       result = null;
       try { result = await crtRead(); err = null; } catch (e) { err = e; }
     }
     if (!result) {
       if (err?.statusCode) throw err;
-      throw bad(err?.name === "AbortError" ? "The upstream cert transparency log did not respond within 10 s; try again later" : `Could not reach a cert transparency log: ${err?.message}`, 502);
+      throw bad(err?.name === "AbortError" ? certLogTimeoutMessage(windowMs) : `Could not reach a cert transparency log: ${err?.message}`, 502);
     }
   } else try {
     // Give crt.sh a head start; if it wins within HEDGE_MS, certspotter never fires.
@@ -209,7 +238,7 @@ async function certTransparencyHandler(body) {
       result = await firstSuccess([crtP, csP]);
     } catch (bothFailed) {
       if (bothFailed?.statusCode) throw bothFailed; // an upstream-status 502 already carries a clear message
-      throw bad(bothFailed?.name === "AbortError" ? "The upstream cert transparency logs did not respond within 10 s; try again later" : `Could not reach a cert transparency log: ${bothFailed?.message}`, 502);
+      throw bad(bothFailed?.name === "AbortError" ? certLogTimeoutMessage(windowMs, 2) : `Could not reach a cert transparency log: ${bothFailed?.message}`, 502);
     }
   } finally {
     clearTimeout(hedgeTimer);
@@ -520,8 +549,8 @@ const RESOLVER_FAILURE = new Set(["ESERVFAIL", "ETIMEOUT", "ETIMEDOUT", "ECONNRE
 // One resolver per lookup, so a lookup that lost (or ran out of time) is
 // canceled on its own, never another call's. The host resolver keeps the
 // system's own settings and timeouts; the public one asks each server once.
-function resolverTxt(name, signal, servers) {
-  const r = servers ? new dnsPromises.Resolver({ timeout: 3000, tries: 1 }) : new dnsPromises.Resolver();
+function resolverTxt(name, signal, servers, perServerMs = CYMRU_PUBLIC_SERVER_MS) {
+  const r = servers ? new dnsPromises.Resolver({ timeout: perServerMs, tries: 1 }) : new dnsPromises.Resolver();
   if (servers) r.setServers([...servers]);
   const cancel = () => { try { r.cancel(); } catch { /* ignore */ } };
   if (signal?.aborted) cancel();
@@ -530,6 +559,10 @@ function resolverTxt(name, signal, servers) {
 }
 const hostResolveTxt = (name, signal) => resolverTxt(name, signal, null);
 const publicResolveTxt = (name, signal) => resolverTxt(name, signal, CYMRU_FALLBACK_SERVERS);
+/** A TXT lookup through `servers` in list order, each asked once and given
+ *  `perServerMs` before the next is asked (the public fallback's own rule,
+ *  exported so a test can point it at servers of its own). */
+export const serialResolveTxt = (servers, perServerMs = CYMRU_PUBLIC_SERVER_MS) => (name, signal) => resolverTxt(name, signal, servers, perServerMs);
 // The lookups the handler makes; a test swaps them to prove the handler goes
 // through cymruTxt with the public fallback (setCymruLookups). Each is called
 // as (name, signal) and the signal aborts when the lookup is no longer wanted.
@@ -540,6 +573,13 @@ const publicResolveTxt = (name, signal) => resolverTxt(name, signal, CYMRU_FALLB
 // cannot hold the call or keep the fallback from answering.
 export const ASN_OWNER_LOOKUP_MS = 3_000;
 export const CYMRU_HEDGE_MS = 1_000;
+// How long the public fallback waits on one of its servers before it asks the
+// next. The servers are asked in list order, one at a time, so this is sized
+// for the owner lookup: the fallback starts CYMRU_HEDGE_MS into a deadline of
+// ASN_OWNER_LOOKUP_MS, and every listed server has to fit in what is left. A
+// wait as long as that deadline would let one slow server use it all, and the
+// servers after it would never be asked.
+export const CYMRU_PUBLIC_SERVER_MS = 600;
 const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: hostResolveTxt, fallback: publicResolveTxt, ownerMs: ASN_OWNER_LOOKUP_MS, hedgeMs: CYMRU_HEDGE_MS });
 let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
 export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }

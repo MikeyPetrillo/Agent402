@@ -39,6 +39,8 @@ t node scripts/test-workflow-client-pins.js
 # @step 2: Offline suites (65 scripts, one process each)
 # images-fast kit (offline)
 t node scripts/test-images-fast-kit.js
+# Image to video: inputs, SSRF and pixel-bomb refusals, filter 422, parked resend (offline)
+t node scripts/test-image-animate.js
 # Index openapi-fallback crawl tests (payment-signal gate, Bazaar merge, ranking — offline)
 t node scripts/test-openapi-fallback.js
 # Bounded response schemas from examples (clean-room behavior test, offline)
@@ -88,6 +90,8 @@ t node scripts/test-discovery-refusals.js
 t node scripts/test-router-worker.js
 t node scripts/test-router-worker-prod-boot.js
 t node scripts/test-route-index-compaction.js
+# Route index retention: replaced entries collected after unchanged cycles, broken statics heal, partly kept lists build their own service key, a bounded row compare per store (offline, a child with --expose-gc)
+t node scripts/test-route-index-retention.js
 t node scripts/test-health-router-warming.js
 t node scripts/test-plan-sketch.js
 # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)
@@ -342,6 +346,10 @@ t node scripts/test-legal-entity-name.js
 t node scripts/test-terms-links.js
 # Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
+# /privacy and /terms open with a summary of at most 150 words and a jump list whose every link lands on a section id (offline)
+t node scripts/test-legal-summary.js
+# /status and /revenue: at most 50 prose words above the first h2 and 700 in the body with detail closed (offline)
+t node scripts/test-ops-page-words.js
 # /trust and the /company contact block state only what the code runs (offline)
 t node scripts/test-trust-page.js
 # The refund terms document follows each switch it reads and the refund run's own families (offline)

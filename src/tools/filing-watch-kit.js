@@ -34,6 +34,7 @@ import { mapLimit } from "./map-limit.js";
 // never re-implemented, so there is exactly one place that knows that URL shape.
 import { probeCompanyFilings as edgarCompanyFilings } from "./ticker-pack-kit.js";
 import { fetchXmlText, edgarGetJson, edgarUserAgent } from "./edgar-kit.js";
+import { secPaced } from "./sec-rate.js";
 import { parseForm4 } from "./insider-flow-kit.js";
 import { extractFilingExcerpts } from "./dossier-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -484,10 +485,12 @@ export async function fetchDocText(url, { maxBytes, maxChars, timeoutMs = DOC_TI
   let u;
   try { u = new URL(String(url)); } catch { throw bad("EDGAR document URL is not a URL", 502); }
   if (u.protocol !== "https:" || u.host !== DOC_HOST) throw bad(`EDGAR document URL is not on ${DOC_HOST}`, 502);
-  const res = await fetchImpl(u.toString(), {
+  // In its turn at the pace every SEC read shares (src/tools/sec-rate.js);
+  // the read's own timeout starts when the request does.
+  const res = await secPaced(() => fetchImpl(u.toString(), {
     headers: { "User-Agent": edgarUserAgent(), Accept: "text/html,application/xhtml+xml,application/xml,text/plain,*/*" },
     signal: AbortSignal.timeout(timeoutMs),
-  });
+  }));
   if (!res || !res.ok) throw new Error(`EDGAR document HTTP ${res ? res.status : "no-response"}`);
   let bytes = 0, truncated = false, raw = "";
   const reader = res.body?.getReader ? res.body.getReader() : null;
@@ -832,6 +835,7 @@ export const FILING_WATCH_TOOLS = [
     category: "llm",
     price: FILING_TIERS["filing-report"].price,
     description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained with citations to each one, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
+    pageSummary: "A cited, model-backed report on what a US company just filed with the SEC. Covers every filing in EDGAR's index for the window, the most consequential primary documents read in full and cited, what changed versus the prior period where the filing says so, and a filings appendix. Not investment advice. Not cached.",
     tags: ["sec", "edgar", "filings", "8-k", "10-q", "10-k", "s-1", "proxy", "report", "equity", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 30 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeFilingHandler("filing-report"),

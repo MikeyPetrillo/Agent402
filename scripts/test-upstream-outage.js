@@ -15,7 +15,7 @@ import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
   bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts, legRefusalStatus,
-  hollowAnswerVerdict, HOLLOW_READS, declaredSourceVerdict, RUNNER_SOURCE_READS,
+  hollowAnswerVerdict, HOLLOW_READS, declaredSourceVerdict, RUNNER_SOURCE_READS, packOutageVerdict, packUpstreamHosts,
 } from "./lib/upstream-outage.js";
 import { createPackGrader } from "./lib/pack-sweep-grade.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
@@ -330,6 +330,7 @@ try {
     const blsRefuses = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_NOT_PROCESSED", message: ["daily threshold"] }) });
     const blsAnswers = async () => ({ status: 200, text: JSON.stringify({ status: "REQUEST_SUCCEEDED", Results: {} }) });
     const notOurs = { test: () => false };
+    const byHostEarly = () => async (url) => (isHost(url, "crt.sh") ? { status: 404, text: "<html>404</html>" } : { status: 200, text: JSON.stringify({ status: "REQUEST_SUCCEEDED" }) });
     const run = async (read, status, json, toolSlugs = ["bls-a", "bls-b", "bare-tool", "calc-tool"]) => {
       const logged = [];
       const g = createPackGrader({ read, root: packRoot, log: (l) => logged.push(l) });
@@ -415,6 +416,54 @@ try {
     }
     ok((await declaredSourceVerdict({ slug: "kit-ct", read: refusedAll, root: packRoot })) === null && (await declaredSourceVerdict({ slug: "ct-stub", read: refusedAll, root: packRoot }))?.verdict === "upstream",
       "(source) a host only its kit names is not a declaration: the rule reads the tool's own upstreamHosts");
+    // ---- a pack's all-steps-failed answer, read from its fields (packOutageVerdict):
+    // excused only when every failed step that ran is excused by a single-tool
+    // rule against a host the PACK declares, and every other step never ran.
+    {
+      writeFileSync(join(packRoot, "src", "tools", "skill-runner.js"), `export const PACK_STEPS = {\n  "bls-pack": {\n    mode: "chain",\n    upstreamHosts: ["api.bls.gov"],\n    steps: [{ slug: "bls-a" }, { slug: "calc-tool" }],\n  },\n  "ct-pack": {\n    mode: "fanout",\n    upstreamHosts: ["crt.sh"],\n    steps: [{ slug: "ct-stub" }],\n  },\n  "silent-pack": {\n    mode: "chain",\n    steps: [{ slug: "bls-a" }],\n  },\n  "other-pack": {\n    mode: "chain",\n    upstreamHosts: ["crt.sh"],\n    steps: [{ slug: "bls-a" }],\n  },\n};\n`);
+      const step = (slug, error, extra = {}) => ({ slug, statusCode: 503, error, ...extra });
+      const blockedStep = { slug: "calc-tool", statusCode: 422, error: "need 6 observations", blocked: true, after: ["bls-a"] };
+      const answer = (pack, failedSteps) => ({ error: `No step in the "${pack}" pack succeeded, so there is nothing to return.`, tool: `skill-${pack}`, pack, failedSteps });
+      const verdict = (pack, failedSteps, read, status = 502) => packOutageVerdict({ pack, status, body: answer(pack, failedSteps), read, root: packRoot });
+      let pv = await verdict("bls-pack", [step("bls-a", REFUSED), step("bls-b", SPENT), blockedStep], blsRefuses);
+      ok(pv?.verdict === "upstream" && /bls-a: bls-a declares api\.bls\.gov, which refuses the runner's direct read too/.test(pv.evidence) && /fed by them and not served: calc-tool/.test(pv.evidence),
+        `(pack fields) every step that ran refused by a declared host the runner's direct read sees refusing too: excused, each step named (${pv?.evidence || pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), blockedStep], blsAnswers);
+      ok(pv?.verdict === "fail" && /step bls-a: .*answers the runner's direct read/.test(pv.reason), `(pack fields) the same answer while the source answers the runner FAILS (${pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), step("calc-tool", "our own parse error", { statusCode: 500 })], blsRefuses);
+      ok(pv?.verdict === "fail" && /step calc-tool failed for a reason that is no declared source's refusal \(ours\)/.test(pv.reason), `(pack fields) one step failing with our own error FAILS the pack though the other is the source's (${pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), step("bare-tool", REFUSED)], blsRefuses);
+      ok(pv?.verdict === "fail" && /step bare-tool: bare-tool does not declare api\.bls\.gov/.test(pv.reason), `(pack fields) a step whose tool declares no host FAILS the pack, whatever its words (${pv?.reason})`);
+      pv = await verdict("other-pack", [step("bls-a", REFUSED)], blsRefuses);
+      ok(pv?.verdict === "fail" && /read api\.bls\.gov the pack other-pack does not declare/.test(pv.reason), `(pack fields) a step refused by a host the pack does not declare FAILS (${pv?.reason})`);
+      pv = await verdict("silent-pack", [step("bls-a", REFUSED)], blsRefuses);
+      ok(pv?.verdict === "fail" && /declares no upstream host/.test(pv.reason), `(pack fields) a pack that declares no host is never excused (${pv?.reason})`);
+      pv = await verdict("bls-pack", [blockedStep], blsRefuses);
+      ok(pv?.verdict === "fail" && /no failed step was judged on its own answer/.test(pv.reason), `(pack fields) an answer whose every step is marked blocked excuses nothing (${pv?.reason})`);
+      // A step that ran on an input mapped from a failed step's missing output.
+      const starved = (statusCode, after = ["bls-a"]) => ({ slug: "calc-tool", statusCode, error: "values must hold at least 2 numbers", starved: true, after });
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), blockedStep, starved(400)], blsRefuses);
+      ok(pv?.verdict === "upstream", `(pack fields) a step fed by the refused step that ran and refused its input as input (a 4xx) does not fail the pack (${pv?.evidence || pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), starved(500)], blsRefuses);
+      ok(pv?.verdict === "fail" && /step calc-tool failed for a reason that is no declared source's refusal \(ours\)/.test(pv.reason), `(pack fields) the same step answering 500 is judged on its own answer and FAILS (${pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), starved(400, ["some-other-step"])], blsRefuses);
+      ok(pv?.verdict === "fail" && /was fed by no step whose failure is its source's/.test(pv.reason), `(pack fields) a step fed by a step that is not an excused one FAILS (${pv?.reason})`);
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), { ...blockedStep, after: [] }], blsRefuses);
+      ok(pv?.verdict === "fail", "(pack fields) a blocked step that names no step it came after FAILS");
+      pv = await verdict("bls-pack", [step("bls-a", REFUSED), { slug: "calc-tool", as: "first", statusCode: 422, error: "x", blocked: true, after: ["bls-a"] }, { slug: "calc-tool", statusCode: 400, error: "y", starved: true, after: ["first"] }], blsRefuses);
+      ok(pv?.verdict === "upstream", "(pack fields) a step fed through another fed step, in chain order, is the source's too");
+      pv = await packOutageVerdict({ pack: "bls-pack", status: 502, body: answer("ct-pack", [step("ct-stub", "crt.sh returned HTTP 404")]), read: byHostEarly(), root: packRoot });
+      ok(pv?.verdict === "fail" && /names the pack ct-pack/.test(pv.reason), "(pack fields) fields naming another pack excuse nothing");
+      pv = await verdict("ct-pack", [step("ct-stub", "crt.sh returned HTTP 404", { statusCode: 502 })], byHostEarly());
+      ok(pv?.verdict === "upstream", `(pack fields) a crt.sh step is read by the same rule against the pack's declared crt.sh (${pv?.evidence || pv?.reason})`);
+      ok((await packOutageVerdict({ pack: "bls-pack", status: 502, body: { error: `No step in the "bls-pack" pack succeeded, so there is nothing to return. bls-a: ${REFUSED}` }, read: blsRefuses, root: packRoot })) === null
+        && (await verdict("bls-pack", [step("bls-a", REFUSED)], blsRefuses, 400)) === null && (await verdict("bls-pack", [step("bls-a", REFUSED)], blsRefuses, 200)) === null,
+        "(pack fields) an answer without the fields, a 400 and a 200 are not read by this rule (null: the caller's other rules grade them)");
+      // The real tree: the packs declare what the rule reads.
+      ok([...packUpstreamHosts("forecasting-bake-off")].some((h) => h === "api.bls.gov") && [...packUpstreamHosts("security-audit")].join() === "crt.sh" && packUpstreamHosts("decode-blob").size === 0 && packUpstreamHosts("no-such-pack").size === 0,
+        "(pack fields) the pack runner's entries declare their hosts as literal lists, and a pack with no source declares none");
+      ok(upstreamHostsForSlug("cert-transparency").size === 1 && upstreamHostsForSlug("us-macro-series").has("api.bls.gov") && upstreamHostsForSlug("stats-summary").size === 0, "(pack fields) a pack's host list is never read as a tool's own");
+    }
     const packSweep = readFileSync(join(ROOT, "scripts/test-pack-examples.js"), "utf8");
     ok(packSweep.includes("createPackGrader(") && packSweep.includes("grader.judge(") && packSweep.includes("grader.grade("), "(pack) the skill-pack sweep grades every pack through the shared grader");
   }

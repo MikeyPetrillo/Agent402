@@ -3,7 +3,8 @@
 // and CHANGELOG.md scopes its text to a server that sets it.
 //   - /api/transcribe-long (TRANSCRIBE_LONG=on, src/tools/stt-kit.js
 //     sttLongEnabled) has an entry, and that entry carries the switch;
-//   - with the switch unset (and with a junk value) neither surface names
+//   - with the switch unset (and with a junk value) neither surface (the page
+//     with its archive, and the feed) names
 //     the route; with it on, both do;
 //   - every item that names a switched route sits in an entry that reads
 //     the switch, so a later item cannot sell it unconditionally;
@@ -17,7 +18,12 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 delete process.env.TRANSCRIBE_LONG;
-const { CHANGELOG_ENTRIES, changelogPage, changelogRss } = await import("../src/changelog.js");
+const changelogModule = await import("../src/changelog.js");
+const { CHANGELOG_ENTRIES, changelogRss } = changelogModule;
+const { renderedChangelogText } = await import("./lib/changelog-text.js");
+// /changelog holds the recent entries and /changelog/archive every older one:
+// an entry is on the site when it is on either page.
+const changelogPage = (base) => renderedChangelogText(changelogModule, base);
 const { sttLongEnabled } = await import("../src/tools/stt-kit.js");
 
 // Each switched route and the switch function that sells it.

@@ -95,9 +95,14 @@ Alongside them:
 - Mutation re-checks of every fix in the batch, on copies.
 - Docker image build and smoke: `docker build` then boot the image as
   `.github/workflows/docker-build-check.yml` does and wait for `/health` 200.
+- A local secret scan of the batch's commits with the CI job's config
+  (`.github/workflows/secret-scan.yml`):
+  `gitleaks git --config .gitleaks.toml --redact --log-opts="-m origin/main..HEAD" --verbose`
+  exits 0, then `gitleaks dir --config .gitleaks.toml --redact .` for the working tree.
 
 Fix every finding with a test that fails without the fix, then re-run the reviewer and suites
-the fix touches. Result: every reviewer verdict is SHIP, every suite and the image smoke exit 0,
+the fix touches. A change made after the full suite ran, however small, means the full suite
+runs again on the final head before the PR is marked ready. Result: every reviewer verdict is SHIP, every suite and the image smoke exit 0,
 and every mutation makes a test fail.
 
 ## 6. Push and merge
@@ -121,8 +126,17 @@ pinned to the tested SHA, every required check green.
   it buys each newly missing route once, under its cap) and read `0 still missing`. The deploy's
   own register job runs only on its marker, so a new route is otherwise unlisted until the next
   scheduled check.
+- The phone path, no phone needed: `TARGET_URL=https://agent402.tools node scripts/phone-path-check.js`
+  (Chromium at 375 px with touch): it opens /start, taps Copy on the Claude desktop step and reads
+  the hosted connector address from the clipboard, calls `hash` (the sample prompt's tool) through
+  that address over /mcp, then opens /recipes and taps a prompt's Copy. One free call, nothing paid.
+- Before a release that changes setup or payment copy, the owner runs the path once on a real
+  phone: find the site, add the connector in the Claude app, make a first free call; once credits
+  are on sale, a first paid call as well.
 
-Result: each of the four reads recorded with its value.
+Result: each read recorded with its value, the phone-path check exits 0 with every step `ok`,
+and for a release that changes setup or payment copy, the owner's phone run recorded (what was
+tapped, the first free answer, and the first paid answer once credits are on).
 
 ## 8. Findings log
 After each gate, append the gate's findings to the per-batch findings log kept in the private
@@ -148,3 +162,9 @@ guard or skill step added.
 - A workflow edited on one branch and deleted on another.
 - An `apt-get install` in a workflow: CI installs apt packages only through
   `bash scripts/ci-apt-install.sh <package>...` (bounded attempts, mirror failover).
+- A brief that changes something a guard or a comment already decides: grep `scripts/` and
+  the module for it first, and treat what they record as a constraint.
+- A catalog `description` (the 402 listing text) shortened: page-only text goes in
+  `pageSummary` (`scripts/test-bazaar-listing-parity.js`).
+- A new refusal or miss rule that is not a narrow named list with controls proving every
+  other request is answered as before.

@@ -130,25 +130,47 @@ document.addEventListener('DOMContentLoaded',function(){try{var btns=document.qu
 /* Exposed so a page that renders text after load (the report view) can bind it too. */
 /* a402: code tokens break at punctuation, never mid-word. Inline code (not a
    <pre> block) gets a <wbr> after each _ . / - : ? & = , inside a token, and
-   between camelCase words of a long token, so a parameter name or route
-   wraps at its own seams instead of splitting a word. Copied text is unchanged.
+   between camelCase words of a token longer than 24 characters, so a
+   parameter name or route wraps at its own seams instead of splitting a word
+   (a shorter camelCase name stays whole). Copied text is unchanged.
    A short name in a table cell gets no seams: one there would let the table
-   squeeze its column, so it stays whole and a wide table scrolls instead. */
+   squeeze its column, so it stays whole and a wide table scrolls instead.
+   A hash or an address (0x and hex digits, or an unbroken run of more than 24
+   letters and digits that is a tenth digits or more) has no words: it gets no
+   camelCase seam, and when it is wider than the room its block has (the
+   table's own scroller, or the block's measure) it breaks where each line
+   ends, starting on the line the sentence is on, instead of setting the
+   column's width or leaving a short piece of itself on a line alone. */
+/* Every edit the passes below make is measured at one viewport width, so each
+   records how to take itself back (a402Undo, newest last). When the width
+   changes (a rotated phone, a resized window) the edits are undone newest
+   first and the passes run again against the new measure; a node the page
+   has since rewritten is left as it is. */
+var a402Undo=[];
 window.a402BreakCode=function(root){try{
   /* A code phrase of 4+ words holds its last three together (when they are short) in a nowrap span, so it never ends on one word. Copied text is unchanged. */
   var holdTail=function(el){var ln=el.lastChild;if(!ln||ln.nodeType!==3)return null;var d=ln.data,re=/\S+/g,m,toks=[];while((m=re.exec(d)))toks.push(m);var w=0,at=-1;for(var q=toks.length-1;q>0;q--){if(/[\p{L}\p{N}]/u.test(toks[q][0]))w++;if(w>=3){at=toks[q].index;break;}}if(at<0||d.length-at>32)return null;var sp=document.createElement('span');sp.style.whiteSpace='nowrap';sp.textContent=d.slice(at);ln.data=d.slice(0,at);el.appendChild(sp);return sp;};
+  var hashLike=function(r){if(/^0x[0-9a-fA-F]+$/.test(r))return true;var n=r.replace(/[^0-9]/g,'').length;return n>=4&&n*10>=r.length;};
+  /* The alphanumeric run around offset k of d, when it is a hash. */
+  var inHash=function(d,k){var a=k,b=k;while(a>0&&/[A-Za-z0-9]/.test(d.charAt(a-1)))a--;while(b<d.length&&/[A-Za-z0-9]/.test(d.charAt(b)))b++;return b-a>24&&hashLike(d.slice(a,b));};
+  /* The width a token has to fit: its table's scroller less the cell's padding, else its block's measure. */
+  var roomFor=function(el){var blk=el.parentElement;while(blk&&blk!==document.body&&/^inline/.test(getComputedStyle(blk).display))blk=blk.parentElement;if(!blk)return Infinity;var cs=getComputedStyle(blk),pad=parseFloat(cs.paddingLeft||0)+parseFloat(cs.paddingRight||0);for(var a=blk.parentElement;a&&a!==document.body;a=a.parentElement){var ox=getComputedStyle(a).overflowX;if(ox==='auto'||ox==='scroll')return a.clientWidth-pad;}return blk.clientWidth-pad;};
   var els=(root||document).querySelectorAll('code,kbd,samp');
   for(var i=0;i<els.length;i++){var el=els[i];if(el.closest('pre')||el.getAttribute('data-wbr'))continue;
     el.setAttribute('data-wbr','1');
+    /* A token that is text only is put back whole before the next measure. */
+    if(!el.children.length){(function(el,txt,ws){a402Undo.push(function(){if(!el.isConnected||el.textContent!==txt)return;el.textContent=txt;el.style.whiteSpace=ws;el.removeAttribute('data-wbr');});})(el,el.textContent,el.style.whiteSpace);}
     /* In a table cell a name stays whole (a short token or phrase); a long one wraps like inline code, at its seams. */
     if(el.closest('td,th')){var tx=el.textContent.trim();if(tx.length<=40){el.style.whiteSpace='nowrap';continue;}}
+    var whole=el.textContent.trim();
+    if(!el.children.length&&/^[A-Za-z0-9]{25,}$/.test(whole)&&(hashLike(whole)||!/[a-z0-9][A-Z][a-z]/.test(whole))){var hw=0,hr=el.getClientRects();for(var h=0;h<hr.length;h++)hw+=hr[h].width;if(hw>roomFor(el)){el.style.setProperty('word-break','break-all','important');(function(el){a402Undo.push(function(){el.style.removeProperty('word-break');});})(el);}continue;}
     var held=holdTail(el);
     var tw=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),nodes=[];for(var n=tw.nextNode();n;n=tw.nextNode())if(!held||!held.contains(n))nodes.push(n);
     nodes.forEach(function(t){var d=t.data;if(d.length<9)return;
       var parts=[],from=0;
       for(var k=1;k<d.length-1;k++){var a=d.charAt(k-1),b=d.charAt(k);
         var c2=d.charAt(k-2)||'';var punct=/[_.\/:?&=,-]/.test(a)&&/[^\s_.\/:?&=,-]/.test(b)&&/\S/.test(c2)&&c2!==a;
-        var camel=/[a-z0-9]/.test(a)&&/[A-Z]/.test(b)&&/[a-z]/.test(d.charAt(k+1)||'');
+        var camel=d.length>24&&/[a-z0-9]/.test(a)&&/[A-Z]/.test(b)&&/[a-z]/.test(d.charAt(k+1)||'')&&!inHash(d,k);
         if(punct||camel){parts.push(d.slice(from,k));from=k;}}
       if(!parts.length)return;parts.push(d.slice(from));
       var f=document.createDocumentFragment();parts.forEach(function(x,j){if(j)f.appendChild(document.createElement('wbr'));f.appendChild(document.createTextNode(x));});
@@ -169,11 +191,25 @@ var a402CellMeasure=function(root){try{var cells=(root||document).querySelectorA
   if(!(window.matchMedia&&window.matchMedia('(max-width: 600px)').matches))return;
   var scrolls=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var ox=getComputedStyle(a).overflowX;if(ox==='auto'||ox==='scroll')return true;}return false;};
   for(var i=0;i<cells.length;i++){var c=cells[i];if(c.style.minWidth||c.classList.contains('ml-codelist'))continue;var t=(c.textContent||'').replace(/\s+/g,' ').trim();var em=t.length>=48&&t.indexOf(' ')>0?20:t.length>=20&&t.split(' ').length>=4?14:0;if(em&&scrolls(c))todo.push([c,em]);}
-  todo.forEach(function(x){x[0].style.minWidth=x[1]+'em';});
+  todo.forEach(function(x){x[0].style.minWidth=x[1]+'em';a402Undo.push(function(){x[0].style.minWidth='';});});
 }catch(e){}};
 /* Two passes: binding a table cell changes its column, which moves its neighbours' lines, so the second pass binds against the settled layout. */
-var a402BindNow=function(root){a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);};
-var a402BindPass=function(root){try{
+/* The whole document is bound in turns of about 12 ms, the browser given the thread between them (a402Turns), so a long page never holds it for the
+   whole pass: each pass still reads every tail before it writes any, so the text ends bound as one unbroken pass binds it. A part of the page drawn
+   after load (a report, an account panel) is bound at once, as before, unless a pass over the document is running (the first binding or a
+   re-measure): it then waits in a402Queue and is bound when that pass ends, so it never edits text the pass has read and not yet written.
+   A change of width while the turns run starts over (a402Rebind). */
+var a402Busy=false,a402Queue=[];
+var a402BindNow=function(root){if(root&&root!==document){if(a402Busy){if(a402Queue.indexOf(root)<0)a402Queue.push(root);return;}a402CellMeasure(root);if(window.a402BreakCode)window.a402BreakCode(root);a402BindPass(root);a402BindPass(root);return;}
+  var run=++a402Run;var pass=function(){var p=null,made=false;return [function(u){if(!made){made=true;p=a402BindPass(document,true);}return p?p.read(u):false;},function(u){return p?p.write(u):false;}];};
+  a402Turns(run,[function(){a402CellMeasure(document);return false;},function(){if(window.a402BreakCode)window.a402BreakCode(document);return false;}].concat(pass(),pass()));};
+/* Run `steps` in order in short turns. A step is called with the turn's end (a clock time) and says whether it has more to do; 'fonts' waits for
+   the web fonts before the next step. A newer run (a402Run) ends this one where it stands. When the last step ends, the parts that waited
+   for the pass are bound (one no longer in the page is dropped). */
+var a402Run=0;
+var a402Turns=function(run,steps){var k=0;a402Busy=true;var go=function(){if(run!==a402Run)return;var until=performance.now()+12;while(k<steps.length){var more=false;try{more=steps[k](until);}catch(e){}if(more==='fonts'){k++;document.fonts.ready.then(go,go);return;}if(!more)k++;if(performance.now()>=until)break;}if(k<steps.length){setTimeout(go,0);return;}
+  a402Busy=false;var waited=a402Queue;a402Queue=[];for(var q=0;q<waited.length;q++){try{if(waited[q].isConnected)a402BindNow(waited[q]);}catch(e){}}};go();};
+var a402BindPass=function(root,sliced){try{
   var SEL='p,li,h1,h2,h3,h4,dd,dt,td,th,figcaption,blockquote,label,[class*="lede"],[class*="intro"],[class*="meta"]';
   var OPAQUE=/^(CODE|PRE|KBD|SAMP|SCRIPT|STYLE|TEXTAREA|BUTTON|SELECT|svg|SVG|IMG|BR)$/;
   var INLINE=/^inline$|^contents$/;
@@ -186,7 +222,8 @@ var a402BindPass=function(root){try{
      Range, inline code by its boxes; a block child in the tail is never bound. */
   var tailW=function(map,x,last){var W=0;for(var q=0;q<map.length;q++){var g=map[q];var a=Math.max(x,g.start),b=Math.min(last+1,g.start+g.len);if(b<=a)continue;var rs;if(g.node){var r=document.createRange();r.setStart(g.node,a-g.start);r.setEnd(g.node,b-g.start);rs=r.getClientRects();}else if(g.el){rs=g.el.getClientRects();}else return Infinity;for(var u=0;u<rs.length;u++)W+=rs[u].width;}return W;};
   /* Reads first (every block's tail measured), writes after, so the page lays out once. */
-  for(var i=0;i<els.length;i++){var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
+  /* `until` (a clock time) ends a turn of the reads or the writes early; each says whether it has more to do. */
+  var i=0;var read=function(until){for(;i<els.length;i++){if(until&&performance.now()>=until)return true;var el=els[i];if(el.a402Split||!el.closest('main,footer')||el.closest('pre,code,[data-wrap="off"]'))continue;var cs=getComputedStyle(el);if(!BLOCK.test(cs.display)||/pre|nowrap/.test(cs.whiteSpace))continue;var w=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);if(!(w>0))continue;
     var segs=collect(el);
     /* A block that closes the element (a nested list after a list item's lead sentence) is measured on its own: the tail bound here is the text before it. */
     var e2=segs.length,blk=false;while(e2>0){var gq=segs[e2-1];if(gq.node&&!/\S/.test(gq.text)){e2--;continue;}if(!gq.node&&!gq.el){blk=true;e2--;continue;}break;}if(blk)segs=segs.slice(0,e2);
@@ -200,40 +237,72 @@ var a402BindPass=function(root){try{
     /* The tail of j words, measured, for the last few runs. */
     var widths=[],wc=[],nw=0;for(var j=1;j<=Math.min(runs.length,24);j++){var rb=runs[runs.length-j].b,re2=j===1?last+1:runs[runs.length-j+1].a;widths.push(tailW(map,rb,last));/* an arrow or a lone dash is not a word; words a first pass already joined still count one by one */nw+=s.slice(rb,re2).split(/[\s\u00A0]+/).filter(function(t){return /[\p{L}\p{N}]/u.test(t);}).length;wc.push(nw);}
     var whole=(runs.length===1||cell)?tailW(map,first,last):0;
-    /* A long token (60%+ of the measure) before the tail (a URL, a host name, inline code) too wide to join it: when the tail alone is short, the token joins it and breaks at its own seams, so its last piece rides on the last line ("protection." / "outlook.com, max_age: 86400."). */
-    var ext=(function(){var lo=w*0.33,hi=w*0.97,jb=0;for(var j=1;j<=widths.length;j++){if(widths[j-1]>hi){jb=j;break;}if(wc[j-1]>=3&&widths[j-1]>=lo)return null;}if(jb<2||cell||widths[jb-1]-widths[jb-2]<w*0.6)return null;
+    /* A long token (half the measure or more) before the tail (a URL, a host name, inline code) too wide to join it: when the tail alone is short, the token joins it and breaks at its own seams, so its last piece rides on the last line ("protection." / "outlook.com, max_age: 86400."). */
+    var ext=(function(){var lo=w*0.33,hi=w*0.97,jb=0;for(var j=1;j<=widths.length;j++){if(widths[j-1]>hi){jb=j;break;}if(wc[j-1]>=3&&widths[j-1]>=lo)return null;}if(jb<2||cell||widths[jb-1]-widths[jb-2]<w*0.5)return null;
       var R=runs.length,ta=runs[R-jb].b,te=runs[R-jb+1].a,seams=[],piece=-1;
       for(var x=ta+1;x<te;x++){var g=segAt(x);if(g&&g.node&&segAt(x-1)===g&&/[_.\/:?&=,-]/.test(s.charAt(x-1))&&/[^\s_.\/:?&=,\-⁠ ]/.test(s.charAt(x)))seams.push(x);}
       if(seams.length)piece=tailW(map,seams[seams.length-1],last);
       /* Inline code already broken at its seams (a <wbr>) splits after its last one. */
       for(var q=map.length-1;q>=0;q--){var gc=map[q];if(!gc.el||gc.start<ta||gc.start>=te||!/^(CODE|KBD|SAMP)$/.test(gc.el.tagName))continue;var wbs=gc.el.querySelectorAll('wbr');if(!wbs.length)break;if(seams.length&&seams[seams.length-1]>=gc.start+gc.len)break;var rr=document.createRange();rr.setStartAfter(wbs[wbs.length-1]);rr.setEnd(gc.el,gc.el.childNodes.length);var cw2=0,crs=rr.getClientRects();for(var u=0;u<crs.length;u++)cw2+=crs[u].width;piece=cw2+tailW(map,gc.start+gc.len,last);seams=[];break;}
       if(piece<0||piece>hi)return null;return {j:jb,seams:seams,from:runs[R-jb+1].b};})();
-    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,whole:whole,cell:cell,ext:ext});}
-  plans.forEach(function(p){
+    /* The block's words, counted as the tail's are. */
+    var tot=s.slice(first,last+1).split(/[\s\u00A0]+/).filter(function(t){return /[\p{L}\p{N}]/u.test(t);}).length;
+    plans.push({el:el,w:w,s:s,map:map,first:first,last:last,segAt:segAt,runs:runs,widths:widths,wc:wc,tot:tot,whole:whole,cell:cell,ext:ext});}return false;};
+  var write=function(p){
     var s=p.s,map=p.map,first=p.first,last=p.last,segAt=p.segAt,runs=p.runs;
     /* Bind the fewest last words that make a tail of 3+ words and a third of the measure; never more than 97% of it, so the tail always fits a line. */
     var lo=p.w*0.33,hi=p.w*0.97,k=0;
     for(var j=1;j<=p.widths.length;j++){var chunk=p.widths[j-1];var words=p.wc[j-1];if(chunk>hi)break;k=j-1;if(words>=3&&chunk>=lo){break;}if(j===runs.length)k=j-1;}
     /* Two words (a short label or cell) stay together when both fit the line. */
+    /* A block of five words or fewer never opens on one word alone ("Five" / "steps, no account"): the tail gives a word back, so it splits 2 + 2 or 2 + 3. */
+    if(p.tot>=4&&p.tot<=5&&k>=1&&k<p.wc.length&&p.tot-p.wc[k]===1)k--;
     if(runs.length===1)k=p.whole<=hi?1:0;
     if(p.cell&&p.whole<=320){k=runs.length;hi=Infinity;}
     if(p.ext)k=p.ext.j-1;
     /* Inline code inside the bound tail stays whole too, when it fits the bound line. */
     var from=p.ext?p.ext.from:k<runs.length?runs[runs.length-k-1].b:first;
-    map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.w<=hi){g.el.style.whiteSpace='nowrap';/* a <wbr> still breaks inside nowrap in Chromium */var wb=g.el.querySelectorAll('wbr');for(var q=0;q<wb.length;q++)wb[q].parentNode.removeChild(wb[q]);g.el.normalize();}});
+    map.forEach(function(g){if(g.el&&/^(CODE|KBD|SAMP)$/.test(g.el.tagName)&&g.start>=from&&g.w<=hi){(function(c,ws){a402Undo.push(function(){c.style.whiteSpace=ws;});})(g.el,g.el.style.whiteSpace);g.el.style.whiteSpace='nowrap';/* a <wbr> still breaks inside nowrap in Chromium */var wb=g.el.querySelectorAll('wbr');for(var q=0;q<wb.length;q++)wb[q].parentNode.removeChild(wb[q]);g.el.normalize();}});
     var edits=[];
     for(var t=1;t<=k;t++){var r2=runs[runs.length-t];var ok=true;for(var x=r2.a;x<r2.b;x++){var g=segAt(x);if(!g||!g.node){ok=false;break;}}if(!ok)continue;for(var y=r2.b-1;y>=r2.a;y--){var g2=segAt(y);edits.push({node:g2.node,off:y-g2.start,op:y===r2.a?'nb':'del'});}}
     /* A hyphen, slash, bar, dash, ellipsis or query mark inside the bound tail, or any seam inside one token ("image_url:{url"), is still a break point ("proof-of-" / "work"): a word joiner after it holds the word together (a spaced dash "result - zero" too: a break is allowed between a hyphen and a no-break space). */
     if(k<1&&!(p.widths.length&&p.widths[0]<=hi)&&!p.cell)return;
     for(var z=from;z<last;z++){var c0=s.charAt(z),c1=s.charAt(z+1);if(c1!=='\u2060'&&c0!=='\u2060'&&(/[-\/\u2026?&=+|\u2013\u2014]/.test(c0)||(/\S/.test(c0)&&/\S/.test(c1)&&!(/[\p{L}\p{N}]/u.test(c0)&&/[\p{L}\p{N}]/u.test(c1))))){var g3=segAt(z);if(g3&&g3.node)edits.push({node:g3.node,off:z-g3.start,op:'wj'});}}
     /* A block whose long token was split is settled: the second pass would read the split token as one wide word. */
-    if(p.ext){p.el.a402Split=true;p.ext.seams.forEach(function(x){var g4=segAt(x);if(g4&&g4.node)edits.push({node:g4.node,off:x-g4.start,op:'wbr'});});}
+    if(p.ext){p.el.a402Split=true;a402Undo.push(function(){p.el.a402Split=false;});p.ext.seams.forEach(function(x){var g4=segAt(x);if(g4&&g4.node)edits.push({node:g4.node,off:x-g4.start,op:'wbr'});});}
     if(!edits.length)return;
     edits.sort(function(a,b){return b.off-a.off;});
-    edits.forEach(function(e){var d=e.node.data;if(e.op==='wbr'){var rest=e.node.splitText(e.off);rest.parentNode.insertBefore(document.createElement('wbr'),rest);return;}if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
-  });
+    /* The text as it was, per node, and every node this block's edits add. */
+    var before=[],made=[];edits.forEach(function(e){for(var q=0;q<before.length;q++)if(before[q][0]===e.node)return;before.push([e.node,e.node.data]);});
+    a402Undo.push(function(){var q;for(q=0;q<before.length;q++)if(!before[q][0].isConnected||before[q][0].data!==before[q][2])return;for(q=0;q<made.length;q++)if(made[q].parentNode)made[q].parentNode.removeChild(made[q]);for(q=0;q<before.length;q++)before[q][0].data=before[q][1];p.el.a402Split=false;});
+    edits.forEach(function(e){var d=e.node.data;if(e.op==='wbr'){var rest=e.node.splitText(e.off);var wb=document.createElement('wbr');rest.parentNode.insertBefore(wb,rest);made.push(wb,rest);return;}if(e.op==='wj'){e.node.data=d.slice(0,e.off+1)+'\u2060'+d.slice(e.off+1);}else{e.node.data=d.slice(0,e.off)+(e.op==='nb'?'\u00A0':'')+d.slice(e.off+1);}});
+    before.forEach(function(b){b[2]=b[0].data;});
+  };
+  /* A plan is written only onto the text it was read from: its block and every node it measured still in the page, each text node holding the
+     characters the read saw. Between a read and its write the page may change under a pass in turns (a part drawn and bound, a redraw, another
+     script's edit); offsets into the old text would then cut the new one. Such a block is read once more after the writes and bound then, or left
+     as it wraps when it has changed again. */
+  var fresh=function(p){if(!p.el.isConnected)return false;for(var q=0;q<p.map.length;q++){var g=p.map[q];if(g.node){if(!g.node.isConnected||g.node.data!==p.s.substr(g.start,g.len))return false;}else if(g.el&&!g.el.isConnected)return false;}return true;};
+  var j=0,redo=[],again=0;var writes=function(until){
+    if(again===1){if(read(until))return true;again=2;}
+    for(;j<plans.length;j++){if(until&&performance.now()>=until)return true;var p=plans[j];if(!fresh(p)){if(!again&&p.el.isConnected)redo.push(p.el);continue;}write(p);}
+    if(!again&&redo.length){els=redo;redo=[];i=0;plans=[];j=0;again=1;return true;}
+    return false;};
+  if(sliced)return {read:read,write:writes};
+  read(0);writes(0);
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
+/* The measure changed: take every edit back, newest first, and bind again. Only a change of width counts (a phone's address bar resizes the height on every scroll).
+   A long page holds a thousand edits, so the work runs in turns of about 12 ms with the browser given the thread between them: the edits are taken back, then each
+   pass reads every tail before it writes any (the result is the one a single pass gives). A newer change of width starts over, and takes back what the last run left.
+   Like the first binding, the measuring waits for the web fonts: once the edits are taken back a layout is forced, and a face still loading then is waited for. */
+var a402Stale=[];
+window.a402Rebind=function(){var run=++a402Run;a402Stale=a402Stale.concat(a402Undo);a402Undo=[];
+  var pass=function(){var p=null,made=false;return [function(u){if(!made){made=true;p=a402BindPass(document,true);}return p?p.read(u):false;},function(u){return p?p.write(u):false;}];};
+  var steps=[function(u){while(a402Stale.length){if(performance.now()>=u)return true;try{a402Stale.pop()();}catch(e){}}return false;},
+    function(){void document.documentElement.offsetHeight;return document.fonts&&document.fonts.status!=='loaded'&&document.fonts.ready?'fonts':false;},
+    function(){a402CellMeasure(document);if(window.a402BreakCode)window.a402BreakCode(document);return false;}].concat(pass(),pass());
+  a402Turns(run,steps);};
+(function(){var w=window.innerWidth,t=null;var later=function(){if(window.innerWidth===w)return;clearTimeout(t);t=setTimeout(function(){if(window.innerWidth===w)return;w=window.innerWidth;window.a402Rebind();},200);};window.addEventListener('resize',later);window.addEventListener('orientationchange',later);})();
 /* A day strip (/status .bars) reads on touch too: a tap or click on the strip writes the nearest bar's title (its date and probe count) into a line under it, read out by a screen reader. */
 document.addEventListener('click',function(e){try{var strip=e.target&&e.target.closest&&e.target.closest('.bars');if(!strip)return;var bars=strip.querySelectorAll('[title]');if(!bars.length)return;var r=strip.getBoundingClientRect();var i=Math.min(bars.length-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*bars.length)));var out=strip.nextElementSibling&&strip.nextElementSibling.classList.contains('bar-read')?strip.nextElementSibling:null;if(!out){out=document.createElement('p');out.className='bar-read';out.setAttribute('aria-live','polite');out.style.cssText='font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:6px 0 0;';strip.parentNode.insertBefore(out,strip.nextSibling);}out.textContent=bars[i].getAttribute('title');}catch(err){}});
 /* Copied text reads as the page does: the joiners and no-break spaces the pass above put in are layout, not text, so a copy drops the joiners and gives the spaces back. */

@@ -18,13 +18,12 @@
 //
 //   node scripts/test-front-door.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { BAZAAR_DESCRIPTIONS, isExamplePointer } from "../src/payments.js";
 import {
   FRONT_DOOR_SLUG, FRONT_DOOR_QUERY, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, RECOVERY_ANCHOR, FIRST_CALL_FREE_COPY,
@@ -43,7 +42,6 @@ let pass = 0, failed = 0;
 // The first call is named by its flagship name when it has one, else by its slug.
 const frontName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG] || FRONT_DOOR_SLUG;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.log(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EM_DASH = /[—–]/;
 const strip = (s) => String(s).replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 /** Words that belong to the recovery lines: none of them may sit in the three-line block. */
@@ -245,7 +243,6 @@ function assertAccess(label, text, powCount, wires) {
 
 // ---------------------------------------------------------------------------
 // Part 2: two paid boots, then one with production's switches (Part 3).
-const [FAC_PORT] = await getFreePorts(1);
 // Every EVM chain a local stub can stand in for; the first two boots offer Base alone.
 const EVM_KINDS = ["eip155:8453", "eip155:137", "eip155:42161", "eip155:143", "eip155:42220", "eip155:43114", "eip155:1329", "eip155:10", "eip155:57073", "eip155:4663"];
 const fac = createServer((req, res) => {
@@ -254,19 +251,20 @@ const fac = createServer((req, res) => {
   if (req.url === "/rpc") return res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x0" }));
   res.end(JSON.stringify(req.url === "/supported" ? { kinds: EVM_KINDS.map((network) => ({ x402Version: 2, scheme: "exact", network })), extensions: [], signers: {} } : {}));
 });
-await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+const FAC_PORT = fac.address().port;
 const BASE_URL = "http://agent402.test";
 let proc = null;
 const stopProc = () => { try { proc?.kill("SIGKILL"); } catch {} proc = null; };
 process.on("exit", () => { stopProc(); try { fac.close(); } catch {} });
 
 async function boot(extraEnv, args = []) {
-  const [PORT] = await getFreePorts(1);
   const TMP = mkdtempSync(join(tmpdir(), "front-door-"));
-  proc = spawn(process.execPath, [...args, "src/server.js"], {
-    cwd: ROOT,
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  const srv = await bootServer({
+    stores: "front-door", args, timeoutMs: 80_000,
     env: {
-      ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "", BASE_URL,
+      FREE_MODE: "", TARGET_URL: "", BASE_URL,
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
@@ -276,15 +274,9 @@ async function boot(extraEnv, args = []) {
       AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
       ...extraEnv,
     },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  const errTail = [];
-  proc.stderr.on("data", (c) => { errTail.push(String(c)); if (errTail.length > 40) errTail.shift(); });
-  const B = `http://127.0.0.1:${PORT}`;
-  let up = false;
-  for (let i = 0; i < 160 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await sleep(500); }
-  if (!up) { console.log(`FAIL - the paid server booted (stderr: ${errTail.join("").slice(-800)})`); process.exit(1); }
-  return B;
+  }).catch((e) => { console.log(`FAIL - the paid server booted (${String(e?.message || e).slice(-800)})`); process.exit(1); });
+  proc = srv.child;
+  return srv.url;
 }
 
 const decode = (r) => { const h = r.headers.get("payment-required"); return h ? JSON.parse(Buffer.from(h, "base64").toString("utf8")) : null; };

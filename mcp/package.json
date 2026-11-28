@@ -1,7 +1,7 @@
 {
   "name": "agent402-mcp",
-  "version": "0.17.1",
-  "mcpName": "io.github.MikeyPetrillo/agent402",
+  "version": "0.17.2",
+  "mcpName": "tools.agent402/agent402",
   "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
   "repository": {

@@ -123,14 +123,60 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
   const at0 = Date.now();
   contained("thrower", () => { blockFor(40); throw new Error("x"); })();
   ok(turnsDuring(at0 - 10, Date.now()).some((t) => t.startsWith("thrower ")), "a turn that throws is timed as well");
+  // A full collection's marking is named: its steps run inside whichever turn
+  // allocates and no gc entry reports them, so a block inside the window from
+  // the marking's start to the pause that ends it says `gc-marking`.
+  {
+    const { noteGcEntry, markingDuring } = await import("../src/loop-lag.js");
+    const t = Date.now() + 500_000; // clear of every entry noted above
+    ok(markingDuring(t, t + 400) === false, "control: with no marking started a window names no marking");
+    noteGcEntry(t + 100, 0, 8);
+    ok(markingDuring(t + 150, t + 600) === true && markingDuring(t, t + 120) === true, "a window after a full collection's marking started, with no pause ending it yet, names the marking");
+    ok(markingDuring(t, t + 90) === false, "a window that ended before the marking started does not");
+    noteGcEntry(t + 700, 40, 4);
+    ok(markingDuring(t + 650, t + 720) === true && markingDuring(t + 741, t + 900) === false, "the marking ends at the pause that closes it: a later window names none");
+    noteGcEntry(t + 800, 5, 1);
+    ok(markingDuring(t + 790, t + 900) === false, "a young collection is not marking");
+    const lag = await (await import("node:fs/promises")).readFile(new URL("../src/loop-lag.js", import.meta.url), "utf8");
+    ok(/if \(markingDuring\(now - late - 50, now\)\) turns = \[\.\.\.turns, "gc-marking"\];/.test(lag), "the stall line and the stall ring carry gc-marking among the turns");
+  }
+  // Three named turns and the marking: the ring keeps all four, the marking included.
+  {
+    const { recordStall, recentStalls, noteGcEntry } = await import("../src/loop-lag.js");
+    const row = recordStall({ ms: 300, turns: ["a 90ms", "b 80ms", "c 70ms", "gc-marking"] });
+    ok(row.turns.length === 4 && row.turns[3] === "gc-marking" && recentStalls()[0].turns.includes("gc-marking"), `a stall with three named turns and the marking keeps the marking (${row.turns.join(", ")})`);
+    // Through the monitor: three turns of our own inside a stall while a full collection marks.
+    _resetTurnsForTest();
+    resetLoopLag();
+    const marked = [];
+    const stop3 = startLoopLagMonitor({ tickMs: 50, warnMs: 200, log: (m) => marked.push(m) });
+    await sleep(120);
+    setTimeout(() => {
+      noteGcEntry(Date.now(), 0, 8); // a full collection's marking starts, no pause ends it yet
+      contained("turn-one", () => blockFor(90))(); contained("turn-two", () => blockFor(80))(); contained("turn-three", () => blockFor(70))();
+    }, 0);
+    await sleep(400);
+    stop3();
+    noteGcEntry(Date.now(), 1, 4); // and ends, so later windows name no marking
+    const ring = recentStalls()[0]?.turns || [];
+    ok(["turn-one ", "turn-two ", "turn-three "].every((n) => ring.some((t) => t.startsWith(n))) && ring.includes("gc-marking"), `through the monitor the ring keeps the three turns and the marking (${ring.join(", ")})`);
+  }
   // The index wires the two spans the crawl stalls pointed at.
   const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
   // Each pass takes a crawl-lane turn of its own and is timed as a span named
   // with the seller's host (scripts/test-crawl-cycle-turns.js bounds the turns).
+  // A pass over a long list runs as lane steps instead (stepsPass): its whole
+  // form is the same manifestPass, and a long slice of its steps is recorded
+  // under the walk's name.
   const passStart = idx.indexOf("const passSpan = `crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`;");
-  const passEnd = idx.indexOf("tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));");
+  const passEnd = idx.indexOf("const x402Listed = x402ListedRoutes(manifestRows);");
   const passes = passStart > 0 && passEnd > passStart ? idx.slice(passStart, passEnd) : "";
-  ok(passes.includes("manifestPass(() => mergeManifestIntoTools(") && passes.includes("manifestPass(() => stampDeclared("), "the crawl's manifest passes are timed as spans named with the seller's host");
+  ok(/const manifestPass = async \(fn\) => \{ await crawlLaneTurn\(\); return laneSpan\(passSpan, fn\); \};/.test(passes) && passes.includes("manifestPass(() => mergeManifestIntoTools("), "the crawl's manifest passes are timed as spans named with the seller's host");
+  ok(/const stepsPass = \(name, rows, steps, whole\) => \(rows > FALLBACK_PASS_TURN_ROWS\s*\? crawlWalkLaned\(name, \{ origin: originUrl, doc: `\$\{rows\}-rows` \}, steps\(\)\)\s*: manifestPass\(whole\)\);/.test(passes)
+    && /await stepsPass\("stamp", tools\.length,\s*\(\) => stampDeclaredSteps\([^\n]*\),\s*\(\) => stampDeclared\(/.test(passes)
+    && /await stepsPass\("carry", tools\.length,\s*\(\) => carryForwardLearnedQuotesSteps\(tools, prev\),\s*\(\) => carryForwardLearnedQuotes\(tools, prev\)\);/.test(passes),
+    "the stamp and carry passes run whole as such a span, or over a long list as lane steps");
+  ok(/noteTurn\(`crawl-walk \$\{name\}`, Date\.now\(\) - d, d\);/.test(idx.slice(idx.indexOf("async function crawlWalkLaned("), idx.indexOf("const laneSpan = "))), "a long slice of a laned walk is recorded under the walk's name");
   ok(/finally \{\s*noteTurn\("route-index-shadow-finish", finishAt, performance\.now\(\) - finishT0\);/.test(idx), "the shadow build's unsliced finish is timed as its own span");
 }
 

@@ -29,6 +29,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { bound, gapMeter, OURS_READING } from "./lib/ours-clock.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
@@ -119,16 +120,20 @@ idx.__setDiscoveryFetchForTest(async (url) => {
 
 // ---- the measured runs ------------------------------------------------------
 const results = [];
+// The collector's pauses, so a long turn no span names is read as one or not.
+const gcPauses = [];
+new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push(e.duration); }).observe({ entryTypes: ["gc"] });
 async function measured(label, fn) {
   _resetTurnsForTest();
   const meter = gapMeter(2);
-  const t0 = Date.now();
+  const t0 = Date.now(), g0 = gcPauses.length;
   const value = await fn();
   const { worst, worstWall } = meter.stop();
   // The turns the [loop-lag] line would name for this run's window.
   const named = turnsDuring(t0, Date.now(), 3);
   results.push({ label, worst });
-  console.log(`# ${label}: longest turn ${worst.toFixed(0)} ms (${OURS_READING}; wall ${worstWall.toFixed(0)} ms); longest named: ${named.join(", ") || "none over 20 ms"}`);
+  const pauses = gcPauses.slice(g0);
+  console.log(`# ${label}: longest turn ${worst.toFixed(0)} ms (${OURS_READING}; wall ${worstWall.toFixed(0)} ms); longest named: ${named.join(", ") || "none over 20 ms"}; longest collector pause ${pauses.reduce((m, d) => Math.max(m, d), 0).toFixed(0)} ms (${pauses.filter((d) => d >= 80).length} of 80 ms or more)`);
   return value;
 }
 // One crawl's store per loop iteration: an iteration counter (a setImmediate

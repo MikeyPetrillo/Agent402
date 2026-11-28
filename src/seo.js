@@ -334,6 +334,7 @@ function pageUrls(baseUrl, catalog) {
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
     { loc: `${baseUrl}/start`, priority: "0.9" },
+    { loc: `${baseUrl}/recipes`, priority: "0.8" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -370,6 +371,7 @@ function pageUrls(baseUrl, catalog) {
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
+    { loc: `${baseUrl}/changelog/archive`, priority: "0.4" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
@@ -386,6 +388,8 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/pay-per-call-api`, priority: "0.9" },
     { loc: `${baseUrl}/paid-mcp-tools`, priority: "0.9" },
     { loc: `${baseUrl}/compare`, priority: "0.8" },
+    { loc: `${baseUrl}/insider-trades-api`, priority: "0.8" },
+    { loc: `${baseUrl}/crypto-history-stats-api`, priority: "0.8" },
     ...docsUrls(baseUrl),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
@@ -623,9 +627,9 @@ Base URL: ${baseUrl}
 
 ${reportsParagraph(baseUrl, tools)}
 
-**Crypto derivatives, DeFi and Solana intel.** Live perpetuals, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth. Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's on-chain risk facts (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full report's facts, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}) and \`POST /api/sol-price\` (${priceOfSlug("sol-price")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending and prices. Market context: \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}) and \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}). Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
+**Crypto derivatives, DeFi and Solana intel.** Live perpetuals, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth. Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's on-chain risk facts (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full report's facts, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}) and \`POST /api/sol-price\` (${priceOfSlug("sol-price")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending and prices. Market context: \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}; candle statistics computed here, no candles). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), and \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}); \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}) answers look-back statistics computed from a token's price history, not the series. Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
 
-**Images and video, flat per call.** Text-to-image and text-to-video on the OpenAI wire, priced per picture or per clip rather than per token: \`POST /v1/images/fast\` (${priceOfSlug("v1-images-fast")}, budget), \`POST /v1/images/pro\` (${priceOfSlug("v1-images-pro")}, higher fidelity), \`POST /v1/images/generations\` (${priceOfSlug("v1-images")}, flagship), \`POST /v1/images/edits\` (${priceOfSlug("v1-images-edit")}, edit up to four reference images with a prompt) and \`POST /v1/videos/generations\` (${priceOfSlug("v1-videos")}, one silent 4-second 720p clip, MP4 inline base64). Point any OpenAI SDK at base_url ${baseUrl}/v1 and call the path you want. A failed or timed-out generation answers 400 or above, which is not settled on x402 (a video prompt the content filter stops answers 422 with reason content_filtered); a wallet payer whose video request timed out can send the same request again unchanged within the window the 504 names to collect the same clip.
+**Images and video, flat per call.** Text-to-image and text-to-video on the OpenAI wire, priced per picture or per clip rather than per token: \`POST /v1/images/fast\` (${priceOfSlug("v1-images-fast")}, budget), \`POST /v1/images/pro\` (${priceOfSlug("v1-images-pro")}, higher fidelity), \`POST /v1/images/generations\` (${priceOfSlug("v1-images")}, flagship), \`POST /v1/images/edits\` (${priceOfSlug("v1-images-edit")}, edit up to four reference images with a prompt) and \`POST /v1/videos/generations\` (${priceOfSlug("v1-videos")}, one silent 4-second 720p clip, MP4 inline base64). To animate a picture you already have, \`POST /api/image-animate\` (${priceOfSlug("image-animate")}, model-backed) takes a PNG or JPEG as base64, a data: URL or an https URL plus a motion prompt and returns the same clip opening on that picture. Point any OpenAI SDK at base_url ${baseUrl}/v1 and call the path you want. A failed or timed-out generation answers 400 or above, which is not settled on x402 (an image or video prompt the provider's content filter stops answers 422 with reason content_filtered).${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE} An image route can be one of them; a video route never is.` : ""} A wallet payer whose video request timed out can send the same request again unchanged within the window the 504 names to collect the same clip.
 
 **A failed x402 call is not charged, and you can check it per response.** ${SETTLE_FIRST_SENTENCE} Settlement runs AFTER the tool handler and only completes for a successful (under-400) response: an error, a capacity 503, or an upstream 502 cancels settlement inside the payment middleware itself, so no money moves and there is nothing to claim. The exception is a Tempo push payment, sent before the call runs: if the call then fails, it is recorded as a refund owed to the paying wallet.
 
@@ -660,6 +664,9 @@ ${flatTiersLine()}
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/guides/buying-at-volume](${baseUrl}/guides/buying-at-volume): buying in bursts - the per-address limits and their \`Retry-After\`, retries that never pay twice, async jobs, spend caps and the errors to handle
 - [/guides/content-pipeline](${baseUrl}/guides/content-pipeline): a content pipeline from paid calls - research, script, voiceover, images, transcription, subtitles, dubbing and media checks from one wallet, with the stages that run as jobs and the rail to pay on
+- [/guides/agent-to-agent-payments](${baseUrl}/guides/agent-to-agent-payments): one agent paying another agent's HTTP endpoint over x402 - the 402 quote, the signed payment header, settlement, the receipt and how to verify it
+- [/insider-trades-api](${baseUrl}/insider-trades-api): SEC Form 4 filings against a US ticker by API, and the model-backed insider flow report; public SEC data, information only, not investment advice
+- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's past year as computed statistics by API (one-year return, largest drawdown, annualized volatility) and a stablecoin's worst distance from its peg over 24 hours and 7 days; computed figures, not a price series; Powered by CoinGecko (https://www.coingecko.com/en/api); information only, not investment advice
 - [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines
@@ -685,13 +692,14 @@ ${flatTiersLine()}
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
-- [Start here](${baseUrl}/start): connect Claude, Claude Code or Cursor
+- [Start here](${baseUrl}/start): connect Claude on a computer or a phone, Claude Code or Cursor
+- [Things you can do](${baseUrl}/recipes): prompts to copy, each with the tool it runs and its price
 - [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockQuoteEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.1\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.1\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.2\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.2\`
 ${listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
@@ -784,8 +792,8 @@ export function surfaceClause(text) {
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];
-  // The short index says each fact once: the explainer link and /api/pricing
-  // are in the paragraph under the summary, access (no account or key, the
+  // The short index says each fact once: the explainer link is in the paragraph
+  // under the summary, /api/pricing in the machine surfaces, access (no account or key, the
   // quote in the 402, what proof-of-work skips) in the front door's lines, the
   // card method in the MPP methods, and the per-request quote and the metered
   // routes in the metered section below. /llms-full.txt keeps the summary whole.
@@ -804,7 +812,7 @@ export function llmsTxt(baseUrl, catalog) {
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
   // The npm server's own Claude Code line is in /llms-full.txt (the hosted one-liner above stays).
-  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
+  const shortHosts = (text) => text.replace(/flagship-first remote MCP \([^)]*\)\. Install one-liners:/, "remote MCP: flagship tools, with catalog.find and catalog.call for the rest. Install:").replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
   const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
   const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
@@ -815,10 +823,15 @@ export function llmsTxt(baseUrl, catalog) {
   // surface's own brief; any other line keeps its first clause
   // (surfaceClause), so a surface added later stays short here too.
   const brief = [
-    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
-    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
+    // The short form keeps what the page is (computed figures, not a series) and its source's credit.
+    [`- [/crypto-history-stats-api](`, `- [/crypto-history-stats-api](${baseUrl}/crypto-history-stats-api): a coin's history as computed statistics, not a price series. Powered by CoinGecko (https://www.coingecko.com/en/api)`],
+    // The Form 4 page keeps its model-backed marking; the guide keeps what is paid and how.
+    [`- [/insider-trades-api](`, `- [/insider-trades-api](${baseUrl}/insider-trades-api): SEC Form 4 filings by ticker, and the model-backed insider flow report`],
+    [`- [/guides/agent-to-agent-payments](`, `- [/guides/agent-to-agent-payments](${baseUrl}/guides/agent-to-agent-payments): one agent paying another's endpoint over x402`],
+    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search`],
+    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer from live web search`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
-    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example), also at \`/.well-known/search\` (GET or QUERY)`],
+    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools, also at \`/.well-known/search\` (GET or QUERY)`],
     [`- [/api/search-news](`, `- [/api/search-news](${baseUrl}/api/search-news): live news search`],
     [`- [/api/mpp-leaderboard](`, `- [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): MPP sellers ranked by USDC.e received on Tempo`],
     [`- [/api/reliability](`, `- [/api/reliability](${baseUrl}/api/reliability): reliability report, a verification URL per claim`],
@@ -842,7 +855,7 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), top 25 (\`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`; \`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
   ];
   const surfaceBrief = (line) => {
     const hit = brief.find(([prefix]) => line.startsWith(prefix));
@@ -855,7 +868,15 @@ export function llmsTxt(baseUrl, catalog) {
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
-    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
+    // What the gateway does (one list sentence), how the quote is estimated and
+    // how long a call usually takes are in /llms-full.txt; the short index keeps
+    // the routes, the model-backed marking, the settlement bound and the timeout.
+    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n")
+      .replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "")
+      .replace(` ${gatewayProductSentence({ receipts: receiptsServed() })}`, "")
+      .replace(" (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee)", "")
+      .replace(", which takes a few seconds on most calls and longer for long answers", "")
+      .trimEnd();
     if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
     if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
     // A platform page keeps its link here; its setup clause is in /llms-full.txt.
@@ -879,7 +900,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP explained, for people: ${GUIDE_SITE}.
+The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. x402 and MPP explained, for people: ${GUIDE_SITE}.
 
 ${[
     // The Tempo currencies are named in the MPP methods line just below.

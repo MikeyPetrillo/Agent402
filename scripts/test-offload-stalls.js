@@ -166,8 +166,10 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) gcs.push([e.startTime, e.startTime + e.duration]); });
   obs.observe({ entryTypes: ["gc"] });
   const Q = "pdf extract text";
+  // The burst changed every row it stored (a row equal to the one it replaces
+  // is kept, and its entry indexes in a moment: no backlog to meet).
   let i = 0;
-  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t, description: `${t.description} burst` })) });
   const pendingBefore = x._routeIndexStatsForTest().pending;
   await new Promise((r) => setTimeout(r, 20));
   const gaps = [];
@@ -197,7 +199,7 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   // that drained inline again would hold about all of it), under a ceiling
   // that only a runner several times slower than usual reaches.
   i = 0;
-  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })) });
+  for (const [o, v] of [...cache]) if (i++ % 2 === 0) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t, description: `${t.description} again` })) });
   const t0 = performance.now();
   x.routeQuery({ query: Q, top: 25, ...routeCtx });
   const inlineMs = performance.now() - t0;

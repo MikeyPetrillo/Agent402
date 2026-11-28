@@ -32,6 +32,7 @@
 
 import zlib from "node:zlib";
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
+import { secPaced } from "./sec-rate.js";
 import { assertPublicUrl } from "./fetch-guard.js";
 // edgar-kit imports this module too; edgarUserAgent is a hoisted function
 // and is only called inside a request, so the cycle is safe.
@@ -114,7 +115,8 @@ export function _resetIndexCache() { indexCache = { at: 0, rows: null }; }
 async function edgarText(url, accept) {
   const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "SEC", step: "data-set listing", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]" };
-  const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: accept } }, ctx);
+  // Each request takes its turn at the pace every SEC read shares (src/tools/sec-rate.js).
+  const res = await secPaced(() => upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: accept } }, ctx));
   const text = await bodyUnderDeadline(res.text(), ctx);
   if (!res.ok) {
     if (res.status >= 500) throw Object.assign(bad(`SEC upstream HTTP ${res.status} - try again later`, 502), { upstreamStatus: res.status });
@@ -139,9 +141,9 @@ export async function listDataSets({ force = false } = {}) {
 export async function rangeBytes(url, start, end, { fetchImpl = fetch } = {}) {
   const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "SEC", step: "range read", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]", fetchImpl };
-  const res = await upstreamFetch(safeUrl, {
+  const res = await secPaced(() => upstreamFetch(safeUrl, {
     headers: { "User-Agent": edgarUserAgent(), Accept: "application/octet-stream", Range: `bytes=${start}-${end}` },
-  }, ctx);
+  }, ctx));
   if (res.status !== 206) {
     try { await res.body?.cancel?.(); } catch { /* nothing to release */ }
     if (res.status === 200) throw bad("SEC did not honor the byte-range request (answered 200 for a Range GET); refusing to download the whole archive", 502);
@@ -158,7 +160,7 @@ export async function rangeBytes(url, start, end, { fetchImpl = fetch } = {}) {
 /** Content-Length via HEAD (sec.gov answers it); used to place the tail read. */
 async function contentLength(url, { fetchImpl = fetch } = {}) {
   const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
-  const res = await upstreamFetch(safeUrl, { method: "HEAD", headers: { "User-Agent": edgarUserAgent() } }, { label: "SEC", step: "archive size", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]", fetchImpl });
+  const res = await secPaced(() => upstreamFetch(safeUrl, { method: "HEAD", headers: { "User-Agent": edgarUserAgent() } }, { label: "SEC", step: "archive size", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]", fetchImpl }));
   if (res.status === 404) throw bad("That data set is no longer at the URL the SEC's listing gave for it", 422);
   if (!res.ok) throw Object.assign(bad(`SEC upstream HTTP ${res.status}`, 502), { upstreamStatus: res.status });
   const n = Number(res.headers.get("content-length"));

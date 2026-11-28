@@ -23,12 +23,11 @@
 //      no page), the catalog does not offer it, /privacy and /terms do not
 //      describe it, and a page made earlier still serves.
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { STUB_ANSWER, STUB_CITATIONS } from "./lib/brave-answer-stub-preload.js";
 
 const SHARE_DIR = mkdtempSync(join(tmpdir(), "answer-share-"));
@@ -295,8 +294,11 @@ const DATA = { query: "q", answer: "a", citations: [] };
 }
 
 // ---- 2. paid server ---------------------------------------------------------
-const [PORT, FAC_PORT] = await getFreePorts(2);
-let B = `http://127.0.0.1:${PORT}`;
+// The origin the server is told it is served at (BASE_URL): a share link is
+// built on it. `served` is that link on the port the server bound.
+const SITE = "http://answer-share.test";
+let B = null;
+const served = (u) => B + String(u).slice(SITE.length);
 const OP_TOKEN = "answer-share-test-operator-token-0123456789";
 let settleMode = "ok", settles = 0;
 facilitator = createServer((req, res) => {
@@ -314,22 +316,25 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-const boot = (port, shareSwitch) => spawn(process.execPath, ["--import", "./scripts/lib/brave-answer-stub-preload.js", "src/server.js"], {
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+// Ready is waitUp() below, so the helper waits for the listening line only.
+const boot = (shareSwitch) => bootServer({
+  stores: "answer-share", args: ["--import", "./scripts/lib/brave-answer-stub-preload.js"], readyPath: null,
   env: {
-    ...process.env, PORT: String(port), FREE_MODE: "", BRAVE_API_KEY: "stub-never-sent", BRAVE_ANSWERS_API_KEY: "",
+    FREE_MODE: "", BRAVE_API_KEY: "stub-never-sent", BRAVE_ANSWERS_API_KEY: "",
     ANSWER_SHARE: shareSwitch, ANSWER_SHARE_PER_HOUR: "", AGENT402_OPERATOR_TOKEN: OP_TOKEN, FIRST_CALL_ALLOWANCE: "",
-    ANSWER_SHARE_DIR: SHARE_DIR, BASE_URL: `http://127.0.0.1:${port}`,
+    ANSWER_SHARE_DIR: SHARE_DIR, BASE_URL: SITE,
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 80) serverLog.splice(0, serverLog.length - 80); };
-const start = (port, shareSwitch) => { proc = boot(port, shareSwitch); proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog); };
-start(PORT, "on");
+const start = async (shareSwitch) => { const srv = await boot(shareSwitch); proc = srv.child; B = srv.url; keepLog(srv.log()); proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog); };
+await start("on");
 
 let nonceN = 0;
 const credential = (accepted, payer) => Buffer.from(JSON.stringify({
@@ -394,12 +399,12 @@ try {
     const r = await pay(SHARE);
     const body = await r.json();
     link = body.share;
-    ok(r.status === 200 && link && link.url.startsWith(`${B}/answers/`) && link.cardUrl === `${link.url}/card.png` && Date.parse(link.expiresAt) > Date.now() + 29 * 86_400_000, `a settled share call answers share { url, cardUrl, expiresAt } (${JSON.stringify(link)})`);
+    ok(r.status === 200 && link && link.url.startsWith(`${SITE}/answers/`) && link.cardUrl === `${link.url}/card.png` && Date.parse(link.expiresAt) > Date.now() + 29 * 86_400_000, `a settled share call answers share { url, cardUrl, expiresAt } (${JSON.stringify(link)})`);
     for (let i = 0; i < 20 && !files().length; i++) await sleep(100);
     ok(files().length === 1, "the settled 200 wrote exactly one share");
   }
   {
-    const r = await fetch(link.url);
+    const r = await fetch(served(link.url));
     const html = await r.text();
     ok(r.status === 200 && /^text\/html/.test(r.headers.get("content-type") || ""), "the share page answers 200 HTML");
     ok(r.headers.get("x-robots-tag") === "noindex, nofollow" && /<meta name="robots" content="noindex, nofollow">/.test(html), "the page is noindex in the header and the meta");
@@ -411,15 +416,15 @@ try {
     checkHostile(html, "served page");
     ok(html.includes('<p class="as-asked">Asked by the caller</p>'), "the served page labels the question as the caller's");
     ok(!/(^|,)\s*accept\s*(,|$)/i.test(r.headers.get("vary") || ""), `the page does not vary on Accept (vary: ${r.headers.get("vary")})`);
-    const viaAccept = await fetch(link.url, { headers: { accept: "application/json" } });
+    const viaAccept = await fetch(served(link.url), { headers: { accept: "application/json" } });
     ok(viaAccept.status === 200 && /^text\/html/.test(viaAccept.headers.get("content-type") || ""), "the page address answers HTML whatever Accept says");
     await viaAccept.text();
-    const j = await fetch(`${link.url}.json`);
+    const j = await fetch(`${served(link.url)}.json`);
     const jb = await j.json().catch(() => ({}));
     ok(j.status === 200 && jb.question === "what is x402" && jb.modelBacked === true && jb.citations.length === STUB_CITATIONS.length && /max-age=([1-9]\d?|[12]\d\d|300)\b/.test(j.headers.get("cache-control") || "") && !/immutable/.test(j.headers.get("cache-control") || "") && j.headers.get("x-robots-tag") === "noindex, nofollow", "the JSON record lives at <url>.json (question, answer, citations, modelBacked), noindex");
-    const svg = await fetch(`${link.url}/card.svg`);
+    const svg = await fetch(`${served(link.url)}/card.svg`);
     ok(svg.status === 200 && /image\/svg\+xml/.test(svg.headers.get("content-type") || "") && /<svg[^>]+width="1200" height="630"/.test(await svg.text()), "the SVG card answers 1200x630");
-    const png = await fetch(link.cardUrl, { redirect: "manual" });
+    const png = await fetch(served(link.cardUrl), { redirect: "manual" });
     ok((png.status === 200 && /image\/png/.test(png.headers.get("content-type") || "")) || (png.status === 302 && /card\.svg$/.test(png.headers.get("location") || "")), `the PNG card answers a PNG, or the SVG card when no renderer is available (${png.status})`);
   }
   {
@@ -427,16 +432,16 @@ try {
     const id = link.url.split("/").pop();
     const del = (headers, body) => fetch(`${B}/__operator/answer-shares/delete`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     const anon = await del({}, { id, note: "x" });
-    ok(anon.status === 404 && (await fetch(link.url)).status === 200, "the takedown without the operator token answers 404 and removes nothing");
+    ok(anon.status === 404 && (await fetch(served(link.url))).status === 200, "the takedown without the operator token answers 404 and removes nothing");
     const r = await del({ "x-operator-token": OP_TOKEN }, { id, note: "reported" });
     const rb = await r.json();
     ok(r.status === 200 && rb.status === "removed" && /no-store/.test(r.headers.get("cache-control") || "") && /private/.test(r.headers.get("cache-control") || ""), `the operator takedown answers removed, private no-store (${JSON.stringify(rb)})`);
     await sleep(100);
     ok(serverLog.some((l) => l.includes(`removed ${id.slice(0, 6)}`) && l.includes("reported")), "the takedown is logged");
-    const p = await fetch(link.url);
+    const p = await fetch(served(link.url));
     ok(p.status === 410 && /was removed/.test(await p.text()) && p.headers.get("cache-control") === "no-store", "the removed page answers 410 removed, not cached");
-    const jr = await fetch(`${link.url}.json`);
-    ok(jr.status === 410 && (await jr.json()).status === "removed" && (await fetch(`${link.url}/card.svg`)).status === 410, "its JSON and card answer 410 removed");
+    const jr = await fetch(`${served(link.url)}.json`);
+    ok(jr.status === 410 && (await jr.json()).status === "removed" && (await fetch(`${served(link.url)}/card.svg`)).status === 410, "its JSON and card answer 410 removed");
     const unk = await del({ "x-operator-token": OP_TOKEN }, { id: "AAAAAAAAAAAAAAAAAAAAAAAA" });
     ok(unk.status === 404 && (await unk.json()).status === "unknown", "the takedown of an unknown id answers 404 unknown");
   }
@@ -456,10 +461,8 @@ try {
     const kept = AS.shareRecord({ id: AS.newShareId(), query: "made while on", answer: "kept", citations: [], now: Date.now() });
     writeFileSync(join(SHARE_DIR, `${kept.id}.json`), JSON.stringify(kept));
     proc.kill("SIGKILL");
-    const [PORT2] = await getFreePorts(1);
-    B = `http://127.0.0.1:${PORT2}`;
     accepts.clear();
-    start(PORT2, "");
+    await start("");
     await waitUp();
     const before = files().length;
     const r = await pay(SHARE);

@@ -16,6 +16,12 @@ export function getWalletHtml({ link = (href, label) => `<a href="${esc(href)}">
   return `No wallet yet? ${link(GET_A_WALLET_HREF, "Fund a first one")} with USDC on Base, no ETH needed, or run ${code(WALLET_NEW_COMMAND)} to make one on this computer: it stores the key and prints the address and the config, never the key.`;
 }
 
+/** The step as one short line, for a page that shows it under every sample
+ *  (the tool pages): the same link and the same command. */
+export function getWalletShortHtml({ link = (href, label) => `<a href="${esc(href)}">${esc(label)}</a>`, code = (t) => `<code>${esc(t)}</code>` } = {}) {
+  return `${link(GET_A_WALLET_HREF, "Get a wallet")} or run ${code(WALLET_NEW_COMMAND)}.`;
+}
+
 /** The same step in markdown, for a page written as markdown. */
 export function getWalletMarkdown(baseUrl = "") {
   return `No wallet yet? [Fund a first one](${baseUrl}${GET_A_WALLET_HREF}) with USDC on Base, no ETH needed, or run \`${WALLET_NEW_COMMAND}\` to make one on this computer: it stores the key and prints the address and the config, never the key.`;

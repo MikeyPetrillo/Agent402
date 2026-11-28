@@ -31,7 +31,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
-import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { costsOrStandIn } from "./lib/stand-in-costs.js";
 import { followsJobAnswer, cdnSyncLeftMs, cdnSyncMaxSeconds, cdnSyncWindowMiddleware } from "../src/cdn-sync-window.js";
 import { syncWindowRefusalOf, SYNC_WINDOW_RETRY } from "../src/slow-sync-window.js";
 import { isTempoPushCredential } from "../src/mpp-tempo.js";
@@ -184,7 +184,7 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   }
 }
 
-requireUpstreamCosts("test-cdn-sync-window");
+const COSTS = costsOrStandIn("test-cdn-sync-window");
 
 // ---- booted server ----
 let B = ""; // the booted server's address (port 0, read back), set per boot

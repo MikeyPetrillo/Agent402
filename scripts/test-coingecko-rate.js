@@ -214,7 +214,7 @@ const isPriceCheck = (input) => new URL(typeof input === "string" ? input : inpu
     }
     if (p === "/coins/bitcoin") return J(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: {} });
     if (p === "/coins/ethereum") return J(500, { error: "upstream failure" });
-    if (p === "/coins/bitcoin/history") return J(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }); // a date with no market data
+    if (p === "/coins/bitcoin/market_chart/range") return J(200, { prices: [], market_caps: [], total_volumes: [] }); // a date with no market data
     if (p === "/coins/bitcoin/market_chart" || p === "/coins/bitcoin/ohlc") return J(200, p.endsWith("ohlc") ? [[1_700_000_000_000, 1, 1, 1, 1]] : { prices: [[1_700_000_000_000, 1]], market_caps: [], total_volumes: [] });
     if (p === "/coins/markets") return J(200, [{ id: "tether", symbol: "usdt", name: "Tether", current_price: 1 }]);
     if (p === "/exchanges/gdax/tickers") return J(200, { name: "Coinbase Exchange", tickers: [] });
@@ -277,7 +277,7 @@ const isPriceCheck = (input) => new URL(typeof input === "string" ? input : inpu
 
     // 4. A listed coin with no market data that day is a free 422, never a
     // charged empty answer; the miss is kept, so a repeat reads nothing.
-    const histReads = () => count(/^\/coins\/bitcoin\/history/);
+    const histReads = () => count(/^\/coins\/bitcoin\/market_chart\/range/);
     eq(await call(coinHistory, { coin: "bitcoin", daysAgo: 3 }), 422, "coin-history: a date with no market data answers 422");
     const firstReads = histReads();
     ok(firstReads >= 1, `control: the first miss read the date upstream (${firstReads})`);

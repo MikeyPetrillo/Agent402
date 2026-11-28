@@ -7,6 +7,7 @@ import { MEV_AND_L2_TOOLS } from "../src/tools/mev-and-l2-kit.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { NETWORK_TOOLS2 } from "../src/tools/network-kit2.js";
+import { KIT } from "../src/tools/kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -688,6 +689,53 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     ok(!served, `"${q}" does not resolve to asn-info (top ${top?.slug || "none"} ${Math.round(top?.score ?? 0)}, rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
   }
   ok(findTools(cat, "ip to asn", { k: 3 }).results?.[0]?.slug === "asn-info", "control: an ASN search still finds asn-info first");
+}
+
+// ip-info reads the address and its PTR record, never a location: its name
+// says what it returns, no name, alias, tag or description word offers it for
+// a geolocation search, and such a search does not read it as served (a
+// score at the weak floor /api/find reads, FIND_WEAK_SCORE 3, with the
+// rarest word covered).
+{
+  const cat = {};
+  for (const t of [...KIT, ...NETWORK_TOOLS2]) cat[t.route] = t;
+  const ipInfo = KIT.find((t) => t.slug === "ip-info");
+  ok(ipInfo?.name === "IP address type and reverse DNS" && ipInfo.route === "POST /api/ip-info", `ip-info is named for what it returns (${ipInfo?.name})`);
+  const words = [ipInfo.name, ipInfo.description, ipInfo.category, ...(ipInfo.tags || []), ...(ipInfo.aliases || [])].join(" ");
+  ok(!/geo|locat|city|latitude|longitude/i.test(words.replace(/no country, city or network owner/, "")), "ip-info carries no geolocation word in its name, description, category, tags or aliases");
+  // Longer wordings ("geolocate an ip address") are read against the whole
+  // catalog in the find-misses gaps (scripts/test-find-misses-corpus.js).
+  for (const q of ["ip geolocation", "geoip", "geolocate ip", "ip-geolocation", "ip location"]) {
+    const r = findTools(cat, q, { k: 3 });
+    const top = r.results?.[0];
+    const served = top?.slug === "ip-info" && top.score >= 3 && r.rarestTermCovered !== false;
+    ok(!served, `"${q}" does not resolve to ip-info (top ${top?.slug || "none"} ${Math.round(top?.score ?? 0)}, rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
+  }
+  for (const q of ["reverse dns for an ip", "is this ip address private", "ptr record of an ip"]) {
+    ok(findTools(cat, q, { k: 3 }).results?.[0]?.slug === "ip-info", `control: "${q}" still finds ip-info first`);
+  }
+}
+
+// The shared false-friend rule (src/query-terms.js TERM_FALSE_FRIENDS, the one
+// /api/route reads): "add" is not the opening of "address". Route-and-execute's
+// own-catalog leg reads this ranking, so an address tool must not stand beside
+// the tool an "add" task names. Every other word is a plain substring, as before.
+{
+  const { TERM_FALSE_FRIENDS } = await import("../src/query-terms.js");
+  const cat = [
+    { slug: "address-label", name: "Known-address label", description: "Label a wallet address: exchange, bridge or contract. Pass the address.", category: "crypto", tags: ["address", "label"] },
+    { slug: "add-time", name: "Add time to a date", description: "Add days, hours or minutes to a date.", category: "time", tags: ["date", "add"] },
+    { slug: "pad-string", name: "Pad a string", description: "Left or right padding for a string; nothing is added past the width.", category: "text", tags: ["pad"] },
+    { slug: "coin-ohlc", name: "Coin OHLC candle statistics", description: "Candle statistics for a coin.", category: "crypto", tags: ["candles"] },
+    { slug: "stats", name: "Statistics", description: "Mean, median, range and outliers of a list of numbers.", category: "math", tags: ["mean", "range"] },
+  ];
+  const slugs = (q) => (findTools(cat, q, { k: 5 }).results || []).map((x) => x.slug);
+  ok(Object.keys(TERM_FALSE_FRIENDS).join() === "add,and", "the shared list is the two named words");
+  ok(!slugs("add two numbers").includes("address-label") && slugs("add two numbers")[0] === "add-time", `"add two numbers" does not rank the address tool (${slugs("add two numbers").join(", ")})`);
+  ok(!slugs("add").includes("address-label") && slugs("add").includes("add-time") && slugs("add").includes("pad-string"), `"add" still reads add, added and padding (${slugs("add").join(", ")})`);
+  ok(slugs("address label")[0] === "address-label" && slugs("addr")[0] === "address-label" && slugs("address")[0] === "address-label", "CONTROL: address and addr queries find the address tool as before");
+  ok(slugs("candle statistics")[0] === "coin-ohlc" && slugs("mean range and outliers")[0] === "stats" && !slugs("mean range and outliers").includes("coin-ohlc"), `CONTROL: a candle query finds the candle tool, and "and" in a statistics task does not (${slugs("mean range and outliers").join(", ")})`);
+  ok(slugs("pad")[0] === "pad-string" && slugs("label")[0] === "address-label" && slugs("stat").includes("stats") && slugs("stat").includes("coin-ohlc"), "CONTROL: every other word is a plain substring (pad, label, stat)");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

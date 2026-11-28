@@ -201,7 +201,7 @@ export function powReplayStatus() { return { mode: PG ? "shared" : "local", wind
 export const WALLET_ONLY_SLUGS = new Set([
   "token-brief", "filing-report",  // token-brief-kit.js: keyless Solana egress + Opus synthesis, metered
   "linkedin-article",              // linkedin-article-kit.js: research + Opus + image generation, metered
-  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
+  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos", "image-animate",  // llm-images-fast-kit.js (OpenRouter spend)
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history", "wallet-transfers-multichain",  // alchemy-data-kit.js (egress)
   // chain-rpc-kit.js: one JSON-RPC read each (Alchemy CU when keyed, a public
   // node otherwise) - egress, so never free-tier.
@@ -349,7 +349,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), api.github.com
   // (github-repo — shared 60/hr per-IP keyless quota PoW must not farm), and
   // arbitrary caller sites (favicon-grab). All egress → wallet-only.
-  "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab",
+  "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab", "name-records",
   // Web-content kit: arbitrary caller feed URLs (feed-parse) and
   // redirect-chain following against arbitrary caller URLs (unshorten-url),
   // both egress. archive-snapshot builds its Wayback Machine link here with no

@@ -813,6 +813,56 @@
       }
     },
     {
+      "slug": "name-records",
+      "name": "a TV series: creators, trademark serial with its USPTO link, logo file page facts, capped list",
+      "input": {
+        "name": "Wild Kratts",
+        "limit": 1
+      },
+      "expect": {
+        "equals": {
+          "found": true,
+          "items[0].id": "Q2875960",
+          "items[0].trademarkSerialNumbers[0].serialNumber": "85722192",
+          "items[0].trademarkSerialNumbers[0].trademarkDetails": "linked",
+          "items[0].commonsFile.recordedOnFilePage.restrictions[0]": "trademarked",
+          "returned": 1,
+          "truncated": true,
+          "usptoCredit": "Source: United States Patent and Trademark Office, www.uspto.gov"
+        },
+        "matches": {
+          "items[0].trademarkSerialNumbers[0].usptoRecordUrl": "^https://tsdr\\.uspto\\.gov/#caseNumber=85722192&",
+          "scope": "no determination of ownership or of permitted use",
+          "items[0].recordedOnWikidata.creator[0].label": "Kratt"
+        },
+        "populated": [
+          "items[0].recordedOnWikidata.productionCompany",
+          "items[0].commonsFile.url",
+          "items[0].readAt"
+        ]
+      }
+    },
+    {
+      "slug": "name-records",
+      "name": "a name with no Wikidata item answers an empty, complete list with the scope field",
+      "input": {
+        "name": "zzqx name records no such item 7731"
+      },
+      "expect": {
+        "equals": {
+          "found": false,
+          "complete": true
+        },
+        "empty": [
+          "items"
+        ],
+        "populated": [
+          "scope",
+          "note"
+        ]
+      }
+    },
+    {
       "slug": "yield-curve-spread",
       "name": "spreads are numbers",
       "input": {},

@@ -11,16 +11,11 @@
 //
 //   node scripts/test-title-clamp.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { metaTitle, clampedTitles, META_TITLE_MAX, metaDescription, cutDescriptions, sentenceFit, META_DESCRIPTION_MAX } from "../src/seo-meta.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- the registry itself ------------------------------------------------------------
 {
@@ -50,18 +45,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 }
 
 // --- every sitemap page on a booted server ------------------------------------------
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
 const TOKEN = "title-clamp-test-token";
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
-  cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", AGENT402_OPERATOR_TOKEN: TOKEN },
-  stdio: "ignore",
+// Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+const srv = await bootServer({
+  stores: "title-clamp",
+  env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", AGENT402_OPERATOR_TOKEN: TOKEN },
 });
+const BASE = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 60; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "server booted");
+  ok(srv.port > 0, "server booted");
   const xml = await (await fetch(`${BASE}/sitemap.xml`)).text();
   const machine = /^\/(api|\.well-known)\/|\.(json|txt|md|xml)$/;
   const paths = [...new Set([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]).pathname + new URL(m[1]).search))].filter((p) => !machine.test(p));
@@ -106,7 +98,7 @@ try {
 } catch (e) {
   ok(false, e.message);
 } finally {
-  proc.kill("SIGKILL");
+  await srv.stop();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -33,14 +33,13 @@
 // of its own (dropped afterwards), and a served grant is also a record there.
 // Requires REDIS_URL (under CI a missing one fails).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { OUR_EVM_WALLETS } from "../src/revenue-live.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,14 +97,15 @@ const facilitator = createServer((req, res) => {
 });
 
 async function boot(extraEnv, { preload = null } = {}) {
-  const [port, facPort] = await getFreePorts(2);
-  if (!facilitator.listening) await new Promise((r) => facilitator.listen(facPort, "127.0.0.1", r));
+  if (!facilitator.listening) await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
   const fac = `http://127.0.0.1:${facilitator.address().port}`;
   const log = [];
-  const proc = spawn(process.execPath, [...(preload ? ["--import", preload] : []), join(ROOT, "src", "server.js")], {
-    cwd: ROOT,
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the paywall answering below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "first-call-allowance", args: preload ? ["--import", preload] : [], readyPath: null,
     env: {
-      ...process.env, TRUST_PROXY_HOPS: "1",
+      TRUST_PROXY_HOPS: "1",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: fac, AGENT402_BASE_RPC: `${fac}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
@@ -116,13 +116,14 @@ async function boot(extraEnv, { preload = null } = {}) {
       REFUND_DB_DIR: mkdtempSync(join(tmpdir(), "fca-refunds-")),
       HANGUP_FORGIVE_FILE: "off", STATS_ALLOW_EPHEMERAL: "true",
       LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
-      AGENT402_OPERATOR_TOKEN: OP_TOKEN, PORT: String(port), FREE_MODE: "",
+      AGENT402_OPERATOR_TOKEN: OP_TOKEN, FREE_MODE: "",
       ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  for (const l of srv.log().split("\n")) if (l.trim()) log.push(l.slice(0, 300));
   for (const st of [proc.stdout, proc.stderr]) st.on("data", (d) => { for (const l of String(d).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); if (log.length > 200) log.splice(0, log.length - 200); });
-  const B = `http://127.0.0.1:${port}`;
+  const B = srv.url;
   const quote = () => fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "hello world" }) }).catch(() => null);
   let r = null;
   for (let i = 0; i < 120; i++) { r = await quote(); if (r?.status === 402) break; await sleep(500); }
@@ -162,6 +163,20 @@ async function payCall(B, route, from, { ip, cred } = {}) {
 }
 const granted = (r) => r.headers.get("x-agent402-allowance") === "first-call";
 const opJson = async (B, path) => (await fetch(`${B}${path}`, { headers: { Authorization: `Bearer ${OP_TOKEN}` } })).json();
+// The operator view once this process's allowance counts satisfy `want`. A
+// count is written after the log line or the answer that announces it (a
+// release is counted after its awaited store call), so a read is never taken
+// on the announcement alone: it is waited for with a deadline, and the reads
+// that follow must agree with it (`steady`), so nothing more came after.
+const allowanceCounts = async (base, want, { deadlineMs = 10_000 } = {}) => {
+  const read = async () => { const st = await opJson(base, "/__operator/refunds.json"); return { st, p: st.firstCallAllowance?.processToday || {} }; };
+  const until = Date.now() + deadlineMs;
+  let cur = await read();
+  while (!want(cur.p) && Date.now() < until) { await sleep(50); cur = await read(); }
+  let steady = true;
+  for (let i = 0; i < 3; i++) { await sleep(50); const next = await read(); if (JSON.stringify(next.p) !== JSON.stringify(cur.p)) steady = false; cur = next; }
+  return { ...cur, steady, reached: want(cur.p) };
+};
 
 const redis = createClient({ url: REDIS });
 await redis.connect();
@@ -254,12 +269,13 @@ try {
   const brk = async (name, cred) => (await redis.zCard(`sl:${PREFIX}:${name}:${brkKeyOf(cred)}`)) || 0;
   const brkNaming = async () => (await redis.keys(`sl:${PREFIX}:gwb-*`)).filter((k) => k.toLowerCase().includes(wR.toLowerCase())).sort();
   const s4c = settles;
+  const served4c = (await opJson(B, "/__operator/refunds.json")).firstCallAllowance?.processToday?.served || 0;
   const r4c = await payCall(B, "radar", wR, { ip: "10.4.0.2" });
   ok(r4c.status === 200 && granted(r4c) && settles === s4c, `a wallet-only route's first call is granted (status ${r4c.status})`);
   grants++; grantUsd += 0.005;
-  await sleep(300);
+  const done4c = await allowanceCounts(B, (p) => p.served === served4c + 1);
   const named4c = await brkNaming();
-  ok(brkKeyOf(r4c.cred)?.includes(wR) && await brk("gwb-ok", r4c.cred) === 0 && await brk("gwb-fail", r4c.cred) === 0 && named4c.length === 0, `the grant is neither a settled nor a failed outcome on the breaker (windows naming the wallet: ${named4c.length})`);
+  ok(done4c.reached && done4c.steady && brkKeyOf(r4c.cred)?.includes(wR) && await brk("gwb-ok", r4c.cred) === 0 && await brk("gwb-fail", r4c.cred) === 0 && named4c.length === 0, `the grant is neither a settled nor a failed outcome on the breaker (windows naming the wallet: ${named4c.length})`);
   const r4d = await payCall(B, "radar", wR, { ip: "10.4.0.3" });
   ok(r4d.status === 200 && !granted(r4d) && settles === s4c + 1, `its second call settles (status ${r4d.status})`);
   let okN = 0;
@@ -308,11 +324,12 @@ try {
     clearTimeout(t);
     let served = false;
     for (let i = 0; i < 40 && !served; i++) { served = Bt.log.some((l) => /\[hangup\] (SETTLE WITHHELD|CHARGED-BUT-NOT-SERVED)/.test(l)); if (!served) await sleep(100); }
-    const st5 = await opJson(B, "/__operator/refunds.json");
+    const c5 = await allowanceCounts(B, (p) => p.released === (before5.released || 0) + 1);
+    const st5 = c5.st;
     ok(served && settles === sH, `a granted call whose client left before its handler was not settled (hang-up recorded ${served}, settles +${settles - sH})`);
     ok(!Bt.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")) && (st5.refunds || []).length === 0 && st5.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st5.totals?.owed?.n})`);
-    const p5 = st5.firstCallAllowance?.processToday || {};
-    ok(p5.released === (before5.released || 0) + 1 && p5.served === (before5.served || 0), `its grant was given back, not kept (${JSON.stringify(p5)})`);
+    const p5 = c5.p;
+    ok(c5.steady && p5.released === (before5.released || 0) + 1 && p5.served === (before5.served || 0), `its grant was given back, not kept, and nothing followed (${JSON.stringify(p5)}, steady ${c5.steady})`);
   }
 
   // 6. Per-address cap: a second new wallet from a granted address settles.
@@ -410,12 +427,10 @@ globalThis.fetch = async (input, init) => {
     ok(started, "the slow handler reached its upstream (the client leaves only after that)");
     ac.abort();
     await call;
-    let st = null;
-    for (let i = 0; i < 40; i++) { st = await opJson(C.B, "/__operator/refunds.json"); if (st.firstCallAllowance?.processToday?.served >= 1 || st.firstCallAllowance?.processToday?.released >= 1) break; await sleep(100); }
-    await sleep(200);
-    st = await opJson(C.B, "/__operator/refunds.json");
-    const pc = st.firstCallAllowance?.processToday || {};
-    ok(pc.served === 1 && pc.released === 0 && settles === sC, `a granted call whose client left during the handler is served unsettled (${JSON.stringify(pc)}, settles +${settles - sC})`);
+    const cC = await allowanceCounts(C.B, (p) => p.served >= 1 || p.released >= 1);
+    const st = cC.st;
+    const pc = cC.p;
+    ok(cC.steady && pc.served === 1 && pc.released === 0 && settles === sC, `a granted call whose client left during the handler is served unsettled (${JSON.stringify(pc)}, settles +${settles - sC})`);
     ok(C.log.some((l) => /\[hangup\] SETTLE WITHHELD/.test(l)) && !C.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")), "the hang-up is recorded as not charged");
     ok((st.refunds || []).length === 0 && st.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st.totals?.owed?.n})`);
 

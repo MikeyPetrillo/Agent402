@@ -327,7 +327,8 @@ export const STATS_TOOLS = [
   },
   // ---------------------------------------------------------------------------
   {
-    route: "POST /api/outliers", name: "Outlier detection (IQR + z-score)", slug: "outliers",
+    // "anomalies" is how a task often names it; a search alias, never in the 402.
+    route: "POST /api/outliers", name: "Outlier detection (IQR + z-score)", slug: "outliers", aliases: ["anomalies", "anomaly-detection"],
     category: "data", price: "$0.001",
     description:
       "Flag outliers in a numeric series using either the IQR rule (Tukey fences at 1.5·IQR - robust, default) or z-score (|z| > threshold - assumes normality). Returns the outlier values + their indices + the thresholds used so you can decide whether to trust them.",

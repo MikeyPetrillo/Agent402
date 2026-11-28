@@ -17,16 +17,14 @@
 // credential (409) or the same recovered transaction on the next run. Every
 // server here runs on in-process state whatever the calling shell exports.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { SettleError } from "@x402/core/types";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   registerFacilitatorFailureHooks,
   fallbackCandidatesFor,
@@ -319,8 +317,6 @@ await check("source: the gate reuses payment-reject's billing classifier and rea
 // Solvador's tx. The control: a Celo 5xx never reaches Solvador and the buyer
 // gets a 402 (not charged).
 await (async () => {
-  const [PORT, BASE_FAC, CELO_FAC, SV_FAC] = await getFreePorts(4);
-  const B = `http://127.0.0.1:${PORT}`;
   const CELO = "eip155:42220";
   const SV_TX = "0x" + "5e".repeat(32);
   const st = { celoSettles: 0, svSettles: 0, celoMode: "out-of-funds", svBody: null };
@@ -359,17 +355,18 @@ await (async () => {
     }
     return json(res, 404, {});
   });
-  await Promise.all([[baseFac, BASE_FAC], [celoFac, CELO_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([baseFac, celoFac, svFac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, CELO_FAC, SV_FAC] = [baseFac, celoFac, svFac].map((s) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-settle-fallback-"));
   const salesDb = join(tmp, "sales.db");
-  const env = { ...process.env };
   // Its nonces count from 1: on a Redis another suite shares, the replay
   // guard (keyed on the nonce) would keep them consumed for that suite too.
-  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "settle-fallback", readyPath: null,
     env: {
-      ...env, PORT: String(PORT), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -379,10 +376,12 @@ await (async () => {
       PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: salesDb,
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   const log = [];
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  keep(srv.log());
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let nonce = 0;
@@ -467,8 +466,6 @@ await (async () => {
 // the failure hook as a new SettleError), and nothing is settled after an
 // ambiguous failure. SETTLE_DEMOTE_AFTER=1 demotes Celo on its first refusal.
 await (async () => {
-  const [PORT, BASE_FAC, CELO_FAC, SV_FAC] = await getFreePorts(4);
-  const B = `http://127.0.0.1:${PORT}`;
   const CELO = "eip155:42220";
   const OP = "settle-demotion-wiring-operator-token-0123456789";
   const SV_TX = "0x" + "5f".repeat(32);
@@ -502,14 +499,15 @@ await (async () => {
     }
     return json(res, 404, {});
   });
-  await Promise.all([[baseFac, BASE_FAC], [celoFac, CELO_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([baseFac, celoFac, svFac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, CELO_FAC, SV_FAC] = [baseFac, celoFac, svFac].map((s) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-settle-demotion-"));
-  const env = { ...process.env };
-  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "settle-fallback", readyPath: null,
     env: {
-      ...env, PORT: String(PORT), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -520,10 +518,12 @@ await (async () => {
       AGENT402_OPERATOR_TOKEN: OP, SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp,
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   const log = [];
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  keep(srv.log());
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let nonce = 0;
@@ -592,8 +592,6 @@ await (async () => {
 // pending answer is never proven, so it is counted fallbackSettled and is not
 // forgiven (no retrySettled, no forgivenPending).
 await (async () => {
-  const [PORT, BASE_FAC, CELO_FAC, SV_FAC] = await getFreePorts(4);
-  const B = `http://127.0.0.1:${PORT}`;
   const CELO = "eip155:42220";
   const OP = "pending-fallback-operator-token-0123456789abcdef";
   const PEND_TX = "0x" + "7a".repeat(32);
@@ -629,14 +627,15 @@ await (async () => {
     if (req.url === "/settle") { st.celo++; return json(res, 200, { success: true, transaction: CELO_TX, network: CELO, payer: payerOf(body) }); }
     return json(res, 404, {});
   });
-  await Promise.all([[baseFac, BASE_FAC], [celoFac, CELO_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([baseFac, celoFac, svFac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, CELO_FAC, SV_FAC] = [baseFac, celoFac, svFac].map((s) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-pending-fallback-"));
-  const env = { ...process.env };
-  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "settle-fallback", readyPath: null,
     env: {
-      ...env, PORT: String(PORT), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -648,10 +647,12 @@ await (async () => {
       AGENT402_OPERATOR_TOKEN: OP, SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, LATE_SETTLE_FILE: join(tmp, "late.json"),
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   const log = [];
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  keep(srv.log());
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const credential = (accepted) => Buffer.from(JSON.stringify({
@@ -700,8 +701,6 @@ await (async () => {
 // unrecovered 402 carries the same explanation.
 await (async () => {
   const { createHash } = await import("node:crypto");
-  const [PORT, BASE_FAC, SV_FAC] = await getFreePorts(3);
-  const B = `http://127.0.0.1:${PORT}`;
   const BASE = "eip155:8453";
   const OP = "fallback-pending-read-operator-token-0123456789";
   const PENDING_MSG = "transaction did not confirm in time: context deadline exceeded";
@@ -766,15 +765,16 @@ await (async () => {
     }
     return json(res, 404, {});
   });
-  await Promise.all([[baseFac, BASE_FAC], [svFac, SV_FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([baseFac, svFac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, SV_FAC] = [baseFac, svFac].map((s) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-fallback-pending-read-"));
   const LATE = join(tmp, "late.json");
-  const env = { ...process.env };
-  delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "settle-fallback", readyPath: null,
     env: {
-      ...env, PORT: String(PORT), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/evm-rpc`, EVM_RPC_8453: `http://127.0.0.1:${BASE_FAC}/evm-rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -784,10 +784,12 @@ await (async () => {
       AGENT402_OPERATOR_TOKEN: OP, SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, STATS_ALLOW_EPHEMERAL: "true",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   const log = [];
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  keep(srv.log());
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let n = 0;
@@ -999,8 +1001,6 @@ await check("robinhood: a revert reaches only the listed fallbacks; a pre-broadc
 // The buyer pays exactly as before and gets a 200 settled by the second. The
 // control: an ambiguous failure at the first never reaches the second.
 await (async () => {
-  const [PORT, BASE_FAC, RH1, RH2, RH3] = await getFreePorts(5);
-  const B = `http://127.0.0.1:${PORT}`;
   const RH2_TX = "0x" + "4b".repeat(32);
   const st = { rh1: 0, rh2: 0, rh3: 0, rh1Mode: "revert", rh2Body: null };
   const json = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
@@ -1036,14 +1036,15 @@ await (async () => {
     if (req.url === "/settle") { st.rh3++; return json(res, 200, { success: true, transaction: "0x" + "3c".repeat(32), network: RH }); }
     return json(res, 404, {});
   });
-  await Promise.all([[baseFac, BASE_FAC], [rh1, RH1], [rh2, RH2], [rh3, RH3]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([baseFac, rh1, rh2, rh3].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, RH1, RH2, RH3] = [baseFac, rh1, rh2, rh3].map((s) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-rh-fallback-"));
-  const env = { ...process.env };
-  delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Port 0, read back: the port is the one the server bound (scripts/lib/boot-server.js).
+  // Ready is the health poll below, so the helper waits for the listening line only.
+  const srv = await bootServer({
+    stores: "settle-fallback", readyPath: null,
     env: {
-      ...env, PORT: String(PORT), FREE_MODE: "",
+      STATE_DATABASE_URL: "", REDIS_URL: "", SOLVADOR_KEY: "", FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -1053,10 +1054,12 @@ await (async () => {
       FACILITATOR_GAS_CHECK: "off",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
+  const proc = srv.child;
+  const B = srv.url;
   const log = [];
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 200) log.splice(0, log.length - 200); };
+  keep(srv.log());
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let nonce = 0;

@@ -52,10 +52,13 @@ export function stallsInWindow(windowMs = 3600_000, now = Date.now()) {
 // their ages, background jobs), newest last, for the operator reads and the
 // serving-health culprit names. Route keys are already value-free.
 const STALL_RING = 50;
+// The named turns a stall keeps: the three longest (turnsDuring) and the
+// `gc-marking` name after them, so the marking is never the one cut.
+const STALL_TURNS = 4;
 const stallRing = [];
 /** Record one stall (the monitor calls this; tests feed it directly). */
 export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [], turns = [] } = {}) {
-  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String), turns: [...turns].slice(0, 3).map(String) };
+  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String), turns: [...turns].slice(0, STALL_TURNS).map(String) };
   row.mostlyGc = gcDominated(row);
   stallTimes.push([at, row.ms]); if (stallTimes.length > 1000) stallTimes.shift();
   stallRing.push(row); if (stallRing.length > STALL_RING) stallRing.shift();
@@ -150,6 +153,27 @@ export function gcDuring(fromMs, toMs) {
   }
   return { ms: Math.round(ms), majorMs: Math.round(majorMs), count };
 }
+// MARKING. The pauses above are the ones the runtime reports. While a full
+// collection marks (from its start, reported as an entry of the incremental
+// kind, to the pause that ends it) the runtime also does marking work on this
+// thread inside whichever turn allocates, in steps of a few milliseconds one
+// after another, and reports none of it: on a heap of gigabytes a turn of a
+// few milliseconds of our code reads as a block of hundreds, with "gc: none"
+// and no turn long enough to be named. A stall that overlaps such a window
+// says so (`gc-marking` among its turns), so no block is left with no name.
+const GC_INCREMENTAL = perfConstants?.NODE_PERFORMANCE_GC_INCREMENTAL ?? 8;
+/** Whether a full collection was marking at some point in [fromMs, toMs] (epoch ms). */
+export function markingDuring(fromMs, toMs) {
+  for (let i = 0; i < gcEntries.length; i++) {
+    const [at, , kind] = gcEntries[i];
+    if (kind !== GC_INCREMENTAL || at > toMs) continue;
+    // The pause that ended this marking: the first major entry after its start.
+    let endedAt = Infinity;
+    for (let j = i + 1; j < gcEntries.length; j++) if (gcEntries[j][2] === GC_MAJOR && gcEntries[j][0] >= at) { endedAt = gcEntries[j][0] + gcEntries[j][1]; break; }
+    if (endedAt >= fromMs) return true;
+  }
+  return false;
+}
 /** The stall line's attribution phrase: how much of a `late` ms block was GC. */
 export function gcPhrase(late, now = Date.now()) {
   const g = gcDuring(now - late - 50, now);
@@ -234,6 +258,7 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
       try { const c = stallContext ? stallContext({ fromMs: now - late - 50 }) : null; if (Array.isArray(c)) inFlight = c; } catch { /* context is best-effort */ }
       try { jobs = jobsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
       try { turns = turnsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
+      try { if (markingDuring(now - late - 50, now)) turns = [...turns, "gc-marking"]; } catch { /* attribution is best-effort */ }
       let gc = "";
       try { gc = gcPhrase(late, now); gcMs = gcDuring(now - late - 50, now).ms; } catch { /* attribution is best-effort */ }
       try { recordStall({ at: now, ms: late, gcMs, inFlight, jobs, turns }); } catch { stallTimes.push([now, Math.round(late)]); }

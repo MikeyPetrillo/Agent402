@@ -24,6 +24,7 @@ import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
+import { servedChangelogText } from "./lib/changelog-text.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -247,7 +248,7 @@ try {
     ok(llms.includes("prove that wallet in the `X-Agent402-Wallet-Proof` header as `<unix seconds>.<signature>`: the wallet's EIP-191 (personal_sign) signature over five lines separated by single line feeds (none after the last): `Agent402 returning-wallet price`, `host: <this server's host name>`, `route: <METHOD> <path>`, `wallet: <the address in lowercase>` and `time: <the same seconds>`, within 5 minutes of the server's clock"), "and how a request proves the wallet, in the exact words of the message it signs");
     const short = await fetch(`${B}/llms.txt`).then((r) => r.text());
     ok(!/X-Agent402-Wallet/.test(short), "CONTROL the rule is on llms-full.txt, not on llms.txt");
-    const notes = (await fetch(`${B}/changelog`).then((r) => r.text())).replace(/\s+/g, " ");
+    const notes = (await servedChangelogText(B)).replace(/\s+/g, " "); // the page and its archive
     ok(/\/llms-full\.txt states the rule/.test(notes) && !/\/llms\.txt states the rule/.test(notes), "the release notes name the document that carries the rule");
     const api = await fetch(`${B}/openapi.json`).then((r) => r.json());
     const headersOf = (path) => (api.paths?.[path]?.post?.parameters || []).filter((p) => p.in === "header").map((p) => p.name);

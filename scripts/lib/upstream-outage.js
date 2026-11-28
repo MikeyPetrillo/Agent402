@@ -100,11 +100,14 @@ export function accessRefusalStatus(status, body) {
 /** The statuses the failure-log preload records besides 500 and above. */
 export const ACCESS_STATUSES = new Set([401, 403, 429]);
 
+const PACK_RUNNER_FILE = "skill-runner.js";
 let kitTexts = null;
 function kits(root) {
   if (!kitTexts || kitTexts.root !== root) {
     const dir = join(root, "src", "tools");
-    kitTexts = { root, files: readdirSync(dir).filter((f) => f.endsWith(".js")).map((f) => readFileSync(join(dir, f), "utf8")) };
+    // The pack runner defines no tool: it names tools as steps, and a pack's
+    // own host list there is read by packUpstreamHosts, never as a tool's.
+    kitTexts = { root, files: readdirSync(dir).filter((f) => f.endsWith(".js") && f !== PACK_RUNNER_FILE).map((f) => readFileSync(join(dir, f), "utf8")) };
   }
   return kitTexts.files;
 }
@@ -373,7 +376,7 @@ export async function sourceAllowanceVerdict({ slug, error, read = directReadAns
   if (!a.refuses(status, text)) return { verdict: "fail", reason: `${slug} answered ${a.source}'s refusal or spent allowance, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
   let said = "";
   try { said = status === 200 ? `, status ${String(JSON.parse(text)?.status).slice(0, 40)}` : ""; } catch { /* the HTTP status is the evidence */ }
-  return { verdict: "upstream", evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
+  return { verdict: "upstream", hosts: [a.host], evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
 }
 
 // A HOLLOW EXAMPLE IS OURS UNLESS THE UPSTREAM IS HOLLOW FOR THE RUNNER TOO.
@@ -451,9 +454,84 @@ export async function declaredSourceVerdict({ slug, read = directReadAnswer, roo
     if (reads[h].refuses(status, text)) {
       let said = "";
       try { const j = status === 200 ? JSON.parse(text) : null; said = j && !Array.isArray(j) && j.status ? `, status ${String(j.status).slice(0, 40)}` : (Array.isArray(j) && !j.length ? ", an empty list" : ""); } catch { said = status === 200 ? ", not JSON" : ""; }
-      return { verdict: "upstream", evidence: `${slug} declares ${h}, which refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
+      return { verdict: "upstream", hosts: [h], evidence: `${slug} declares ${h}, which refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
     }
     seen.push(`${h} HTTP ${status}`);
   }
   return { verdict: "fail", reason: `${slug}'s declared source answers the runner's direct read (${seen.join(", ")})` };
+}
+
+// A SKILL PACK'S FAILURE IS ITS STEPS'. A pack runs other catalog tools (its
+// steps) in process. When none of them succeeds it answers a 502 that names
+// each failed step, in its message and in fields (src/tools/skill-runner.js,
+// src/tool-error-fields.js packFailureOf): `pack` and `failedSteps`, each
+// step with its slug, status and message. A step whose input was mapped from
+// the output of earlier steps that had failed (`after`) is `blocked` (the
+// input could not be built; its handler was never called) or `starved` (the
+// handler was called with what could be built). That answer is excused only
+// when ALL of these hold, and fails otherwise:
+//
+//   1. it carries those fields for the pack that was called;
+//   2. every failed step that ran is excused by a rule above for a single
+//      tool, read from the step's own answer: its tool declares sources the
+//      runner reads for itself (declaredSourceVerdict), or it answered a
+//      source's fixed sentence (sourceAllowanceVerdict), and the runner's own
+//      direct read of that source is refused too;
+//   3. the host so read is one the PACK declares (a literal `upstreamHosts`
+//      in its entry in src/tools/skill-runner.js);
+//   4. at least one step is excused that way, and every other failed step
+//      had its input mapped from an excused step's missing output, directly
+//      or through another such step: it never ran (`blocked`), or it ran and
+//      refused that input as input (`starved` with a 4xx). A starved step
+//      that answered 500 or above is judged like any step that ran.
+//
+// A step that failed for any other reason (a tool with no declared source, an
+// error of ours, a source that answers the runner) fails the pack, whatever
+// the other steps say.
+/** The hosts a pack declares, read from its entry in the pack runner. */
+export function packUpstreamHosts(pack, root = ROOT) {
+  let text = "";
+  try { text = readFileSync(join(root, "src", "tools", PACK_RUNNER_FILE), "utf8"); } catch { return new Set(); }
+  const at = text.indexOf(`\n  ${JSON.stringify(String(pack))}: {`);
+  if (at < 0) return new Set();
+  const steps = text.indexOf("steps:", at);
+  const declared = DECLARED_HOSTS.exec(text.slice(at, steps < 0 ? at + 400 : steps));
+  return declared && declared[1] != null ? hostsIn(declared[1]) : new Set();
+}
+/** The verdict on a pack's all-steps-failed answer: null when the answer is
+ *  not one (the caller grades it by its other rules), else
+ *  { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function packOutageVerdict({ pack, status, body, read = directReadAnswer, root = ROOT }) {
+  const steps = body?.failedSteps;
+  if (![502, 503, 504].includes(status) || typeof body?.pack !== "string" || !Array.isArray(steps) || !steps.length) return null;
+  if (body.pack !== pack) return { verdict: "fail", reason: `the answer names the pack ${String(body.pack).slice(0, 40)}, not ${pack}` };
+  const declared = packUpstreamHosts(pack, root);
+  if (!declared.size) return { verdict: "fail", reason: `the pack ${pack} declares no upstream host` };
+  const evidence = [];
+  // The steps judged on their own answer first: every one that is not fed by
+  // a failed step, and a starved one that did not answer a 4xx.
+  const fed = (s) => s?.blocked === true || (s?.starved === true && Number(s?.statusCode) >= 400 && Number(s?.statusCode) < 500);
+  const excusedKeys = new Set();
+  for (const s of steps) {
+    const slug = String(s?.slug || "");
+    if (fed(s)) continue;
+    const v = (await declaredSourceVerdict({ slug, read, root })) || (await sourceAllowanceVerdict({ slug, error: s?.error, read, root }));
+    if (!v) return { verdict: "fail", reason: `step ${slug} failed for a reason that is no declared source's refusal (ours): ${String(s?.error || "").slice(0, 120)}` };
+    if (v.verdict !== "upstream") return { verdict: "fail", reason: `step ${slug}: ${v.reason}` };
+    const undeclared = (v.hosts || []).filter((h) => !declared.has(h));
+    if (!v.hosts?.length || undeclared.length) return { verdict: "fail", reason: `step ${slug} read ${undeclared.join(", ") || "a host"} the pack ${pack} does not declare` };
+    evidence.push(`${slug}: ${v.evidence}`);
+    excusedKeys.add(String(s?.as || slug));
+  }
+  if (!evidence.length) return { verdict: "fail", reason: "no failed step was judged on its own answer: nothing to read the source against" };
+  // A fed step is the source's only when what it lacked is an excused step's
+  // output, or the output of a fed step already accepted (in chain order).
+  for (const s of steps) {
+    if (!fed(s)) continue;
+    const after = Array.isArray(s.after) ? s.after.map(String) : [];
+    if (!after.length || !after.every((k) => excusedKeys.has(k))) return { verdict: "fail", reason: `step ${String(s?.slug)} was fed by no step whose failure is its source's (after: ${after.join(", ") || "none"})` };
+    excusedKeys.add(String(s?.as || s?.slug));
+  }
+  const rest = steps.filter(fed).map((s) => s.slug);
+  return { verdict: "upstream", evidence: `every step judged on its own answer failed on its source's side (${evidence.join("; ")})${rest.length ? `; fed by them and not served: ${[...new Set(rest)].join(", ")}` : ""}` };
 }

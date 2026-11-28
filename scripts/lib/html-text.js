@@ -18,6 +18,24 @@ export function stripScripts(html, sep = " ") {
   return s;
 }
 
+/** Drop each named element with its contents (any letter case, a closing tag
+ *  with whitespace or attributes), repeating until nothing changes; `keep(m)`
+ *  may return true to leave one matched element in place. */
+export function stripElements(html, tags, sep = " ", keep = () => false) {
+  let s = String(html ?? "");
+  let prev;
+  do {
+    prev = s;
+    for (const t of tags) s = s.replace(new RegExp(`<${t}\\b[^>]*>[\\s\\S]*?<\\/${t}\\b[^>]*>`, "gi"), (m) => (keep(m) ? m : sep));
+  } while (s !== prev);
+  return s;
+}
+
+/** The bodies of the page's JSON-LD blocks, as text. */
+export function jsonLdBlocks(html) {
+  return [...String(html ?? "").matchAll(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => m[1]);
+}
+
 /** Drop every tag, keeping the text between them. */
 export function stripTags(html, sep = " ") {
   let s = String(html ?? "");

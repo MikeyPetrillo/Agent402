@@ -33,7 +33,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**security-audit**](https://agent402.tools/skills/security-audit) | $0.012 | Enumerate a domain's external attack surface: certs, DNS posture, email auth, HTTP headers, tech stack. |
 | [**email-deliverability**](https://agent402.tools/skills/email-deliverability) | $0.008 | Diagnose why a domain's email lands in spam: SPF, DMARC, DKIM strength, MX, composite score. |
 | [**fraud-signals**](https://agent402.tools/skills/fraud-signals) | $0.01 | Is this domain a phishing site / typosquat / scam? Pull the reputation signals before you click. |
-| [**domain-intel**](https://agent402.tools/skills/domain-intel) | $0.008 | Full domain security + SEO intel: WHOIS, DNS, TLS, headers, tech stack, robots, certificate transparency. |
+| [**domain-intel**](https://agent402.tools/skills/domain-intel) | $0.008 | Full domain security + SEO intel: WHOIS, DNS, TLS, headers, tech stack, robots. |
 | [**ssl-audit**](https://agent402.tools/skills/ssl-audit) | $0.005 | TLS/SSL posture: live certificate inspection, HTTP security headers, and CAA DNS records. |
 | [**email-security**](https://agent402.tools/skills/email-security) | $0.006 | Full email auth posture: SPF, DMARC, DKIM, and a composite deliverability score. |
 | [**brand-protection**](https://agent402.tools/skills/brand-protection) | $0.014 | Is this domain legitimate? WHOIS age, DNS, scam/phishing search, and HTTP headers for a trust read. |
@@ -106,8 +106,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**market-brief**](https://agent402.tools/skills/market-brief) | $0.005 | Quick crypto snapshot: price for a coin, trending coins, and global market stats in one call. |
-| [**crypto-research**](https://agent402.tools/skills/crypto-research) | $0.031 | Live price, market structure, OHLC history, trending status, global context, and news for a coin. |
-| [**crypto-dossier**](https://agent402.tools/skills/crypto-dossier) | $0.028 | Everything about a coin: live price, 90-day history, trending status, market context, news + top article. |
+| [**crypto-research**](https://agent402.tools/skills/crypto-research) | $0.031 | Live price, market structure, look-back return and risk statistics, trending status, global context, and news for a coin. |
+| [**crypto-dossier**](https://agent402.tools/skills/crypto-dossier) | $0.028 | Everything about a coin: live price, 90-day return and risk statistics, trending status, market context, news + top article. |
 | [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.02 | Due-diligence a DeFi protocol: live token price, market context, the token's supply and valuation profile, and recent news. |
 | [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.009 | DeFi overview: DeFi market cap and dominance, ETH price, Base gas, and global crypto stats. |
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |

@@ -1048,6 +1048,7 @@ jobs:
           CDP_KEY_SECRET: ""
           MPP_SECRET_KEY: ""
           INDEXNOW_KEY: ""
+          MCP_REGISTRY_PRIVATE_KEY: ""
         run: |
           node adapters/eliza/test-runtime.js
           ELIZA_CORE_VERSION=beta node adapters/eliza/test-runtime.js
@@ -1835,7 +1836,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b3 1
 
       - name: Tool-count sync (static surfaces match the live catalog total — no count drift)
@@ -3290,6 +3291,9 @@ jobs:
       - name: Phone and touch checks (pricing badge, no-match search line, 24 px arrow links, reports h1 on the scale, status strip by tap; real browser)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
 
+      - name: Phone path release check (375 px, real browser, its own port-0 boot and two drifted proxies; scripts/phone-path-check.js)
+        run: node scripts/test-phone-path-check.js
+
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
 
@@ -3705,6 +3709,7 @@ jobs:
           CDP_KEY_SECRET: ""
           MPP_SECRET_KEY: ""
           INDEXNOW_KEY: ""
+          MCP_REGISTRY_PRIVATE_KEY: ""
         run: node scripts/test-package-audit.js
       - name: MCP package gate (pack → install the tarball → real initialize handshake)
         # mcp/test.js runs from the working tree, so a module missing from
@@ -3844,7 +3849,7 @@ jobs:
       )
       && needs.publish-gate.result == 'success'
     runs-on: ubuntu-24.04
-    # Recent runs on main took up to 6 minutes; the registry wait loops below sum to about 20.
+    # Recent runs on main took up to 6 minutes; the npm wait loop below is bounded at 15.
     timeout-minutes: 45
     # F01: publishing packages mutates a production artifact — gate it behind the
     # same protected environment as deploy (see the deploy job comment).
@@ -3858,14 +3863,15 @@ jobs:
     # working tree, no published package declares a prepack/prepare/
     # prepublishOnly script (test-supply-chain-guards pins the install hooks),
     # `npm view` is registry-only, the version reads are `node -p` on a JSON
-    # file, and scripts/mcp-find-latest-version.js imports nothing. The two
-    # third-party executables that DO run here are a checksum-verified
-    # mcp-publisher binary and `npx` of a pinned ClawHub CLI with lifecycle
-    # scripts disabled (see that step). Adding an install here re-opens the
-    # hole this split closes.
+    # file, and scripts/registry-proof-check.js imports one module of ours
+    # that imports nothing. The one third-party executable that DOES run here
+    # is `npx` of a pinned ClawHub CLI with lifecycle scripts disabled (see
+    # that step). Adding an install here re-opens the hole this split closes.
+    # The MCP Registry release is its own job, publish-registry, after the
+    # deploy: the registry grants our name on a proof the deployed site serves.
     permissions:
       contents: read
-      id-token: write   # GitHub OIDC → authorize the io.github.mikeypetrillo/* MCP Registry namespace
+      id-token: write   # GitHub OIDC: npm trusted publishing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3938,8 +3944,7 @@ jobs:
               # sed -i leaves $NPMRC.bak holding the ORIGINAL auth line. Empty
               # today, but it would hold a real token under the documented
               # NODE_AUTH_TOKEN rollback - and this job still runs a pinned
-              # third-party CLI (ClawHub) and a downloaded publisher binary
-              # after this step. Delete it.
+              # third-party CLI (ClawHub) after this step. Delete it.
               rm -f "$NPMRC.bak"
               echo "--- npmrc after ---"; sed -E 's/(=).*/\1<redacted>/' "$NPMRC"
             else
@@ -4016,14 +4021,22 @@ jobs:
               fi
               # A successful exchange body is {"token":"npm_..."} - a live
               # short-lived publish credential. The gates moved to publish-gate,
-              # but later steps in THIS job still execute third-party code (the
-              # ClawHub CLI, the mcp-publisher binary), so the response must
-              # not outlive the probe.
+              # but a later step in THIS job still executes third-party code
+              # (the ClawHub CLI), so the response must not outlive the probe.
               rm -f /tmp/oidc-out.txt
             else
               echo "could not mint a GitHub OIDC token for the npm audience"
             fi
           fi
+
+      # The MCP Registry release (publish-registry, after the deploy) logs in
+      # on the proof production serves. This reads it before anything goes to
+      # npm and only reports: the build that serves the proof may be the one
+      # this run is about to deploy, and the deploy waits on this job, so
+      # nothing here may depend on it. publish-registry reads it again after
+      # the deploy and decides there.
+      - name: Registry namespace proof on production (reported, never decides here)
+        run: node scripts/registry-proof-check.js --warn https://agent402.tools || true
 
       - name: Publish agent402-mcp to npm
         run: |
@@ -4038,9 +4051,10 @@ jobs:
           echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
       - name: Verify the public npx path resolves
         run: |
-          # Wait for THIS version, not any version: the MCP Registry step below
-          # validates the exact version against npm and refuses it until npm
-          # serves it (measured: up to ~9 min after publish).
+          # Wait for THIS version, not any version: the deploy that follows
+          # ships install lines naming it, and the MCP Registry release after
+          # that validates the exact version against npm (measured: up to
+          # ~9 min after publish).
           VERSION=$(node -p "require('./mcp/package.json').version")
           for i in $(seq 1 60); do
             npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1 && { echo "agent402-mcp@$VERSION visible on npm ✓"; exit 0; }
@@ -4224,122 +4238,6 @@ jobs:
             echo "published $PKG@$VERSION -> https://www.npmjs.com/package/$PKG"
           done
 
-      - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
-        env:
-          # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
-          # unset to track the latest. Optionally hard-pin the exact tarball
-          # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
-          MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
-          MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
-          # api.github.com reads (the latest tag, the release's asset names) go
-          # out under the job's own token: an unauthenticated read shares the
-          # runner pool's rate limit and is refused 403 when it is spent. The
-          # job's contents: read covers a public release. Only api.github.com
-          # gets the header; the github.com downloads stay plain.
-          GH_API_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh_api() { curl -fsSL -H "Authorization: Bearer $GH_API_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
-          # The registry verifies ownership by matching mcp/package.json's
-          # "mcpName" to the server.json name and confirming the npm package is
-          # published — so this runs after the npm publish above.
-          VER=$(node -p "require('./mcp/package.json').version")
-          SERVER_NAME=io.github.MikeyPetrillo/agent402
-          # Every page of the registry's entries for our name, one compact JSON
-          # document per line (at most five pages; a failed read ends the walk).
-          : > registry-pages.jsonl
-          cursor=""
-          for page in 1 2 3 4 5; do
-            q="search=$SERVER_NAME&limit=100"
-            [ -z "$cursor" ] || q="$q&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
-            body=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?$q") || break
-            printf '%s' "$body" | jq -c . >> registry-pages.jsonl 2>/dev/null || break
-            cursor=$(printf '%s' "$body" | jq -r '.metadata.nextCursor // empty' 2>/dev/null || true)
-            [ -n "$cursor" ] || break
-          done
-          if node -e 'const [n, v] = process.argv.slice(1); const rows = require("fs").readFileSync("registry-pages.jsonl", "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return JSON.parse(l).servers || []; } catch { return []; } }); process.exit(rows.some((r) => r?.server?.name === n && r?.server?.version === v) ? 0 : 1)' "$SERVER_NAME" "$VER"; then
-            echo "$SERVER_NAME@$VER already in the MCP Registry: nothing to do"; exit 0
-          fi
-          # Capture whichever version is isLatest RIGHT NOW - it's about to
-          # become stale the moment the new publish below lands - and every
-          # older version still "active" (deprecation tooling gap found
-          # 2026-08-16: 24 of 25 published versions were still active, and
-          # 26 still were on 2026-11-20). Our name only: a search also returns
-          # other publishers' similar names. Best-effort: a lookup failure
-          # leaves both empty and the deprecations below just skip.
-          PREV_LATEST=$(node scripts/mcp-find-latest-version.js --name "$SERVER_NAME" < registry-pages.jsonl || true)
-          SUPERSEDED=$(node scripts/mcp-find-latest-version.js --superseded --name "$SERVER_NAME" --except "$VER" < registry-pages.jsonl || true)
-          asset="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
-          if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
-          # Download to disk and fail fast (no curl|tar of unverified bytes).
-          curl -fsSL -o "$asset" "$base/$asset"
-          # Verify the binary before executing it. Fail CLOSED: require either a
-          # hard-pinned digest (MCP_PUBLISHER_SHA256 repo var) or the release's
-          # published checksums.txt — never run an unverified download.
-          verified=""
-          if [ -n "${MCP_PUBLISHER_SHA256:-}" ]; then
-            echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c - && verified=1
-          fi
-          if [ -z "$verified" ]; then
-            # As of registry v1.7.0+ the checksums file is versioned —
-            # registry_<ver>_checksums.txt — instead of a flat checksums.txt.
-            # Resolve the actual filename from the GitHub release API rather
-            # than guessing, then verify with sha256sum.
-            tag_path="${MCP_PUBLISHER_VERSION:-}"
-            if [ -z "$tag_path" ]; then
-              tag_path=$(gh_api "https://api.github.com/repos/modelcontextprotocol/registry/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
-            fi
-            checksums_name=$(gh_api "https://api.github.com/repos/modelcontextprotocol/registry/releases/tags/$tag_path" \
-              | grep -oP '"name":\s*"\K[^"]*_checksums\.txt(?=")' | head -1)
-            if [ -n "$checksums_name" ]; then
-              curl -fsSL -o "$checksums_name" "https://github.com/modelcontextprotocol/registry/releases/download/$tag_path/$checksums_name" 2>/dev/null || true
-              if [ -s "$checksums_name" ] && grep -q " $asset\$" "$checksums_name"; then
-                grep " $asset\$" "$checksums_name" | sha256sum -c - && verified=1
-              fi
-            fi
-            # Legacy fallback: pre-v1.7.0 releases used a flat checksums.txt.
-            if [ -z "$verified" ]; then
-              curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
-              if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
-                grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
-              fi
-            fi
-          fi
-          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums file) — refusing to execute"; exit 1; }
-          tar -xzf "$asset" mcp-publisher
-          cd mcp
-          ../mcp-publisher login github-oidc
-          # The registry validates the npm version EXISTS before it registers
-          # it, and npm takes ~a minute to serve a version it just accepted
-          # (0.13.1: published 01:49:00, visible 01:49:54, registry 400
-          # "version '0.13.1' was not found (status: 404)" at 01:49:18, run
-          # 34073854085). Retry only that propagation 404, never any other
-          # refusal, for up to ~3 minutes.
-          for attempt in 1 2 3 4 5 6 7 8 9; do
-            if out=$(../mcp-publisher publish 2>&1); then printf '%s\n' "$out"; break; fi
-            printf '%s\n' "$out"
-            if [ "$attempt" = 9 ] || ! printf '%s' "$out" | grep -q "was not found (status: 404)"; then
-              echo "::error::registry publish failed (attempt $attempt)"; exit 1
-            fi
-            echo "npm has not served $VER yet (attempt $attempt) - waiting 20s"; sleep 20
-          done
-          echo "published io.github.mikeypetrillo/agent402@$VER → https://registry.modelcontextprotocol.io"
-          # Deprecate every version this publish leaves behind: the one it just
-          # superseded and every older one still active, so the registry lists
-          # one current version. Status only (never a rewrite of an entry), at
-          # most 60 a run, and never fails the job: a registry hiccup here is a
-          # missed housekeeping step, not a publish failure.
-          deprecated=0
-          for old in $(printf '%s\n%s\n' "$PREV_LATEST" "$SUPERSEDED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -u -V | head -60); do
-            [ "$old" != "$VER" ] || continue
-            if ../mcp-publisher status --status deprecated --message "Superseded by $VER" "$SERVER_NAME" "$old"; then
-              deprecated=$((deprecated + 1))
-            else
-              echo "::warning::failed to deprecate superseded version $old (non-fatal)"
-            fi
-          done
-          echo "deprecated $deprecated superseded version(s)"
-
       # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
       # clawhub:agent402-model-provider`); their docs keep no static third-party
       # catalog, so this release is the listing. Token-authenticated (repo secret
@@ -4348,8 +4246,7 @@ jobs:
       # in the runner home). Idempotent: an already-published version is skipped,
       # never re-uploaded. A missing token skips loudly instead of failing the
       # npm publish that already happened. It runs last in the job, so a
-      # refusal on ClawHub's side never holds back the npm and MCP Registry
-      # releases above.
+      # refusal on ClawHub's side never holds back the npm releases above.
       #
       # This is the one `npx` in the id-token job. The CLI's pinned tree
       # (47 packages, measured 2026-09-03) carries no preinstall/install/
@@ -4360,7 +4257,7 @@ jobs:
       # run, beside the OIDC credential. The CLI itself still runs (verified:
       # `--help` under NPM_CONFIG_IGNORE_SCRIPTS=true).
       # A ClawHub refusal never holds production: the deploy job waits on this
-      # job, and the install lines it ships need only npm and the MCP Registry.
+      # job, and the install lines it ships need only npm.
       # So this step alone continues on error, and the next one warns.
       - name: Publish agent402-model-provider to ClawHub
         id: clawhub
@@ -4384,9 +4281,9 @@ jobs:
           REASON: ${{ steps.clawhub.outputs.reason }}
         run: |
           if [ "$REASON" = "plugin-id-claimed" ]; then
-            echo "::warning::The ClawHub release did not go through: the plugin id is claimed by a superseded package in this publisher namespace. npm and the MCP Registry are published. Soft-delete or transfer the superseded package on ClawHub, then re-run the publish job."
+            echo "::warning::The ClawHub release did not go through: the plugin id is claimed by a superseded package in this publisher namespace. The npm releases are published. Soft-delete or transfer the superseded package on ClawHub, then re-run the publish job."
           else
-            echo "::warning::The ClawHub release did not go through; npm and the MCP Registry are published. Re-run the ClawHub release by hand."
+            echo "::warning::The ClawHub release did not go through; the npm releases are published. Re-run the ClawHub release by hand."
           fi
 
   probe:
@@ -5543,6 +5440,28 @@ jobs:
       # version resolves (scripts/mcp-pin-resolves.js waits up to 20 minutes);
       # a version that never does fails the job, an unreadable registry is a
       # warning.
+      # The MCP Registry release that follows this job (publish-registry) logs
+      # in on the proof this build serves while MCP_REGISTRY_AUTH_PROOF is set.
+      # Read here the way the registry reads it, so an absent proof is on the
+      # deploy's own page before that job runs. A warning only: the deploy has
+      # shipped and does not depend on it.
+      - name: Registry namespace proof on the new build (warning only)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: node scripts/registry-proof-check.js --warn --tries 3 --wait-ms 10000 https://agent402.tools
+
       - name: Pinned agent402-mcp version resolves on npm
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         timeout-minutes: 25
@@ -5622,6 +5541,225 @@ jobs:
   # by hand is released as it is). The job's token can write the tree's tags
   # and releases and nothing else; it installs no packages
   # (scripts/github-release.js imports node: only; scripts/test-github-release.js).
+  publish-registry:
+    # The MCP Registry release, after the deploy. The registry grants the name
+    # tools.agent402/agent402 to whoever signs with the key whose public half
+    # https://agent402.tools/.well-known/mcp-registry-auth serves, so the login
+    # needs the deployed site; and it lists an npm version only once npm
+    # serves it with a matching mcpName, so it needs the publish job. The
+    # deploy does not wait on this job: a refusal here never holds, fails or
+    # rolls back the deploy, and the npm releases stand (an install reads no
+    # registry name). Re-running this job alone is safe: a version already
+    # listed is skipped. A publish dispatch deploys nothing, so there the
+    # proof read alone decides.
+    needs: [publish, deploy]
+    if: >-
+      !cancelled()
+      && needs.publish.result == 'success'
+      && ( needs.deploy.result == 'success' || ( github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' && needs.deploy.result == 'skipped' ) )
+    runs-on: ubuntu-24.04
+    # Its own waits (the proof read, the npm propagation retry) sum to about 5 minutes.
+    timeout-minutes: 30
+    # The registry key is a secret of this environment, MCP_REGISTRY_PRIVATE_KEY
+    # (the Ed25519 private key as 64 hex characters), read by the one step that
+    # logs in. No id-token here: the npm publish credential stays in the
+    # publish job alone. Like that job, this one installs nothing: no `npm ci`,
+    # no `npx`, no lifecycle script. It runs our own scripts and the
+    # checksum-verified mcp-publisher binary.
+    environment: "agent402 / production"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Read the way the registry reads it (its headers, no redirect followed,
+      # one proof record). Not served = no login is tried: the job fails here
+      # with the reason, and nothing was changed on the registry.
+      - name: Registry namespace proof is served by production
+        run: node scripts/registry-proof-check.js --tries 6 --wait-ms 20000 https://agent402.tools
+      - name: Fetch the verified registry publisher
+        env:
+          # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
+          # unset to track the latest. Optionally hard-pin the exact tarball
+          # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
+          MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
+          MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
+          # The job's own token, for the script's api.github.com reads only
+          # (the job's contents: read covers a public release).
+          GH_API_TOKEN: ${{ github.token }}
+        run: bash scripts/mcp-publisher-fetch.sh
+      - name: Publish to the official MCP Registry (domain proof)
+        env:
+          MCP_REGISTRY_PRIVATE_KEY: ${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # The registry verifies ownership by matching mcp/package.json's
+          # "mcpName" to the server.json name and confirming the npm package is
+          # published, so this runs after the npm publish.
+          VER=$(node -p "require('./mcp/package.json').version")
+          SERVER_NAME=tools.agent402/agent402
+          [ "$SERVER_NAME" = "$(node -p "require('./mcp/server.json').name")" ] || { echo "::error::mcp/server.json does not name $SERVER_NAME"; exit 1; }
+          # Every page of the registry's entries for our name, one compact JSON
+          # document per line (at most five pages; a failed read ends the walk).
+          : > registry-pages.jsonl
+          cursor=""
+          for page in 1 2 3 4 5; do
+            q="search=$SERVER_NAME&limit=100"
+            [ -z "$cursor" ] || q="$q&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
+            body=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?$q") || break
+            printf '%s' "$body" | jq -c . >> registry-pages.jsonl 2>/dev/null || break
+            cursor=$(printf '%s' "$body" | jq -r '.metadata.nextCursor // empty' 2>/dev/null || true)
+            [ -n "$cursor" ] || break
+          done
+          if node -e 'const [n, v] = process.argv.slice(1); const rows = require("fs").readFileSync("registry-pages.jsonl", "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return JSON.parse(l).servers || []; } catch { return []; } }); process.exit(rows.some((r) => r?.server?.name === n && r?.server?.version === v) ? 0 : 1)' "$SERVER_NAME" "$VER"; then
+            echo "$SERVER_NAME@$VER already in the MCP Registry: nothing to do"; exit 0
+          fi
+          # Capture whichever version is isLatest RIGHT NOW - it's about to
+          # become stale the moment the new publish below lands - and every
+          # older version still "active". Our name only: a search also returns
+          # other publishers' similar names. Best-effort: a lookup failure
+          # leaves both empty and the deprecations below just skip.
+          PREV_LATEST=$(node scripts/mcp-find-latest-version.js --name "$SERVER_NAME" < registry-pages.jsonl || true)
+          SUPERSEDED=$(node scripts/mcp-find-latest-version.js --superseded --name "$SERVER_NAME" --except "$VER" < registry-pages.jsonl || true)
+          # The key is checked for its shape before it is used and is never
+          # printed: 64 hex characters, the form the publisher signs with.
+          if [ -z "${MCP_REGISTRY_PRIVATE_KEY:-}" ]; then
+            echo "::error::The environment secret MCP_REGISTRY_PRIVATE_KEY is not set, so $SERVER_NAME@$VER was not published to the MCP Registry. The npm releases and the deploy stand; set the secret and re-run this job."; exit 1
+          fi
+          case "$MCP_REGISTRY_PRIVATE_KEY" in
+            *[!0-9a-fA-F]*) echo "::error::MCP_REGISTRY_PRIVATE_KEY is not hex (the key's 32 private bytes as 64 hex characters, not a PEM)"; exit 1 ;;
+          esac
+          [ "${#MCP_REGISTRY_PRIVATE_KEY}" = 64 ] || { echo "::error::MCP_REGISTRY_PRIVATE_KEY is not 64 hex characters"; exit 1; }
+          cd mcp
+          # The key reaches the publisher in its environment (MCP_PRIVATE_KEY,
+          # read by mcp-publisher v1.8.10 and later), never on its command
+          # line, where any process on the runner could read it.
+          MCP_PRIVATE_KEY="$MCP_REGISTRY_PRIVATE_KEY" ../mcp-publisher login http --domain agent402.tools
+          # The registry validates the npm version EXISTS before it registers
+          # it, and npm takes ~a minute to serve a version it just accepted.
+          # Retry only that propagation 404, never any other refusal, for up
+          # to ~3 minutes.
+          for attempt in 1 2 3 4 5 6 7 8 9; do
+            if out=$(../mcp-publisher publish 2>&1); then printf '%s\n' "$out"; break; fi
+            printf '%s\n' "$out"
+            if [ "$attempt" = 9 ] || ! printf '%s' "$out" | grep -q "was not found (status: 404)"; then
+              echo "::error::registry publish failed (attempt $attempt)"; exit 1
+            fi
+            echo "npm has not served $VER yet (attempt $attempt) - waiting 20s"; sleep 20
+          done
+          echo "published $SERVER_NAME@$VER → https://registry.modelcontextprotocol.io"
+          # Deprecate every version this publish leaves behind: the one it just
+          # superseded and every older one still active, so the registry lists
+          # one current version. Status only (never a rewrite of an entry), at
+          # most 60 a run, and never fails the job: a registry hiccup here is a
+          # missed housekeeping step, not a publish failure.
+          deprecated=0
+          for old in $(printf '%s\n%s\n' "$PREV_LATEST" "$SUPERSEDED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -u -V | head -60); do
+            [ "$old" != "$VER" ] || continue
+            if ../mcp-publisher status --status deprecated --message "Superseded by $VER" "$SERVER_NAME" "$old"; then
+              deprecated=$((deprecated + 1))
+            else
+              echo "::warning::failed to deprecate superseded version $old (non-fatal)"
+            fi
+          done
+          echo "deprecated $deprecated superseded version(s)"
+
+  registry-earlier-name:
+    # The earlier registry name (the repository account's namespace) cannot be
+    # renamed or removed, and it stops at its last version: new npm releases
+    # carry the new mcpName. Every version of it is marked deprecated with a
+    # pointer to the new name, so a reader holding the earlier name still
+    # resolves it and is told where the server is. Runs only after
+    # publish-registry succeeded (the new name is listed), under the GitHub
+    # OIDC login that owns the earlier name, and only while a version is not
+    # yet marked: once all are, it logs in nowhere. Never fails the run.
+    #
+    # It holds id-token and is deliberately OUTSIDE every environment: npm's
+    # trusted publishers name the environment "agent402 / production", so this
+    # job's token cannot make the npm exchange. It installs nothing.
+    needs: [publish-registry]
+    if: >-
+      !cancelled() && needs.publish-registry.result == 'success'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # GitHub OIDC: the io.github.<account>/* MCP Registry namespace
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: List the earlier name's versions not yet marked moved
+        id: pending
+        run: |
+          set -uo pipefail
+          SERVER_NAME=$(node -p "require('./mcp/server.json').name")
+          EARLIER_NAME=io.github.MikeyPetrillo/agent402
+          MOVED="Moved to $SERVER_NAME"
+          : > registry-earlier-pages.jsonl
+          cursor=""
+          for page in 1 2 3 4 5; do
+            q="search=$EARLIER_NAME&limit=100"
+            [ -z "$cursor" ] || q="$q&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
+            body=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?$q") || break
+            printf '%s' "$body" | jq -c . >> registry-earlier-pages.jsonl 2>/dev/null || break
+            cursor=$(printf '%s' "$body" | jq -r '.metadata.nextCursor // empty' 2>/dev/null || true)
+            [ -n "$cursor" ] || break
+          done
+          TOTAL=$(node scripts/mcp-find-latest-version.js --count --name "$EARLIER_NAME" < registry-earlier-pages.jsonl || echo 0)
+          if [ "${TOTAL:-0}" = "0" ]; then
+            echo "::warning::The earlier registry name could not be read, so it was not checked this run (non-fatal; re-run this job)."
+            echo "count=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          node scripts/mcp-find-latest-version.js --unmoved "$MOVED" --name "$EARLIER_NAME" < registry-earlier-pages.jsonl > registry-earlier-pending.txt || true
+          COUNT=$(grep -c . registry-earlier-pending.txt || true)
+          echo "count=${COUNT:-0}" >> "$GITHUB_OUTPUT"
+          if [ "${COUNT:-0}" = "0" ]; then echo "every version of the earlier name already points to $SERVER_NAME: nothing to do"; else echo "$COUNT of $TOTAL version(s) of the earlier name to mark"; fi
+      - name: Fetch the verified registry publisher
+        if: steps.pending.outputs.count != '0'
+        env:
+          # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
+          # unset to track the latest. Optionally hard-pin the exact tarball
+          # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
+          MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
+          MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
+          # The job's own token, for the script's api.github.com reads only
+          # (the job's contents: read covers a public release).
+          GH_API_TOKEN: ${{ github.token }}
+        run: bash scripts/mcp-publisher-fetch.sh || echo "::warning::The registry publisher could not be fetched or verified; the earlier name was not marked moved (non-fatal; re-run this job)."
+      - name: Mark the earlier registry name as moved (GitHub OIDC)
+        if: steps.pending.outputs.count != '0'
+        run: |
+          set -uo pipefail
+          [ -x ./mcp-publisher ] || { echo "no verified publisher: nothing was run"; exit 0; }
+          SERVER_NAME=$(node -p "require('./mcp/server.json').name")
+          EARLIER_NAME=io.github.MikeyPetrillo/agent402
+          MOVED="Moved to $SERVER_NAME"
+          if ! ./mcp-publisher login github-oidc; then
+            echo "::warning::GitHub OIDC login for the earlier registry name failed; it was not marked moved (non-fatal; re-run this job)."; exit 0
+          fi
+          if ./mcp-publisher status --status deprecated --message "$MOVED" --all-versions --yes "$EARLIER_NAME"; then
+            echo "marked every version of the earlier name: $MOVED"; exit 0
+          fi
+          # The bulk change was refused: one version at a time, at most 100.
+          marked=0
+          for old in $(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' registry-earlier-pending.txt | head -100); do
+            if ./mcp-publisher status --status deprecated --message "$MOVED" "$EARLIER_NAME" "$old"; then
+              marked=$((marked + 1))
+            else
+              echo "::warning::failed to mark earlier version $old as moved (non-fatal)"
+            fi
+          done
+          echo "marked $marked earlier version(s): $MOVED"
+
   github-release:
     needs: [deploy]
     if: >-

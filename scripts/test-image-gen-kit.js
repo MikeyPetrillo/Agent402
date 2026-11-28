@@ -149,29 +149,50 @@ try {
     ok(e?.statusCode === 400 && sent.length === 2, `a second refusal is final: two requests, a 400 (${sent.length}, ${e?.statusCode})`);
     upstream = [openAIError(400, { message: "Your request was rejected by the safety system.", param: "complexity", code: "moderation_blocked" })];
     const e2 = await thrown("image-gen", { prompt: "a" });
-    ok(e2?.statusCode === 400 && sent.length === 1 && /content check refused/.test(e2.message), "a content refusal is never retried as a complexity fallback");
+    ok(e2?.statusCode === 422 && e2.contentFiltered === true && sent.length === 1 && /content check refused/.test(e2.message), "a content refusal is never retried as a complexity fallback");
     upstream = [];
     const { RETIRED_IMAGE_MODELS } = await import("../src/tools/image-gen-kit.js");
     ok(Object.values(TIERS).every((t) => !Object.hasOwn(RETIRED_IMAGE_MODELS, t.model)) && RETIRED_IMAGE_MODELS["gpt-image-2"]?.until === "2027-02-10" && Object.values(TIERS).some((t) => t.model === RETIRED_IMAGE_MODELS["gpt-image-2"].use), "no tier sends a retiring image model; gpt-image-2's mapping names a model a tier sends");
   }
 
-  // ---- a content-check refusal: 400, plain message, no retry, counted ----
+  // ---- a content-check refusal: 422 content_filtered, plain message, no retry, counted ----
   {
     const before = imageModerationStats().sinceBoot;
     const secret = "sk-proj-" + "A".repeat(40);
     upstream = [openAIError(400, { message: `Your request was rejected by the safety system. If you believe this is an error, contact us and include the request ID req_123. safety_violations=[violence]. ${secret}`, type: "image_generation_user_error", param: null, code: "moderation_blocked" })];
     const e = await thrown("image-gen-premium", { prompt: "a" });
-    ok(e?.statusCode === 400 && sent.length === 1, `a refusal is a 400 and is not retried (${e?.statusCode}, ${sent.length} requests)`);
+    ok(e?.statusCode === 422 && e.contentFiltered === true && sent.length === 1, `a refusal is a 422 content_filtered and is not retried (${e?.statusCode}, ${sent.length} requests)`);
     ok(/^The model's content check refused this prompt\. Nothing was charged\. Rephrase the prompt and try again\./.test(e?.message || "") && /Flagged: violence\./.test(e.message) && !/"auto"/.test(e.message), `refusal message is plain and names what was flagged (${e?.message})`);
     ok(!e.message.includes(secret) && !e.message.includes("req_123"), "the upstream body is not echoed (no key, no request id)");
+    {
+      const { toolErrorFields } = await import("../src/tool-error-fields.js");
+      ok(toolErrorFields(e).reason === "content_filtered", "the refusal carries reason content_filtered");
+      // Wording that names the safety system in an outage is not a refusal of
+      // the prompt (the narrowed rule the video route uses): no 422.
+      for (const message of ["Safety system timed out, please retry", "Safety system overloaded", "Content moderation service is temporarily unavailable",
+        // An outage worded as a rejection: an outage marker wins over the rejection wording.
+        "Request rejected by the moderation system: service overloaded", "Rejected by our safety system: at capacity, try again later"]) {
+        upstream = [openAIError(400, { message, type: "invalid_request_error", param: null, code: null })];
+        const o = await thrown("image-gen", { prompt: "a" });
+        ok(o?.statusCode === 400 && !o.contentFiltered && /OpenAI rejected the request/.test(o.message), `outage wording on a 400 is not a content refusal (${message} -> ${o?.statusCode})`);
+      }
+      // No moderation code: only the "rejected as a result of our safety system" wording decides.
+      upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: null })];
+      const w = await thrown("image-gen", { prompt: "a" });
+      ok(w?.statusCode === 422 && w.contentFiltered === true, `the as-a-result-of wording alone, with no code, is a 422 content_filtered (${w?.statusCode})`);
+      upstream = [openAIError(503, { message: "Your request was rejected by the safety system.", code: "moderation_blocked" })];
+      const o5 = await thrown("image-gen", { prompt: "a" });
+      ok(o5?.statusCode === 502 && !o5.contentFiltered, `a 5xx stays a 502 whatever it says (${o5?.statusCode})`);
+      upstream = [];
+    }
     upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: "content_policy_violation" })];
     const e2 = await thrown("image-gen", { prompt: "a", moderation: "auto" });
-    ok(e2?.statusCode === 400 && sent.length === 1 && sent[0].body.moderation === "auto" && /This call chose moderation "auto", the stricter level; "low" is the default level\./.test(e2.message) && !/filters less strictly|try "low"|send "low"|use "low"/i.test(e2.message), `a "safety system" message on an auto call: 400, no retry, states the default and the stricter choice, with no advice to change the level (${e2?.message})`);
+    ok(e2?.statusCode === 422 && sent.length === 1 && sent[0].body.moderation === "auto" && /This call chose moderation "auto", the stricter level; "low" is the default level\./.test(e2.message) && !/filters less strictly|try "low"|send "low"|use "low"/i.test(e2.message), `a "safety system" refusal on an auto call: 422, no retry, states the default and the stricter choice, with no advice to change the level (${e2?.message})`);
     // Never routed elsewhere: every request in the refusal went to the one images endpoint and model.
     ok(sent.every((x) => new URL(x.url).pathname === "/v1/images/generations" && [TIERS["image-gen-premium"].model, TIERS["image-gen"].model].includes(x.body.model)), "a refused prompt goes to no other model or endpoint");
     upstream = [];
     const after = imageModerationStats().sinceBoot;
-    ok(after.refusals.low - before.refusals.low === 1 && after.refusals.auto - before.refusals.auto === 1, `refusals are counted by level (${JSON.stringify(after.refusals)})`);
+    ok(after.refusals.low - before.refusals.low === 2 && after.refusals.auto - before.refusals.auto === 1, `refusals are counted by level (${JSON.stringify(after.refusals)})`);
     ok(JSON.stringify(imageModerationStats()).length < 200 && !/apple|violence/.test(JSON.stringify(imageModerationStats())), "the counters hold counts only, no prompt or category text");
   }
 
@@ -193,6 +214,32 @@ try {
   }
 } finally {
   globalThis.fetch = realFetch;
+}
+
+// ---- the shared reader (src/tools/content-filter.js): a moderation signal beside
+// words a filter's own message or a quoted prompt holds is still a verdict; text
+// that says the service is in trouble never is ----
+{
+  const { providerContentFiltered: filtered, providerBodyContentFiltered: bodyFiltered } = await import("../src/tools/content-filter.js");
+  for (const [error, want] of [
+    [{ code: "content_filter", message: "The response was filtered due to the prompt triggering the provider's content management policy. Please modify your prompt and retry." }, true],
+    ["Content was filtered. Rephrase the prompt and retry.", true],
+    [{ code: "moderation_blocked", message: "Prompt \"a busy street at rush hour\" was blocked by our content policy" }, true],
+    [{ code: "content_policy_violation", message: "Your request was rejected as a result of our safety system. Request ID 7f3a-512-9b2c." }, true],
+    ["Content was filtered. Rephrase the prompt and try again.", true],
+    ["Your request was rejected as a result of our safety system.", true],
+    ["content filtered", true],
+    // The service's own trouble, with or without a moderation code.
+    [{ message: "Request rejected by the moderation system: service overloaded", code: "moderation_blocked" }, false],
+    [{ code: "content_policy_violation", message: "Image generation capacity exceeded" }, false],
+    [{ message: "upstream content-filter returned 500", code: "content_filter" }, false],
+    [{ message: "Moderation check failed with status 503", code: "moderation_blocked" }, false],
+    ["Rejected by our safety system: at capacity, try again later", false],
+    ["Safety system timed out, please retry", false], ["Safety system overloaded", false], ["Content moderation service is temporarily unavailable", false],
+    ["Blocked by the moderation system: rate limit exceeded", false], ["Rejected by our content filter. Please try again in a few minutes", false],
+    [{ message: "Internal error in content filter" }, false], ["prompt rejected by safety", false], ["", false], [null, false], [{ message: 5, code: 7 }, false],
+  ]) ok(filtered(error) === want, `content filter reader: ${want ? "a verdict" : "not a verdict"} (${JSON.stringify(error).slice(0, 90)})`);
+  ok(bodyFiltered(JSON.stringify({ error: { code: "content_filter", message: "Please modify your prompt and retry." } })) === true && bodyFiltered("{bad json content was filtered") === true && bodyFiltered(JSON.stringify({ error: { code: "content_filter", message: "service overloaded" } })) === false, "the body reader holds the same rule");
 }
 
 console.log(`\ntest-image-gen-kit: ${pass} passed, ${fail} failed`);

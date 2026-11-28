@@ -119,9 +119,10 @@ export function badgesSectionHtml(baseUrl) {
   return `<!-- BADGES -->
       <section>
       <h2 id="badges" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Badges.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Show that a project runs on Agent402: paste a snippet into a README, docs page or site. Each image is served from <code>${esc(baseUrl)}/badges/{style}.svg</code>, so an embed always shows the current badge.</p>
-      <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">${rows}
+      <details class="doc-more"><summary>Badge styles and snippets for a README or site</summary>
+      <div>${rows}
       </div>
+      </details>
       </section>
 `;
 }

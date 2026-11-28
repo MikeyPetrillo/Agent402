@@ -11,10 +11,9 @@
 // facilitators (EVM + Algorand, both local) with a stub /sponsorship/status,
 // and drives the real 402, the real matching and the real settle path.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -385,7 +384,6 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
 
 // ---- Part 2: booted, against stub facilitators ------------------------------
 {
-  const [PORT, PORT_OFF, FAC] = await getFreePorts(3);
   let status = "error", settleMode = "quota", verifies = 0, settles = 0;
   const fac = createServer((rq, rs) => {
     let body = ""; rq.on("data", (c) => (body += c)); rq.on("end", () => {
@@ -411,13 +409,16 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
       return reply(404, {});
     });
   });
-  await new Promise((r) => fac.listen(FAC, "127.0.0.1", r));
+  await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+  const FAC = fac.address().port;
   const serverLog = [];
   const procs = [];
-  const boot = async (port, extraEnv = {}) => {
-    const proc = spawn(process.execPath, ["src/server.js"], {
+  // Port 0, read back: the port is the one each server bound (scripts/lib/boot-server.js).
+  const boot = async (extraEnv = {}) => {
+    const srv = await bootServer({
+      stores: "avm-subcent", timeoutMs: 60_000,
       env: {
-        ...process.env, PORT: String(port), FREE_MODE: "",
+        FREE_MODE: "",
         WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
         PAYMENT_NETWORKS: "base,algorand", ALGORAND_WALLET_ADDRESS: PAYTO,
         CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
@@ -428,15 +429,14 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
         X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
         ...extraEnv,
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    }).catch((e) => { serverLog.push(String(e?.message || e)); return null; });
+    if (!srv) return null;
+    const proc = srv.child;
     procs.push(proc);
-    const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(`[${port}] ${l.slice(0, 400)}`); if (serverLog.length > 200) serverLog.splice(0, serverLog.length - 200); };
+    const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(`[${srv.port}] ${l.slice(0, 400)}`); if (serverLog.length > 200) serverLog.splice(0, serverLog.length - 200); };
+    keep(srv.log());
     proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-    const B = `http://127.0.0.1:${port}`;
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
-    return up ? B : null;
+    return srv.url;
   };
   const done = (code) => { for (const p of procs) p.kill("SIGKILL"); fac.close(); if (code) for (const l of serverLog.slice(-30)) console.error("  server:", l); console.log(`\n${pass} passed, ${fail} failed`); process.exit(code); };
 
@@ -461,7 +461,7 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
   const waitFor = async (cond, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await cond()) return true; await sleep(100); } return false; };
 
   try {
-    const B = await boot(PORT);
+    const B = await boot();
     if (!B) { ok(false, "paid server booted"); done(1); }
     const offer402 = (t) => offer402At(B, t);
     const payAvm = (t, accepted) => payAvmAt(B, t, accepted);
@@ -594,7 +594,7 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
     // answered 402 (nothing charged), and the run raises the settleFailures
     // burst alarm instead (scripts/test-gateway-settle-breaker.js).
     {
-      const B2 = await boot(PORT_OFF, { AVM_SUBCENT_GATE: "off" });
+      const B2 = await boot({ AVM_SUBCENT_GATE: "off" });
       ok(!!B2, "a second paid server booted with AVM_SUBCENT_GATE=off");
       if (!B2) done(1);
       status = "exhausted"; settleMode = "quota";

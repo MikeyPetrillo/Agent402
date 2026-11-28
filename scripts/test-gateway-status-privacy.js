@@ -17,16 +17,34 @@
 // operator-authed read is never cached.
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { bootServer } from "./lib/boot-server.js";
+import { createServer } from "node:http";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 const TOKEN = "privacy-test-operator-token-0123456789";
+// A watched funding wallet (src/funding-watch.js), read from a local stand-in
+// for the Tempo RPC: an example address holding 7.5, line 5.
+const WATCHED = "0x000000000000000000000000000000000000dEaD";
+let watchReads = 0;
+const rpcStub = createServer((req, res) => {
+  let body = ""; req.on("data", (d) => { body += d; });
+  req.on("end", () => {
+    let j = {}; try { j = JSON.parse(body); } catch {}
+    const mine = j.method === "eth_call" && String(j.params?.[0]?.data || "").toLowerCase().endsWith(WATCHED.slice(2).toLowerCase());
+    if (mine) watchReads++;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(mine ? { jsonrpc: "2.0", id: j.id, result: "0x" + (7_500_000).toString(16).padStart(64, "0") } : { jsonrpc: "2.0", id: j.id, error: { message: "not served" } }));
+  });
+});
+await new Promise((r) => rpcStub.listen(0, "127.0.0.1", r));
 const srv = await bootServer({
   stores: "gateway-status-privacy",
   timeoutMs: 60_000,
   env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-         AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", X_BEARER_TOKEN: "t" },
+         AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", X_BEARER_TOKEN: "t",
+         TEMPO_RPC_URL: `http://127.0.0.1:${rpcStub.address().port}`,
+         FUNDING_WATCH_ADDRESSES: `canary-example:tempo:${WATCHED}:5` },
 });
 const base = srv.url;
 
@@ -256,6 +274,15 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
   ok(typeof opBody?.loopLag?.worstMs === "number" && typeof opBody?.loopLag?.stalls === "number",
      "the OPERATOR view keeps the figures - they are what you read after a bad deploy");
 }
+// crawlParse: the document parser's word (src/crawl-parse.js crawlParseStatus).
+{
+  const c = pubBody?.crawlParse || {};
+  ok(["ok", "fallback", "paused", "registry-kept", "off"].includes(c.status) && Object.keys(c).join() === "status",
+     `crawlParse publishes one word and nothing else (${JSON.stringify(c)})`);
+  const o = opBody?.crawlParse || {};
+  ok(o.status === c.status && typeof o.fallbacks === "number" && typeof o.died === "number" && typeof o.kept === "number" && Array.isArray(o.registriesKept),
+     "the OPERATOR view keeps the parser's counters and the registry sources held from an earlier pass");
+}
 
 // --- NOT hidden, and the reason is worth keeping -------------------------
 // The wish board's qualification constants stay public. An attempt to hide
@@ -271,6 +298,26 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
      "the wish qualification bar stays published - the paid radar states it too, so hiding it here would be theatre");
 }
 
+// --- a watched funding wallet: on the operator's runway, nowhere public ---
+{
+  // The public reads above started its balance read; it is never awaited by an answer.
+  let w = null, op = null;
+  for (let i = 0; i < 50 && !(w?.readings >= 1); i++) {
+    op = await (await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json();
+    w = op?.fundingRunway?.wallets?.["watch:canary-example"];
+    if (!(w?.readings >= 1)) await new Promise((r) => setTimeout(r, 100));
+  }
+  ok(w?.readings === 1 && w.line === 5 && w.unit === "USD" && w.status === "unknown", `the OPERATOR runway carries the watched wallet's reading with its own line (${JSON.stringify(w)})`);
+  for (let i = 0; i < 5; i++) await fetch(`${base}/api/gateway-status`);
+  ok(watchReads === 1, `status reads inside the sample interval read the watched wallet once (${watchReads} reads)`);
+  const pubNow = await (await fetch(`${base}/api/gateway-status`)).json();
+  const pubText = JSON.stringify(pubNow).toLowerCase();
+  ok(!("fundingRunway" in pubNow) && !pubText.includes("watch:") && !pubText.includes("canary-example") && !pubText.includes(WATCHED.toLowerCase()), "the PUBLIC response carries no runway, no watched label and no address");
+  ok(Object.keys(pubNow).sort().join() === Object.keys(pubBody).sort().join() && Object.keys(op).filter((k) => !(k in pubNow)).includes("fundingRunway"), "the PUBLIC response has the keys it had before the watched read");
+  ok(!JSON.stringify(op).toLowerCase().includes(WATCHED.toLowerCase()), "the OPERATOR view names the label, not the address");
+}
 srv.child.kill();
+rpcStub.close();
+
 console.log(`\ntest-gateway-status-privacy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

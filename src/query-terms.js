@@ -157,8 +157,24 @@ export function withoutFiller(terms) {
  *  substring for terms of three or more characters and for every CJK term;
  *  whole-token for a short Latin term (the 2026-08-28 "ip" rule). */
 export function termMatcher(term) {
-  if (term.length >= 3 || isCjkTerm(term)) return (str) => str.includes(term);
+  if (term.length >= 3 || isCjkTerm(term)) return substringMatcher(term);
   return (str) => splitTokens(str).includes(term);
+}
+
+// FALSE FRIENDS. Substring matching reads a short term as the opening of an
+// unrelated longer word: "add" inside "address", so a calculator task scored
+// every row named for an address. Each entry is one term and the pattern it
+// is read by in place of the plain substring: the term where the text does
+// not go on as that other word. A narrow, named list; every other term keeps
+// the plain substring rule (scripts/test-route-term-false-friends.js).
+export const TERM_FALSE_FRIENDS = Object.freeze({
+  add: /add(?!r)/, // not "address", "addresses", "addr"; still "adds", "added", "adder", "addition", "padding"
+  and: /(?<!c)and|and(?!le)/, // not "candle", "candles"; still the word itself, "random", "standard", "scandal", "candid"
+});
+/** The substring predicate for a term of three or more characters. */
+export function substringMatcher(term) {
+  const re = Object.hasOwn(TERM_FALSE_FRIENDS, term) ? TERM_FALSE_FRIENDS[term] : null;
+  return re ? (str) => re.test(str) : (str) => str.includes(term);
 }
 
 // PLURALS. A buyer writes "uuids", "ids", "hashes"; the catalog names the
@@ -193,4 +209,24 @@ export function versionTerms(q) {
     if (!out.includes(v)) out.push(v);
   }
   return out;
+}
+
+// ARITHMETIC IN WORDS. "5 plus 7", "seven minus five" and "6 times 7" are an
+// expression the calculator takes, and the operator is the only word a
+// lexical scorer can read in them: "plus" belongs to a tool named for a
+// tier, "times" to tools named for times of day. Read as a SHAPE, never as
+// the word: a number (digits or a number word), one operator word, a
+// number. The operator on its own ("plus tier", "route execute plus", "sun
+// times") is no expression and is ranked exactly as before. Returns the slug
+// the expression names and the expression's own words, which are values of
+// that tool (the scorers set them aside), or null.
+const NUM_WORD = "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million";
+const NUM = `(?:\\d{1,15}(?:\\.\\d{1,15})?|${NUM_WORD})`;
+const ARITHMETIC_RE = new RegExp(`(?<![\\p{L}\\p{N}.,])${NUM} (?:plus|minus|times|multiplied by) ${NUM}(?![\\p{L}\\p{N}]|[.,]\\d)`, "u");
+export const ARITHMETIC_TOOL = "calc";
+export function arithmeticAsk(q) {
+  if (typeof q !== "string") return null;
+  const s = q.slice(0, 500).toLowerCase().replace(/\s+/g, " ");
+  const m = ARITHMETIC_RE.exec(s);
+  return m ? { term: ARITHMETIC_TOOL, words: splitTokens(m[0]) } : null;
 }

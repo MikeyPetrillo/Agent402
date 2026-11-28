@@ -14,8 +14,8 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 // Its quotes and caps read the private upstream-cost table: without it they
 // fall to the floor and the checks fail for that reason, so a missing table is
 // named (a failure under CI, a skip locally) instead.
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-messages-sdk-alias");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-messages-sdk-alias");
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
 

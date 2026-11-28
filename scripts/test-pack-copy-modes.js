@@ -4,7 +4,9 @@
 // reads a token the wallet holds, never the wallet address, and refuses with a
 // 422 when the wallet holds no tokens. Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
-const { SKILL_PACKS } = await import("../src/skills.js");
+const { SKILL_PACKS, packPageCopy } = await import("../src/skills.js");
+// The page's short copy (src/skill-page-copy.js) is read beside the pack's own.
+const pageText = (p) => { const c = packPageCopy(p); return [c.lead, c.use, ...(c.steps || [])]; };
 const { PACK_STEPS } = await import("../src/tools/skill-runner.js");
 
 let pass = 0, fail = 0;
@@ -18,7 +20,7 @@ for (const p of SKILL_PACKS) {
   const steps = PACK_STEPS[p.slug];
   if (!steps) continue;
   checked++;
-  const txt = [p.tagline, p.useCase, ...(p.workflow || [])].filter(Boolean).join(" ");
+  const txt = [p.tagline, p.useCase, ...(p.workflow || []), ...pageText(p)].filter(Boolean).join(" ");
   if (steps.mode === "chain" && PARALLEL.test(txt)) wrong.push(`${p.slug} (chain) reads "${txt.match(PARALLEL)[0]}"`);
   if (steps.mode === "fanout" && SEQUENCE.test(txt)) wrong.push(`${p.slug} (fanout) reads "${txt.match(SEQUENCE)[0]}"`);
 }
@@ -39,7 +41,7 @@ let err = null;
 try { meta?.mapInput({ address: wallet }, { "wallet-balance": { tokens: [] } }); } catch (e) { err = e; }
 ok(err?.statusCode === 422, "a wallet holding no tokens gets a 422 on the metadata step, not a lookup of its own address");
 const pack = SKILL_PACKS.find((p) => p.slug === "wallet-audit");
-ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|contracts the wallet interacts with/.test([pack?.tagline, ...(pack?.workflow || [])].join(" ")), "wallet-audit's copy says it reads a token the wallet holds");
+ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|contracts the wallet interacts with/.test([pack?.tagline, ...(pack?.workflow || []), ...(pack ? pageText(pack) : [])].join(" ")), "wallet-audit's copy says it reads a token the wallet holds");
 
 // Pack copy, the macro tool descriptions and the storefront's fund card say
 // what the data is and where it comes from: no signal, prediction or advice
@@ -48,7 +50,7 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   const ADVICE = /recession[- ]signal|recession lead indicator|recession-priced|recession territory|are we in (or near )?a recession|smart money|before any investment decision|recommend a savings|inflation-sensitive recommendation/i;
   const hits = [];
   for (const p of SKILL_PACKS) {
-    const txt = [p.title, p.tagline, p.useCase, ...(p.workflow || []), p.claudePrompt].filter(Boolean).join(" ");
+    const txt = [p.title, p.tagline, p.useCase, ...(p.workflow || []), p.claudePrompt, ...pageText(p)].filter(Boolean).join(" ");
     const m = txt.match(ADVICE);
     if (m) hits.push(`${p.slug}: "${m[0]}"`);
   }
@@ -62,7 +64,193 @@ ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|c
   }
   const macro = SKILL_PACKS.find((p) => p.slug === "macro-context");
   ok(/each figure with its as-of date and source/.test(macro?.tagline || "") && /makes no forecast/.test(macro?.useCase || ""), "macro-context says its figures are dated and sourced, and that it makes no forecast");
+  const macroPage = macro ? packPageCopy(macro) : {};
+  ok(/each figure with its as-of date and source/.test(macroPage.lead || "") && /makes no forecast/.test(macroPage.use || ""), "macro-context's page copy says the same");
   ok(/<h3>A fund's 13F holdings<\/h3>/.test(src("src/human-reports-page.js")), "the fund card is headed by what it reports: a fund's 13F holdings");
+}
+
+// A pack's copy names only what its tools do. Each rule is a claim the copy
+// once made past its tools: email-validate reads syntax and the domain's MX
+// records (it probes no mailbox and suggests no correction), cpi-yoy answers
+// headline CPI only, redact masks the patterns it matches (the text is not
+// thereby safe to store), a certificate transparency read needs the tool that
+// makes it, no pack reads a page's links, and a stock-history close is a
+// venue close. Read on every pack in full and on its page copy, stock on and off.
+{
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { PACK_BRAND_FLOOR } = await import("./sync-count.js");
+  const RULES = [
+    ["a mailbox probe or a typo suggestion", /mailbox reachab|dead mailbox|likely[- ]typos?|reachable MX|MX is actually reachable|typo of a major provider/i, () => false],
+    ["core CPI from cpi-yoy", /headline and core|core (CPI|inflation)/i, () => false],
+    ["text that is safe to store, or free of PII", /safe to store|holds PII|sloppy with retention/i, () => false],
+    ["certificate transparency", /certificate transparency|\bCT logs?\b/i, (p) => (p.toolSlugs || []).includes("cert-transparency")],
+    ["a page's link graph as something the pack reads", /on-page link graph|where do its links point/i, () => false],
+  ];
+  const strings = (p) => {
+    const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])];
+    for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); }
+    return out.filter(Boolean);
+  };
+  const findings = (packs, rules = RULES) => packs.flatMap((p) => strings(p).flatMap((t) => rules.filter(([, re, allowed]) => re.test(t) && !allowed(p)).map(([what]) => `${p.slug} claims ${what}: "${t.slice(0, 70)}"`)));
+  const found = findings(ALL_SKILL_PACKS);
+  ok(ALL_SKILL_PACKS.length >= PACK_BRAND_FLOOR && found.length === 0, `no pack's copy claims what its tools do not do${found.length ? `: ${found.join("; ")}` : ""}`);
+  const fake = (text, toolSlugs = ["email-validate"]) => [{ slug: "control-pack", tagline: text, toolSlugs }];
+  for (const [text, tools] of [["Catches typos, disposable domains and dead mailboxes."], ["Read headline and core CPI year over year with cpi-yoy."], ["into something safe to store"], ["robots policy, and certificate transparency.", ["whois"]], ["and the on-page link graph."]]) {
+    ok(findings(fake(text, tools)).length >= 1, `control: "${text}" is caught`);
+  }
+  ok(findings(fake("Pull the certificate transparency log.", ["cert-transparency"])).length === 0, "control: a pack that holds cert-transparency may name it");
+  // A stock-history close in page copy is a venue close, said where it is named.
+  const venue = ALL_SKILL_PACKS.flatMap((p) => { const c = packPageCopy(p, { stock: true }); return [c.lead, c.use, ...(c.steps || [])].filter((t) => t && /24 hours old/.test(t) && !/not (the )?consolidated/.test(t)).map((t) => `${p.slug}: "${t.slice(0, 70)}"`); });
+  const named = ALL_SKILL_PACKS.flatMap((p) => { const c = packPageCopy(p, { stock: true }); return [c.lead, c.use, ...(c.steps || [])].filter((t) => t && /24 hours old/.test(t)); });
+  ok(named.length >= 3 && venue.length === 0, `page copy that names delayed stock closes says they are not consolidated (${named.length} lines)${venue.length ? `: ${venue.join("; ")}` : ""}`);
+  const text = SKILL_PACKS.find((p) => p.slug === "text-hygiene");
+  const { PII_TYPES } = await import("../src/tools/pii-redact.js");
+  ok(PII_TYPES.join() === "email,card,ssn,phone,ip" && /no later step sees the emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(packPageCopy(text).use || "") && /emails, phone numbers, card numbers, SSNs and IPv4 addresses it matched/.test(text.useCase), "text-hygiene names the five patterns redact matches, and redact still matches those five");
+}
+
+// The look-back tools (COMPUTED_SERIES_SLUGS, src/resale-terms.js) answer
+// statistics computed from a series and never the series. A line of README.md,
+// wiki/ or docs/ that names one, by slug or by the slug's words, and a pack
+// that runs one, must not say it returns history, candles, OHLC, a series or
+// price points. A phrase is allowed where the text says the figures are
+// computed from it ("computed from a coin's history"), where it is denied
+// ("no price series") and in a tool's own name ("price history statistics").
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { COMPUTED_SERIES_SLUGS } = await import("../src/resale-terms.js");
+  const ROOT = new URL("../", import.meta.url);
+  const SERIES_PHRASES = [
+    /\bOHLC (?:history|data|bars|series|candles)\b/gi,
+    /\b(?:candle|candlestick|kline)s? (?:history|data|series)\b/gi,
+    /\bprice history\b(?! statistics)/gi,
+    /\bhistorical (?:[a-z]+ )?prices?\b/gi,
+    /\bprice (?:series|points)\b/gi,
+    /\bchart data\b/gi,
+  ];
+  const ALLOWED_BEFORE = /(?:computed (?:here )?(?:from|over)|statistics (?:from|over|of|for)|\b(?:no|not|never|without|in place of|instead of)\b)[^.;|]{0,60}$/i;
+  const names = COMPUTED_SERIES_SLUGS.map((slug) => new RegExp(`(?<![\\w-])${slug.split("-").join("[- ]")}(?![\\w-])`, "i"));
+  const namesOne = (text) => names.some((re) => re.test(text));
+  /** The series phrases in `text` that no allowance covers (`before`: the text ahead of it). */
+  const seriesClaims = (text, before = "") => {
+    const out = [];
+    for (const re of SERIES_PHRASES) for (const m of text.matchAll(re)) if (!ALLOWED_BEFORE.test(`${before} ${text.slice(0, m.index)}`.slice(-120))) out.push(m[0]);
+    return out;
+  };
+  const lineFindings = (file, body) => {
+    const lines = body.split("\n");
+    return lines.flatMap((line, k) => (namesOne(line) ? seriesClaims(line, lines[k - 1] || "").map((c) => `${file}:${k + 1} "${c}"`) : []));
+  };
+  const files = ["README.md", ...readdirSync(new URL("wiki/", ROOT)).filter((f) => f.endsWith(".md")).map((f) => `wiki/${f}`), ...readdirSync(new URL("docs/", ROOT)).filter((f) => f.endsWith(".md")).map((f) => `docs/${f}`)];
+  const texts = files.map((f) => [f, readFileSync(new URL(f, ROOT), "utf8")]);
+  const named = texts.filter(([, body]) => body.split("\n").some(namesOne)).map(([f]) => f);
+  const found = texts.flatMap(([f, body]) => lineFindings(f, body));
+  ok(named.includes("README.md") && named.includes("wiki/Tool-Catalog.md") && found.length === 0, `no README, wiki or docs line says a look-back tool returns a series (${named.length} files name one)${found.length ? `: ${found.join("; ")}` : ""}`);
+  const packStrings = (p) => { const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])]; for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); } return out.filter(Boolean); };
+  // Sentence by sentence: one that names only the pack's other tools (a
+  // stock-history step does return daily closes) is about those tools.
+  const sentences = (t) => String(t).split(/(?<=[.;:])\s+|\n+/).filter(Boolean);
+  const aboutOthers = (p, sentence) => !namesOne(sentence) && (p.toolSlugs || []).some((t) => !COMPUTED_SERIES_SLUGS.includes(t) && new RegExp(`(?<![\\w-])${t}(?![\\w-])`).test(sentence));
+  const packFindings = (packs) => packs.filter((p) => (p.toolSlugs || []).some((t) => COMPUTED_SERIES_SLUGS.includes(t)))
+    .flatMap((p) => [...new Set(packStrings(p))].flatMap((t) => sentences(t).filter((x) => !aboutOthers(p, x)).flatMap((x) => seriesClaims(x).map((c) => `${p.slug} "${c}"`))));
+  const withOne = ALL_SKILL_PACKS.filter((p) => (p.toolSlugs || []).some((t) => COMPUTED_SERIES_SLUGS.includes(t)));
+  const packFound = packFindings(ALL_SKILL_PACKS);
+  ok(withOne.length >= 3 && packFound.length === 0, `no pack that runs a look-back tool says it returns a series (${withOne.length} packs)${packFound.length ? `: ${packFound.join("; ")}` : ""}`);
+  // CONTROLS: the three texts this rule was written after, and the allowances.
+  ok(lineFindings("wiki", "| `crypto-price`, `crypto-history` | $0.001 | **crypto-kit**: prices, market data, OHLC history, trending coins |").length === 1, "control: a catalog row that calls crypto-history OHLC history is caught");
+  ok(lineFindings("docs", "  decoded receipts, block receipts, token price history); whole-site crawling").length === 1, "control: a listing line that offers token price history is caught");
+  ok(packFindings([{ slug: "control-pack", toolSlugs: ["crypto-history"], tagline: "Pull live price, market structure, OHLC history, trending status and recent news for a single coin in one pass." }]).length >= 1, "control: a pack tagline that offers OHLC history is caught");
+  ok(packFindings([{ slug: "control-pack", toolSlugs: ["crypto-history", "stock-history"], tagline: "Compare assets.", workflow: ["Call stock-history to read the daily price series.", "Call crypto-history and read the price series."] }]).length === 1, "control: a step about another tool's series is not read, the look-back tool's is");
+  ok(lineFindings("x", "`coin-ohlc` returns candle data and `token-price-history` returns price points and historical token prices").length === 3 && lineFindings("x", "`coin-market-chart-range` returns chart data").length === 1, "control: candle data, price points, historical prices and chart data are caught");
+  ok(lineFindings("x", "`crypto-history`: look-back statistics computed from a coin's price history (return, volatility, drawdown; no price series)").length === 0
+    && lineFindings("x", "`token-price-history` (Token price history statistics) answers statistics, not the prices").length === 0
+    && lineFindings("x", "`perp-klines` returns kline data and OHLC candles").length === 0, "control: computed-from, denied and named-statistics wording passes, and a line about another tool is not read");
+}
+
+// A pack's copy says which of its tools are pure-CPU, free over proof-of-work
+// or wallet-only, and each such claim is read against the pack's tool list:
+// a tool is PoW-eligible when src/free-tier.js lists it and WALLET_ONLY_SLUGS
+// (src/pow.js) does not. Four shapes of claim, sentence by sentence:
+//   "N of M tools are PoW-eligible" (or wallet-only)   N and M are the pack's counts
+//   "four pure-CPU ...", "two egress ..."   the count of eligible (or not) tools
+//   "all N tools are wallet-only / egress"  no tool is eligible
+//   pure-CPU / PoW-eligible / free over PoW / free tier / no egress:
+//     with "only ... is paid" beside it, the pack holds both kinds;
+//     in a clause that names tools and no "all" or "every", those tools are eligible;
+//     said of all or every tool or step, or with no subject ("Pure CPU."),
+//     every tool in the pack is eligible; otherwise at least one is.
+{
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { FREE_TIER_SLUGS } = await import("../src/free-tier.js");
+  const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
+  const eligible = (slug) => FREE_TIER_SLUGS.has(slug) && !WALLET_ONLY_SLUGS.has(slug);
+  const NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+  const num = (w) => (/^\d+$/.test(w) ? Number(w) : NUM[String(w).toLowerCase()]);
+  const CLAIM = /pure[- ]CPU|PoW-eligible|free over (?:PoW|proof-of-work|the proof-of-work tier)|free via proof-of-work|free tier|egress is 0|\b(?:no|zero) egress\b/i;
+  const NO_EGRESS = /egress is 0|\b(?:no|zero) egress\b/i;
+  const UNIVERSAL = /\b(?:all|every|each|whole)\b/i;
+  const SCOPED = /\bonly\b[^.]*\b(?:is|are) paid\b/i;
+  const names = (text, slug) => new RegExp(`(?<![\\w-])${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text);
+  const strings = (p) => {
+    const out = [p.tagline, p.useCase, p.claudePrompt, ...(p.workflow || [])];
+    for (const stock of [true, false]) { const c = packPageCopy(p, { stock }); out.push(c.lead, c.use, ...(c.steps || [])); }
+    return [...new Set(out.filter(Boolean))];
+  };
+  const claimFindings = (packs) => {
+    const out = [];
+    for (const p of packs) {
+      const tools = p.toolSlugs || [];
+      const free = tools.filter(eligible), paid = tools.filter((t) => !eligible(t));
+      const say = (what, sentence) => out.push(`${p.slug} ${what} (${free.length} of ${tools.length} tools are PoW-eligible; not: ${paid.join(", ") || "none"}): "${sentence.trim().slice(0, 90)}"`);
+      for (const text of strings(p)) {
+        for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+          let counted = false;
+          const of = sentence.match(/\b(\w+) of (\w+) tools are PoW-eligible/i);
+          if (of && num(of[1]) != null && num(of[2]) != null) { counted = true; if (num(of[1]) !== free.length || num(of[2]) !== tools.length) say("miscounts its PoW-eligible tools", sentence); }
+          for (const m of sentence.matchAll(/\b(\w+) (pure[- ]CPU|egress)\b/gi)) {
+            const n = num(m[1]);
+            if (n == null) continue;
+            counted = true;
+            const have = /egress/i.test(m[2]) ? paid.length : free.length;
+            if (n !== have) say(`counts ${m[1]} ${m[2]} tools`, sentence);
+          }
+          const ofPaid = sentence.match(/\b(\w+) of (\w+) tools are wallet-only/i);
+          if (ofPaid && num(ofPaid[1]) != null && num(ofPaid[2]) != null) { counted = true; if (num(ofPaid[1]) !== paid.length || num(ofPaid[2]) !== tools.length) say("miscounts its wallet-only tools", sentence); }
+          if (/\ball (?:of (?:these|the) )?(?:\w+ )?tools (?:are (?:wallet-only|egress)|touch external APIs)/i.test(sentence)) { counted = true; if (free.length) say("calls every tool wallet-only", sentence); }
+          if (!CLAIM.test(sentence) || (counted && !/;/.test(sentence))) continue;
+          if (SCOPED.test(sentence)) { if (!free.length || !paid.length) say("splits free steps from paid ones", sentence); continue; }
+          for (const clause of sentence.split(/;\s+/)) {
+            if (!CLAIM.test(clause)) continue;
+            const named = tools.filter((t) => names(clause, t));
+            if (/\b\w+ of \w+ tools are\b/i.test(clause)) continue; // a counted clause, held above
+            const whole = UNIVERSAL.test(clause) || new RegExp(`^\\W*(?:${CLAIM.source})`, "i").test(clause) || (NO_EGRESS.test(clause) && !named.length);
+            if (whole) { if (paid.length) say("calls every tool pure-CPU or free", sentence); }
+            else if (named.length) { if (named.some((t) => !eligible(t))) say(`calls ${named.filter((t) => !eligible(t)).join(", ")} pure-CPU or free`, sentence); }
+            else if (!free.length) say("calls some steps pure-CPU or free", sentence);
+          }
+        }
+      }
+    }
+    return out;
+  };
+  const found = claimFindings(ALL_SKILL_PACKS);
+  ok(found.length === 0, `every pure-CPU, free and wallet-only claim in pack copy matches the pack's tools${found.length ? `:\n  ${found.join("\n  ")}` : ""}`);
+  const claims = ALL_SKILL_PACKS.filter((p) => strings(p).some((t) => CLAIM.test(t))).length;
+  ok(claims >= 8, `the check reads the packs that make such a claim (${claims})`);
+  ok(eligible("hash") && !eligible("email-validate") && !eligible("extract"), "control: hash is PoW-eligible; email-validate and extract are not");
+  const fake = (text, toolSlugs) => [{ slug: "control-pack", tagline: text, toolSlugs }];
+  const mixed = ["email-validate", "uuid", "hash"], pure = ["uuid", "hash"], net = ["email-validate", "extract"];
+  for (const [text, tools] of [
+    ["One pass, every step a pure-CPU call.", mixed], ["All three tools are pure-CPU (PoW-eligible / free tier).", mixed], ["Hashes and mints. Pure CPU.", mixed],
+    ["2 of 3 tools are PoW-eligible (extract is wallet-only).", ["extract", "email-validate", "hash"]], ["all 2 tools are PoW-eligible (pure network I/O).", net],
+    ["Three tools - one pure-CPU, two egress.", mixed], ["Stats steps are free over PoW; only the data fetch is paid.", pure], ["Checks mail; email-validate is pure-CPU.", mixed],
+    ["All three tools are wallet-only (egress).", mixed], ["Budget small; all of these tools are wallet-only (paid per call).", mixed], ["1 of 3 tools are wallet-only; uuid is pure-CPU.", ["email-validate", "extract", "uuid"]], ["1 of 3 tools are wallet-only; email-validate is pure-CPU.", mixed], ["The mint steps are free over PoW.", net], ["Reads bytes - egress is 0, but CPU is meaningful.", mixed],
+  ]) ok(claimFindings(fake(text, tools)).length >= 1, `control: "${text}" on [${tools.join(", ")}] is caught`);
+  for (const [text, tools] of [
+    ["One pass, every step a pure-CPU call.", pure], ["2 of 3 tools are PoW-eligible (email-validate is wallet-only).", mixed], ["Three tools - two pure-CPU, one egress.", mixed],
+    ["Mint steps are free over PoW; only the mail check is paid.", mixed], ["Checks mail; hash is pure-CPU.", mixed], ["1 of 3 tools are wallet-only (a live read); hash is pure-CPU.", mixed], ["All two tools are wallet-only (egress).", net],
+    ["Scores a risk-free rate into free-form objects.", net],
+  ]) ok(claimFindings(fake(text, tools)).length === 0, `control: "${text}" on [${tools.join(", ")}] passes`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

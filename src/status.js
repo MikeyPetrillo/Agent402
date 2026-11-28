@@ -83,6 +83,7 @@ export const RAIL_COMPONENTS = [
     key: `rail_${railKey(r)}`,
     label: r.name,
     blurb: `Real ${r.asset} settlement on ${r.name}, proven daily by the paid canary.`,
+    asset: r.asset,
     staleAfterMs: DAILY,
   })),
   // Tempo is NOT in RAILS (it settles over its own native MPP relay, never
@@ -95,6 +96,7 @@ export const RAIL_COMPONENTS = [
     key: "rail_mpp-tempo",
     label: "Tempo (native MPP)",
     blurb: "Real USDC.e settlement over Tempo's own MPP relay, proven daily by the paid canary.",
+    asset: "USDC.e",
     staleAfterMs: DAILY,
   },
 ];
@@ -374,6 +376,32 @@ function componentRow(c) {
 </div>`;
 }
 
+// The rails read as one table: each chain's word, asset, daily strip and
+// window figure, the same values its card carried. A rail's blurb is the one
+// sentence the section lead says for all of them.
+const RAIL_ASSET = new Map(RAIL_COMPONENTS.map((c) => [c.key, c.asset]));
+function railRow(c) {
+  const w = c.windows[`${STRIP_DAYS}d`];
+  const asset = RAIL_ASSET.get(c.key);
+  const note = `${observerLines(c)}${staleLine(c)}`;
+  return `<tr>
+  <td data-l="Rail"><span class="dot ${DOT[c.current.state]}" aria-hidden="true"></span> <span class="comp-n">${esc(c.label)}</span> <span class="comp-s ${DOT[c.current.state]}">${esc(WORD[c.current.state])}</span>${note ? `\n  ${note}` : ""}</td>
+  <td data-l="Asset" class="mono">${esc(asset || "")}</td>
+  ${
+    c.observed > 0
+      ? `<td data-l="${STRIP_DAYS} days" class="rail-bars"><div class="bars">${bars(c.daily)}</div></td>
+  <td data-l="Settled" class="mono">${w.observed ? `${fmtPct(w.pct)} <span class="faint">of ${w.observed} probe${plural(w.observed)}</span>` : `<span class="faint">no probes yet</span>`}</td>`
+      : `<td data-l="${STRIP_DAYS} days" class="rail-bars"><span class="faint">Not yet measured</span></td>
+  <td data-l="Settled" class="mono"><span class="faint">no availability claimed</span></td>`
+  }
+</tr>`;
+}
+function railTable(rails) {
+  return `<div class="inc-scroll"><table class="inc rails"><thead><tr><th>Rail</th><th>Asset</th><th>Last ${STRIP_DAYS} days</th><th>Settled</th></tr></thead><tbody>
+${rails.map(railRow).join("\n")}
+</tbody></table></div>`;
+}
+
 function liveSection(live, stats) {
   const rows = [];
   const bucket = (v) => (v === "ok" ? "ok" : v === "low" ? "warn" : "unk");
@@ -388,7 +416,7 @@ function liveSection(live, stats) {
   }
   if (!rows.length) return "";
   return `<h2 id="live">Live checks</h2>
-<p class="lead">Read from the running service as this page loaded, so unlike the history above these are self-reported. They are here because they lead outages rather than follow them.</p>
+<p class="lead">Self-reported by the running service as this page loaded; they lead outages rather than follow them.</p>
 <div class="live">
 ${rows.map(([n, cls, v, b]) => `<div class="lrow"><span class="dot ${cls}"></span><span class="ln">${esc(n)}</span><span class="lv">${v}</span><p class="lb">${esc(b)}</p></div>`).join("\n")}
 </div>`;
@@ -419,10 +447,10 @@ export function humanizeDetail(detail) {
 function incidentsSection(incidents) {
   if (!incidents.length) {
     return `<h2 id="incidents">Incident history</h2>
-<p class="lead">No failed probe in the recorded window. This list is computed from the observations themselves, so it cannot be tidied up after a bad day.</p>`;
+<p class="lead">No failed probe in the recorded window. This list is computed from the observations, so it cannot be tidied up.</p>`;
   }
   return `<h2 id="incidents">Incident history</h2>
-<p class="lead">Computed from failed probes rather than written by hand, so nothing can be quietly left out. Consecutive failures are grouped into a single incident.</p>
+<p class="lead">Computed from failed probes, never written by hand; consecutive failures are one incident.</p>
 <div class="inc-scroll"><table class="inc"><thead><tr><th>Started (UTC)</th><th>Duration</th><th>Failed probes</th><th>What failed</th></tr></thead><tbody>
 ${incidents
     .map(
@@ -476,9 +504,10 @@ const CSS = `
 .comp-f em{font-style:normal;color:var(--faint)}
 .nomeasure{margin:0;font-size:var(--fs-sm);color:var(--faint);border-left:2px solid var(--dash);padding-left:10px}
 .live{display:grid;gap:10px;margin:14px 0 30px}
-.lrow{display:grid;grid-template-columns:12px auto minmax(0,1fr);gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+.lrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:9px;align-items:center;border:1px solid var(--hairline);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .lrow .ln{font-weight:600;font-size:var(--fs-md)}
-.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The reading is never cut: its column takes the width its words need and it wraps between words when the row is narrow. */
+.lrow .lv{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);text-align:right;overflow-wrap:normal;word-break:normal}
 .lrow .lb{grid-column:2/4;margin:2px 0 0;font-size:var(--fs-sm);color:var(--faint)}
 table.inc{width:100%;border-collapse:collapse;margin:12px 0 30px;font-size:var(--fs-md)}
 table.inc th,table.inc td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--hairline);vertical-align:top}
@@ -488,6 +517,11 @@ table.inc th{font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.06
 .lead{color:var(--muted);margin:0 0 14px;font-size:var(--fs-md);line-height:1.6}
 .method{border:1px solid var(--hairline);border-radius:var(--radius);padding:6px 22px 16px;background:var(--card);margin:0 0 26px}
 .method li{margin:9px 0;color:var(--muted);font-size:var(--fs-md);line-height:1.6}
+.method summary{cursor:pointer;padding:10px 0;font-weight:600;font-size:var(--fs-md)}
+table.rails .comp-s{margin-left:6px}
+table.rails .comp-b{margin:4px 0 0;font-size:var(--fs-sm)}
+table.rails td.rail-bars{width:40%;min-width:120px;vertical-align:middle}
+table.rails .bars{height:22px}
 h2{font-family:var(--font-body);font-weight:700;letter-spacing:-.02em;margin:34px 0 6px}
 .st-links{margin-top:26px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-sm)}
 .st-links a{color:var(--accent);text-decoration:none}
@@ -572,7 +606,7 @@ export function statusPage(baseUrl, stats, snap) {
 
 <section>
 <h1 class="st-h1">Service status</h1>
-<p class="st-sub">Availability is measured from outside this server, so an outage is witnessed by something that stays up when we do not. <a href="${esc(HEARTBEAT_RUNS)}" rel="noopener">Every heartbeat run is public</a>.</p>
+<p class="st-sub">Measured from outside this server. <a href="${esc(HEARTBEAT_RUNS)}" rel="noopener">Every heartbeat run is public</a>.</p>
 
 <div class="hero">
   <span class="dot ${DOT[snap.overall]}"></span>
@@ -588,13 +622,13 @@ ${windowList}
 
 <section>
 <h2 id="components">Components</h2>
-<p class="lead">Each bar is one UTC day; hover over or tap a bar for that day's probe count. Grey means no observation was made that day, shown as absence rather than counted as uptime.</p>
+<p class="lead">Each bar is one UTC day (hover over or tap a bar for its probe count); grey means no observation, never counted as uptime.</p>
 <p class="bar-legend"><i class="b up"></i> every probe passed <i class="b partial"></i> some probes failed <i class="b down"></i> every probe failed <i class="b nodata"></i> no observation</p>
 ${snap.components.map(componentRow).join("\n")}
 
 <h2 id="rails">Payment rails</h2>
-<p class="lead">Each chain settled by the daily paid canary, graded independently - a single rail failing here never counts as a service outage above; it means that specific chain isn't settling right now.</p>
-${snap.railComponents.map(componentRow).join("\n")}
+<p class="lead">Real settlement in each chain's asset, proven daily by the paid canary. Each rail is graded on its own: one failing never counts as a service outage above.</p>
+${railTable(snap.railComponents)}
 </section>
 
 <section>
@@ -605,7 +639,9 @@ ${liveSection(snap.live, stats)}
 
 <section>
 <h2 id="method">How this is measured</h2>
-<div class="method">
+<p class="lead">Two observers outside the service record every probe; this page only stores and renders what they saw.</p>
+<details class="method">
+<summary>Measurement rules</summary>
 <ul>
 <li><b>The observers sit outside the service.</b> An outside probe checks production every 5 minutes and a scheduled heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
 <li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
@@ -615,7 +651,7 @@ ${liveSection(snap.live, stats)}
 <li><b>Payment is proven with real money.</b> A daily canary buys tools across every supported chain and settles genuine USDC. <a href="${esc(CANARY_RUNS)}" rel="noopener">Runs are public</a>.</li>
 <li><b>Incidents are derived, not authored.</b> The table above is computed from failed probes, so a bad day cannot be edited out.</li>
 </ul>
-</div>
+</details>
 
 <div class="st-links ml-meta">
   <span><a href="/api/status">/api/status</a></span><span><a href="/api/stats">/api/stats</a></span><span><a href="/api/reliability">/api/reliability</a></span><span><a href="/health">/health</a></span>${onchain ? `<span><a href="${esc(onchain)}" rel="noopener">wallet on-chain</a></span>` : ""}

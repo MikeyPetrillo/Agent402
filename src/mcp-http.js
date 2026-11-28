@@ -42,7 +42,8 @@ class McpError extends ProtocolError {
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport, toWebRequest } from "@modelcontextprotocol/node";
-import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
+import { MCP_REGISTRY_NAMESPACE } from "./org-profiles.js";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
@@ -56,6 +57,7 @@ import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { tempoEnabled, pushHashOf, tempoOfferedFor, tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { isIdentityBoundRoute } from "./payments.js";
+import { paysThirdParty } from "./third-party-routes.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
@@ -125,6 +127,7 @@ import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled, creditsKeyQualifier, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
+import { connectorNextStep, waitInWords, freeModeServer } from "./next-step-copy.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
@@ -204,6 +207,8 @@ const mcpLimiter = createLimiter("mcp");
 // perReplica): the figure a client is told is the service-wide one, so the
 // copy says so rather than quoting it as a per-replica allowance.
 const RATE_LIMIT_COPY = `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client, shared across replicas`;
+// The same figures as a person reads them in a refusal.
+const RATE_LIMIT_WORDS = `${MAX_CALLS_PER_BURST} call${MAX_CALLS_PER_BURST === 1 ? "" : "s"} a minute, ${MAX_CALLS_PER_WINDOW} an hour from one address`;
 
 // Adoption telemetry: every session's initialize names its client. In memory
 // since boot, one map for every mount, read on the operator surface only
@@ -239,7 +244,7 @@ const mcpPaidReqLimiter = createLimiter("mcp-transport-paid", { perMin: MCP_PAID
 // restored at runtime. At most OFFER_CACHE_MAX routes are kept.
 const OFFER_CACHE_TTL_MS = 30_000;
 const OFFER_CACHE_MAX = 256;
-const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} - slow down and retry in about ${retryAfterSeconds} s.`;
+const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} from this address; the limit resets in ${waitInWords(retryAfterSeconds)}.`;
 const MCP_MAX_CONCURRENT = Number(process.env.AGENT402_MCP_MAX_CONCURRENT) || 64;
 const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 30_000;
 // After the deadline fires (or the client disconnects) we abort + close the
@@ -465,7 +470,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   const site = baseUrl || MCP_SERVER_WEBSITE;
   return {
     ...(SERVER_CARD_SCHEMA ? { $schema: SERVER_CARD_SCHEMA } : {}),
-    name: `${REPO_NAMESPACE}/${serverName}`,
+    name: `${MCP_REGISTRY_NAMESPACE}/${serverName}`,
     version: VERSION,
     title: "Agent402",
     description: mcpShortDescription({ mpp }),
@@ -604,6 +609,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   /** True when this tool's run can outlast the blocking wait: the x402 wire
    *  refuses its signed retry (payOverX402), so no x402 offer is made for it. */
   const isLongCall = (def) => needsAsyncOrWait(def?.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000);
+  // Whether the credits connector (/mcp/credits) would pay for this tool: the
+  // credits gate refuses wallet-identity routes and routes that buy from an
+  // outside seller (src/credits.js, on the same two readings server.js hands
+  // it), and payOverCredits refuses a long call. A refusal's next step offers
+  // the credits connector only where it would pay (src/next-step-copy.js).
+  const creditsConnectorPays = (def) => !(Boolean(def?.identityBound) || isIdentityBoundRoute(def) || paysThirdParty(def) || isLongCall(def));
   const longCallNote = payX402
     ? `a tool whose run can outlast this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s) is not paid here over x402: ${payMpp ? "pay it here over MPP as an MCP task, or call" : "call"} its HTTP route with Prefer: respond-async`
     : "";
@@ -747,7 +758,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // A long call (isLongCall) is never invited to sign an x402 payment: it is
   // paid here over MPP as a task, or on its HTTP route as a job.
   function walletRequiredText(def, { x402 = false, mpp = payMpp } = {}) {
-    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`;
+    // The lead, then what to do next from a phone or a computer (src/next-step-copy.js).
+    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier. ${connectorNextStep(baseUrl, { creditsPay: creditsConnectorPays(def) })}`;
     if (isLongCall(def)) {
       const asTask = mpp && Boolean(tasks);
       return [
@@ -1178,7 +1190,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const def = entry.def;
       const params = paidParamsOf(args, isNamed);
       const startedAt = Date.now();
-      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+      if (isLongCall(def)) {
         // A person signed in here holds no credits key, so the answer does not
         // send them to one: it names what this connector can run instead.
         return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s), so it cannot run here. Nothing was charged. Pick a tool that answers within ${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s (catalog.find), or run this one over HTTP with the header Prefer: respond-async from a client that pays per call (x402 or MPP).` }], isError: true };
@@ -2072,13 +2084,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         const toolBudget = mcpLimiter.check(ip);
         if (toolBudget.limited) {
-          const limitText = `Free-tier rate limit reached (${RATE_LIMIT_COPY}); room again in about ${toolBudget.retryAfterSeconds} s.`;
+          const limitText = [`Free-tier rate limit reached (${RATE_LIMIT_WORDS}); it resets in ${waitInWords(toolBudget.retryAfterSeconds)}.`, connectorNextStep(baseUrl, { limited: true })].filter(Boolean).join(" ");
           // A free tool at its limit offers its own x402 challenge (the HTTP
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
           const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal, { reuse: true });
           return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt`, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
-            || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
+            // A FREE_MODE server takes no payment: the limit's own words stand alone.
+            || { content: [{ type: "text", text: freeModeServer() ? limitText : `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }
         // Flagship tools called by name: args IS the params (no envelope).
         // call_tool path: accept params as object, JSON string, or flattened.
@@ -2360,7 +2373,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (reqBudget.limited) {
       // A client that is told when to come back waits; one that is not retries at once.
       res.setHeader("Retry-After", String(reqBudget.retryAfterSeconds));
-      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: `Too many requests to ${path} - slow down and retry shortly.` }, id: req.body?.id ?? null });
+      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: reqLimitText(path, reqBudget.retryAfterSeconds) }, id: req.body?.id ?? null });
     }
     // MCP Tasks (io.modelcontextprotocol/tasks). Answered here, ahead of the SDK
     // transport, for two reasons: polling must not consume a transport slot (it

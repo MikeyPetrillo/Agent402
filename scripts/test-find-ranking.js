@@ -160,6 +160,92 @@ const PACK_TOP1 = [
   ["solidity",                      "contract-audit"],
 ];
 
+// Picks that rest on a phrase alias (src/phrase-aliases.js), the arithmetic
+// shape (src/query-terms.js arithmeticAsk) or neither, read on /api/route
+// over this server's own catalog and on /api/find. "current bitcoin price"
+// tied crypto-price with four other tools on the word "price"; "bitcoin
+// volatility last 90 days" ranked the holiday tools on "days"; "5 plus 7"
+// went to the tool named for a tier. The neighbors keep the queries that
+// name them: a failure there means a phrase took a pick that was not its own.
+const ROUTE_TOP1 = [
+  ["current bitcoin price",         "crypto-price"],
+  ["what is the current price of bitcoin", "crypto-price"],
+  ["current eth price",             "crypto-price"],
+  ["bitcoin volatility last 90 days", "crypto-history"],
+  ["bitcoin volatility",            "crypto-history"],
+  ["volatility of ethereum",        "crypto-history"],
+  ["what is 5 plus 7",              "calc"],
+  ["5 plus 7",                      "calc"],
+  ["seven plus five",               "calc"],
+  ["10 minus 3",                    "calc"],
+  ["6 times 7",                     "calc"],
+  // Neighbors: every one of these was the pick before the phrases existed.
+  ["bond price",                    "bond-price"],
+  ["current bond price",            "bond-price"],
+  ["current gold price",            "bond-price"],
+  ["current stock price",           "bond-price"],
+  ["current price",                 "bond-price"],
+  ["token price",                   "token-price"],
+  ["token price history",           "token-price-history"],
+  ["gas estimate",                  "gas-estimate"],
+  ["current gas price",             "gas-estimate"],
+  ["current weather",               "weather-current"],
+  ["current time",                  "time"],
+  ["business days",                 "business-days"],
+  ["bank holidays",                 "bank-holidays"],
+  ["next holidays",                 "next-holidays"],
+  ["public holidays",               "public-holidays"],
+  ["sharpe ratio",                  "sharpe-ratio"],
+  ["option volatility",             "black-scholes"],
+  ["implied volatility",            "sharpe-ratio"],
+  ["jpy volatility",                "sharpe-ratio"],
+  ["coin ohlc",                     "coin-ohlc"],
+  ["bitcoin price",                 "crypto-price"],
+  ["route execute plus",            "route-execute-plus"],
+  ["plus tier",                     "route-execute-plus"],
+  ["plus",                          "route-execute-plus"],
+  ["sun times",                     "sun-times"],
+  ["tip calculator dollars",        "calc"],
+];
+const FIND_TOP1 = [
+  ["current bitcoin price",         "crypto-price"],
+  ["current ethereum price",        "crypto-price"],
+  ["bitcoin volatility last 90 days", "crypto-history"],
+  ["bitcoin volatility",            "crypto-history"],
+  ["what is 5 plus 7",              "calc"],
+  ["5 plus 7",                      "calc"],
+  ["seven plus five",               "calc"],
+  // Neighbors.
+  ["bond price",                    "bond-price"],
+  ["token price",                   "token-price"],
+  ["current weather",               "weather-current"],
+  ["current gas price",             "gas-estimate"],
+  ["business days",                 "business-days"],
+  ["public holidays",               "public-holidays"],
+  ["bitcoin price",                 "crypto-price"],
+  ["route execute plus",            "route-execute-plus"],
+  ["plus tier",                     "route-execute-plus"],
+  ["sun times",                     "sun-times"],
+];
+// Answers that read as a miss before the phrases and still do: a phrase never
+// turns a qualified or a neighboring task into a confident pick.
+const FIND_STILL_WEAK = ["current gold price", "current stock price", "current price", "jpy volatility", "implied volatility", "bitcoin implied volatility", "tip calculator dollars"];
+// A stock's price history has no tool while no stock tool is listed: a miss
+// on both surfaces, named as the gap, never a coin tool as a confident pick.
+const STOCK_GAP = ["stock price history", "historical stock prices", "AAPL price history"];
+
+const routeAnswer = async (q, k = 5) => {
+  const r = await fetch(`${BASE}/api/route?q=${encodeURIComponent(q)}&include=local&top=${k}`);
+  if (!r.ok) throw new Error(`/api/route returned ${r.status} for "${q}"`);
+  return r.json();
+};
+const findAnswer = async (q, k = 3) => {
+  const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=${k}`);
+  if (!r.ok) throw new Error(`/api/find returned ${r.status} for "${q}"`);
+  return r.json();
+};
+const findMiss = (j) => j.weakMatches === true || j.rarestTermCovered === false || (j.results || []).some((x) => x.weak === true);
+
 const slugs = async (q, k = 3) => {
   const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=${k}`);
   if (!r.ok) throw new Error(`/api/find returned ${r.status} for "${q}"`);
@@ -189,6 +275,32 @@ try {
   for (const [q, expected, k] of TOPN) {
     const found = await slugs(q, k);
     ok(found.includes(expected), `top-${k} for "${q}" includes ${expected} (got ${found.join(",") || "none"})`);
+  }
+
+  for (const [q, expected] of ROUTE_TOP1) {
+    const j = await routeAnswer(q);
+    const found = (j.results || []).map((x) => x.slug);
+    ok(found[0] === expected && j.weakMatches !== true, `route top-1 for "${q}" is ${expected} (got ${found.slice(0, 4).join(",") || "none"})`);
+  }
+  for (const [q, expected] of FIND_TOP1) {
+    const j = await findAnswer(q);
+    const found = (j.results || []).map((x) => x.slug);
+    ok(found[0] === expected && !findMiss(j), `find top-1 for "${q}" is ${expected}, read as served (got ${found.join(",") || "none"}, rarest ${j.rarestTerm} covered ${j.rarestTermCovered})`);
+  }
+  for (const q of FIND_STILL_WEAK) {
+    const j = await findAnswer(q);
+    ok(findMiss(j), `find "${q}" still reads as a miss (top ${j.results?.[0]?.slug || "none"}, covered ${j.rarestTermCovered})`);
+  }
+  if (!stockToolServed("stock-history")) {
+    for (const q of STOCK_GAP) {
+      const f = await findAnswer(q), r = await routeAnswer(q);
+      ok(f.capabilityGap === "stock-price-history" && f.capabilityGapCovered === false && findMiss(f), `find "${q}" is a miss named stock-price-history (top ${f.results?.[0]?.slug || "none"}, gap ${f.capabilityGap})`);
+      ok(r.capabilityGap === "stock-price-history" && r.weakMatches === true && (r.results || []).every((x) => x.weak === true), `route "${q}" is a miss named stock-price-history (top ${r.results?.[0]?.slug || "none"}, gap ${r.capabilityGap})`);
+    }
+    for (const q of ["token price history", "crypto price history", "BTC price history", "treasury yield history"]) {
+      const f = await findAnswer(q), r = await routeAnswer(q);
+      ok(!("capabilityGap" in f) && !("capabilityGap" in r) && !findMiss(f) && r.weakMatches !== true, `"${q}" carries no gap field and reads as served on find and route`);
+    }
   }
 
   for (const [q, expected] of PACK_TOP1) {

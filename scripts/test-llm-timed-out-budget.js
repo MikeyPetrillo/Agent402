@@ -22,8 +22,8 @@ process.env.OPENROUTER_API_KEY = "test-key";
 const { LLM_GATEWAY_TOOLS, UPSTREAM_TIMEOUT_MS, timedOutAttempt } = await import("../src/tools/llm-gateway-kit.js");
 const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
 const { LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-llm-timed-out-budget");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-llm-timed-out-budget");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };

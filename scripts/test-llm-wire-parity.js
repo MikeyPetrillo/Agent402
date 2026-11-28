@@ -33,8 +33,8 @@ import { _setModelCatalogForTest } from "../src/model-catalog.js";
 import { readFileSync } from "node:fs";
 import { perReplica } from "../src/rate-limit.js";
 import { METERED_UNPAID_QUOTES_PER_MIN } from "../src/unpaid-quote-budget.js";
-const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-requireUpstreamCosts("test-llm-wire-parity");
+const { costsOrStandIn } = await import("./lib/stand-in-costs.js");
+const COSTS = costsOrStandIn("test-llm-wire-parity");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
@@ -154,14 +154,17 @@ const CALLER_ROWS = [
   // The output cap is optional on three wires, where an unreadable value
   // reads the tier default; the Messages API requires max_tokens, and this
   // wire refuses a call without a usable one as that API does.
-  { id: "bad max tokens", tier: "v1-chat-metered", expect: "2xx",
+  // realRates: the row's body is priced before it is sent, and whether it is
+  // served or refused at the tier's price is the real table's answer. Without
+  // the table the row is counted as needing it, not run on a stand-in.
+  { id: "bad max tokens", tier: "v1-chat-metered", expect: "2xx", realRates: true,
     build: (wire, b) => (wire === "gemini" ? { ...b, generationConfig: { maxOutputTokens: -5 } } : wire === "responses" ? { ...b, max_output_tokens: -5 } : { ...b, max_tokens: -5 }),
     differs: { messages: ["4xx", "max_tokens is required by the Messages API"] } },
   { id: "unsupported parameter", tier: "v1-chat-metered", expect: "4xx", opts: { model: NO_SAMPLING },
     build: (wire, b) => (wire === "gemini" ? { ...b, generationConfig: { ...b.generationConfig, temperature: 0.2 } } : { ...b, temperature: 0.2 }) },
   { id: "malformed tool definition", tier: "v1-chat-metered", expect: "4xx", build: (wire, b) => ({ ...b, ...BAD_TOOL[wire] }) },
-  { id: "image where the model takes none", tier: "v1-chat-metered", expect: "4xx", opts: { text: "SCN=noimage", image: true }, provider: true },
-  { id: "image where the model takes none (flat tier)", tier: "v1-chat", expect: "4xx", opts: { text: "SCN=noimage", image: true }, provider: true },
+  { id: "image where the model takes none", tier: "v1-chat-metered", expect: "4xx", opts: { text: "SCN=noimage", image: true }, provider: true, realRates: true },
+  { id: "image where the model takes none (flat tier)", tier: "v1-chat", expect: "4xx", opts: { text: "SCN=noimage", image: true }, provider: true, realRates: true },
 ];
 const UPSTREAM_ROWS = [
   { id: "upstream 4xx about the request", scn: "up4xx", expect: "4xx", provider: true },
@@ -205,6 +208,7 @@ const cell = (o) => `${o.status}${o.event ? (o.event.status >= 500 ? " failure" 
 /** Sends `row` to every wire and asserts the row's rule. */
 async function runRow(srv, row, { stream = false } = {}) {
   const out = {};
+  if (row.realRates && COSTS.standIn) { COSTS.needsTable(`${row.id}${stream ? " (streamed)" : ""}: served or refused at the tier's price`); return out; }
   for (const name of WIRE_NAMES) {
     const w = WIRES[name];
     if (stream && w.noStream) continue;

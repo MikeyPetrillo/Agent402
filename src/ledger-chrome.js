@@ -117,6 +117,19 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.wof
 // Design-token CSS + base reset + keyframes + shared chrome styles
 // ---------------------------------------------------------------------------
 
+/**
+ * A row of tags joined by a middle dot that wraps between tags (`sel` is a
+ * flex-wrap row of spans). Every tag carries its dot in a left padding as wide
+ * as the dot and its two gaps, pulled back by the same margin, and the row
+ * clips what lies left of it: the dot of a tag that starts a row falls outside
+ * and is not drawn, so no row begins with its separator, and no width changes
+ * when a tag moves to the next row. `pad` is the gap each side of the dot.
+ */
+export function sepRowCss(sel, pad = 10) {
+  const w = `calc(${pad * 2}px + 1ch)`;
+  return `${sel}{column-gap:${w};clip-path:inset(-6px)}${sel}>span{position:relative;margin-left:calc(-1 * ${w});padding-left:${w}}${sel}>span::before{content:"·";position:absolute;left:0;width:${w};text-align:center}`;
+}
+
 export const LEDGER_CSS = `
 /* A heading that exists for structure rather than for the eye. A screen reader
    announces heading LEVEL as structure, so h1 straight to h3 tells a listener
@@ -403,9 +416,9 @@ body { overflow-wrap: break-word; }
 .ml-nowrap { white-space: nowrap; }
 .ml-items { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
 .ml-items > * { white-space: nowrap; max-width: 100%; }
-.ml-meta { display: flex; flex-wrap: wrap; gap: 4px 0; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
+.ml-meta { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 10px 0 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); }
 .ml-meta > span { white-space: nowrap; }
-.ml-meta > span + span::before { content: "·"; padding: 0 10px; }
+${sepRowCss(".ml-meta", 10)}
 /* A row of chips of any count: on a phone it is one strip that scrolls sideways, so it never ends on one stray chip (a grid column holding one is minmax(0,1fr), so the strip scrolls instead of widening it). */
 @media (max-width: 600px) { .ml-strip { flex-wrap: nowrap !important; overflow-x: auto; max-width: 100%; padding-bottom: 4px; } .ml-strip > * { flex: none; } }
 /* Breadcrumbs: each link stays whole; on a phone the current page's name (the
@@ -429,11 +442,11 @@ body { overflow-wrap: break-word; }
 .ml-foot-links > button[hidden] { display: none; }
 @media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; line-height: normal; } .ml-foot-links > a { margin-right: 0; } }
 /* The legal line: the entity and the contact address are two whole items, joined by a dot on one row and stacked when the row is too narrow, so neither breaks inside itself. */
-.ml-foot-legal { display: flex; flex-wrap: wrap; gap: 4px 0; }
+.ml-foot-legal { display: flex; flex-wrap: wrap; row-gap: 4px; }
 .ml-foot-legal > span { white-space: nowrap; }
 .ml-foot-legal a, .ml-foot-brand { display: inline-flex; align-items: center; min-height: 24px; }
-.ml-foot-legal > span + span::before { content: "·"; padding: 0 8px; }
-@media (max-width: 600px) { .ml-foot-legal { flex-direction: column; } .ml-foot-legal > span + span::before { content: none; } }
+${sepRowCss(".ml-foot-legal", 8)}
+@media (max-width: 600px) { .ml-foot-legal { flex-direction: column; } .ml-foot-legal > span::before { content: none; } }
 /* A table cell that is a list of code names (site-chrome.js marks it .ml-codelist): on a phone each name takes its own
    line and the separators between them take no space, so the list never ends on one stray name. */
 @media (max-width: 600px) { td.ml-codelist, th.ml-codelist { font-size: 0; } .ml-codelist > code, .ml-codelist > kbd, .ml-codelist > samp { display: table; margin: 0 0 4px; font-size: var(--fs-sm); } }

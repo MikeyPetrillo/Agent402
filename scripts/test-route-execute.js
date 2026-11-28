@@ -546,6 +546,121 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     try { await mk(pay, async () => [C]).handler({ task: "t", include: "external", params: { messages: [] } }, {}); } catch (e) { threw = e; }
     ok(threw?.statusCode === 502, "an input refusal with every contract field present stays 502 (not the caller's input)");
   }
+  // A task routed to a chat completion whose params leave out a chat field
+  // the seller needs is answered 400 naming them in `missing`, BEFORE any
+  // seller is paid, when no other candidate can take the call. A seller is a
+  // chat completion by a real signal only (its route ends /chat/completions,
+  // or it ends /messages and its category or declared contract says chat),
+  // and the fields asked for are its declared ones when it declares any.
+  {
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const { chatFieldsMissing } = await import("../src/tools/route-execute.js");
+    const CHAT = { ...A, url: "https://a.example/v1/chat/completions", slug: "chat" };
+    // The Messages wire, said by the listing: a category, or a declared contract.
+    const MSG_CAT = { ...A, url: "https://a.example/v1/messages", slug: "messages", category: "llm" };
+    const MSG_CONTRACT = { ...A, url: "https://a.example/v1/messages", slug: "messages", requestContract: { state: "declared", required: { body: ["model", "messages", "max_tokens"] } } };
+    for (const [params, want, ext] of [[{}, ["model", "messages"], CHAT], [{ model: "m1" }, ["messages"], CHAT], [{ messages: [{ role: "user", content: "hi" }] }, ["model"], CHAT],
+      [{ model: " ", messages: [] }, ["model", "messages"], CHAT], [{ prompt: "hi" }, ["model", "messages"], MSG_CAT], [{ model: "m1" }, ["messages"], MSG_CONTRACT]]) {
+      let calls = 0;
+      let threw = null;
+      try { await mk(async () => { calls++; return good; }, async () => [ext]).handler({ task: "chat completion", include: "external", params }, {}); } catch (e) { threw = e; }
+      const f = threw ? toolErrorFields(threw) : {};
+      ok(threw?.statusCode === 400 && calls === 0 && JSON.stringify(f.missing) === JSON.stringify(want) && want.every((w) => threw.message.includes(`params.${w}`)) && /Nothing was spent/.test(threw.message),
+        `a chat task missing ${want.join(" and ")} answers 400 naming them before any purchase (${threw?.statusCode}, ${calls} buys, missing ${JSON.stringify(f.missing)})`);
+    }
+    // A bare /messages suffix is also a mailbox or an SMS route: it is called
+    // with the caller's own fields, never asked for model and messages.
+    for (const [ext, label] of [[{ ...A, url: "https://a.example/v1/messages", slug: "send-message" }, "no contract"],
+      [{ ...A, url: "https://a.example/v1/messages", slug: "send-sms", category: "messaging", requestContract: { state: "declared", required: { body: ["to", "text"] } } }, "a contract requiring to and text"]]) {
+      const bodies = [];
+      const r = await mk(async (_url, opts) => { bodies.push(opts?.body); return good; }, async () => [ext]).handler({ task: "send a text message", include: "external", params: { to: "+15550100", text: "hi" } }, {});
+      ok(bodies.length === 1 && r.receipt.seller === A.seller && bodies[0]?.to === "+15550100" && bodies[0]?.text === "hi" && chatFieldsMissing(ext, { to: "+15550100", text: "hi" }) === null,
+        `a seller at POST /v1/messages taking {to, text} is called, not refused (${label}; ${bodies.length} buys)`);
+    }
+    // A chat ROOM is not a chat completion: a GET message list, and a POST
+    // whose only chat signal is the bare category or tag word "chat", are
+    // called with the caller's own fields. A model category on a POST still
+    // reads as the Messages wire, and so does a contract naming model or messages.
+    for (const [ext, params, label] of [
+      [{ ...A, url: "https://a.example/rooms/42/messages", slug: "room-messages", method: "GET", category: "chat" }, { limit: 5 }, "a GET message list, category chat"],
+      [{ ...A, url: "https://a.example/channels/messages", slug: "channel-history", method: "GET", category: "social", tags: ["chat", "history"] }, { limit: 5 }, "a GET message list tagged chat"],
+      [{ ...A, url: "https://a.example/v1/messages", slug: "list-messages", method: "GET", category: "llm" }, { limit: 5 }, "a GET at /messages in a model category"],
+      [{ ...A, url: "https://a.example/rooms/messages", slug: "room-send", method: "POST", category: "chat" }, { room: "r", text: "hi" }, "a POST to a chat room, no contract"],
+      [{ ...A, url: "https://a.example/rooms/messages", slug: "room-send", method: "POST", category: "social", tags: ["chat"] }, { room: "r", text: "hi" }, "a POST tagged chat, no contract"]]) {
+      const urls = [];
+      let threw = null;
+      try { await mk(async (url) => { urls.push(url); return good; }, async () => [ext]).handler({ task: "t", include: "external", params }, {}); } catch (e) { threw = e; }
+      ok(!threw && urls.length === 1 && chatFieldsMissing(ext, params) === null, `${label} is called, not asked for model and messages (${threw ? `${threw.statusCode} ${String(threw.message).slice(0, 80)}` : `${urls.length} buys`})`);
+    }
+    ok(JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", method: "POST", category: "llm" }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", category: "inference" }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/messages", method: "post", tags: ["chat-completions"] }, { model: "m" })) === '["messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/rooms/messages", method: "POST", category: "chat", requestContract: { required: { body: ["model", "messages"] } } }, {})) === '["model","messages"]'
+      && JSON.stringify(chatFieldsMissing({ ...A, url: "https://a.example/v1/chat/completions", category: "chat" }, {})) === '["model","messages"]',
+    "CONTROL: a POST in a model category, one with a contract naming model and messages, and /chat/completions are still asked");
+    // The seller's own declared fields decide: one that requires only
+    // `prompt` is bought with a prompt, and is asked for `prompt` (never
+    // `messages`) when it is missing.
+    {
+      const PROMPT = { ...CHAT, requestContract: { state: "declared", required: { body: ["prompt"] } } };
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [PROMPT]).handler({ task: "chat completion", include: "external", params: { prompt: "hi" } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "a chat seller whose contract requires only prompt is bought with a prompt alone");
+      let threw = null;
+      try { await mk(async () => { calls++; return good; }, async () => [PROMPT]).handler({ task: "chat completion", include: "external", params: {} }, {}); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 400 && calls === 1 && JSON.stringify(toolErrorFields(threw).missing) === '["prompt"]' && !/params\.messages|params\.model/.test(threw.message), `...and without one it is asked for prompt only (${JSON.stringify(toolErrorFields(threw || {}).missing)})`);
+    }
+    {
+      const NOMODEL = { ...CHAT, requestContract: { state: "declared", required: { body: ["messages"] } } };
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [NOMODEL]).handler({ task: "chat completion", include: "external", params: { messages: [{ role: "user", content: "hi" }] } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "a chat seller whose contract does not require model is bought with messages alone");
+    }
+    // Another candidate can take the call: the chat seller is skipped and the
+    // next one is bought. The 400 is the answer only when none can.
+    {
+      const urls = [];
+      const r = await mk(async (url) => { urls.push(url); return good; }, async () => [CHAT, B]).handler({ task: "t", include: "external", params: { q: "x" } }, {});
+      ok(urls.length === 1 && urls[0] === B.url && r.receipt.seller === B.seller, `a chat candidate missing its fields is skipped and the next candidate is bought (${urls.join(", ")})`);
+      urls.length = 0;
+      let threw = null;
+      try { await mk(async (url) => { urls.push(url); return good; }, async () => [CHAT, MSG_CAT]).handler({ task: "t", include: "external", params: { q: "x" } }, {}); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 400 && urls.length === 0 && JSON.stringify(toolErrorFields(threw).missing) === '["model","messages"]', "with no candidate that can take the call, the answer is the 400 and nothing is bought");
+    }
+    {
+      let calls = 0;
+      const r = await mk(async () => { calls++; return good; }, async () => [CHAT]).handler({ task: "chat completion", include: "external", params: { model: "m1", messages: [{ role: "user", content: "hi" }] } }, {});
+      ok(calls === 1 && r.receipt.seller === A.seller, "control: a chat task carrying model and messages is bought");
+      calls = 0;
+      await mk(async () => { calls++; return good; }, async () => [A]).handler({ task: "t", include: "external", params: {} }, {});
+      ok(calls === 1, "control: a seller whose route is not chat-shaped is not asked for model or messages");
+    }
+  }
+  // A capability gap (src/capability-gaps.js) on the own-catalog path: an IP
+  // geolocation task with no tool named for it runs nothing and answers the
+  // uncharged 404, while a task that only names a country runs its tool.
+  {
+    const ran = [];
+    const cat = {
+      "POST /api/ip-info": { route: "POST /api/ip-info", slug: "ip-info", name: "IP address type and reverse DNS", category: "network", price: "$0.001", description: "Address type and PTR record of an IP address", tags: ["ip", "dns"], discovery: { bodyType: "json", input: { ip: "8.8.8.8" } }, handler: async () => { ran.push("ip-info"); return { ok: true }; } },
+      "POST /api/bank-holidays": { route: "POST /api/bank-holidays", slug: "bank-holidays", name: "Bank holidays", category: "data", price: "$0.001", description: "Bank holidays of a country for a year", tags: ["holidays", "holiday"], discovery: { bodyType: "json", input: { country: "DE" } }, handler: async () => { ran.push("bank-holidays"); return { ok: true }; } },
+    };
+    const tool = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute", execPriceUsd: 0.01, underlyingMaxUsd: 0.01 } });
+    for (const task of ["ip geolocation", "geolocate ip address", "where is this IP located"]) {
+      let threw = null;
+      try { await tool.handler({ task, params: { ip: "8.8.8.8" } }, { headers: {} }); } catch (e) { threw = e; }
+      ok(threw?.statusCode === 404 && ran.length === 0 && /offers IP geolocation\. Nothing was run\. Nothing was charged\./.test(threw.message), `"${task}" on the own catalog: uncharged 404, nothing run (${threw?.statusCode}, ran ${ran.length})`);
+    }
+    for (const task of ["holidays in germany", "holidays in canada", "is today a holiday in germany"]) {
+      ran.length = 0;
+      let threw = null, r = null;
+      try { r = await tool.handler({ task, params: { country: "DE" } }, { headers: {} }); } catch (e) { threw = e; }
+      ok(!threw && ran.join() === "bank-holidays" && r?.receipt?.slug === "bank-holidays", `"${task}" runs bank-holidays: a country is a value, never a miss (${threw ? threw.statusCode : r?.receipt?.slug})`);
+    }
+    ran.length = 0;
+    const r = await tool.handler({ task: "reverse dns for an ip", params: { ip: "8.8.8.8" } }, { headers: {} });
+    ok(ran.join() === "ip-info" && r?.receipt?.slug === "ip-info", "control: an IP task that is not geolocation still runs ip-info");
+  }
   // A REFUSES the payment and the buyer proved on chain it was not charged
   // (committed:false + refused) -> falls through; B was admitted UNPROVEN, so
   // the buyer is told to allow it and the receipt says so (2026-09-02).
@@ -1017,6 +1132,161 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(contractFieldsMissing(ext, {}, { sellerStatus: 500 }) === null && contractFieldsMissing(ext, {}, {}) === null, "a 5xx or an unstamped error names nothing");
   ok(contractFieldsMissing({}, {}, { sellerStatus: 400 }) === null && contractFieldsMissing({ requestContract: { required: {} } }, {}, { sellerStatus: 400 }) === null, "no declared body contract names nothing");
   ok(contractFieldsMissing(ext, { model: 1, messages: [] }, { sellerStatus: 400 }) === null, "nothing missing -> null");
+}
+// --- a gap task on the external leg buys only a row NAMED for the capability ---
+// (gapNamedCandidates: src/capability-gaps.js is the list /api/find and
+// /api/route read.) An outside candidate a judge or a description put forward
+// for "ip geolocation" is not bought unless its slug or name says so; the
+// refusal is the uncharged 404, before any spend reservation; every other
+// task is handed the resolver's list untouched.
+{
+  const { gapNamedCandidates } = await import("../src/tools/route-execute.js");
+  const { resolvedCandidateOf } = await import("../src/sor-candidates.js");
+  const guard = await import("../src/external-spend-guard.js");
+  const NEAR = { seller: "https://near.example", slug: "ip-lookup", name: "IP lookup", url: "https://near.example/api/ip-lookup", method: "POST", price: "$0.01", networks: ["eip155:8453"], selection: { method: "judged", confidence: 0.99 } };
+  const NAMED = { seller: "https://geo.example", slug: "ip-geolocation", name: "IP geolocation", url: "https://geo.example/api/ip-geolocation", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const BYNAME = { seller: "https://g2.example", slug: "lookup-v2", name: "IP to country", url: "https://g2.example/v2/lookup", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const good = { result: { country: "US" }, quote: { usd: 0.01, network: "eip155:8453" }, receipt: { transaction: "0xTX", network: "eip155:8453" } };
+  let paid = [];
+  const day = () => guard.walletDailySpentUsd("base");
+  const mk = (resolve) => buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, externalEnabled: () => true,
+    resolveExternal: resolve, payExternal: async (url) => { paid.push(url); return good; } });
+  const run = async (tool, task, req = { headers: {} }) => { paid = []; try { return { r: await tool.handler({ task, include: "external", params: { ip: "8.8.8.8" } }, req), req }; } catch (e) { return { e, req }; } };
+  const GAP_TASKS = ["ip geolocation", "which country is this IP in", "where is 8.8.8.8", "geoip lookup"];
+
+  // The judge's pick alone: refused, nothing bought, nothing reserved or held.
+  for (const task of GAP_TASKS) {
+    const before = day();
+    const x = await run(mk(async () => [NEAR]), task);
+    ok(x.e?.statusCode === 404 && /none of them is named for IP geolocation\. Nothing was bought\. Nothing was charged\./.test(x.e.message) && paid.length === 0,
+      `"${task}": an outside seller not named for it is not bought, the uncharged 404 (${x.e ? `${x.e.statusCode} ${String(x.e.message).slice(0, 150)}` : `bought ${paid.join()}`})`);
+    ok(day() === before && x.req.__externalSpend === undefined && x.req.__externalSpends === undefined && !x.req.__hangupTicket,
+      `"${task}": no spend was reserved against the wallet's day and nothing is held on the request (day ${before} -> ${day()})`);
+  }
+  // A step (no request) makes no charge claim, as every refusal here does.
+  {
+    paid = [];
+    let e = null;
+    try { await mk(async () => [NEAR]).handler({ task: "ip geolocation", include: "external", params: {} }); } catch (err) { e = err; }
+    ok(e?.statusCode === 404 && /Nothing was bought\./.test(e.message) && !/Nothing was charged/.test(e.message) && paid.length === 0, "the refusal inside a step makes no charge claim");
+  }
+  // The resolver's own tally of the same rule words the same refusal.
+  {
+    const x = await run(mk(async () => Object.assign([], { __gateDrops: { total: 2, byReason: { capability_gap: 2 } } })), "ip geolocation");
+    ok(x.e?.statusCode === 404 && /2 matched those words and none of them is named for IP geolocation/.test(x.e.message) && paid.length === 0, `candidates the resolver set aside read the same (${x.e?.message?.slice(0, 120)})`);
+  }
+  // A named row is the one bought, whatever stands ahead of it; a name alone names it.
+  {
+    const x = await run(mk(async () => [NEAR, NAMED]), "ip geolocation");
+    ok(!x.e && paid.join() === NAMED.url && x.r?.receipt?.seller === NAMED.seller, `a seller named for it is bought past a judged near name (${paid.join() || x.e?.message})`);
+    const y = await run(mk(async () => [NEAR, BYNAME]), "which country is this IP in");
+    ok(!y.e && paid.join() === BYNAME.url, `a listing whose NAME says it is bought (${paid.join() || y.e?.message})`);
+    const z = await run(mk(async () => NEAR), "ip geolocation");
+    ok(z.e?.statusCode === 404 && paid.length === 0, "a single (non-array) candidate is held to the same rule");
+  }
+  // A pinned target narrows only: it is held to the rule too.
+  {
+    paid = [];
+    let e = null;
+    try { await mk(async () => [NEAR]).handler({ task: "ip geolocation", include: "external", target: NEAR.url, params: {} }, { headers: {} }); } catch (err) { e = err; }
+    ok(e?.statusCode === 404 && paid.length === 0, "a pinned target that is not named for it is not bought");
+  }
+  // CONTROLS: any other task buys the same candidate, and no outside match at all keeps its own answer.
+  for (const task of ["reverse dns for an ip", "is this ip private", "ip address validation", "asn for an ip", "where is the ip for example.com", "weather for my location"]) {
+    const before = day();
+    const x = await run(mk(async () => [NEAR]), task);
+    ok(!x.e && paid.join() === NEAR.url && day() > before && x.req.__externalSpend != null, `CONTROL "${task}": the resolver's candidate is bought as before, its spend reserved (${paid.join() || x.e?.message}; day ${before} -> ${day()})`);
+  }
+  {
+    const x = await run(mk(async () => []), "ip geolocation");
+    ok(x.e?.statusCode === 404 && /No external x402 seller matched that task/.test(x.e.message), `CONTROL: a gap task with no outside match keeps the no-seller answer (${x.e?.message?.slice(0, 80)})`);
+  }
+  // The helper: the same array for any other task; slug or name for a gap task.
+  {
+    const list = [NEAR, NAMED];
+    const same = gapNamedCandidates("reverse dns for an ip", list);
+    ok(same.items === list && same.dropped === 0 && same.gap === null, "any other task gets the resolver's own list back");
+    const g = gapNamedCandidates("ip geolocation", [NEAR, NAMED, BYNAME, { slug: "geo", name: "IP" }, { slug: "ip-lookup", name: "Lookup", description: "ip geolocation geoip", tags: ["geolocation"] }]);
+    ok(g.items.map((c) => c.slug).join() === "ip-geolocation,lookup-v2" && g.dropped === 3 && g.gap?.id === "ip-geolocation", `a gap task keeps rows named by slug or by name, never by description or tags (${g.items.map((c) => c.slug).join()})`);
+  }
+  // The name rides from an index row to the candidate the handler reads.
+  ok(resolvedCandidateOf({ seller: "https://g2.example", slug: "lookup-v2", name: "IP to country", url: "https://g2.example/v2/lookup" }).name === "IP to country" && !("name" in resolvedCandidateOf({ seller: "s", slug: "x", url: "u" })), "a resolved candidate carries its listing's name");
+  // The resolver applies the rule before its judge call and its probes.
+  {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const fn = src.slice(src.indexOf("async function resolveExternalSeller("), src.indexOf("async function diagnoseExternalSeller("));
+    const at = fn.indexOf("gapNamedCandidates(task, candidates)");
+    ok(at > 0 && at < fn.indexOf("judgeSellerOrder(task, candidates)") && at < fn.indexOf("probePublicUrl") && /gateDrops\.byReason\.capability_gap/.test(fn), "the resolver sets un-named candidates aside before the judge and before any probe");
+  }
+}
+// ---- the resolver itself, in a booted server: what reaches the judge and the probes ----
+// Two outside sellers with the same settlement evidence, both eligible: one
+// named for IP geolocation, one that only describes itself with the words.
+// The server's every outbound request is recorded from inside its process
+// (scripts/lib/outbound-record-preload.js) and answered there.
+{
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { randomBytes } = await import("node:crypto");
+  const { fileURLToPath } = await import("node:url");
+  const { bootServer } = await import("./lib/boot-server.js");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gap-resolver-"));
+  const now = Date.now();
+  const NEAR_ORIGIN = "https://near-lookup.example", NAMED_ORIGIN = "https://named-geo.example";
+  const P1 = "0x1111111111111111111111111111111111111111", P2 = "0x2222222222222222222222222222222222222222";
+  const entry = (origin, payTo, tool) => [origin, {
+    manifest: { name: origin.replace(/^https:\/\//, ""), homepage: origin }, fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1],
+    payToByNetwork: { "eip155:8453": payTo }, evmDomainByNetwork: { "eip155:8453": { name: "USD Coin", version: "2" } },
+    tools: [{ seller: origin, method: "POST", price: "$0.01", networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo }, ...tool }],
+  }];
+  const lbFile = join(dir, "leaderboard-snapshot.json");
+  const lbRow = (rank, origin, payTo) => ({ rank, homepage: origin, origins: [origin], wallet: payTo, wallets: [payTo], callsSettled: 500, uniqueBuyers: 40 });
+  writeFileSync(lbFile, JSON.stringify({
+    spec: "x402-leaderboard/1", asOf: new Date(now).toISOString(), windowLabel: "7d", leaderboard: [lbRow(1, NEAR_ORIGIN, P1), lbRow(2, NAMED_ORIGIN, P2)],
+    walletEvidence: { [P1]: { callsSettled: 500, uniqueBuyers: 40, origins: [NEAR_ORIGIN] }, [P2]: { callsSettled: 500, uniqueBuyers: 40, origins: [NAMED_ORIGIN] } },
+  }));
+  writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 2 }),
+    JSON.stringify(entry(NEAR_ORIGIN, P1, { route: "/api/ip-lookup", slug: "ip-lookup", name: "IP lookup", tags: ["geolocation"], description: "ip geolocation geolocate geoip ip location where is this ip located country city coordinates" })),
+    JSON.stringify(entry(NAMED_ORIGIN, P2, { route: "/api/ip-geolocation", slug: "ip-geolocation", name: "IP geolocation", description: "Country, city and coordinates for an address." }))].join("\n") + "\n");
+  const srv = await bootServer({
+    stores: "gap-resolver", ipc: true, args: ["--import", fileURLToPath(new URL("./lib/outbound-record-preload.js", import.meta.url))],
+    readyPath: `/api/index?seller=${encodeURIComponent(NAMED_ORIGIN)}`, timeoutMs: 90_000,
+    env: { FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
+      LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "0", SOR_EXTERNAL_ENABLED: "1", X402_UPSTREAM_BUYER_KEY: `0x${randomBytes(32).toString("hex")}`, TYPESAFE_API_KEY: "offline-stand-in", ROUTE_JUDGE: "on" },
+  });
+  const record = () => new Promise((resolve) => {
+    const id = randomBytes(6).toString("hex");
+    const on = (m) => { if (m?.outbound === "record" && m.id === id) { srv.child.off("message", on); resolve(m.requests); } };
+    srv.child.on("message", on);
+    srv.child.send({ outbound: "read", id });
+  });
+  try {
+    const run = async (task) => {
+      const before = (await record()).length;
+      const r = await fetch(`${srv.url}/api/route/execute-max`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task, include: "external", params: { ip: "8.8.8.8" } }) });
+      const text = await r.text();
+      const sent = (await record()).slice(before);
+      const toSeller = (origin) => sent.filter((x) => `https://${x.host}` === origin);
+      const judged = sent.filter((x) => !/\.example$/.test(x.host) && /asked a tool router to run this task/.test(x.body));
+      return { status: r.status, text, sent, near: toSeller(NEAR_ORIGIN), named: toSeller(NAMED_ORIGIN), judged, judgedNear: judged.filter((x) => /ip-lookup|near-lookup|IP lookup/.test(x.body)) };
+    };
+    // Both sellers are candidates the router may buy from (the gap is the only thing between them).
+    const listed = await (await fetch(`${srv.url}/api/route?q=${encodeURIComponent("ip geolocation")}&include=external&top=10`)).json();
+    const rowOf = (origin) => (listed.results || []).find((x) => x.seller === origin);
+    ok(rowOf(NEAR_ORIGIN)?.routerDispatchEligible === true && rowOf(NAMED_ORIGIN)?.routerDispatchEligible === true, `both outside sellers are eligible for the router (${rowOf(NEAR_ORIGIN)?.routerDispatchReason}, ${rowOf(NAMED_ORIGIN)?.routerDispatchReason})`);
+    const gap = await run("ip geolocation");
+    ok(gap.near.length === 0 && gap.judgedNear.length === 0, `a gap task: the seller that is not named for it is never probed and never sent to the judge (${gap.near.length} requests to it, ${gap.judgedNear.length} judge calls naming it)`);
+    ok(gap.named.length >= 1 && gap.named.every((x) => x.path === "/api/ip-geolocation") && gap.judged.length >= 1 && gap.judged.every((x) => /ip-geolocation/.test(x.body)), `...and the one named for it is judged and probed (${gap.named.length} requests to it, ${gap.judged.length} judge calls)`);
+    // CONTROL: on a task outside the list the same seller IS judged and probed.
+    const plain = await run("ip lookup");
+    ok(plain.near.length >= 1 && plain.judgedNear.length >= 1, `CONTROL: for a task outside the list the same seller is judged and probed (${plain.near.length} requests to it, ${plain.judgedNear.length} judge calls naming it)`);
+    ok(gap.sent.concat(plain.sent).every((x) => /\.example$/.test(x.host) || x.host === "api.typesafe.ai"), `nothing else left the server during the two runs (${[...new Set(gap.sent.concat(plain.sent).map((x) => x.host))].join(", ")})`);
+  } finally {
+    await srv.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

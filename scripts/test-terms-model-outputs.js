@@ -25,6 +25,7 @@ for (const variant of ["off", "on"]) {
   ok(/href="https:\/\/openai\.com\/policies\/usage-policies\/"/.test(sec) && /href="https:\/\/openrouter\.ai\/docs\/features\/provider-routing#terms-of-service"/.test(sec), `${variant}: it links the providers' usage terms and the model terms list`);
   ok(/train or improve an AI model that competes/.test(sec), `${variant}: no training competing models on outputs`);
   ok(/don't present AI output as made by a person/.test(sec) && /Synthetic speech[^.]*must always be disclosed as AI-generated/.test(sec), `${variant}: AI output is never presented as human-made, and synthetic speech is always disclosed`);
+  ok(/video clip that depicts a real person[^.]*image-animate[^.]*: it needs the consent of the person it depicts and must always be disclosed as AI-generated/.test(sec) && /offer that speech or those clips to your own users, you must require them to get the same consent and disclose it the same way/.test(sec), `${variant}: a clip of a real person needs that person's consent and an AI disclosure, passed on to the buyer's own users`);
   ok(/advice that requires a professional license/.test(sec), `${variant}: no licensed professional advice built on outputs`);
   const gw = /<li><b>AI gateway:<\/b>([\s\S]*?)<\/li>/.exec(html)?.[1] || "";
   ok(/our gateway service/.test(gw) && /priced before it runs/.test(gw) && !/proxy/.test(gw), `${variant}: the gateway bullet describes the routes as our service`);

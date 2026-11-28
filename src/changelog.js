@@ -1,4 +1,4 @@
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { upstreamKeyEnabled } from "./upstream-key.js";
 import { stockToolServed } from "./tools/stock-provider.js";
@@ -18,7 +18,7 @@ import { CSV_ANSWER_MAX_BYTES } from "./tools/kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
-import { settleFirstCopyOn, SETTLE_FIRST_TEXT } from "./settle-first-copy.js";
+import { settleFirstCopyOn, SETTLE_FIRST_TEXT, SETTLE_FIRST_MARK } from "./settle-first-copy.js";
 import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
@@ -59,6 +59,75 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-28",
+    title: "Shorter pages, clearer answers",
+    items: [
+      "Site: Tool pages are shorter: a short lead, one line per fact under \"Errors and behavior\", and related tools and skill packs as linked names.",
+      "Site: A tool page's lead ends at a sentence or clause boundary; on a phone an address or hash in its parameter table breaks at the line's end, and the price badge never starts a wrapped line with its separator dot.",
+      "Site: Skill pack pages list their tools in a table with each tool's route; the full pack text is still served to agents by the API and MCP.",
+      "Site: Skill pack prompts state each pack's budget as its listed price and each tool's proof-of-work eligibility as listed.",
+      "Site: /changelog shows the 30 most recent entries; older entries moved to /changelog/archive. /docs/api is a short index of the API references.",
+      "Site: Long pages such as the changelog archive bind their line wraps in short turns, on first load and on resize, so the page stays responsive while it finishes.",
+      "Site: The home page, /sell and /docs open with short answers and keep detail one tap away; /status shows rails in a table; the Transactions page (/revenue) leads with its figures.",
+      "Site: /privacy and /terms open with a summary and a jump list and are dated 2026-11-28; the full text below them is unchanged and governs.",
+      "Site: Two new pages: SEC Form 4 insider trades by API at /insider-trades-api, and a guide to agent-to-agent payments over x402 at /guides/agent-to-agent-payments, whose sample sets a per-call ceiling.",
+      "Site: A new page at /crypto-history-stats-api covers the routes that answer a coin's history as computed figures, not a price series.",
+      "Site: /company lists the official Agent402.tools packages and endpoints; the same list is in the README and in /.well-known/x402 (field `official`).",
+      "Site: /start has an \"On your phone\" path: add the connector from a phone's browser, use it in the Claude app, and check it with one free first prompt; both connector steps name the Customize, then Connectors menu.",
+      "Site: The FAQ answers \"Is it free?\", \"Do I need crypto?\", \"Does it work on my phone?\" and \"Is my data safe?\".",
+      "Site: New page /recipes: prompts to copy into an AI app, each with the tool it runs and its catalog price.",
+      "Site: The FAQ's data answer matches /privacy: a tool's input goes to the outside source the lookup needs, and a model-backed tool's input goes to its model provider.",
+      "Site: /start and /recipes offer card payment only while a card offer is on sale; with the credits connector off, /recipes says paid recipes run from a computer with a wallet.",
+      "Site: /start notes that on Team and Enterprise plans an Owner adds the connector.",
+      "Site: /terms asks that a generated clip of a real person have that person's consent and be disclosed as AI-generated, and that a buyer ask the same of its own users.",
+      "Index: The index crawler sends one seller route at most one unpaid price request a week. Inside that week it asks once more only after a server error, a redirect or no answer, to confirm a not-found answer from a route the seller's documents do not list, or when the price those documents state has changed. Registering again still reads at once, the paywall check (one request to a seller's cheapest paid route, on a rotation across the index) keeps its own schedule, and /crawler says the same.",
+      "Index: A large document read from a seller or a registry is parsed in a separate process with its own memory limit and rebuilt in short steps, so a crawl of a multi-megabyte catalog no longer delays other requests; a document that ends that parser, or is too large to parse safely (also when that parser is unavailable), is not parsed by the server, the seller's or registry's previous listing is kept unchanged, and a seller's scheduled crawl does not fetch it again for up to a day (registering again still reads at once).",
+      "Tools: /v1/videos/generations has a higher list price, shown on /api/pricing and in its 402.",
+      "Tools: ip-info is named \"IP address type and reverse DNS\"; its route and answer are unchanged, and /api/find answers a reverse DNS or PTR lookup search with it.",
+      "Tools: An image prompt the provider's content filter stops answers 422 with reason `content_filtered`, in place of the earlier 400 or 502; a provider outage keeps its 5xx answer, and an overloaded or rate-limited provider is read as an outage, not a filtered prompt.",
+      "Tools: Tool pages for the tools with the longest descriptions show a shorter summary, while their listings and API descriptions are unchanged.",
+      "Tools: crypto-history, coin-ohlc and coin-market-chart-range answer look-back statistics computed from a coin's history (return, volatility, drawdown with its dates, best and worst day, distance from the window's high and low, trend, candle statistics) and no longer return the price series or candles.",
+      "Tools: coin-history answers what changed since a date in place of the dated price snapshot.",
+      "Tools: token-price-history answers the same look-back statistics for a token and no longer returns price points.",
+      "Tools: EDGAR tools, reports and pages share one pace of at most 8 requests a second to the SEC's hosts, with turns shared across callers; an EDGAR tool call whose read cannot get its turn in time answers 503 with Retry-After, at once when its place cannot be reached, and is not charged on x402; a run whose payment is final before it runs starts ahead of the line and is never refused by the pace, and a read that arrives while its payment is settling waits for that outcome first.",
+      "Tools: New: `POST /api/image-animate` turns a still picture (PNG or JPEG, sent as base64, a data: URL or an https URL) and a motion prompt into one silent 4-second 720p clip that opens on the picture, model-backed and priced flat per clip.",
+      "Tools: Video generation answers 422 with reason `content_filtered` when the provider's filter refuses the request at submit, not only when a job fails.",
+      "Tools: New: `name-records` returns, for a name, the creator, publisher, first appearance and other statements Wikidata records, the US trademark serial numbers it records with links to their USPTO record pages, and the Commons file page's recorded author, license and restriction tags, plus an exact-copy Commons match for an uploaded image; each record carries its source link and read time, and the answer makes no determination of ownership or permitted use.",
+      "Tools: cert-transparency waits up to 18 seconds for its certificate log across all of a call's reads, so a slow but healthy log is served where it used to answer a retryable error.",
+      "Tools: A ticker pack whose payment is settled before its work no longer fails because one of its report legs met this server's own pace of EDGAR reads.",
+      "Tools: A skill pack with no successful step names each failed step in the answer's `pack` and `failedSteps` fields.",
+      "Tools: Image-to-video and text-to-video calls end inside the payment's own time, the picture's download included; a clip cut off by that time is kept for the same request to collect.",
+      "Tools: Image-to-video refuses a picture whose pixel data cannot be read, before anything is sent to the provider, and its content-filter answer on a finished job says to change the prompt or the picture.",
+      "Tools: name-records and wikidata-entity make one Wikimedia read per host at a time across all callers, taking fair turns so one caller's burst never refuses another's read.",
+      "API: /api/find, /api/route and route-and-execute read a task that asks for IP geolocation, in phrasings such as \"which country is this IP in\" and for the time zone or local time of an IP too, as a miss (`capabilityGap` names it) unless a listed tool is named for it; every other query is answered as before. route-and-execute, with `include:\"external\"` as well, answers 404 for such a task without running or charging anything.",
+      "API: /api/find and /api/route no longer read the query word \"add\" inside \"address\", so a calculator task is not matched to address tools, and \"add two numbers\" is answered with the calculator.",
+      "API: /api/find, /api/route and route-and-execute read a task that asks only for a coin's price on a past date as a miss (`capabilityGap` names it) unless a listed tool is named for it; a task that names anything else, a date that names the current year or a later one, or a month with no year, is answered as before.",
+      "API: route-and-execute answers 400 naming the missing fields when a call to a chat completion lacks the fields the seller requires and no other candidate can take it, before any purchase.",
+      "API: route-and-execute no longer asks a chat-room message route for `model` and `messages`.",
+      "API: /api/find and /api/route answer \"current bitcoin price\" (and btc, ethereum, eth) with crypto-price and a coin's volatility (\"bitcoin volatility last 90 days\") with crypto-history; a query that holds only one word of those phrases is ranked as before.",
+      "API: /api/find and /api/route read arithmetic written in words (\"5 plus 7\", \"seven minus five\", \"6 times 7\") as the calculator's task; \"plus\" or \"times\" outside an expression is ranked as before.",
+      "API: /api/find, /api/route and route-and-execute read a task that asks only for a stock's price history as a miss (`capabilityGap: \"stock-price-history\"`) while no stock history tool is listed, unless a listed tool is named for it; route-and-execute answers 404 without running or charging anything, and every other query is answered as before.",
+      "API: On the hosted connector, a paid tool asked without payment and a free tool past its limit say what to do next, with a link that opens on a phone, and every limit says when it resets.",
+      "API: /llms.txt names the image routes whose payment can settle before their work; a video route never is.",
+      "API: A self-hosted FREE_MODE server's free-limit message names only the limit and when it resets.",
+      "Operations: The operator view of /api/gateway-status shows a projected-runway word for each spending and fee wallet whose balance a low-balance alarm already reads (`FUNDING_RUNWAY_DAYS` sets how many days ahead it looks), held steady while a wallet sits at the mark; it can also watch wallets the server does not spend from, read by public address (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.",
+      "Operations: /api/gateway-status carries a `crawlParse` word for the crawl's document parser; a registry whose whole list could not be parsed reads `registry-kept` and pages one issue.",
+      "Operations: A seller whose document keeps ending the parser stops having its previous listing kept after three such reads or six hours, and its entry reads as the seller's failed read.",
+      "Operations: Reads of SEC filings share one pace across the server's processes, so a deploy's overlap stays under the SEC's rate.",
+      "Operations: A crawl cycle in which no seller's documents changed no longer rebuilds the route index or the directory, so the full collections that stalled requests during crawls run less often.",
+      "Operations: The router's seller index frees each replaced listing after a crawl in which nothing changed, finds a listing again once a read error clears, and bounds the row compare inside one store.",
+      "Packages: agent402-mcp 0.17.2 is published for the MCP Registry under tools.agent402/agent402, a name verified against the agent402.tools domain; the earlier name stays resolvable and is being marked deprecated with a pointer to it.",
+    ],
+  },
+  {
+    date: "2026-11-28",
+    title: "Tool page payment sentence",
+    shownWhen: settleFirstCopyOn,
+    items: [
+      `Site: On a server that does not set \`GATEWAY_SETTLE_FIRST=off\`, a tool page shows the sentence about calls ${SETTLE_FIRST_MARK} only on the routes that can be paid first.`,
+    ],
+  },
   {
     date: "2026-11-27",
     title: "Stellar refund proof",
@@ -2591,6 +2660,59 @@ ${items}
 </rss>`;
 }
 
+// /changelog shows the most recent entries; every older entry is on
+// /changelog/archive, grouped by month, so no entry leaves the site.
+export const CHANGELOG_RECENT = 30;
+/** The entries /changelog shows and the ones /changelog/archive holds. */
+export function changelogSplit() {
+  const shown = shownEntries();
+  return { recent: shown.slice(0, CHANGELOG_RECENT), older: shown.slice(CHANGELOG_RECENT) };
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthName = (ym) => `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+
+function entryHtml(entry, h) {
+  const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
+  return `
+          <div class="tl-entry">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <span class="tl-date">${esc(entry.date)}</span>
+              <${h}>${esc(entry.title)}</${h}>
+              <ul>
+              ${itemsHtml}
+              </ul>
+            </div>
+          </div>`;
+}
+
+const CHANGELOG_CSS = `
+.cl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
+.cl-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
+.cl-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
+.cl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.cl-rss{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:32px;}
+.cl-rss:hover{text-decoration:underline;}
+.cl-more{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:8px 0 0;}
+.cl-months{display:flex;flex-wrap:wrap;gap:8px 18px;list-style:none;padding:0;margin:0 0 32px;font-family:var(--font-mono);font-size:var(--fs-sm);}
+.cl-months a{color:var(--accent);white-space:nowrap;}
+.cl-month{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:40px 0 18px;color:var(--ink);}
+.timeline{position:relative;padding-left:28px;}
+.timeline::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1.5px;background:var(--hairline);}
+.tl-entry{position:relative;margin-bottom:24px;}
+.tl-dot{position:absolute;left:-28px;top:8px;width:16px;height:16px;background:var(--accent);border:3px solid var(--paper);}
+.tl-card{background:var(--card);border:1px solid var(--hairline);padding:20px 24px;}
+.tl-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:4px;}
+.tl-card h2,.tl-card h3{font-family:var(--font-body);font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
+.tl-card h2{font-weight:700;}
+.tl-card h3{font-weight:600;}
+.tl-card ul{margin:0;padding-left:20px;color:var(--muted);font-size:var(--fs-base);line-height:1.55;}
+.tl-card li{margin-bottom:5px;}
+.tl-card li:last-child{margin-bottom:0;}
+@media(max-width:600px){.cl-wrap h1{font-size:var(--fs-3xl);}.tl-card{padding:16px 18px;}}
+`;
+
 export function changelogPage(baseUrl) {
   const canonical = `${baseUrl}/changelog`;
   const title = "Changelog - what's new at Agent402";
@@ -2605,40 +2727,11 @@ export function changelogPage(baseUrl) {
     isPartOf: { "@type": "WebSite", url: baseUrl },
   };
 
-  const timelineHtml = shownEntries().map((entry) => {
-    const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
-    return `
-          <div class="tl-entry">
-            <div class="tl-dot"></div>
-            <div class="tl-card">
-              <span class="tl-date">${esc(entry.date)}</span>
-              <h2>${esc(entry.title)}</h2>
-              <ul>
-              ${itemsHtml}
-              </ul>
-            </div>
-          </div>`;
-  }).join("\n");
-
-  const extraCss = `
-.cl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
-.cl-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
-.cl-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
-.cl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
-.cl-rss{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:32px;}
-.cl-rss:hover{text-decoration:underline;}
-.timeline{position:relative;padding-left:28px;}
-.timeline::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1.5px;background:var(--hairline);}
-.tl-entry{position:relative;margin-bottom:24px;}
-.tl-dot{position:absolute;left:-28px;top:8px;width:16px;height:16px;background:var(--accent);border:3px solid var(--paper);}
-.tl-card{background:var(--card);border:1px solid var(--hairline);padding:20px 24px;}
-.tl-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:4px;}
-.tl-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
-.tl-card ul{margin:0;padding-left:20px;color:var(--muted);font-size:var(--fs-base);line-height:1.55;}
-.tl-card li{margin-bottom:5px;}
-.tl-card li:last-child{margin-bottom:0;}
-@media(max-width:600px){.cl-wrap h1{font-size:var(--fs-3xl);}.tl-card{padding:16px 18px;}}
-`;
+  const { recent, older } = changelogSplit();
+  const timelineHtml = recent.map((entry) => entryHtml(entry, "h2")).join("\n");
+  const moreHtml = older.length
+    ? `<p class="cl-more">These are the ${recent.length} most recent entries. The ${older.length} older ones, back to ${esc(older[older.length - 1].date)}, are in the <a href="/changelog/archive">changelog archive</a>.</p>`
+    : "";
 
   const body = `<div class="cl-wrap">
   <section>
@@ -2651,10 +2744,48 @@ export function changelogPage(baseUrl) {
   <div class="timeline">
 ${timelineHtml}
   </div>
+  ${moreHtml}
   </section>
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: CHANGELOG_CSS, body });
+}
+
+/** Every entry older than the ones /changelog shows, by month, newest first. */
+export function changelogArchivePage(baseUrl) {
+  const canonical = `${baseUrl}/changelog/archive`;
+  const title = "Changelog archive - Agent402";
+  const description = "Every earlier Agent402 changelog entry, by month: tools, skill packs, framework adapters, and platform features.";
+  const { older } = changelogSplit();
+  const months = [];
+  for (const e of older) {
+    const ym = e.date.slice(0, 7);
+    let m = months.find((x) => x.ym === ym);
+    if (!m) months.push((m = { ym, entries: [] }));
+    m.entries.push(e);
+  }
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Changelog", "/changelog"], ["Archive", "/changelog/archive"]]);
+  const monthNav = months.length > 1
+    ? `<ul class="cl-months" aria-label="Months">${months.map((m) => `<li><a href="#m-${m.ym}">${monthName(m.ym)}</a></li>`).join("")}</ul>`
+    : "";
+  const sections = months.map((m) => `<section id="m-${m.ym}">
+  <h2 class="cl-month">${monthName(m.ym)}</h2>
+  <div class="timeline">
+${m.entries.map((e) => entryHtml(e, "h3")).join("\n")}
+  </div>
+  </section>`).join("\n");
+  const body = `<div class="cl-wrap">
+  ${crumbs.nav}
+  <section>
+  <h1>Changelog archive</h1>
+  <p class="cl-desc">${older.length ? `Every entry older than the ${CHANGELOG_RECENT} on <a href="/changelog">the changelog</a>, newest first. Each describes the service on its date; current prices are on <a href="/pricing">/pricing</a> and in every 402.` : `Every entry is on <a href="/changelog">the changelog</a>.`}</p>
+  ${monthNav}
+  </section>
+${sections}
+</div>
+${ledgerFooterCompact()}`;
+  const jsonLd = [{ "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: canonical, isPartOf: { "@type": "WebSite", url: baseUrl } }, crumbs.ld];
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: CHANGELOG_CSS, body });
 }
 import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";

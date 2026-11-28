@@ -711,6 +711,8 @@ export const CRAWL_TOOLS = [
     price: "$0.005",
     description:
       "Discover a website's URLs in one call: reads robots.txt, its declared sitemap(s) (sitemap indexes and gzipped sitemaps included, /sitemap.xml as the fallback) and the start page's internal links, then returns a same-host, normalized, deduplicated list (up to 500) with an optional substring filter. Hard budgets: at most 6 fetches, 15 seconds, 5 MB. Use it to pick which pages to crawl or extract next.",
+    pageSummary:
+      "Discover a website's URLs in one call, from its robots.txt, its sitemaps and the start page's internal links. Returns a same-host, normalized, deduplicated list (up to 500) with an optional substring filter. Sitemap indexes and gzipped sitemaps are read, /sitemap.xml as the fallback. Hard budgets: at most 6 fetches, 15 seconds, 5 MB. Use it to choose pages to crawl or extract next.",
     tags: ["web", "sitemap", "crawl", "urls", "discovery", "seo", "robots", "site"],
     discovery: {
       bodyType: "json",
