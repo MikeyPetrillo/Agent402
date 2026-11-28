@@ -251,9 +251,11 @@ Returns an **object**, not a bare array. The matches are in `results`:
   back to `all`).
 - `capabilityGap` and `capabilityGapCovered` appear only on a query that asks
   for a capability this host's catalog does not offer. The list is short and
-  named in the source (`src/capability-gaps.js`); today it holds two entries,
-  `ip-geolocation` and `coin-price-on-date` (the look-back tools answer
-  statistics computed from a coin's history, never a past price). Such a query is a miss unless a row is named for the
+  named in the source (`src/capability-gaps.js`); today it holds three entries,
+  `ip-geolocation`, `coin-price-on-date` (the look-back tools answer
+  statistics computed from a coin's history, never a past price) and
+  `stock-price-history` (the price-history tools read coins and tokens; the
+  entry applies while this host lists no stock history tool). Such a query is a miss unless a row is named for the
   capability in its slug or name (a description does not count), and a row
   that is named for it, an outside seller's included, is ranked first. On a
   miss the answer carries `capabilityGapCovered: false`, `weakMatches: true`,
