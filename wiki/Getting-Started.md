@@ -43,7 +43,7 @@ To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new walle
 
 | You are… | Use |
 |---|---|
-| A Claude user | Paste `https://agent402.tools/mcp` into Settings → Connectors - see [[MCP Connector]] |
+| A Claude user | Paste `https://agent402.tools/mcp` into Customize → Connectors - see [[MCP Connector]] |
 | A Cursor, VS Code, Windsurf, Cline, Codex or Gemini CLI user | Each host's config block is in the [agent-hosts guide](https://agent402.tools/guides/agent-hosts) - see also [[MCP Connector]] |
 | An MCP-based agent | `npx -y agent402-mcp@0.17.2` with optional `AGENT_KEY` - see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages - see [[Adapters]] |

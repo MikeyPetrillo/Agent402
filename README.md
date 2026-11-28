@@ -129,7 +129,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 
 Pick whichever fits. They are all free and need no wallet:
 
-**1. Zero install - add the hosted connector to Claude** (claude.ai → Settings → Connectors → Add custom connector):
+**1. Zero install - add the hosted connector to Claude** (claude.ai → Customize → Connectors → Add → Add custom connector):
 
 ```
 https://agent402.tools/mcp

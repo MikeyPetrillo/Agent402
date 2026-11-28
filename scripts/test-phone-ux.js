@@ -18,6 +18,9 @@
 //   - /start at 375 px: the phone card is the first app card, its address and
 //     first prompt each have a copy button of 44 px or more that does not sit
 //     on the text, and the page does not scroll sideways.
+//   - /start at 1024, 1280 and 1440 px: every app card's code block follows its
+//     sentence (no hollow block between them), no card ends on more than a
+//     line of empty space, and the prompt's label is one line of its own.
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
@@ -403,6 +406,32 @@ document.addEventListener('DOMContentLoaded',function(){
     ok(r.blocks.length === 2 && r.blocks.every((b) => b.btn && b.text.length && !b.text.some((t) => overlap(t, b.btn))), "/start at 375 px: neither copy button sits on the text it copies");
     ok(r.blocks.map((b) => b.label).join() === "Copy the connector address,Copy the first prompt", `/start: each copy button is named for what it copies (${r.blocks.map((b) => b.label).join(", ")})`);
     ok(r.sideways <= 0, `/start at 375 px: the page does not scroll sideways (${r.sideways})`);
+    await p.close();
+  }
+  for (const width of [1024, 1280, 1440, 375]) {
+    const p = await open("/start", width);
+    await p.waitForSelector("#phone .ml-code-copy", { timeout: 8000 }).catch(() => {});
+    const r = await p.evaluate(() => {
+      const lines = (e) => { const g = document.createRange(); g.selectNodeContents(e); return [...g.getClientRects()].filter((x) => x.width > 0); };
+      const cards = [...document.querySelectorAll("#apps .st-card")].map((c) => {
+        const inner = c.getBoundingClientRect().bottom - parseFloat(getComputedStyle(c).paddingBottom);
+        // Each block against the text before it; the card's last content against its inner edge.
+        const gaps = [...c.querySelectorAll(".ml-code")].map((b) => { const prev = b.previousElementSibling; const ls = prev ? lines(prev) : []; return ls.length ? b.getBoundingClientRect().top - Math.max(...ls.map((x) => x.bottom)) : 999; });
+        const ends = [...c.querySelectorAll("p, .ml-code")].map((e) => e.getBoundingClientRect().bottom);
+        // The phone card's two columns, while they sit side by side.
+        const side = [...c.querySelectorAll(".st-cols > div")]; const beside = side.length === 2 && Math.abs(side[0].getBoundingClientRect().top - side[1].getBoundingClientRect().top) < 2;
+        const cols = beside ? side.map((d) => Math.max(...[...d.children].map((e) => e.getBoundingClientRect().bottom))) : [];
+        return { id: c.id, gap: Math.round(Math.max(...gaps)), tail: Math.round(inner - Math.max(...ends)), cols: cols.length ? Math.round(Math.max(...cols) - Math.min(...cols)) : 0 };
+      });
+      const ask = document.querySelector("#phone .st-ask"), next = ask?.nextElementSibling;
+      const askLines = ask ? new Set(lines(ask).map((x) => Math.round(x.top))).size : 0;
+      const line = ask ? parseFloat(getComputedStyle(ask).lineHeight) : 0;
+      return { cards, askLines, askAbove: Boolean(next && next.matches(".ml-code[data-name='the first prompt']")), line };
+    });
+    const show = r.cards.map((c) => `${c.id} ${c.gap}/${c.tail}/${c.cols}`).join(", ");
+    ok(r.cards.length === 4 && r.cards.every((c) => c.gap <= 16), `/start at ${width} px: every app card's code block follows its sentence (gap/tail/columns px: ${show})`);
+    ok(r.cards.length === 4 && r.cards.every((c) => c.tail <= r.line + 2 && c.cols <= r.line + 2), `/start at ${width} px: no app card ends on more than a line of empty space`);
+    ok(r.askLines === 1 && r.askAbove, `/start at ${width} px: the prompt's label is one line, directly above the prompt (${r.askLines} line(s))`);
     await p.close();
   }
 } finally {

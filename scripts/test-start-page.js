@@ -65,7 +65,7 @@ const creditsOnly = plain(startPage(ORIGIN, catalog, { credits: true, connector:
 const CONNECTOR_URL = `${ORIGIN}/mcp/credits`;
 
 const apps = startApps(ORIGIN);
-ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor,On your phone", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
+ok(apps.map((a) => a.name).join() === "On your phone,Claude desktop,Cursor,Claude Code", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
 {
   // The phone path, in both switch states, from the same list the page renders.
   const offHtml = startPage(ORIGIN, catalog, { credits: false, connector: false, storefront: false });
@@ -74,8 +74,8 @@ ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor,On your
   const cardOf = (html) => { const at = html.indexOf(`id="${START_PHONE_ID}"`); return at < 0 ? "" : plain(html.slice(at, html.indexOf('<div id="', at + 10) > 0 ? html.indexOf('<div id="', at + 10) : html.indexOf("</section>", at))); };
   ok(phoneOff?.copy === install.hostedUrl && cardOf(offHtml).includes(install.hostedUrl) && !cardOf(offHtml).includes("/mcp/credits"), "sales off: the phone card pastes the hosted connector address");
   ok(phoneOn?.copy === CONNECTOR_URL && cardOf(onHtml).includes(CONNECTOR_URL), "credits and the sign-in on: the phone card pastes the credits connector address");
-  ok(phoneOff && !/card|credit/i.test(`${phoneOff.step} ${phoneOff.then}`) && /free tools run from your phone with no wallet/.test(phoneOff.then) && /wallet set up on a computer/.test(phoneOff.then), "sales off: the phone steps say what runs with no wallet and offer no card or credits");
-  ok(phoneOn && /A card pays for paid tools/.test(phoneOn.then) && /sign in with your email/.test(phoneOn.then) && cardOf(onHtml).includes("A card pays for paid tools"), "credits and the sign-in on: the phone steps say a card pays for paid tools after an email sign-in");
+  ok(phoneOff && !/card|credit/i.test(`${phoneOff.step} ${phoneOff.after} ${phoneOff.then} ${phoneOff.promptLabel}`) && /free tools run from your phone with no wallet/.test(phoneOff.then) && /wallet set up on a computer/.test(phoneOff.then), "sales off: the phone steps say what runs with no wallet and offer no card or credits");
+  ok(phoneOn && /A card pays for paid tools/.test(phoneOn.then) && /sign in with your email/.test(phoneOn.after) && cardOf(onHtml).includes("A card pays for paid tools"), "credits and the sign-in on: the phone steps say a card pays for paid tools after an email sign-in");
   ok(phoneOff && /claude\.ai/.test(phoneOff.step) && /Add custom connector/.test(phoneOff.step) && /Claude app/.test(phoneOff.then), "the phone steps add the connector in the browser and use it in the Claude app");
   ok(FREE_TIER_SLUGS.has(START_FIRST_PROMPT.slug) && isComputePayable({ slug: START_FIRST_PROMPT.slug, route: "POST /api/x", price: "$0.001" }), `the first prompt's tool is on the free list (${START_FIRST_PROMPT.slug})`);
   ok(phoneOff?.prompt === START_FIRST_PROMPT.text && cardOf(offHtml).includes(START_FIRST_PROMPT.text) && cardOf(onHtml).includes(START_FIRST_PROMPT.text), "the phone card ends on the first prompt, in both states");
@@ -83,7 +83,11 @@ ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor,On your
   const ld = JSON.parse(offHtml.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => m.replace(/^<script[^>]*>|<\/script>$/g, "")).find((j) => /"HowTo"/.test(j)));
   const step = ld.step.find((x) => x.name === "On your phone");
   ok(step && step.text.includes(install.hostedUrl) && step.text.includes(START_FIRST_PROMPT.text) && !/credit/i.test(JSON.stringify(ld)), "the page's structured data carries the phone step and offers no credits with sales off");
-  ok(/order:-1/.test(offHtml) && offHtml.includes(`#${START_PHONE_ID}{order:-1}`), "at phone width the phone card is first");
+  ok(/<p class="st-ask"[^>]*>Ask this to check the connection:<\/p>\s*<div class="ml-code[^"]*" data-name="the first prompt"/.test(offHtml) && phoneOff.promptLabel === "Ask this to check the connection:", "the prompt's label is its own line, directly above the prompt block");
+  const { CONNECTOR_MENU_STEP } = await import("../src/start-page.js");
+  ok(apps.find((a) => a.id === "claude-desktop").step === CONNECTOR_MENU_STEP && /Customize, then Connectors/.test(CONNECTOR_MENU_STEP) && /Customize, then Connectors/.test(phoneOff.step), "the desktop and phone steps name the same menu path");
+  const printed = ["README.md", "wiki/MCP-Connector.md", "wiki/Getting-Started.md", "mcp/README.md", "llms-install.md"].map((f) => [f, readFileSync(join(ROOT, f), "utf8")]);
+  ok(printed.every(([, t]) => !/Settings\s*(→|>|,|->)\s*(open )?Connectors/.test(t)) && printed.filter(([, t]) => /Customize → Connectors/.test(t)).length === printed.length, `every printed copy of the menu path agrees (${printed.filter(([, t]) => !/Customize → Connectors/.test(t)).map(([f]) => f).join(", ") || "all"})`);
 }
 ok(apps.find((a) => a.id === "claude-desktop").copy === install.hostedUrl && allOff.includes(install.hostedUrl), "Claude desktop pastes the hosted connector address from the install hints");
 ok(apps.find((a) => a.id === "claude-code").copy === install.claudeCodeHosted && allOff.includes(install.claudeCodeHosted), "Claude Code runs the hosted install line from the install hints");

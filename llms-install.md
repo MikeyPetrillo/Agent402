@@ -41,8 +41,8 @@ add to `mcpServers`:
 }
 ```
 
-For the hosted connector instead: claude.ai → Settings → Connectors → Add
-custom connector → `https://agent402.tools/mcp`.
+For the hosted connector instead: claude.ai → Customize → Connectors → Add →
+Add custom connector → `https://agent402.tools/mcp`.
 
 ## Cline (VS Code extension)
 
