@@ -126,8 +126,17 @@ pinned to the tested SHA, every required check green.
   it buys each newly missing route once, under its cap) and read `0 still missing`. The deploy's
   own register job runs only on its marker, so a new route is otherwise unlisted until the next
   scheduled check.
+- The phone path, no phone needed: `TARGET_URL=https://agent402.tools node scripts/phone-path-check.js`
+  (Chromium at 375 px with touch): it opens /start, taps Copy on the Claude desktop step and reads
+  the hosted connector address from the clipboard, calls `hash` (the sample prompt's tool) through
+  that address over /mcp, then opens /recipes and taps a prompt's Copy. One free call, nothing paid.
+- Before a release that changes setup or payment copy, the owner runs the path once on a real
+  phone: find the site, add the connector in the Claude app, make a first free call; once credits
+  are on sale, a first paid call as well.
 
-Result: each of the four reads recorded with its value.
+Result: each read recorded with its value, the phone-path check exits 0 with every step `ok`,
+and for a release that changes setup or payment copy, the owner's phone run recorded (what was
+tapped, the first free answer, and the first paid answer once credits are on).
 
 ## 8. Findings log
 After each gate, append the gate's findings to the per-batch findings log kept in the private

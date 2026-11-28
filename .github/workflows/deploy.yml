@@ -3291,6 +3291,9 @@ jobs:
       - name: Phone and touch checks (pricing badge, no-match search line, 24 px arrow links, reports h1 on the scale, status strip by tap; real browser)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
 
+      - name: Phone path release check (375 px, real browser, its own port-0 boot and two drifted proxies; scripts/phone-path-check.js)
+        run: node scripts/test-phone-path-check.js
+
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
 
