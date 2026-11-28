@@ -347,18 +347,21 @@ document.addEventListener('DOMContentLoaded',function(){
       const p = await open(LONG, 1440); await settled(p);
       const edits = await p.evaluate(() => (document.querySelector("main").innerHTML.match(/\u2060|\u00A0|<wbr>/g) || []).length);
       await p.evaluate(() => { window.__long = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long.push(e.duration); }).observe({ entryTypes: ["longtask"] }); });
-      await p.setViewportSize({ width: 390, height: 900 }); await p.waitForTimeout(2500);
-      const got = await snap(p);
+      // Wait for the outcome, not a fixed time: a slow runner stretches a
+      // long page's turns. Poll until the text is the fresh load's, up to a
+      // deadline, then read it once more to confirm nothing follows.
+      const boundAs = async (pg, target, ms = 30_000) => { const end = Date.now() + ms; let cur = await snap(pg); while (cur !== target && Date.now() < end) { await pg.waitForTimeout(250); cur = await snap(pg); } await pg.waitForTimeout(500); return (await snap(pg)) === cur ? cur : null; };
+      await p.setViewportSize({ width: 390, height: 900 });
+      const got = await boundAs(p, want);
       const longest = await p.evaluate(() => Math.round(Math.max(0, ...window.__long)));
       const call = await p.evaluate(() => { const t = []; for (let i = 0; i < 3; i++) { const s = performance.now(); window.a402Rebind(); t.push(performance.now() - s); } return Math.round(t.sort((a, b) => a - b)[1]); });
-      await p.waitForTimeout(2500);
-      const again = await snap(p);
+      const again = await boundAs(p, want);
       ok(edits >= 500, `${LONG} is a long page for the pass (${edits} edits at 1440px)`);
       ok(call < 50 && longest < 300, `${LONG}: a changed width re-measures in short turns (the call returns in ${call} ms, the longest task after the resize ${longest} ms)`);
       ok(got === want && again === want, `${LONG}: narrowed from 1440px to 390px it is bound as a fresh load binds it, and again after three more passes started over each other`);
       await p.setViewportSize({ width: 400, height: 900 }); await p.waitForTimeout(260);
-      await p.setViewportSize({ width: 414, height: 900 }); await p.waitForTimeout(2500);
-      ok((await snap(p)) === want2, `${LONG}: a width that changes again while a pass runs ends bound for the last width`);
+      await p.setViewportSize({ width: 414, height: 900 });
+      ok((await boundAs(p, want2)) === want2, `${LONG}: a width that changes again while a pass runs ends bound for the last width`);
       await p.close();
     }
     // A re-measure waits for the web fonts as the first binding does: with a
