@@ -156,6 +156,70 @@ for (const pack of SKILL_PACKS) {
   ok(refused && /No step in the "trend-analysis" pack succeeded/.test(refused.message), "all attempted steps failing still refuses (nothing to sell)");
 }
 
+// ---- a pack none of whose steps succeeded says so in fields ----------------
+// The 502 names each failed step in its message; the same answer rides in
+// fields (`pack`, `failedSteps`), so a reader need not parse the sentence:
+// each step's status and message, whose failure its tool said it was, and
+// `blocked` for a step that never ran because an earlier step of the chain
+// left it nothing to read.
+{
+  const { __test: { runPack }, PACK_STEPS } = await import("../src/tools/skill-runner.js");
+  const { ALL_SKILL_PACKS } = await import("../src/skills.js");
+  const { toolErrorFields, packFailureOf } = await import("../src/tool-error-fields.js");
+  const { upstreamHostsForSlug, declaresUpstreamHosts, packUpstreamHosts } = await import("./lib/upstream-outage.js");
+  const packIndex = new Map(ALL_SKILL_PACKS.map((p) => [p.slug, p]));
+  const REFUSED = "The U.S. Bureau of Labor Statistics API did not answer or refused the read (the publisher's own limit or outage); retry shortly. Nothing was charged.";
+  const ran = [];
+  const inline = {
+    "stock-history": async () => { ran.push("stock-history"); throw Object.assign(new Error("Market data is not configured on this server."), { statusCode: 503 }); },
+    "us-macro-series": async () => { ran.push("us-macro-series"); throw Object.assign(new Error(REFUSED), { statusCode: 503, attribution: "upstream", retryAfter: 60 }); },
+    "forecast-eval": async () => { ran.push("forecast-eval"); return {}; },
+    ...Object.fromEntries(["forecast-naive", "forecast-ses", "forecast-holt", "forecast-holt-winters"].map((slug) => [slug, async (i) => { ran.push(slug); if (!i.values?.length) throw Object.assign(new Error("values must hold at least 2 numbers"), { statusCode: 400 }); return {}; }])),
+  };
+  let e = null;
+  try { await runPack("forecasting-bake-off", { series: "UNRATE" }, { packIndex, catalog: {}, inlineHandlers: inline }); } catch (x) { e = x; }
+  const f = packFailureOf(e), body = toolErrorFields(e);
+  const macro = f?.failedSteps.find((st) => st.slug === "us-macro-series");
+  const evals = (f?.failedSteps || []).filter((st) => st.slug === "forecast-eval");
+  ok(e?.statusCode === 502 && body.pack === "forecasting-bake-off" && Array.isArray(body.failedSteps) && body.failedSteps.length === f.failedSteps.length, `the pack's all-steps-failed 502 carries the pack and its failed steps in the answer's fields (${e?.statusCode}, ${body.failedSteps?.length} steps)`);
+  ok(macro?.statusCode === 503 && macro.attribution === "upstream" && macro.blocked === undefined && /did not answer or refused the read/.test(macro.error) && !/Nothing was charged/.test(macro.error), `the step whose source refused carries its status, its message and its tool's own attribution (${JSON.stringify(macro)})`);
+  ok(evals.length === 4 && evals.every((st) => st.blocked === true && st.starved === undefined && st.after.join() === "stock-history,us-macro-series" && st.statusCode === 422) && !ran.includes("forecast-eval"), `a step whose input could not be built from a failed step's missing output is marked blocked, with the steps it read, and its handler never ran (${JSON.stringify(evals[0])})`);
+  const fwd = f?.failedSteps.find((st) => st.slug === "forecast-naive");
+  ok(fwd?.starved === true && fwd.blocked === undefined && fwd.statusCode === 400 && fwd.after.includes("us-macro-series") && ran.includes("forecast-naive"), `a step that ran on an input mapped from a failed step's missing output is marked starved, never blocked (${JSON.stringify(fwd)})`);
+  ok(f?.failedSteps.find((st) => st.slug === "stock-history")?.after === undefined, "the first failed steps read no failed step and carry neither mark");
+  ok(/^No step in the "forecasting-bake-off" pack succeeded/.test(e.message) && /us-macro-series: The U\.S\. Bureau of Labor Statistics API did not answer or refused the read \(the publisher's own limit or outage\)/.test(e.message), "the message still names each step's own sentence: a source's refusal is said as the source's");
+  // Our own spent allowance is said as ours: no attribution to the source.
+  const SPENT = "The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow.";
+  let e2 = null;
+  try { await runPack("forecasting-bake-off", { series: "UNRATE" }, { packIndex, catalog: {}, inlineHandlers: { ...inline, "us-macro-series": async () => { throw Object.assign(new Error(SPENT), { statusCode: 503, capRefusal: "bls-day" }); } } }); } catch (x) { e2 = x; }
+  const spent = packFailureOf(e2)?.failedSteps.find((st) => st.slug === "us-macro-series");
+  ok(spent && spent.attribution === undefined && /allowance of this server is used up/.test(spent.error), `this server's own spent allowance carries no attribution to the source (${JSON.stringify(spent)})`);
+  // A step that ran and failed is never marked blocked, whatever failed before it.
+  let e3 = null;
+  try { await runPack("macro-snapshot", {}, { packIndex, catalog: {}, inlineHandlers: { "us-macro-series": async () => { throw Object.assign(new Error("our own parse error"), { statusCode: 500 }); } } }); } catch (x) { e3 = x; }
+  const ours = packFailureOf(e3)?.failedSteps || [];
+  ok(ours.length >= 3 && ours.every((st) => st.blocked === undefined && st.starved === undefined && st.attribution === undefined && st.statusCode === 500), `steps that ran and failed with our own error are neither marked nor attributed (${ours.length} steps)`);
+  // The fields are bounded and checked.
+  const big = packFailureOf({ pack: "p", failedSteps: Array.from({ length: 90 }, (_, i) => ({ slug: `s-${i}`, statusCode: 502, error: "x".repeat(5000), attribution: "Upstream <b>", after: ["../x"], blocked: true, starved: true })) });
+  ok(big.failedSteps.length === 40 && big.failedSteps[0].error.length === 400 && big.failedSteps[0].attribution === undefined && big.failedSteps[0].after.length === 0 && big.failedSteps[0].blocked === true && big.failedSteps[0].starved === undefined && packFailureOf({ pack: "Bad Pack", failedSteps: [{ slug: "a" }] }) === null && packFailureOf(new Error("x")) === null,
+    "the fields are bounded: at most forty steps, a capped message, checked slugs and attribution words, and none for any other error");
+  // A partial answer's envelope is unchanged: the facts ride the refusal only.
+  const partial = await runPack("macro-snapshot", {}, { packIndex, catalog: {}, inlineHandlers: { "us-macro-series": async (i) => { if (i.seriesId === "UNRATE") throw Object.assign(new Error(REFUSED), { statusCode: 503, attribution: "upstream" }); return { observations: [] }; } } });
+  const pf = partial.steps.find((st) => !st.ok);
+  ok(pf && Object.keys(pf).sort().join() === "error,ok,slug,statusCode", `a failed step in a served envelope keeps its four fields (${Object.keys(pf || {}).join()})`);
+  // EVERY pack declares the hosts its steps' tools declare, as a literal list.
+  const wrong = [];
+  let declaring = 0;
+  for (const [pack, cfg] of Object.entries(PACK_STEPS)) {
+    const want = new Set();
+    for (const st of cfg.steps) if (declaresUpstreamHosts(st.slug)) for (const h of upstreamHostsForSlug(st.slug)) want.add(h);
+    const lit = [...packUpstreamHosts(pack)].sort().join(), have = [...(cfg.upstreamHosts || [])].sort().join();
+    if (want.size) declaring++;
+    if ([...want].sort().join() !== have || lit !== have) wrong.push(`${pack}: steps declare [${[...want].sort().join()}], pack declares [${have}], read as [${lit}]`);
+  }
+  ok(wrong.length === 0 && declaring >= 12, `every pack whose steps' tools declare upstream hosts declares the same hosts as a literal list, and no other pack declares any (${declaring} packs)${wrong.length ? `: ${wrong.join(" | ")}` : ""}`);
+}
+
 // ---- trend-analysis does what its workflow says (2026-10-02) ---------------
 // The correlation step used to pass the series against itself (r = 1 on every
 // run) and the bake-off ran forecast-eval once with drift.

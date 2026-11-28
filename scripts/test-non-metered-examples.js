@@ -294,7 +294,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict, sourceAllowanceVerdict, declaredSourceVerdict, directReadAnswer } from "./lib/upstream-outage.js";
+import { packOutageVerdict, upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus, hollowAnswerVerdict, sourceAllowanceVerdict, declaredSourceVerdict, directReadAnswer } from "./lib/upstream-outage.js";
 import { CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 
@@ -596,6 +596,22 @@ export async function sourceRefusalGrade(t, r, read = sourceReadOnce, root) {
   const v = (await declaredSourceVerdict({ slug: t.slug, ...opts })) || (await sourceAllowanceVerdict({ slug: t.slug, error: r.body?.error, ...opts }));
   if (!v) return null;
   if (v.verdict === "upstream") return { skip: `${t.slug}: answered ${r.status} "${errText(r.body, r.threw).slice(0, 80)}", and ${v.evidence} (upstream, not our defect)` };
+  return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 160)} [not excused: ${v.reason}]` };
+}
+
+// A SKILL PACK none of whose steps succeeded answers a 502 with the failed
+// steps in fields (`pack`, `failedSteps`). It is graded as its steps', by the
+// shared rule (scripts/lib/upstream-outage.js packOutageVerdict): excused, and
+// named, only when every failed step that ran is excused by the single-tool
+// rules above against a host the pack itself declares, and every other failed
+// step never ran. One step that failed for a reason of ours fails the pack.
+// Resolves null for any other answer.
+export async function packFailureGrade(t, r, read = sourceReadOnce, root) {
+  const pack = String(t.path || "").startsWith("/api/skill/") ? t.path.slice("/api/skill/".length) : null;
+  if (!pack) return null;
+  const v = await packOutageVerdict({ pack, status: r.status, body: r.body, read, ...(root ? { root } : {}) });
+  if (!v) return null;
+  if (v.verdict === "upstream") return { skip: `${t.slug}: answered ${r.status} with no step served, and ${v.evidence} (upstream, not our defect)` };
   return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 160)} [not excused: ${v.reason}]` };
 }
 
@@ -1035,9 +1051,26 @@ export async function runVerdictStubControls() {
       g = await sourceRefusalGrade(ct, { status: 502, body: { error } }, crtAnswers);
       ok(Boolean(g?.fail), `control (stub): "${error}" FAILS while crt.sh answers the runner`);
     }
+    // A skill pack's all-steps-failed 502 (packFailureGrade): graded as its
+    // steps', from the answer's fields, against the real packs' declarations.
+    const bake = { slug: "skill-forecasting-bake-off", method: "post", path: "/api/skill/forecasting-bake-off" };
+    const packBody = (failedSteps) => ({ error: `No step in the "forecasting-bake-off" pack succeeded, so there is nothing to return. us-macro-series: ${REFUSED}`, tool: bake.slug, pack: "forecasting-bake-off", failedSteps });
+    const macroStep = { slug: "us-macro-series", statusCode: 503, error: REFUSED, attribution: "upstream" };
+    const evalStep = { slug: "forecast-eval", statusCode: 422, error: "need ≥6 observations for backtest, got 0", blocked: true, after: ["us-macro-series"] };
+    const fwdStep = { slug: "forecast-naive", statusCode: 400, error: "values must hold at least 2 numbers", starved: true, after: ["us-macro-series"] };
+    g = await packFailureGrade(bake, { status: 502, body: packBody([macroStep, evalStep, evalStep, fwdStep]) }, blsRefuses);
+    ok(/skill-forecasting-bake-off: answered 502 with no step served, and every step judged on its own answer failed on its source's side \(us-macro-series: api\.bls\.gov refuses the runner's direct read too/.test(g?.skip || ""), `control (stub): a pack whose only step that ran was refused by BLS, which refuses the runner too, is excused and named (${g?.skip || g?.fail})`);
+    g = await packFailureGrade(bake, { status: 502, body: packBody([macroStep, evalStep]) }, blsAnswers);
+    ok(Boolean(g?.fail) && /answers the runner's direct read/.test(g.fail), "control (stub): the same pack answer FAILS while BLS answers the runner");
+    g = await packFailureGrade(bake, { status: 502, body: packBody([macroStep, { slug: "forecast-eval", statusCode: 500, error: "Internal error" }]) }, blsRefuses);
+    ok(Boolean(g?.fail) && /step forecast-eval failed for a reason that is no declared source's refusal \(ours\)/.test(g.fail), "control (stub): a pack with one step failing with our own error FAILS though BLS refuses the runner");
+    g = await packFailureGrade({ slug: "skill-decode-blob", method: "post", path: "/api/skill/decode-blob" }, { status: 502, body: { ...packBody([macroStep]), pack: "decode-blob" } }, blsRefuses);
+    ok(Boolean(g?.fail) && /declares no upstream host/.test(g.fail), "control (stub): a pack that declares no host is not excused for a step's source");
+    ok((await packFailureGrade(bake, { status: 502, body: { error: packBody([]).error } }, blsRefuses)) === null && (await packFailureGrade(cpi, { status: 502, body: packBody([macroStep]) }, blsRefuses)) === null,
+      "control (stub): a pack answer without the fields, and a route that is not a pack, are not read by the pack rule");
     const src = (await import("node:fs")).readFileSync(fileURLToPath(import.meta.url), "utf8");
     // Each needle is joined here, so this control never finds its own text.
-    const graded = src.indexOf(["const source = await", "sourceRefusalGrade(t, r);"].join(" ")), skip = src.indexOf(["if", "(isRateLimited(r.status, r.body, r.threw)) {"].join(" "));
+    const graded = src.indexOf(["const source = (await packFailureGrade(t, r)) || await", "sourceRefusalGrade(t, r);"].join(" ")), skip = src.indexOf(["if", "(isRateLimited(r.status, r.body, r.threw)) {"].join(" "));
     ok(graded > 0 && skip > graded, "the strict sweep reads a source's refusal against the runner before its rate-limit skip");
   }
   const listen = (handler) => new Promise((resolve) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => resolve(srv)); });
@@ -1300,7 +1333,7 @@ async function main() {
     }
     // A source's refusal of the server (or this server's spent allowance of
     // it): read against the runner, before the rate-limit skip below.
-    const source = await sourceRefusalGrade(t, r);
+    const source = (await packFailureGrade(t, r)) || await sourceRefusalGrade(t, r);
     if (source?.skip) {
       skippedRunnerUnreachable++;
       console.log(`\nskip - ${source.skip}`);

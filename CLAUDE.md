@@ -167,6 +167,10 @@ LLC: credit the entity, never a personal name.
   shared read helper, or other tools' handlers as a bundle product does) writes the hosts in its own
   definition as a literal `upstreamHosts: [...]`; a sweep excuses its upstream's refusal only against
   the runner's direct read of a declared host (`scripts/lib/upstream-outage.js`).
+- A skill pack (`src/tools/skill-runner.js`) declares, as a literal `upstreamHosts` beside its mode, the hosts
+  its steps' tools declare (`scripts/test-skill-pack-steps.js` holds the two equal). Its all-steps-failed
+  answer carries `pack` and `failedSteps` in fields (`src/tool-error-fields.js`), and a sweep excuses it only
+  when every step judged on its own answer is excused against a host the pack declares (`packOutageVerdict`).
 - A bundle product (`src/tools/bundle-kit.js`) holds one read per upstream host per unit at a time,
   runs a leg the source rate-limited (its 429) once, and starts no further unit after it; a leg
   helper that answers the source's 429 in its own words marks the error `throttled`. Its published
