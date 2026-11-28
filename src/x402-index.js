@@ -11490,7 +11490,7 @@ function sameShallow(a, b) {
   return true;
 }
 const rowKeyOf = (t) => (t && typeof t === "object" ? `${t.method} ${t.route}` : "");
-let rowsKept = 0; // rows a store kept from the entry it replaced (test counter)
+let rowsKept = 0, serviceKeysKept = 0; // test counters
 /** The entry as stored, with each row equal to the previous entry's row for the
  *  same place (or the same method and route) replaced by that previous row
  *  object; the list itself is the previous one when every row is. The rows are
@@ -11511,8 +11511,13 @@ function keepUnchangedRows(prev, v) {
   }
   if (!out) return v;
   rowsKept += kept;
-  // Every row the previous one, in its order: the previous list.
-  if (out.length === was.length && out.every((t, i) => t === was[i])) out = was;
+  // Every row the previous one, in its order: the previous list, and the
+  // entry's service key (a function of its rows alone) is the previous one's.
+  if (out.length === was.length && out.every((t, i) => t === was[i])) {
+    const next = { ...v, tools: was };
+    if (serviceKeyMemo.has(prev)) { serviceKeyMemo.set(next, serviceKeyMemo.get(prev)); serviceKeysKept++; }
+    return next;
+  }
   return { ...v, tools: out };
 }
 // The last pool decorated for each origin's live entry, with its context.
@@ -11524,6 +11529,7 @@ function keepUnchangedRows(prev, v) {
 // object, so a kept copy's inherited networks and domains are the values the
 // fresh copy carries. Nothing is written on the crawled rows themselves.
 const decoratedByOrigin = new Map(); // origin -> { c, pool }
+const poolCtx = new WeakMap(); // decorated pool -> the context it was decorated with (one per entry)
 function sameDecorationCtx(a, b) {
   return a.home === b.home && a.name === b.name && Object.is(a.health, b.health) && a.hasDomains === b.hasDomains
     && sameValue(a.sellerNets, b.sellerNets) && sameValue(a.sellerDomains, b.sellerDomains);
@@ -11561,7 +11567,12 @@ function decorateRow(t, c) {
 const decoratePartial = new WeakMap();
 function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   const memo = remotePoolMemo.get(v);
-  if (memo) return memo;
+  if (memo) {
+    // A pool decorated while its entry was out of the cache (or before an
+    // earlier entry's) becomes the origin's last pool once it is the live one.
+    if (typeof origin === "string" && decoratedByOrigin.get(origin)?.pool !== memo && cache.get(origin) === v && poolCtx.has(memo)) decoratedByOrigin.set(origin, { c: poolCtx.get(memo), pool: memo });
+    return memo;
+  }
   let p = decoratePartial.get(v);
   try {
     if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null, prev: null }; decoratePartial.set(v, p); }
@@ -11600,6 +11611,7 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   }
   decoratePartial.delete(v);
   remotePoolMemo.set(v, p.out);
+  poolCtx.set(p.out, p.c);
   if (typeof origin === "string" && cache.get(origin) === v) decoratedByOrigin.set(origin, { c: p.c, pool: p.out });
   return p.out;
 }
@@ -12381,7 +12393,7 @@ export function _routeIndexAuditForTest() {
 }
 /** Test hook: what the layers built and kept (counters since boot). */
 export function _rowReuseStatsForTest() {
-  return { flatRowsKept, rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
+  return { flatRowsKept, serviceKeysKept, rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
@@ -12546,6 +12558,10 @@ const yieldToLoop = () => new Promise((r) => setImmediate(r));
 // thread, so a caller's CPU budget is charged while the query runs, not only
 // when it ends (a burst of queries would otherwise all pass a budget check
 // that none of them had charged yet).
+// Test hook: a query's steps, driven by the suite, and how many queries have
+// read their view of the cache (so a suite can stop one right after it has).
+let routeQueryViews = 0;
+export function _routeQueryStepsForTest(args) { return { steps: routeQuerySteps({ ...args, drainBacklog: false }), views: () => routeQueryViews }; }
 export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null } = {}) {
   // In this thread a backlog is scanned, never indexed inline (see routeIndexSync).
   const steps = routeQuerySteps({ ...args, drainBacklog: false });
@@ -12784,6 +12800,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     const liveOrder = [], liveAt = new Map();
     for (const [o, v] of cache) { liveOrder.push(v); liveAt.set(o, v); }
     const live = new Set(liveOrder);
+    routeQueryViews++;
     const unindexed = routeIndexUnindexedLive(); // entry -> origin, scanned whole
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to

@@ -71,6 +71,7 @@ for (let cycle = 0; cycle < 2; cycle++) {
   const s = await settle();
   const d = delta(r0, reuse());
   ok(s.staleTools === 0 && s.builds === b0, `unchanged cycle ${cycle + 1}: nothing stale and no compaction (stale ${s.staleTools}, builds ${b0} -> ${s.builds})`);
+  ok(!!d && d.serviceKeysKept === cache.size, `unchanged cycle ${cycle + 1}: every entry's service key carried over (${d?.serviceKeysKept} of ${cache.size})`);
   ok(!!d && d.rowsKept === rows && d.staticsBuilt === 0 && d.rowsDecorated === 0 && d.rowsPosted === 0 && d.rowsCopied === 0 && d.rowsMoved > 100000,
     `unchanged cycle ${cycle + 1}: every row kept (${d?.rowsKept} of ${rows}), no search text built (${d?.staticsBuilt}), no row decorated again (${d?.rowsDecorated}), none posted again (${d?.rowsPosted}); ${d?.rowsMoved} moved`);
   ok(clean(audit()), `unchanged cycle ${cycle + 1}: the lists hold every live row once (${show(audit())})`);
@@ -123,7 +124,7 @@ ok(ranked("gen2").length === 10 && ranked("gen1").length === 0, "the last cycle'
 // ---- a changed field always builds the row again ------------------------------------
 {
   const o = "https://kept-rows.example";
-  const row = (extra = {}) => ({ seller: o, method: "POST", route: "/api/zebra", slug: "zebra-count", name: "Zebra count", description: "counts zebras on the plain", category: "data", tags: ["zebra"], price: 0.002, networks: ["eip155:8453"], accepts: [{ network: "eip155:8453", amount: "2000" }], ...extra });
+  const row = (extra = {}) => ({ seller: o, method: "POST", route: "/api/zebra", slug: "zebra-count", name: "Zebra count", description: "counts zebras on the plain", category: "data", tags: ["zebra"], price: 0.002, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": "0x00000000000000000000000000000000000000aa" }, accepts: [{ network: "eip155:8453", amount: "2000" }], ...extra });
   const entry = (tools, history = [1, 1, 1]) => ({ manifest: { name: "Kept rows", homepage: o }, tools, fetchedAt: Date.now(), error: null, history });
   const zebra = () => xi.routeQuery({ query: "zebras", top: 5, include: "external", ...ctx }).results.find((r) => r.seller === o);
   cache.set(o, entry([row()]));
@@ -155,6 +156,7 @@ ok(ranked("gen2").length === 10 && ranked("gen1").length === 0, "the last cycle'
     cache.set(o, { ...live });
     await settle();
     ok(zebra()?.price === 0.005, `a row written in place and stored again is decorated again (${zebra()?.price})`);
+    ok(/0\.005/.test(xi._exactServiceKeyForTest(cache.get(o)) || ""), "...and its entry's service key is built again from the written row");
   }
   // The seller's context changed (its health), the row did not: a new copy
   // carries the new health, and the row's statics carry over.
@@ -196,6 +198,14 @@ ok(ranked("gen2").length === 10 && ranked("gen1").length === 0, "the last cycle'
   xi._routeIndexStartShadowForTest();
   await settle();
   ok(clean(audit()), `...and every live row is in the lists once (${show(audit())})`);
+  // A compaction that starts while the seller's newer entry waits to be
+  // indexed leaves the older entry's rows: they are moved, not copied.
+  cache.set(o, { manifest: { name: "Copied", homepage: o }, tools: tools.map((t) => ({ ...t })), fetchedAt: 3, error: null, history: [1, 1] });
+  const r1 = reuse();
+  xi._routeIndexStartShadowForTest();
+  await settle();
+  const d1 = delta(r1, reuse());
+  ok(!!d1 && d1.rowsMoved === 40 && d1.rowsCopied === 0, `a compaction started while the newer entry waits leaves its rows to move (${d1?.rowsMoved} moved, ${d1?.rowsCopied} copied)`);
   const served = new Set();
   for (let j = 0; j < 40; j++) for (const r of xi.routeQuery({ query: `okapi ${j}`, top: 25, include: "external", ...ctx }).results) if (r.seller === o) served.add(r.slug);
   ok(served.size === 40, `...and all 40 are served (${served.size})`);
@@ -204,16 +214,25 @@ ok(ranked("gen2").length === 10 && ranked("gen1").length === 0, "the last cycle'
 }
 
 // ---- a query part way through while a re-crawl moves the rows it reads ----------------
+// The query is stopped right after it read its view of the cache, the entries
+// are stored again (every row kept) and the drain moves the rows to the new
+// entries; then the query runs on. It ranks the rows of the entries it read.
 {
-  const want = await Promise.all(QUERIES.map((q) => xi.routeQueryAsyncInThread({ query: q, top: 10, include: "external", ...ctx }, { sliceMs: 0.2 })));
-  const m0 = reuse();
-  const running = QUERIES.map((q) => xi.routeQueryAsyncInThread({ query: q, top: 10, include: "external", ...ctx }, { sliceMs: 0.2 }));
-  for (const [o, v] of [...cache]) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })), fetchedAt: Date.now() });
-  const got = await Promise.all(running);
-  const moved = delta(m0, reuse())?.rowsMoved || 0;
   const sig = (r) => JSON.stringify(r.results.map((x) => `${x.seller}|${x.slug}|${x.score}`));
-  ok(moved > 0 && got.every((r, i) => sig(r) === sig(want[i]) && r.results.length === 10), `queries that read the cache before a re-crawl moved ${moved} of their rows rank as before (${got.map((r) => r.results.length).join(", ")} results)`);
-  await settle();
+  for (const q of QUERIES) {
+    const args = { query: q, top: 10, include: "external", ...ctx };
+    const want = xi.routeQuery(args);
+    const run = xi._routeQueryStepsForTest(args);
+    const v0 = run.views();
+    let r = run.steps.next();
+    while (!r.done && run.views() === v0) r = run.steps.next();
+    const m0 = reuse();
+    for (const [o, v] of [...cache]) cache.set(o, { ...v, tools: v.tools.map((t) => ({ ...t })), fetchedAt: Date.now() });
+    await settle();
+    const moved = delta(m0, reuse())?.rowsMoved || 0;
+    while (!r.done) r = run.steps.next();
+    ok(!r.done ? false : moved > 100000 && want.results.length === 10 && sig(r.value) === sig(want), `a "${q}" query that read the cache before a re-crawl moved ${moved} rows ranks those rows as before (${r.value?.results?.length} results)`);
+  }
 }
 
 console.log(`\ntest-route-index-compaction: ${pass} passed, ${fail} failed`);
