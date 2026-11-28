@@ -137,13 +137,13 @@ const COINGECKO_SLUGS = new Set([
 // measurement the cap is tuned from.
 export const CG_KEYLESS_SAMPLE_SIZE = 2;
 export const CG_KEYED_SAMPLE_SIZE = 6;
-export const CG_RUN_READ_CAP = 40;
+export const CG_RUN_READ_CAP = 66;
 // The minute pacing holds a whole keyed run (with room for one retry in four)
 // and stays well under the per-minute limit of the key's plan: the lowest one
 // src/tools/coingecko-rate.js records is 100 calls a minute (the Demo plan; the
 // CI key's paid pro-tier plan allows more), and under the service's own
 // default bucket of 80, so a keyed 429 is still ours to explain.
-export const CG_RUN_MAX_PER_MIN = 40;
+export const CG_RUN_MAX_PER_MIN = 56;
 export const CG_PLAN_MIN_PER_MIN = 100;
 // The BLS key (BLS_API_KEY, the BLS-backed macro tools) is capped per run the
 // same way: the sweep server's BLS_DAILY_MAX is this (a fresh server's day is
@@ -156,6 +156,9 @@ export const CG_NIGHTLY_READ_CAP = 200;
 export const CG_EXAMPLE_READS = Object.freeze({
   "crypto-price": 2, "stablecoin-peg": 2, "exchanges": 2, "rwa-asset": 2,
   "chain-board": 3, "token-diligence": 4, "dex-volume-board": 3, "dex-pool-health": 3,
+  // The derivatives list is paged: its example (one coin at the default floor)
+  // reads about 18 pages, at most its page cap (FUNDING_PAGE_CAP).
+  "funding-screener": 24,
 });
 // Metered (excluded here), but the lenient sweep drives them on the keyed server.
 export const CG_KEYED_METERED_SLUGS = Object.freeze(["dex-volume-board", "dex-pool-health"]);
