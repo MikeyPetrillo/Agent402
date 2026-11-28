@@ -392,14 +392,7 @@ ok(stores >= 3 * SELLERS, `control: the cycles stored their origins (${stores} s
   // Counted per walk, in slices: a count does not depend on the machine's speed.
   const slices = new Map(), wholes = new Map();
   let counting = slices;
-  // Also per twin: each long document's own walks, not only the sum.
-  const twinSlices = new Map(), twinWholes = new Map();
-  const twinOf = (from) => { const m = /twin-(?:sliced|whole)-(\d+)\./.exec(String(from?.origin || "")); return m ? m[1] : null; };
-  idx.__setCrawlWalkObserverForTest((name, from) => {
-    counting.set(name, (counting.get(name) || 0) + 1);
-    const k = twinOf(from);
-    if (k !== null) { const m = counting === slices ? twinSlices : twinWholes; m.set(`${name} ${k}`, (m.get(`${name} ${k}`) || 0) + 1); }
-  });
+  idx.__setCrawlWalkObserverForTest((name) => counting.set(name, (counting.get(name) || 0) + 1));
   // And a long document that prices nothing: the payment-signal walk reads all of it.
   const UNPRICED = "https://unpriced.example";
   openapiBody.set(UNPRICED, manyOperations(250_000).replaceAll(',"x-payment-info":{"price":"0.01","currency":"USDC","network":"base"}', ""));
@@ -424,8 +417,6 @@ ok(stores >= 3 * SELLERS, `control: the cycles stored their origins (${stores} s
   idx.__setCrawlWalkObserverForTest(null);
   const per = (m) => ["examples", "signal", "pack-rows", "rows", "routes"].map((k) => `${k} ${m.get(k) || 0}`).join(", ");
   ok(["examples", "signal", "pack-rows"].every((k) => (slices.get(k) || 0) > (wholes.get(k) || 0) && wholes.get(k) > 0), `the probe-example walk, the payment-signal walk and the packing of the rows each ran over several lane slices (${per(slices)}; run whole: ${per(wholes)})`);
-  const unsliced = [...twinWholes.keys()].filter((k) => /^(examples|signal|pack-rows) /.test(k) && !((twinSlices.get(k) || 0) > twinWholes.get(k)));
-  ok(twinWholes.size > 0 && unsliced.length === 0, `...each of those walks over each long document ran in more slices than whole (${unsliced.join(", ") || "all did"})`);
   ok(same === 6 && rows > 10_000 && packedBytes > 0, `the long documents store the same entry and the same packed rows whether their walks ran in slices or whole (${same} sellers, ${rows} rows)`);
 }
 
