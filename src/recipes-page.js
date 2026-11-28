@@ -36,7 +36,7 @@ export const RECIPES = [
   { id: "units", task: "Convert units", slug: "unit-convert", prompt: () => "Use Agent402 to convert 10 kilometers to miles." },
 ];
 
-/** A catalog price as a person reads it: "$0.030" reads "$0.03", "$0.006" stays. */
+/** A catalog price as a person reads it: a trailing zero past the cents is dropped, a tenth of a cent is kept. */
 export function readablePrice(price) {
   const n = Number(String(price ?? "").replace(/[^0-9.]/g, ""));
   if (!Number.isFinite(n) || n <= 0) return null;
