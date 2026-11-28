@@ -171,6 +171,8 @@ const NEW_WORDS = [
   ["Scheduled check needs review: referral-settlement", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
   // The weather kit's keyed Open-Meteo reads (src/tools/weather-kit.js).
   ["Scheduled check needs review: weather-keyed-reads", "openMeteo", ["refused"], ["ok", "off"], ["unknown"]],
+  // The crawl's document parser: a registry list held from an earlier pass (src/crawl-parse.js).
+  ["Scheduled check needs review: crawl-parse", "crawlParse", ["registry-kept"], ["ok", "fallback", "paused", "off"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
