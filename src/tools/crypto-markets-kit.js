@@ -116,7 +116,7 @@ function headers() {
 }
 
 // One upstream GET with the cache in front. `ttlMs` picks the cache class.
-// Returns { data, fetchedAt, cached }.
+// Returns { data, fetchedAt, cached, expiresAt } (expiresAt: when the kept entry ends, ms).
 // The key's per-minute limit covers the whole deployment, so paid
 // traffic has to be paced here rather than discovered at the upstream 429. A
 // caller that arrives with an empty bucket gets 503 (capacity) and is not
@@ -145,7 +145,7 @@ export async function cgGet(path, params, ttlMs, reduce = null) {
   const cacheKey = reduce ? `${key}#${reduce.name}` : key;
   const { entry, cached } = await cache.through(cacheKey, ttlMs, () => cgLoad(key, path, reduce));
   entry.data ??= JSON.parse(entry.text);
-  return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
+  return { data: entry.data, fetchedAt: entry.fetchedAt, cached, expiresAt: entry.expiresAt };
 }
 
 // --- ids confirmed before they are read ---------------------------------------
@@ -277,12 +277,13 @@ async function cgLoad(key, path, reduce = null) {
   }
   // A reducer with `fromText` reads the body itself (a large list, in slices
   // that leave the event loop free between them); the body is then never
-  // parsed whole.
+  // parsed whole. It is handed the response headers too (a paged list names
+  // its next page in `link`).
   let text, data;
   try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); if (!reduce?.fromText) data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
   if (reduce) {
-    try { data = reduce.fromText ? await reduce.fromText(text) : reduce.fn(data); text = JSON.stringify(data); }
+    try { data = reduce.fromText ? await reduce.fromText(text, res.headers) : reduce.fn(data); text = JSON.stringify(data); }
     catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
   }
   // Every document read here is an object or a list. A body that parses to

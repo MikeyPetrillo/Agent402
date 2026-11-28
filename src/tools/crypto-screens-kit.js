@@ -24,19 +24,19 @@
 // read shares that kit's response cache (this process and, through the shared
 // store, every replica), its error mapping, and the one per-minute and daily
 // budget in coingecko-rate.js. A repeat call inside a document's cache window
-// spends nothing of that budget; the large documents (the derivatives list,
-// the stablecoin page with its 7-day series) are cached as the few fields the
-// tools read. The on-chain pool endpoints answer only to a key, so the two
+// spends nothing of that budget; the large documents (the derivatives list's
+// pages, the stablecoin page with its 7-day series) are cached as the few
+// fields the tools read. The on-chain pool endpoints answer only to a key, so the two
 // pool tools answer 503 (nothing charged) on a deployment without one.
 //
 // Every tool carries the credit CoinGecko's terms require, in its description
 // and as the `credit` field of every answer (src/data-attribution.js).
 
-import { cgGet, knownIdGate } from "./crypto-markets-kit.js";
-import { cgScopeAll } from "./coingecko-rate.js";
+import { cgGet, knownIdGate, ID_LIST_TTL_MS } from "./crypto-markets-kit.js";
+import { cgScopeAll, cgReserveUnconfirmed } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { markResaleComputed, markResaleCleared, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
-import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 import { partialFields } from "../partial-answer.js";
 
 const SOURCE = "coingecko";
@@ -64,7 +64,7 @@ const SOURCE = "coingecko";
 // Each listing states its window ("refreshed every N minutes").
 const MIN = 60_000;
 export const SCREEN_TTL = Object.freeze({
-  funding: 30 * MIN,         // funding-screener: the derivatives list
+  funding: 30 * MIN,         // funding-screener: each page of the derivatives list
   depeg: 15 * MIN,           // stablecoin-depeg-watch: the stablecoin page with its 7-day series
   spread: 5 * MIN,           // exchange-spread: one coin's venue tickers
   defi: 30 * MIN,            // defi-screener: the DeFi category page
@@ -83,7 +83,7 @@ export const SCREENS_MAX_TTL_MS = Math.max(...Object.entries(SCREEN_TTL).filter(
  *  daily cost of one caller polling without pause is the sum over a tool's
  *  rows of count x (86400000 / window). */
 export const SCREEN_READS = Object.freeze({
-  "funding-screener": [["funding", 1]],
+  "funding-screener": [["funding", 24]], // FUNDING_PAGE_CAP pages, the most one call reads (18 at the default floor)
   "stablecoin-depeg-watch": [["depeg", 1]],
   "exchange-spread": [["spread", 1]],
   "defi-screener": [["defi", 1]],
@@ -230,11 +230,29 @@ export function resetScreensMemory() { answerMemo.clear(); memoCounts.computed =
 // =============================================================================
 // funding-screener
 // =============================================================================
-// One document lists every derivatives ticker the upstream tracks. Kept from
-// it: perpetuals that are live, carry a funding rate and hold at least
-// FUNDING_MIN_OI_USD of open interest (the floor a caller may screen at).
-// funding_rate and basis arrive in percent; open interest and volume in USD.
+// The derivatives list is paged (FUNDING_PER_PAGE tickers a page, the most the
+// upstream gives): the perpetuals first, in descending open interest, then the
+// dated futures. Its `link` header names the next page. Pages are read in order
+// until one holds a perpetual under the call's floor (every later perpetual is
+// under it too), a page turns to futures (the perpetuals have ended), the list
+// ends, or FUNDING_PAGE_CAP pages are read; a cap, a page that cannot be read
+// (`upstream`), this server's own CoinGecko limiter (`read-limit`) or a spent
+// budget ends the reading early and the answer says so in fields (`scan`,
+// `complete`, `truncated`). Each page is its own cache entry, and every page
+// after the first is kept under page 1's window (its key names page 1's fetch,
+// its life ends with page 1's), so one scan never joins pages of two windows
+// and a deeper floor reads only the pages a shallower one did not.
+// Kept from each page: perpetuals that are live, carry a funding rate and hold
+// at least FUNDING_MIN_OI_USD of open interest (the floor a caller may screen
+// at). funding_rate and basis arrive in percent; open interest and volume in USD.
 const FUNDING_MIN_OI_USD = 100_000;
+export const FUNDING_PER_PAGE = 250;
+/** The most pages one call reads (6,000 tickers). The default floor needs
+ *  about 18 of them (measured 2026-11-28); a lower floor that needs more is
+ *  answered from these, marked partial with the open interest reached. */
+export const FUNDING_PAGE_CAP = 24;
+/** A page after the first is not started with less than this left in the call's budget. */
+const FUNDING_PAGE_FLOOR_MS = 3_000;
 const FUNDING_INTERVALS_PER_YEAR = 3 * 365;
 /** A venue whose annualized rate reaches this, either sign, is flagged. */
 const FUNDING_EXTREME_ANNUAL_PCT = 50;
@@ -284,21 +302,136 @@ export async function eachListObject(text, onObject, sliceChars = LIST_SLICE_CHA
   if (!closed || inString || i !== n) throw new Error("not a complete list");
 }
 
+// One page reduced: { rows, objects (tickers on the page), lowestOi (the
+// smallest open interest among its perpetuals), futures (the page holds a
+// contract that is not a perpetual: the perpetuals have ended), next (a later
+// page exists) }. `next` is the `link` header's rel="next" when the upstream
+// sends one, else a full page; a page holding more than FUNDING_PER_PAGE
+// tickers is an upstream that did not page, and is the whole list.
+// A `link` header (RFC 8288): comma-separated entries `<uri>; param=value`, and
+// rel's value a space-separated list of relation types. Read by splitting and
+// index lookups only, so the time is linear in the header whatever it holds.
+export const LINK_MAX_CHARS = 16_384;
+export function linkHasNext(link) {
+  if (typeof link !== "string" || !link) return false;
+  for (const entry of link.slice(0, LINK_MAX_CHARS).split(",")) {
+    const close = entry.indexOf(">");
+    if (entry.indexOf("<") < 0 || close < 0) continue;
+    for (const param of entry.slice(close + 1).split(";")) {
+      const eq = param.indexOf("=");
+      if (eq < 0 || param.slice(0, eq).trim().toLowerCase() !== "rel") continue;
+      const value = param.slice(eq + 1).trim().replace(/^"|"$/g, "");
+      if (value.toLowerCase().split(/\s+/).includes("next")) return true;
+    }
+  }
+  return false;
+}
+function perpPage() {
+  const rows = [];
+  let objects = 0, lowestOi = null, futures = false;
+  return {
+    take(t) {
+      objects++;
+      if (!t || typeof t !== "object") return;
+      if (typeof t.contract_type === "string" && t.contract_type !== "perpetual") { futures = true; return; }
+      const oi = num(t.open_interest);
+      if (oi != null && (lowestOi === null || oi < lowestOi)) lowestOi = oi;
+      const r = perpFields(t); if (r) rows.push(r);
+    },
+    done(headers) {
+      const link = typeof headers?.get === "function" ? headers.get("link") : null;
+      const next = objects > FUNDING_PER_PAGE ? false : typeof link === "string" && link ? linkHasNext(link) : objects === FUNDING_PER_PAGE;
+      return { rows, objects, lowestOi, futures, next };
+    },
+  };
+}
 const reducePerps = {
-  name: "perps",
+  name: "perps-page",
   fn(doc) {
     if (!Array.isArray(doc)) throw new Error("not a list");
-    const rows = [];
-    for (const t of doc) { const r = perpFields(t); if (r) rows.push(r); }
-    return rows;
+    const page = perpPage();
+    for (const t of doc) page.take(t);
+    return page.done(null);
   },
   // The same reduction from the body text, in slices (cgLoad calls this one).
-  async fromText(text) {
-    const rows = [];
-    await eachListObject(text, (t) => { const r = perpFields(t); if (r) rows.push(r); });
-    return rows;
+  async fromText(text, headers = null) {
+    const page = perpPage();
+    await eachListObject(text, (t) => page.take(t));
+    return page.done(headers);
   },
 };
+const isPerpPage = (d) => d !== null && typeof d === "object" && Array.isArray(d.rows) && typeof d.next === "boolean" && typeof d.futures === "boolean";
+/** Two significant figures, rounded down: the open interest a scan reached,
+ *  stated as an edge rather than as any one venue's figure. */
+const edgeOf = (v) => { if (v == null || !(v > 0)) return null; const p = 10 ** (Math.floor(Math.log10(v)) - 1); return Math.floor(v / p) * p; };
+
+// The coin list's symbols (one read an hour, through the same cache as the id
+// lists), read only to confirm a coin page 1 does not list while the share of
+// the day kept for unsettled calls is full.
+const reduceSymbols = { name: "symbols", fn: (d) => (Array.isArray(d) ? [...new Set(d.map((r) => (typeof r?.symbol === "string" ? r.symbol.toUpperCase() : null)).filter(Boolean))] : []) };
+const symbolSets = new WeakMap();
+async function listedSymbol(coin) {
+  let read;
+  try { read = await cgGet("/coins/list", {}, ID_LIST_TTL_MS, reduceSymbols); } catch { return null; }
+  if (!Array.isArray(read.data) || !read.data.length) return null;
+  let set = symbolSets.get(read.data);
+  if (!set) { set = new Set(read.data); symbolSets.set(read.data, set); }
+  return set.has(coin);
+}
+/** Whether a coin-mode call reads past page 1. A coin page 1 lists is read
+ *  as asked. Another is read as asked while the call holds a place in the
+ *  unsettled share (src/tools/coingecko-rate.js cgReserveUnconfirmed, the rule
+ *  every id the lists have not confirmed follows); once the share is full it is
+ *  read as asked when the coin list names its symbol (or that list cannot be
+ *  read), and otherwise answered from page 1 alone, so made-up tickers cost
+ *  one page a window. Underlyings outside the coin list (indexes, stocks,
+ *  multiplied tickers such as 1000PEPE) are read in full whenever the share
+ *  has room; with it full, one not on page 1 is answered from page 1, and the
+ *  422 says how far the reading went. */
+async function coinMayPage(coin, page1) {
+  if (page1.rows.some((a) => a[2] === coin)) return true;
+  if (await cgReserveUnconfirmed()) return true;
+  return (await listedSymbol(coin)) !== false;
+}
+
+const isOurLimit = (err) => err?.attribution === "ours" && err?.statusCode === 503;
+/** The pages a call at `minOi` reads, in order. The first page's failure is
+ *  the call's; a later one ends the reading with what was read. `mayPage`
+ *  (coin mode) decides after page 1 whether to read on. */
+async function readPerpPages(minOi, mayPage = null) {
+  const reads = [];
+  let stoppedBy = null, scanOf = null;
+  for (let page = 1; stoppedBy === null; page++) {
+    if (page > FUNDING_PAGE_CAP) { stoppedBy = "page-cap"; break; }
+    if (page > 1 && budgetSpent(currentBudget(), FUNDING_PAGE_FLOOR_MS)) { stoppedBy = "deadline"; break; }
+    let read;
+    try {
+      // Page 1 sets the scan's window: every later page is kept under it.
+      read = page === 1
+        ? await cgGet("/derivatives", { page, per_page: FUNDING_PER_PAGE }, SCREEN_TTL.funding, reducePerps)
+        : await cgGet("/derivatives", { page, per_page: FUNDING_PER_PAGE }, Math.max(1_000, scanOf.endsAt - Date.now()), { ...reducePerps, name: `${reducePerps.name}@${scanOf.fetchedAt}` });
+    } catch (err) { if (page === 1) throw err; stoppedBy = isOurLimit(err) ? "read-limit" : "upstream"; break; }
+    if (!isPerpPage(read.data)) throw bad("Market data upstream returned an unexpected shape", 502);
+    reads.push(read);
+    if (page === 1) scanOf = { fetchedAt: read.fetchedAt, endsAt: Number.isFinite(read.expiresAt) ? read.expiresAt : Date.now() + SCREEN_TTL.funding };
+    if (read.data.lowestOi != null && read.data.lowestOi < minOi) stoppedBy = "floor";
+    else if (read.data.futures) stoppedBy = "perpetuals-end";
+    else if (!read.data.next) stoppedBy = "last-page";
+    else if (page === 1 && mayPage && !(await mayPage(read.data))) stoppedBy = "unconfirmed-coin";
+  }
+  const complete = stoppedBy === "floor" || stoppedBy === "perpetuals-end" || stoppedBy === "last-page";
+  const lows = reads.map((r) => r.data.lowestOi).filter((v) => v != null);
+  const scan = {
+    pagesRead: reads.length, pageCap: FUNDING_PAGE_CAP, stoppedBy, complete,
+    ...(complete ? {} : { openInterestReachedUsd: lows.length ? edgeOf(Math.min(...lows)) : null }),
+  };
+  // A ticker that moved across a page edge between two reads is counted once.
+  const seen = new Set(), rows = [];
+  for (const r of reads) for (const a of r.data.rows) { const k = `${a[0]}\u0000${a[1]}\u0000${a[2]}`; if (!seen.has(k)) { seen.add(k); rows.push(a); } }
+  return { reads, rows, scan };
+}
+/** A list answer's partial fields, marked partial too when the scan ended early. */
+const withScan = (fields, scan) => (scan.complete ? fields : { ...fields, complete: false, truncated: true });
 const perpRow = (a) => ({ venue: a[0], symbol: a[1], coin: a[2], funding: a[3], oi: a[4], basis: a[5], volume: a[6] });
 
 function fundingStats(rows) {
@@ -339,6 +472,7 @@ const fundingScreener = {
       example: {
         source: "coingecko", fetchedAt: "2026-11-16T12:00:00.000Z", cached: false,
         mode: "coin", coin: "ETH", venues: 42, minOpenInterestUsd: 1000000,
+        complete: true, truncated: false, scan: { pagesRead: 18, pageCap: FUNDING_PAGE_CAP, stoppedBy: "floor", complete: true },
         funding: { unit: "percent per funding interval", oiWeightedPct: -0.0021, medianPct: -0.0034, dispersionPct: 0.0335, stdevPct: 0.0061, positiveVenueSharePct: 31, annualizedOiWeightedPct: -2.2995, annualizedMedianPct: -3.723, annualizationAssumes: "8-hour funding intervals (3 a day); venues with other intervals differ" },
         basis: { oiWeightedPct: 0.0612, medianPct: 0.0591, rangePct: 0.1287 },
         openInterest: { tier: "$10B or more", topVenueSharePct: 22.58, hhi: 1034 },
@@ -356,13 +490,13 @@ const fundingScreener = {
       coin = i.coin.trim().toUpperCase();
     }
     const sort = takeChoice(i.sort, "sort", ["open_interest", "dispersion", "funding"], "open_interest");
-    const read = await cgGet("/derivatives", {}, SCREEN_TTL.funding, reducePerps);
+    const { reads, rows: perps, scan } = await readPerpPages(minOi, coin ? (page1) => coinMayPage(coin, page1) : null);
     const annual = (pct) => round(pct * FUNDING_INTERVALS_PER_YEAR, 4);
-    const venuesAbove = () => read.data.map(perpRow).filter((r) => r.oi >= minOi);
+    const venuesAbove = () => perps.map(perpRow).filter((r) => r.oi >= minOi);
 
     if (!coin) {
       const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 10 });
-      return answerOnce(`funding-board|${minOi}|${sort}|${limit}`, [read], () => {
+      return answerOnce(`funding-board|${minOi}|${sort}|${limit}|${scan.stoppedBy}`, reads, () => {
       const all = venuesAbove();
       const by = new Map();
       for (const r of all) { if (!by.has(r.coin)) by.set(r.coin, []); by.get(r.coin).push(r); }
@@ -377,7 +511,7 @@ const fundingScreener = {
       const coins = board.slice(0, limit).map(({ _oi, ...r }, idx) => ({ rank: idx + 1, ...r }));
       return {
         mode: "board", sort, minOpenInterestUsd: minOi, venuesScreened: all.length,
-        ...partialFields(board.length, coins.length),
+        ...withScan(partialFields(board.length, coins.length), scan), scan,
         unit: "percent per funding interval",
         annualizationAssumes: "8-hour funding intervals (3 a day); venues with other intervals differ",
         coins,
@@ -386,9 +520,9 @@ const fundingScreener = {
     }
 
     const limit = takeInt(i.limit, "limit", { min: 1, max: 25, dflt: 5 });
-    return answerOnce(`funding-coin|${coin}|${minOi}|${limit}`, [read], () => {
+    return answerOnce(`funding-coin|${coin}|${minOi}|${limit}|${scan.stoppedBy}`, reads, () => {
     const rows = venuesAbove().filter((r) => r.coin === coin);
-    if (rows.length === 0) throw bad(`No perpetual venue lists "${coin}" with at least $${minOi} of open interest - check the ticker or lower minOpenInterestUsd`, 422);
+    if (rows.length === 0) throw bad(`No perpetual venue lists "${coin}" with at least $${minOi} of open interest${scan.complete ? "" : ` among the venues read (down to about $${scan.openInterestReachedUsd} of open interest)`} - check the ticker or lower minOpenInterestUsd`, 422);
     const s = fundingStats(rows);
     const basisRows = rows.filter((r) => r.basis != null);
     const b = basisRows.map((r) => r.basis);
@@ -424,6 +558,7 @@ const fundingScreener = {
     if (rows.length >= 2 && topShare > 50) flags.push("concentrated-open-interest");
     return {
       mode: "coin", coin, venues: rows.length, minOpenInterestUsd: minOi,
+      ...withScan({ complete: true, truncated: false }, scan), scan,
       funding: {
         unit: "percent per funding interval",
         oiWeightedPct: round(s.weighted, 6), medianPct: round(s.median, 6),
@@ -1147,7 +1282,7 @@ for (const t of CRYPTO_SCREENS_TOOLS) creditAnswers(attribute(t, "coingecko"), C
 // so the /ref and /aws copies serve the public answer as it is.
 markResaleComputed(CRYPTO_SCREENS_TOOLS, CRYPTO_SCREENS_TOOLS.map((t) => t.slug));
 
-export const __test = { tierOf, percentileOf, athBand, memoCounts, answerMemoSize: () => answerMemo.size, median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
+export const __test = { readPerpPages, edgeOf, linkHasNext, tierOf, percentileOf, athBand, memoCounts, answerMemoSize: () => answerMemo.size, median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // The screens read several documents a call: they stop short of the reserve

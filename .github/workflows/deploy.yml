@@ -2908,8 +2908,8 @@ jobs:
           BLS_DAILY_MAX: "12"
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
           COINGECKO_API_TIER: pro
-          COINGECKO_DAILY_MAX: "40"
-          COINGECKO_MAX_PER_MIN: "40"
+          COINGECKO_DAILY_MAX: "66"
+          COINGECKO_MAX_PER_MIN: "56"
         run: |
           cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
           om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
