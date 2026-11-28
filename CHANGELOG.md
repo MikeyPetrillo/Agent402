@@ -199,6 +199,13 @@ Site:
   shows the sentence about calls paid before they run only on the routes
   that can be paid first.
 
+### 2026-11-28 (Funding screener reads every page)
+Tools:
+- funding-screener reads the derivatives list page by page in open-interest
+  order down to the call's open-interest floor, so the board and the coin
+  answer count every venue above it; a read that stops early says so in
+  `scan`, `complete` and `truncated`.
+
 ## v2.17.1 - 2026-11-27
 
 ### 2026-11-27 (Stellar refund proof)

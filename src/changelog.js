@@ -129,6 +129,13 @@ const ENTRIES = [
     ],
   },
   {
+    date: "2026-11-28",
+    title: "Funding screener reads every page",
+    items: [
+      "Tools: funding-screener reads the derivatives list page by page in open-interest order down to the call's open-interest floor, so the board and the coin answer count every venue above it; a read that stops early says so in `scan`, `complete` and `truncated`.",
+    ],
+  },
+  {
     date: "2026-11-27",
     title: "Stellar refund proof",
     items: [
