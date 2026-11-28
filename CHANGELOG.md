@@ -41,6 +41,17 @@ Site:
   phone?" and "Is my data safe?".
 - New page /recipes: prompts to copy into an AI app, each with the tool it
   runs and its catalog price.
+- The FAQ's data answer matches /privacy: a tool's input goes to the outside
+  source the lookup needs, and a model-backed tool's input goes to its model
+  provider.
+- /start and /recipes offer card payment only while a card offer is on sale;
+  with the credits connector off, /recipes says paid recipes run from a
+  computer with a wallet.
+- /start notes that on Team and Enterprise plans an Owner adds the
+  connector.
+- /terms asks that a generated clip of a real person have that person's
+  consent and be disclosed as AI-generated, and that a buyer ask the same of
+  its own users.
 Index:
 - The index crawler sends one seller route at most one unpaid price
   request a week. Inside that week it asks once more only after a server
@@ -107,6 +118,14 @@ Tools:
   because one of its report legs met this server's own pace of EDGAR reads.
 - A skill pack with no successful step names each failed step in the
   answer's `pack` and `failedSteps` fields.
+- Image-to-video and text-to-video calls end inside the payment's own time,
+  the picture's download included; a clip cut off by that time is kept for
+  the same request to collect.
+- Image-to-video refuses a picture whose pixel data cannot be read, before
+  anything is sent to the provider, and its content-filter answer on a
+  finished job says to change the prompt or the picture.
+- name-records and wikidata-entity make one Wikimedia read per host at a
+  time across all callers.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
@@ -142,6 +161,10 @@ API:
 - On the hosted connector, a paid tool asked without payment and a free tool
   past its limit say what to do next, with a link that opens on a phone, and
   every limit says when it resets.
+- /llms.txt names the image routes whose payment can settle before their work; a video
+  route never is.
+- A self-hosted FREE_MODE server's free-limit message names only the limit
+  and when it resets.
 Operations:
 - The operator view of /api/gateway-status shows a projected-runway word for
   each spending and fee wallet whose balance a low-balance alarm already
@@ -149,6 +172,17 @@ Operations:
   steady while a wallet sits at the mark; it can also watch wallets the
   server does not spend from, read by public address
   (`FUNDING_WATCH_ADDRESSES`); it moves no money and refuses nothing.
+- /api/gateway-status carries a `crawlParse` word for the crawl's document
+  parser; a registry whose whole list could not be parsed reads
+  `registry-kept` and pages one issue.
+- A seller whose document keeps ending the parser stops having its previous
+  listing kept after three such reads or six hours, and its entry reads as
+  the seller's failed read.
+- Reads of SEC filings share one pace across the server's processes, so a
+  deploy's overlap stays under the SEC's rate.
+- A crawl cycle in which no seller's documents changed no longer rebuilds
+  the route index or the directory, so the full collections that stalled
+  requests during crawls run less often.
 Packages:
 - agent402-mcp 0.17.2 is published for the MCP Registry under
   tools.agent402/agent402, a name verified against the agent402.tools
