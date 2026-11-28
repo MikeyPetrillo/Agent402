@@ -5874,83 +5874,96 @@ function stampRouteAsk(t, now = Date.now()) {
   return !wasRetry;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false, x402Listed = null, laneTurn = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
   if (!Array.isArray(tools) || !tools.length) return tools;
-  dropGoneRoutes(tools, originUrl);
-  if (!tools.length) return tools;
-  carryQuoteHolds(tools, cache.get(originUrl)?.tools);
-  carryRouteAsks(tools, cache.get(originUrl)?.tools);
-  const postMarks = postMarksOf(tools, x402Listed);
-  const declaredFree = (t) => {
-    if (!sellerDeclaresFree(t)) return false;
-    quoteProbeStats.declaredFree++;
+  // The passes over every row before the probes (the gone-route drop, the
+  // hold and ask carries, the POST marks and, with no pass runner handed in,
+  // the candidate pick) are one stretch, timed as the span `crawl-quote-prep`
+  // so a long one names itself. The crawl hands in its lane (`laneTurn`): the
+  // stretch then takes a turn of its own instead of the tail of the pass
+  // before it, whose span it would otherwise run beside unnamed.
+  if (laneTurn) await laneTurn();
+  let postMarks = null, declaredFree, isCandidate, picked;
+  const prepared = laneSpan("crawl-quote-prep", () => {
+    dropGoneRoutes(tools, originUrl);
+    if (!tools.length) return false;
+    carryQuoteHolds(tools, cache.get(originUrl)?.tools);
+    carryRouteAsks(tools, cache.get(originUrl)?.tools);
+    postMarks = postMarksOf(tools, x402Listed);
+    declaredFree = (t) => {
+      if (!sellerDeclaresFree(t)) return false;
+      quoteProbeStats.declaredFree++;
+      return true;
+    };
+    isCandidate =
+      (t) => t
+        && typeof t.route === "string" && t.route.startsWith("/")
+        && t.seller !== LOCAL_SELLER                      // never probe ourselves
+        // The seller marks it free: nothing to read, and a probe would run it.
+        && !declaredFree(t)
+        // It answered our last probe with no 402 at all: held for days, so a
+        // seller's own limit (a daily cap, a validation error) is not asked
+        // again on every crawl. An explicit re-registration still re-asks.
+        && (ignoreBudget || !quoteProbeHeld(t))
+        // Asked inside the per-route interval, with no retry owed and no change
+        // in the seller's own price since: not asked again by the scheduled crawl.
+        && (ignoreBudget || !routeHeldToInterval(t))
+        // Already priced: nothing to learn - UNLESS the amount we hold disagrees
+        // with what the origin declared this crawl. That disagreement is exactly
+        // how a price CUT used to be invisible: a priced route was never
+        // re-probed, so the live 402 that would correct it was never fetched
+        // (reported 2026-08-29, a 10x overquote standing for nine days).
+        // A row missing EITHER the price or the networks is a candidate. This
+        // was && - both had to be missing - so a probe that learned networks
+        // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
+        // for the 7-day staleness window: networks known, price null, never
+        // probed again (measured 2026-09-01).
+        && ((!isPricedAboveZero(t.price) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
+          // An explicit re-registration ("price my catalog NOW") also re-asks
+          // every route whose price is NOT the origin's own declaration - a
+          // learned quote, or a Bazaar settlement snapshot. Issue #1365
+          // (2026-09-15): a seller made a route free, re-registered, and the
+          // 0.001 learned two weeks earlier stood because a priced row was never
+          // a candidate until its 7-day clock ran out.
+          || (ignoreBudget && isPricedAboveZero(t.price) && !isPricedAboveZero(t.originDeclaredPrice))
+          // ...and every route whose held price differs from the origin's own
+          // declaration AT ALL. The automatic crawl waits for a 2x drift
+          // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
+          // asking us to look now, and a 1.67x gap is still a wrong price.
+          || (ignoreBudget && isPricedAboveZero(t.price) && isPricedAboveZero(t.originDeclaredPrice)
+            && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
+          // ...and every route whose chains, payTo and EIP-712 domain came from
+          // a past live read. The price of an origin-priced row is the origin's
+          // own and needs no re-ask, but those three fields are the 402's, and
+          // carry-forward keeps a verified read across rebuilds, so the automatic
+          // crawl re-reads them only on the weekly networksNeedLiveVerify clock.
+          // A seller who fixed a wrong USDC domain (the fix we ask them to make,
+          // then re-register) or moved its payout wallet would otherwise keep the
+          // old observation for up to a week, with the router skipping them on it
+          // and the Base scan reading the old wallet.
+          || (ignoreBudget && Number(t.networksVerifiedAt) > 0 && Array.isArray(t.networks) && t.networks.length > 0))
+        // (An undeclared route needs no clause of its own here: the staleness
+        // tests above re-ask every priced row within the same 7 days that
+        // needsLiveProof measures, off the same timestamps.)
+        // A route observed free inside the quote window is left alone by the
+        // automatic crawl; an explicit re-registration still re-asks it.
+        && (ignoreBudget || !isObservedFree(t))
+        // A route priced above every router tier is never bought by us, so its
+        // live 402 is read once and then once a week (and on a re-registration),
+        // whatever else would make it due: a drift, a stamp from another verb.
+        && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
+        && quoteProbeVerbsFor(t, x402Listed, postMarks).length        // never PUT/PATCH/DELETE; POST only where marked paid
+        && probeDue(originUrl, `quote:${t.route}`);
+    // The registry fallback hands its pass runner in (`candidatePass`), so a
+    // long list is picked over in the crawl lane; every other caller filters here.
+    if (!candidatePass) picked = tools.filter(isCandidate);
     return true;
-  };
-  const isCandidate =
-    (t) => t
-      && typeof t.route === "string" && t.route.startsWith("/")
-      && t.seller !== LOCAL_SELLER                      // never probe ourselves
-      // The seller marks it free: nothing to read, and a probe would run it.
-      && !declaredFree(t)
-      // It answered our last probe with no 402 at all: held for days, so a
-      // seller's own limit (a daily cap, a validation error) is not asked
-      // again on every crawl. An explicit re-registration still re-asks.
-      && (ignoreBudget || !quoteProbeHeld(t))
-      // Asked inside the per-route interval, with no retry owed and no change
-      // in the seller's own price since: not asked again by the scheduled crawl.
-      && (ignoreBudget || !routeHeldToInterval(t))
-      // Already priced: nothing to learn - UNLESS the amount we hold disagrees
-      // with what the origin declared this crawl. That disagreement is exactly
-      // how a price CUT used to be invisible: a priced route was never
-      // re-probed, so the live 402 that would correct it was never fetched
-      // (reported 2026-08-29, a 10x overquote standing for nine days).
-      // A row missing EITHER the price or the networks is a candidate. This
-      // was && - both had to be missing - so a probe that learned networks
-      // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
-      // for the 7-day staleness window: networks known, price null, never
-      // probed again (measured 2026-09-01).
-      && ((!isPricedAboveZero(t.price) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
-        // An explicit re-registration ("price my catalog NOW") also re-asks
-        // every route whose price is NOT the origin's own declaration - a
-        // learned quote, or a Bazaar settlement snapshot. Issue #1365
-        // (2026-09-15): a seller made a route free, re-registered, and the
-        // 0.001 learned two weeks earlier stood because a priced row was never
-        // a candidate until its 7-day clock ran out.
-        || (ignoreBudget && isPricedAboveZero(t.price) && !isPricedAboveZero(t.originDeclaredPrice))
-        // ...and every route whose held price differs from the origin's own
-        // declaration AT ALL. The automatic crawl waits for a 2x drift
-        // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
-        // asking us to look now, and a 1.67x gap is still a wrong price.
-        || (ignoreBudget && isPricedAboveZero(t.price) && isPricedAboveZero(t.originDeclaredPrice)
-          && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
-        // ...and every route whose chains, payTo and EIP-712 domain came from
-        // a past live read. The price of an origin-priced row is the origin's
-        // own and needs no re-ask, but those three fields are the 402's, and
-        // carry-forward keeps a verified read across rebuilds, so the automatic
-        // crawl re-reads them only on the weekly networksNeedLiveVerify clock.
-        // A seller who fixed a wrong USDC domain (the fix we ask them to make,
-        // then re-register) or moved its payout wallet would otherwise keep the
-        // old observation for up to a week, with the router skipping them on it
-        // and the Base scan reading the old wallet.
-        || (ignoreBudget && Number(t.networksVerifiedAt) > 0 && Array.isArray(t.networks) && t.networks.length > 0))
-      // (An undeclared route needs no clause of its own here: the staleness
-      // tests above re-ask every priced row within the same 7 days that
-      // needsLiveProof measures, off the same timestamps.)
-      // A route observed free inside the quote window is left alone by the
-      // automatic crawl; an explicit re-registration still re-asks it.
-      && (ignoreBudget || !isObservedFree(t))
-      // A route priced above every router tier is never bought by us, so its
-      // live 402 is read once and then once a week (and on a re-registration),
-      // whatever else would make it due: a drift, a stamp from another verb.
-      && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
-      && quoteProbeVerbsFor(t, x402Listed, postMarks).length        // never PUT/PATCH/DELETE; POST only where marked paid
-      && probeDue(originUrl, `quote:${t.route}`);
-  // The registry fallback hands its pass runner in (`candidatePass`), so a
-  // long list is picked over in the crawl lane; every other caller filters here.
-  const picked = candidatePass ? candidatePass(filterSteps(tools, isCandidate)) : tools.filter(isCandidate);
+  });
+  if (!prepared) return tools;
+  if (candidatePass) picked = candidatePass(filterSteps(tools, isCandidate));
   const candidates = picked && typeof picked.then === "function" ? await picked : picked;
   // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
   // into a list that SHRINKS as rows price, so some rows landed in skipped
@@ -7486,7 +7499,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     const candidatePass = tools.length > FALLBACK_PASS_TURN_ROWS
       ? (gen) => crawlWalkLaned("quote-pick", { origin: originUrl, doc: `${tools.length}-rows` }, gen)
       : null;
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled, x402Listed, candidatePass });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled, x402Listed, candidatePass, laneTurn: crawlLaneTurn });
     // Not this seller's turn: carry the last reading forward rather than
     // dropping it — null must mean "never probed", not "not probed today".
     const paywall = await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled });
@@ -7697,7 +7710,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled,
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled, laneTurn: crawlLaneTurn,
         candidatePass: (gen) => { meter.rows(tools.length); return laned ? meter.lane("quotes", gen) : meter.sync("quotes", gen); } });
       // A cut listing: rows a live probe just dropped are replaced from the
       // rows not yet taken, and the total is the kept rows plus the listed

@@ -263,7 +263,12 @@ idx.__setDiscoveryBodyFetchForTest(async (url) => {
   return { html: pages.get(key) };
 });
 // ---- the recorder ---------------------------------------------------------------
-const epochOf = (t) => performance.timeOrigin + t;
+// The clock the spans and jobs are stamped on (src/active-jobs.js reads
+// Date.now, which the cycles below move a day ahead): a window read on the
+// unmoved clock finds no span of a later cycle, so every turn of it read as
+// naming nothing.
+let shift = 0;
+const epochOf = (t) => performance.timeOrigin + t + shift;
 const gcs = []; // { at, ms, kind }
 const gcObserver = new PerformanceObserver((list) => { for (const e of list.getEntries()) gcs.push({ at: e.startTime, ms: e.duration, kind: e.detail?.kind }); });
 gcObserver.observe({ entryTypes: ["gc"] });
@@ -337,7 +342,6 @@ const withReader = async (fn) => { reading = true; setImmediate(reader); try { r
 
 // ---- the cycle --------------------------------------------------------------------
 const realNow = Date.now;
-let shift = 0;
 Date.now = () => realNow() + shift;
 const nextDay = () => { shift += 25 * 3_600_000; };
 
@@ -364,6 +368,15 @@ nextDay(); sameAsLast = false; ver = 1;
 const c3 = await cycle("crawl cycle 3 (every document changed)");
 ok(c3.crawled >= SELLERS && cache.get(origins[4]).tools.some((t) => / v1$/.test(t.description)), `control: the third cycle stored the changed documents (${c3.crawled})`);
 ok(stores >= 3 * SELLERS, `control: the cycles stored their origins (${stores} stores)`);
+// The recorder reads spans on the clock they are stamped on: a day ahead, a
+// span timed now is found in the window that holds it.
+{
+  const { timeSpan } = await import("../src/active-jobs.js");
+  const from = performance.now();
+  timeSpan("recorder-clock-check", () => { const end = performance.now() + TURN_NOTE_MS + 5; while (performance.now() < end) { /* a span long enough to be kept */ } });
+  const seen = turnsDuring(epochOf(from), epochOf(performance.now()), 64);
+  ok(shift > 0 && seen.some((x) => x.startsWith("recorder-clock-check ")), `with the clock moved ahead the recorder still finds a span inside its window (${seen.join(", ") || "nothing"})`);
+}
 
 // ---- sliced and whole: the same entry ------------------------------------------
 // The long documents again, on origins of their own: once with every laned
