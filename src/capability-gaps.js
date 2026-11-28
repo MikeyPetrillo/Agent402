@@ -220,7 +220,7 @@ const STOCK_HISTORY_WORD_RE = /^(?:history|historical|historic)$/;
 const STOCK_ASK_WORDS = new Set(["daily", "past", "data"]);
 function asksStockPriceHistory(n) {
   const w = n.trim().split(" ");
-  if (w.length < 3 || w.length > ASK_MAX_WORDS) return false;
+  if (w.length > ASK_MAX_WORDS) return false;
   let stocks = 0, prices = 0, history = 0;
   for (const t of w) {
     if (STOCK_WORD_RE.test(t) || STOCK_TICKERS.has(t)) stocks++;

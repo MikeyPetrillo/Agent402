@@ -438,7 +438,9 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
     "company revenue history", "AAPL filings", "AAPL insider trades", "AAPL 10-k", "tesla sec filings", "stock market holidays", "stock exchange opening hours", "ticker symbol lookup",
     "institutional holdings of AAPL", "stock token price history on robinhood chain", "tokenized stock price history", "price history of a token on base", "share of voice history", "browser history",
     "git commit history", "wayback history of a website", "weather history", "current stock price", "stock price history for apple", "apple stock price history", "stock price history chart",
-    "stock price history news", "historical stock volatility", "stock options price history", "bond price history", "etf holdings", "AAPL price", "AAPL history", "ip geolocation", "bitcoin price on 2021-01-01"];
+    "stock price history news", "historical stock volatility", "stock options price history", "bond price history", "etf holdings", "AAPL price", "AAPL history", "ip geolocation", "bitcoin price on 2021-01-01",
+    // Two of the three parts, written with the function words the shape allows: each lacks one.
+    "the stock history", "daily stock prices", "stock price data", "what is the stock price", "historical price data", "daily price history", "the price history of a", "historical stock data"];
   ok(!!STOCK && STOCK_POSITIVE.length >= 15 && STOCK_NEGATIVE.length >= 40 && new Set([...STOCK_POSITIVE, ...STOCK_NEGATIVE]).size === STOCK_POSITIVE.length + STOCK_NEGATIVE.length, `the stock table holds ${STOCK_POSITIVE.length} positive and ${STOCK_NEGATIVE.length} negative phrasings, each once`);
   ok(!stockToolServed("stock-history") && !stockTools.some((t) => STOCK_SLUGS.has(t.slug)), "no stock tool is listed on this catalog");
   const named = stockTools.filter((t) => gapNamedBy(STOCK, t.slug, t.name)).map((t) => t.slug);

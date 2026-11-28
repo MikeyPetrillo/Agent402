@@ -79,6 +79,8 @@ ok(phraseAliasHits(null) === null && phraseAliasHits(undefined) === null && phra
 
 // ---- the table ----
 ok(Object.keys(PHRASE_ALIASES).length >= 2, `the table lists ${Object.keys(PHRASE_ALIASES).length} tools`);
+ok(JSON.stringify(PHRASE_ALIASES) === JSON.stringify({ "crypto-price": ["current-bitcoin-price", "current-btc-price", "current-ethereum-price", "current-eth-price"], "crypto-history": ["bitcoin-volatility", "btc-volatility", "ethereum-volatility", "eth-volatility"] }),
+  "the table is the eight phrases these cases cover (a new phrase adds its own case and its neighbors' controls here)");
 for (const [slug, phrases] of Object.entries(PHRASE_ALIASES)) {
   const tool = TOOLS.find((t) => t.slug === slug);
   ok(!!tool, `${slug} is a catalog tool`);
@@ -92,7 +94,9 @@ ok(has("crypto-price") && has("crypto-history") && has("bond-price") && has("tok
 
 // ---- /api/route ----
 for (const [q, want] of [["current bitcoin price", "crypto-price"], ["what is the current price of bitcoin", "crypto-price"], ["current eth price", "crypto-price"],
-  ["bitcoin volatility last 90 days", "crypto-history"], ["bitcoin volatility", "crypto-history"], ["volatility of ethereum", "crypto-history"]]) {
+  ["bitcoin volatility last 90 days", "crypto-history"], ["bitcoin volatility", "crypto-history"], ["volatility of ethereum", "crypto-history"],
+  // One query per listed phrase, so a phrase taken off the table fails here.
+  ["current btc price", "crypto-price"], ["current ethereum price", "crypto-price"], ["btc volatility", "crypto-history"], ["eth volatility last 30 days", "crypto-history"]]) {
   const r = route(q);
   ok(r[0]?.slug === want, `route "${q}" picks ${want} (${r.slice(0, 4).map((x) => `${x.slug}:${x.score}`).join(", ")})`);
 }
