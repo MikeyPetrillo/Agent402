@@ -308,6 +308,7 @@ t node scripts/test-terms-model-outputs.js
 t node scripts/test-x402-trending.js
 # ticker pack kit (offline)
 t node scripts/test-ticker-pack-kit.js
+t node scripts/test-ticker-pack-pace.js
 t node scripts/test-dossier-inputs.js
 t node scripts/test-report-inputs.js
 # The research plan must never collapse silently into a one-search report.

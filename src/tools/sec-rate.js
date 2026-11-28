@@ -52,7 +52,18 @@
 // of the pace: a read that would be refused (on arrival, or at its deadline in
 // the line) waits for the outcome instead, to the run's ceiling or its
 // caller's signal. On success it joins the paid line; on failure it is an
-// unpaid read from then on. A run with no settlement in flight is unchanged.
+// unpaid read from then on.
+// A run ARMED to settle at its settle point that has not reached it yet (the
+// server armed it from a verified payment, src/settle-first.js
+// settleArmedHere) is held the same way: one leg's read answered 503 here,
+// while another leg of the same run goes on to settle, would fail a run that
+// is then charged. Such a read keeps its place in the line like any unpaid
+// read, and only where it would be answered the pace's 503 does it wait in
+// the paid line instead. It is judged again when its place comes: it starts
+// while the run is still armed, settling or paid, and is answered the 503 when
+// the settlement failed or the handler ended without one (nothing was
+// charged). A run that was never armed, which is every run served before it
+// is charged, is unchanged.
 //
 // EACH READ IS JUDGED IN ITS OWN REQUEST'S SCOPE. Whether a run is paid, and
 // whether its settlement is in flight, are read from the request scope the
@@ -74,7 +85,7 @@ import { notChargedHere } from "../not-charged.js";
 import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 import { admissionCallerOf, currentCallerLeftSignal } from "../dispatch-caller.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { paidBeforeRunHere, settleInFlightHere } from "../settle-first.js";
+import { paidBeforeRunHere, settleInFlightHere, settleArmedHere } from "../settle-first.js";
 
 export const SEC_HOSTS = Object.freeze(["sec.gov", "www.sec.gov", "data.sec.gov", "efts.sec.gov"]);
 /** Whether a URL names one of the SEC's hosts (the ones the pace covers). */
@@ -114,9 +125,10 @@ const LANE = "sec";
  *  `callerOf()` names the caller a read runs for, `leftSignalOf()` the signal
  *  of a caller that has left, `paidOf()` whether the run is already paid for,
  *  `pendingOf()` the run's settlement in flight (a promise that ends with its
- *  outcome) or null. */
+ *  outcome) or null, `armedOf()` whether the run is armed to settle and has
+ *  not reached its settle point. */
 export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC_WINDOW_MS, maxWaitMs = SEC_MAX_WAIT_MS, queueMax = null, now = () => performance.now(),
-  callerOf = () => admissionCallerOf(null), leftSignalOf = currentCallerLeftSignal, paidOf = paidBeforeRunHere, pendingOf = settleInFlightHere } = {}) {
+  callerOf = () => admissionCallerOf(null), leftSignalOf = currentCallerLeftSignal, paidOf = paidBeforeRunHere, pendingOf = settleInFlightHere, armedOf = settleArmedHere } = {}) {
   const limit = Math.max(1, Math.floor(perSecond));
   // What the pace can start inside the longest wait: a place past it is
   // never reached in time.
@@ -191,8 +203,11 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
     // for the outcome first (`settling`, below).
     const inFlight = () => { if (paid) return null; let p = null; try { p = mine(pendingOf); } catch { p = null; } return p && typeof p.then === "function" ? p : null; };
     const late = !paid && (!(allowed > 0) || earliest((room.busy ? 1 : 0) + turns.ownAhead(who) + 1) >= allowed);
+    // An armed run that has not reached its settle point is held too.
+    const armedNow = () => { if (paid) return false; try { return mine(armedOf) === true; } catch { return false; } };
     const settling = late ? inFlight() : null;
-    if (late && !settling) return Promise.reject(busyRefusal());
+    const armedLate = late && !settling && armedNow();
+    if (late && !settling && !armedLate) return Promise.reject(busyRefusal());
 
     return new Promise((resolve, reject) => {
       const t0 = now();
@@ -231,12 +246,28 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       // known (the ceiling and the caller's signal still end the wait). Then
       // the run is read once more: paid joins the paid line, unpaid is refused.
       const awaitOutcome = (p) => { leaveLine(); const again = () => mine(() => { if (!done) refuse(true); }); p.then(again, again); };
+      // An armed run's read, where the pace would refuse it: it waits in the
+      // paid line, and is judged again when its place comes.
+      const holdArmed = () => {
+        allowed = Infinity;
+        leaveLine();
+        me.serve = () => mine(() => {
+          if (done) return;
+          let backed = false;
+          try { backed = paidOf() === true; } catch { backed = false; }
+          if (backed || armedNow() || inFlight()) return finish(resolve);
+          finish(reject, busyRefusal());
+        });
+        paidLine.push(me);
+        if (!paidTimer) servePaid();
+      };
       const refuse = (known = false) => {
         let nowPaid = false;
         if (!paid) { try { nowPaid = mine(paidOf) === true; } catch { nowPaid = false; } }
         if (!nowPaid) {
           const p = known ? null : inFlight();
           if (p) return awaitOutcome(p);
+          if (!known && armedNow()) return holdArmed();
           return finish(reject, busyRefusal());
         }
         paid = true; allowed = Infinity;
@@ -270,6 +301,7 @@ export function createSecPace({ perSecond = secStartsPerSecond(), windowMs = SEC
       signal?.addEventListener?.("abort", onAbort, { once: true });
       if (paid) { paidLine.push(me); if (!paidTimer) servePaid(); return; }
       if (settling) { awaitOutcome(settling); return; }
+      if (armedLate) { holdArmed(); return; }
       pending = turns.acquire(LANE, who, { waitMs: Math.max(1, Math.floor(allowed)) });
       pending.then((t) => {
         if (done) { t.release(); return; }

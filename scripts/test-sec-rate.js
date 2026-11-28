@@ -321,20 +321,24 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
   ok(ok1.before === null && bad1.before === null, `a read that arrives while its settlement is in flight, with the line past its deadline, is answered nothing until the outcome is known (${ok1.before ? say(ok1.before) : "waiting"}, ${bad1.before ? say(bad1.before) : "waiting"})`);
   ok(ok1.at >= 300 && !ok1.e && ok1.waiting === 0, `the settlement then succeeds: the read is served, never the 503 (${say(ok1)})`);
   ok(bad1.e?.secBusy === true && bad1.waiting === 0, `the settlement then fails: the read is an unpaid one, answered as any unpaid read is (${say(bad1)})`);
-  // CONTROLS: with no settlement in flight nothing changed. Before the settle
-  // point and after a failed one the same read is answered 503 at once; after
-  // a successful one it waits past the longest wait and is served.
+  // CONTROLS: a run with nothing to wait for is unchanged. A run that was
+  // never armed (every run served before it is charged), one whose handler
+  // ended before its settle point, and one whose settlement failed are
+  // answered 503 at once; after a successful one the read waits past the
+  // longest wait and is served.
   const noFlight = async (state) => {
     const { g, r, pace, done } = rigOf();
+    if (state === "unarmed") sf.setSettleFirstAmbient(() => ({}));
+    if (state === "ended") sf.disarmSettleFirst(r.req);
     await pace.paced(async () => 1);
-    if (state !== "before") { const point = sf.settleBeforeUpstream(r.req); point.catch(() => {}); if (state === "success") g.open(); else g.fail(new Error("refused")); await point.catch(() => {}); await null; }
+    if (state === "failure" || state === "success") { const point = sf.settleBeforeUpstream(r.req); point.catch(() => {}); if (state === "success") g.open(); else g.fail(new Error("refused")); await point.catch(() => {}); await null; }
     const t0 = performance.now();
     const out = await pace.paced(async () => performance.now() - t0).then((v) => ({ at: v }), (e) => ({ e }));
     done();
     return { ...out, ms: performance.now() - t0, waiting: pace.status().waiting };
   };
-  const pre = await noFlight("before"), failed = await noFlight("failure"), settled = await noFlight("success");
-  ok(pre.e?.secBusy === true && pre.ms < 60 && failed.e?.secBusy === true && failed.ms < 60, `CONTROL: a run with no settlement in flight (not started, or failed) is refused at once as before (${say(pre)} in ${Math.round(pre.ms)} ms; ${say(failed)} in ${Math.round(failed.ms)} ms)`);
+  const pre = await noFlight("unarmed"), ended = await noFlight("ended"), failed = await noFlight("failure"), settled = await noFlight("success");
+  ok(pre.e?.secBusy === true && pre.ms < 60 && ended.e?.secBusy === true && ended.ms < 60 && failed.e?.secBusy === true && failed.ms < 60, `CONTROL: a run never armed, one whose handler ended unsettled and one whose settlement failed are refused at once as before (${say(pre)} in ${Math.round(pre.ms)} ms; ${say(ended)} in ${Math.round(ended.ms)} ms; ${say(failed)} in ${Math.round(failed.ms)} ms)`);
   ok(settled.at >= 100 && !settled.e && settled.waiting === 0, `CONTROL: after the settle point returned success the same read waits past the longest wait and is served (${say(settled)})`);
   // A read ADMITTED to the unpaid line before the settle point was reached,
   // whose deadline comes while the settlement is in flight: it is not refused
@@ -383,6 +387,85 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
     const gone = await left;
     done();
     ok(cut?.ceilingCut === true && gone?.name === "AbortError" && ran === 0 && pace.status().waiting === 0, `the wait for a settlement's outcome ends at the run's ceiling and on the caller's signal (${cut?.statusCode}, ${gone?.name}, waiting ${pace.status().waiting})`);
+  }
+  // ---- an armed run that has not reached its settle point ----
+  // A run with two legs: one leg's read meets a full line BEFORE the other
+  // leg reaches the settle point. Answered 503, that leg fails a run whose
+  // payment the other leg then settles: a charged failure of our own pace.
+  // The read is held instead, and judged again when its place comes.
+  {
+    const armedState = () => { const { r, done } = rigOf(); const a = sf.settleArmedHere(); const p = sf.settleBeforeUpstream(r.req); p?.catch?.(() => {}); const b = sf.settleArmedHere(); done(); return [a, b, sf.settleArmedHere()]; };
+    const [a1, a2, a3] = armedState();
+    const endedRig = rigOf(); sf.disarmSettleFirst(endedRig.r.req); const a4 = sf.settleArmedHere(); sf.setSettleFirstAmbient(() => ({})); const a5 = sf.settleArmedHere(); endedRig.done();
+    ok(a1 === true && a2 === false && a3 === false && a4 === false && a5 === false, `a run reads armed only between its arming and its settle point: not once the settlement started, not with no reader, not after its handler ended, not for a request that was never armed (${[a1, a2, a3, a4, a5].join()})`);
+    // On arrival, the line already past the read's deadline.
+    const arrivesArmed = async (then) => {
+      const { g, r, pace, done } = rigOf({ windowMs: 300 });
+      await pace.paced(async () => 1);
+      const t0 = performance.now();
+      const read = pace.paced(async () => performance.now() - t0).then((v) => ({ at: v }), (e) => ({ e, at: performance.now() - t0 }));
+      await sleep(60);
+      if (then === "ends") sf.disarmSettleFirst(r.req);
+      if (then === "settles" || then === "fails" || then === "in-flight") { const point = sf.settleBeforeUpstream(r.req); point.catch(() => {}); if (then === "settles") g.open(); if (then === "fails") g.fail(new Error("refused")); }
+      const out = await read;
+      if (then === "in-flight") g.open();
+      done();
+      return { ...out, waiting: pace.status().waiting, refused: pace.status().refused };
+    };
+    const held = await arrivesArmed("nothing"), paidLater = await arrivesArmed("settles"), flying = await arrivesArmed("in-flight");
+    ok(!held.e && held.at >= 200 && held.waiting === 0 && held.refused === 0, `a read of an armed run that meets a line past its deadline, before the settle point, is held and served at the next place, never the 503 (${say(held)})`);
+    ok(!paidLater.e && !flying.e, `and is served when the settlement succeeds or is still in flight as its place comes (${say(paidLater)}; ${say(flying)})`);
+    const failedLater = await arrivesArmed("fails"), endedLater = await arrivesArmed("ends");
+    ok(failedLater.e?.secBusy === true && failedLater.at >= 200 && endedLater.e?.secBusy === true && endedLater.at >= 200 && failedLater.waiting === 0 && endedLater.waiting === 0,
+      `a held read whose run's settlement failed, or whose handler ended with none, is answered the unpaid 503 when its place comes (${say(failedLater)}; ${say(endedLater)})`);
+    // Admitted to the unpaid line, its deadline comes before any settle point.
+    {
+      const { r, pace, done } = rigOf({ windowMs: 200, maxWaitMs: 2000, queueMax: 8 });
+      void r;
+      await pace.paced(async () => 1);
+      const others = [pace.paced(async () => 1).catch(() => 0), pace.paced(async () => 1).catch(() => 0)];
+      const t0 = performance.now();
+      const out = await pace.paced(async () => performance.now() - t0, { waitMs: 150 }).then((v) => ({ at: v }), (e) => ({ e, at: performance.now() - t0 }));
+      await Promise.all(others);
+      done();
+      ok(!out.e && out.at >= 150 && pace.status().waiting === 0, `a waiting read of an armed run whose deadline comes before the settle point is held, not refused (${say(out)})`);
+    }
+    // The hold ends at the run's ceiling and on the caller's signal.
+    {
+      const { pace, done } = rigOf({ windowMs: 600 });
+      await pace.paced(async () => 1);
+      let cut = null, ran = 0;
+      try { await withRunCeiling(120, () => pace.paced(async () => { ran++; })); } catch (x) { cut = x; }
+      const ctl = new AbortController();
+      const left = pace.paced(async () => { ran++; }, { signal: ctl.signal }).then(() => null, (e) => e);
+      setTimeout(() => ctl.abort(), 50);
+      const gone = await left;
+      done();
+      ok(cut?.ceilingCut === true && gone?.name === "AbortError" && ran === 0 && pace.status().waiting === 0, `the hold ends at the run's ceiling and on the caller's signal (${cut?.statusCode}, ${gone?.name}, waiting ${pace.status().waiting})`);
+    }
+    // Many held reads and unpaid ones together: every start is one start in the one window.
+    {
+      const WINDOW = 400, LIMIT = 8;
+      const { pace, done } = rigOf({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 4 });
+      const t0 = performance.now(), starts = [];
+      const mark = async () => { starts.push(performance.now() - t0); };
+      await Promise.all(Array.from({ length: LIMIT }, () => pace.paced(mark)));
+      const outs = await Promise.all(Array.from({ length: 20 }, () => pace.paced(mark).then(() => "ran", (e) => e)));
+      done();
+      const most = mostPerWindow(starts, WINDOW - 60);
+      ok(outs.every((o) => o === "ran") && most <= LIMIT && starts.length === LIMIT + 20, `twenty held reads of an armed run are all served, at most ${LIMIT} starts in any window (${outs.filter((o) => o === "ran").length} served, most ${most})`);
+    }
+    // CONTROL: the same arrivals from a run that was never armed are refused as before.
+    {
+      const { pace, done } = rigOf({ windowMs: 300 });
+      sf.setSettleFirstAmbient(() => ({}));
+      await pace.paced(async () => 1);
+      const t0 = performance.now();
+      const out = await pace.paced(async () => 1).then(() => ({}), (e) => ({ e }));
+      const ms = performance.now() - t0;
+      done();
+      ok(out.e?.secBusy === true && out.e.statusCode === 503 && ms < 60 && pace.status().refused === 1, `CONTROL: a run with no armed payment cannot be held: the same read is answered 503 at once (${out.e?.statusCode} in ${Math.round(ms)} ms)`);
+    }
   }
   // Many reads waiting on one settlement: when it succeeds they all start, at
   // most the pace's count in any window, with the unpaid reads counted too.

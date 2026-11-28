@@ -129,6 +129,20 @@ export function settleInFlightHere() {
   return s.promise.then(() => {}, () => {});
 }
 
+/** True while the run this call belongs to is armed and has not reached its
+ *  settle point: the server armed it from a verified payment, its handler is
+ *  still running, and its first paid upstream call will settle that payment.
+ *  False for every other run (never armed, the settle point reached, or the
+ *  handler ended). A refusal of our own making answered to one leg of such a
+ *  run would be a charged failure if another leg then settles, so the pace
+ *  holds it (src/tools/sec-rate.js). False with no reader registered. */
+export function settleArmedHere() {
+  let r = null;
+  if (ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  return !!s && s.armed === true && !s.promise;
+}
+
 /** Record the settlement this request's settle point made. */
 export function markSettledFirst(req, info) {
   const s = stateOf(req);
