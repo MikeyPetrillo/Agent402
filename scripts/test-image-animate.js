@@ -153,7 +153,8 @@ try {
     site.intercept({ path: "/photo.png" }).reply(200, SQUARE, { headers: { "content-type": "image/png" } });
     const seen = videoApi();
     fetchSeen.length = 0;
-    await call({ prompt: "the square rises", image: "https://img.example.test/photo.png" });
+    const got = await call({ prompt: "the square rises", image: "https://img.example.test/photo.png" }).catch((e) => e);
+    ok(!(got instanceof Error), `an https URL answers a clip (${got instanceof Error ? got.message.slice(0, 80) : "ok"})`);
     ok(seen.submits.length === 1 && seen.submits[0].frame_images[0].image_url.url === `data:image/png;base64,${SQUARE.toString("base64")}`, "an https URL is read and sent on as a data URL (the provider never gets the caller's URL)");
     ok(fetchSeen.length === 1 && fetchSeen[0].guarded, "the read goes through the SSRF dispatcher");
   }
@@ -161,7 +162,7 @@ try {
     site.intercept({ path: "/moved.png" }).reply(302, "", { headers: { location: "https://cdn.example.test/real.png" } });
     cdn.intercept({ path: "/real.png" }).reply(200, SQUARE, { headers: { "content-type": "image/png" } });
     const seen = videoApi();
-    await call({ prompt: "the square rises", image: "https://img.example.test/moved.png" });
+    await call({ prompt: "the square rises", image: "https://img.example.test/moved.png" }).catch(() => null);
     ok(seen.submits.length === 1, "control: a redirect to another public host is followed");
   }
   const noSubmit = async (input, status, frag, label) => {
