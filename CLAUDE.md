@@ -236,7 +236,8 @@ LLC: credit the entity, never a personal name.
   not only in a prose note.
 - Before adding a data source, read its terms.
 - A read of an SEC host goes through `src/tools/sec-rate.js` (`SEC_STARTS_PER_SECOND_TOTAL` starts in any
-  rolling second, shared across replicas): it paces our outbound reads, with turns fair across callers
+  rolling second, shared across replicas and, with the shared store, across a deploy's overlapping
+  processes by presence, `createSecPresence`): it paces our outbound reads, with turns fair across callers
   (`src/caller-turns.js`), and refuses nobody for how many came before; a read that cannot get its turn
   inside its bounded wait answers 503 with Retry-After, at once when the pace cannot reach its place in
   that wait, and a read of a run already paid for (settle first) is never refused by it; a read of a run

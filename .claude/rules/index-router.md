@@ -78,8 +78,13 @@ Loaded when an index, discovery, router or buyer file is read.
   drops the validators, counts no read, and the scheduled turn passes under the word `parser-ended`
   in the cycle's `skipped`; its later scheduled turns pass the same way with no request until the
   parser's memory of the document ends (`crawlParseRecallMs`, a day), an explicit crawl still reads
-  and a completed read ends the wait (`scripts/test-crawl-kept-backoff.js`). A registry pass ends the same way (its last pass's rows stand; the word is
-  in its status `error` and `keptPrevious`). One line: `crawl parse <origin hash> <file> <size class>:
+  and a completed read ends the wait (`scripts/test-crawl-kept-backoff.js`). The keep is bounded: a
+  `parser-ended` turn is the seller's document, so it never moves the hold start (`noteTurnNotRead`), and
+  after `KEPT_PREVIOUS_MAX_IN_A_ROW` (3) kept reads in a row, or `CRAWL_HOLD_MS` since the first, the
+  entry reads the seller's failed read and its last listing is no longer held. A registry pass ends the
+  same way (its last pass's rows stand; the word is in its status `error` and `keptPrevious`), and
+  `crawlParse` on `/api/gateway-status` reads `registry-kept` while one does (`discoveryKeptPrevious`;
+  the status Worker and the heartbeat page on it; `fallback` / `paused` / `off` / `ok` otherwise). One line: `crawl parse <origin hash> <file> <size class>:
   not parsed, last read kept (<word>)`. The child first measures the text (`estimateTreeBytes`) and
   declines a document that plainly will not fit (half the limit); a declined document under
   `DECLINED_IN_PLACE_MAX_CHARS` (16 M characters: every seller document) is parsed in place, a longer
