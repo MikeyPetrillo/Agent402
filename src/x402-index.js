@@ -2998,7 +2998,7 @@ export function normaliseOpenapiTools(openapi, originUrl) {
 // one such document held the loop for most of a second in one turn.
 const CRAWL_SLICE_MS = 10;
 async function normaliseOpenapiToolsSliced(openapi, originUrl) {
-  return scopeRowsToSeller(await runCrawlLaneAsync(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+  return scopeRowsToSeller(await crawlWalkLaned("rows", { origin: originUrl, doc: "openapi-rows" }, normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
 }
 // ONE LANE for the crawl's sliced work. Twenty-five crawls run at once, and a
 // slice that yields with setImmediate comes back in the next loop iteration
@@ -3045,7 +3045,7 @@ function fallbackPassMeter() {
     /** A pass run in this turn: its time is one stretch. */
     sync(name, gen) { const t0 = performance.now(); const v = runSteps(gen); const d = performance.now() - t0; ms[name] += d; stretch(d); return v; },
     /** A pass run in the crawl lane: each slice is one stretch. */
-    lane(name, gen) { return runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { ms[name] += d; stretch(d); }); },
+    lane(name, gen) { return runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { ms[name] += d; stretch(d); noteTurn(`crawl-fallback ${name}`, Date.now() - d, d); }); },
     line(originUrl, listed, kept, { always = false } = {}) {
       const total = FALLBACK_PASS_NAMES.reduce((sum, n) => sum + ms[n], 0);
       if (!always && total <= FALLBACK_PASS_LOG.totalMs && !FALLBACK_PASS_NAMES.some((n) => ms[n] > FALLBACK_PASS_LOG.passMs)) return null;
@@ -3124,6 +3124,9 @@ function crawlWalk(name, docRef, fn) {
   try { return laneSpan(`crawl-walk ${name}`, fn); }
   finally { if (crawlWalkObserver) crawlWalkObserver(name, docRef); noteCrawlWalk(name, docRef, performance.now() - t0); }
 }
+let crawlWalksWhole = false;
+/** Test hook: run every laned walk whole in one lane turn (the unsliced control a suite compares against). */
+export function __setCrawlWalksWholeForTest(on) { crawlWalksWhole = on === true; }
 let crawlWalkObserver = null;
 /** Test hook: called with (name, docRef) as each walk stretch ends (a laned walk: each slice). */
 export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof fn === "function" ? fn : null; }
@@ -3133,6 +3136,7 @@ function noteCrawlWalk(name, docRef, ms) {
 /** The same for a walk written as steps: run in the crawl lane a slice at a
  *  time, its longest slice read against the threshold. */
 async function crawlWalkLaned(name, from, gen) {
+  if (crawlWalksWhole) { await crawlLaneTurn(); return crawlWalk(name, from, () => runSteps(gen)); }
   let longest = 0;
   // A slice is cut at CRAWL_SLICE_MS, but one step of the walk may run past
   // it: a long slice is recorded under the walk's name, as a span is, so the
@@ -3264,7 +3268,7 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   // One answer for the whole document: if anything in it is sold, rows the
   // seller left unannotated are stamped free instead of carrying no `paid`.
   // Each of these reads every operation, so each is a step of its own.
-  const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
+  const documentDistinguishesPaidOperations = yield* openapiHasPaymentSignalSteps(openapi);
   yield;
   logUnknownPaymentKeys(openapi, originUrl);
   yield;
@@ -3771,11 +3775,18 @@ export function normaliseManifestTools(manifest, originUrl, { examples = null } 
  *  operations, into the crawl-local `examples` Map, keyed by the route the
  *  OpenAPI reader gives the operation. For the unpaid quote probe only (see
  *  src/probe-example.js); never put on a row. */
-export function openapiProbeExamples(openapi, originUrl, examples) {
+export function openapiProbeExamples(openapi, originUrl, examples) { return runSteps(openapiProbeExamplesSteps(openapi, originUrl, examples)); }
+/** The same walk as steps (a yield every WALK_STEP_PATHS paths), for the crawl
+ *  lane: the paths are read in the document's order, as Object.entries reads them. */
+const WALK_STEP_PATHS = 256;
+function* openapiProbeExamplesSteps(openapi, originUrl, examples) {
   if (!(examples instanceof Map) || !openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return examples;
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return examples;
-  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
+  const paths = openapi.paths, names = Object.keys(paths);
+  for (let at = 0; at < names.length; at++) {
+    if (at && at % WALK_STEP_PATHS === 0) yield;
+    const rawPath = names[at], methods = paths[rawPath];
     if (examples.size >= MAX_PROBE_EXAMPLES) break;
     if (!methods || typeof methods !== "object" || !Object.hasOwn(methods, "post")) continue;
     const ex = openapiOperationExample(methods.post, openapi);
@@ -4631,15 +4642,24 @@ function logUnknownPaymentKeys(openapi, originUrl) {
 // value of every path item (array items included) and ignores the listing
 // filters: a priced operation that is deprecated, or on a path never listed,
 // still counts.
-export function openapiHasPaymentSignal(openapi) {
+export function openapiHasPaymentSignal(openapi) { return runSteps(openapiHasPaymentSignalSteps(openapi)); }
+/** The same reading as steps (a yield every WALK_STEP_PATHS path items), for
+ *  the crawl lane; a throw while reading reads false, as it does whole. */
+function* openapiHasPaymentSignalSteps(openapi) {
   const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : undefined;
   if (!paths) return false;
-  try {
-    return Object.values(paths).some((item) =>
-      item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething));
-  } catch {
-    return false;
+  let names;
+  try { names = Object.keys(paths); } catch { return false; }
+  for (let at = 0; at < names.length; at++) {
+    if (at && at % WALK_STEP_PATHS === 0) yield;
+    try {
+      const item = paths[names[at]];
+      if (item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething)) return true;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 // How mergeOpenapiIntoBazaar (further down) combines the two sources. The
@@ -7134,13 +7154,36 @@ async function packManifestBody(body) {
 // The same for an OpenAPI seller's derived rows: the next crawl needs them
 // only when /openapi.json answers 304, so between crawls they are one packed
 // buffer per seller instead of every row as heap objects.
-async function packOpenapiRows(tools, routes) {
+async function packOpenapiRows(tools, routes, originUrl = null) {
   if (!Array.isArray(tools)) return null;
-  // Serialised in a crawl-lane turn (see parseInCrawlLane): concurrent crawls'
-  // rows are not stringified back to back in one loop iteration.
-  await crawlLaneTurn();
-  try { return await gzipAsyncRaw(Buffer.from(laneSpan("crawl-pack-rows", () => JSON.stringify({ tools, routes: Array.isArray(routes) ? routes : [] })), "utf8")); } catch { return null; }
+  // Serialised in the crawl lane (see parseInCrawlLane): concurrent crawls'
+  // rows are not stringified back to back in one loop iteration,
+  // and a long list is serialised a step of rows per lane slice: the bytes are
+  // the ones JSON.stringify({ tools, routes }) gives (packedRowsSteps).
+  try { return await gzipAsyncRaw(Buffer.concat(await crawlWalkLaned("pack-rows", { origin: originUrl, doc: `${tools.length}-rows` }, packedRowsSteps(tools, Array.isArray(routes) ? routes : [])))); } catch { return null; }
 }
+/** JSON.stringify({ tools, routes }) as UTF-8 buffers, a yield every
+ *  PACK_STEP_ROWS rows: each element is serialised as JSON.stringify
+ *  serialises an array's element (a value with no JSON form reads null), so
+ *  the buffers joined are that call's bytes. */
+const PACK_STEP_ROWS = 128;
+function* packedRowsSteps(tools, routes) {
+  const out = [];
+  let text = '{"tools":[';
+  const flush = () => { out.push(Buffer.from(text, "utf8")); text = ""; };
+  for (const [open, list] of [["", tools], ['],"routes":[', routes]]) {
+    text += open;
+    for (let i = 0; i < list.length; i++) {
+      text += (i ? "," : "") + (JSON.stringify(list[i]) ?? "null");
+      if (i % PACK_STEP_ROWS === PACK_STEP_ROWS - 1) { flush(); yield; }
+    }
+  }
+  text += "]}";
+  flush();
+  return out;
+}
+/** Test hook: the packed rows' text, built in steps. */
+export function __packedRowsTextForTest(tools, routes) { return Buffer.concat(runSteps(packedRowsSteps(tools, routes))).toString("utf8"); }
 /** The previous crawl's OpenAPI rows, for a 304: unpacked from the entry, or
  *  the arrays an entry seeded by a test still holds; null when there are none
  *  (the crawl then reads the document afresh). */
@@ -7290,7 +7333,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       if (prevRows) {
         openapiTools = prevRows.tools;
         openapiRoutes = prevRows.routes;
-        openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes);
+        openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes, originUrl);
         tools = openapiTools;
         openapiHash = undefined;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
@@ -7307,9 +7350,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         openapi = body;
         openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = await openapiAllOperationRoutesSliced(openapi, originUrl, from);
-        openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes);
+        openapiPacked = await packOpenapiRows(openapiTools, openapiRoutes, originUrl);
         tools = openapiTools;
-        openapiExamples = crawlWalk("examples", from, () => openapiProbeExamples(openapi, originUrl, new Map()));
+        openapiExamples = await crawlWalkLaned("examples", from, openapiProbeExamplesSteps(openapi, originUrl, new Map()));
       }
     } catch (e) {
       if (e?.landingHeld) throw e;
@@ -7490,7 +7533,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       const text = await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES });
       const from = { origin: originUrl, doc: "/openapi.json", chars: typeof text === "string" ? text.length : 0 };
       const parsed = await parseInCrawlLane(text, from);
-      if (bazaarTools.length || crawlWalk("signal", from, () => openapiHasPaymentSignal(parsed))) {
+      if (bazaarTools.length || await crawlWalkLaned("signal", from, openapiHasPaymentSignalSteps(parsed))) {
         openapi = parsed;
         openapiTools = await normaliseOpenapiToolsSliced(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
@@ -7516,7 +7559,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         const text = await fallbackBody(originUrl, "/agents.json", agentsRes, { maxBytes: MAX_OPENAPI_BYTES });
         const from = { origin: originUrl, doc: "/agents.json", chars: typeof text === "string" ? text.length : 0 };
         const parsed = await parseInCrawlLane(text, from);
-        if (bazaarTools.length || crawlWalk("signal", from, () => openapiHasPaymentSignal(parsed))) {
+        if (bazaarTools.length || await crawlWalkLaned("signal", from, openapiHasPaymentSignalSteps(parsed))) {
           const fromAgents = await normaliseOpenapiToolsSliced(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
@@ -7587,7 +7630,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         if (laned) await meter.lane("carry", carrySteps); else meter.sync("carry", carrySteps);
       }
       // Crawl-local, as on the manifest path: the probe body only.
-      const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
+      const probeExamples = openapi ? await crawlWalkLaned("examples", { origin: originUrl, doc: openapiPath || "/openapi.json" }, openapiProbeExamplesSteps(openapi, originUrl, new Map())) : null;
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);

@@ -83,7 +83,13 @@ Loaded when an index, discovery, router or buyer file is read.
   vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk
   stretch of 100 ms or more logs `[x402-index] crawl parse|walk ... <origin hash> <file or row count>
   [<size class>]: longest=` (never the host; a walk over rows has no size class). A new whole-document walk in the crawl goes through
-  `crawlWalk` or `crawlWalkLaned` (`scripts/test-crawl-parse-off-loop.js`).
+  `crawlWalk` or `crawlWalkLaned` (`scripts/test-crawl-parse-off-loop.js`). The probe-example walk, the
+  payment-signal walk and the packing of an OpenAPI seller's rows (`packedRowsSteps`: the bytes
+  `JSON.stringify({ tools, routes })` gives) are laned walks; a laned slice of 20 ms or more is
+  recorded under `crawl-walk <name>` (a fallback pass under `crawl-fallback <name>`) for the
+  `[loop-lag]` line. On a heap of gigabytes the long turns left in a cycle are V8's marking steps
+  inside whichever turn allocates while a full collection marks; no gc entry reports them and no
+  slice ends them (`scripts/test-crawl-cycle-heap-turns.js` lists them apart and bounds the rest).
 - **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
   seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
   matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and

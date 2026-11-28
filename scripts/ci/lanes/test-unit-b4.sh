@@ -223,6 +223,8 @@ t node scripts/test-offload-stalls.js
 t node scripts/test-fallback-crawl-turn.js
 # A crawl cycle on a production-sized index (discovery, two full cycles, the MPP crawl) holds no turn long: one crawl's step per loop iteration, the route index's slices on time (offline)
 t node scripts/test-crawl-cycle-turns.js
+# The same cycle on a heap of 1.5 GB of live rows, with long documents and registries: our own turns bounded and named outside marking collections, new slices counted, sliced equals whole, readers see whole entries (offline; a child process with its own heap flags)
+t node scripts/test-crawl-cycle-heap-turns.js
 # A document at the crawl's size cap is parsed in a child process and rebuilt a piece per lane turn: turn bound, same entry as the in-place path, invalid and over-size as before, parser failures fall back (offline)
 t node scripts/test-crawl-parse-off-loop.js
 # No document under the crawl's byte caps ends the server through its parser: shapes searched for heap per character, run at the caps under the image's NODE_OPTIONS (offline)
