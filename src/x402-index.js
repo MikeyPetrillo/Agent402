@@ -11495,6 +11495,7 @@ function sameShallow(a, b) {
   for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i] || !Object.is(a[ka[i]], b[ka[i]])) return false;
   return true;
 }
+const KEEP_GIVE_UP = 64;
 const rowKeyOf = (t) => (t && typeof t === "object" ? `${t.method} ${t.route}` : "");
 let rowsKept = 0, serviceKeysKept = 0; // test counters
 /** The entry as stored, with each row equal to the previous entry's row for the
@@ -11504,16 +11505,23 @@ let rowsKept = 0, serviceKeysKept = 0; // test counters
 function keepUnchangedRows(prev, v) {
   const was = prev?.tools, now = v?.tools;
   if (!Array.isArray(was) || !Array.isArray(now) || was === now || !was.length || !now.length) return v;
-  let out = null, byKey = null, kept = 0;
+  let out = null, byKey = null, kept = 0, misses = 0;
+  // A list whose rows changed stops being compared once KEEP_GIVE_UP rows in a
+  // row differ and none matched: a store's turn then costs a few rows, not
+  // two walks of a list that kept nothing. Rows are looked up by method and
+  // route only when the list grew or shrank (rows moved place).
+  const shifted = now.length !== was.length;
   for (let i = 0; i < now.length; i++) {
+    if (!kept && misses >= KEEP_GIVE_UP) break;
     const t = now[i];
     let k = i < was.length && sameValue(was[i], t) ? was[i] : null;
-    if (!k && t && typeof t === "object") {
+    if (!k && shifted && t && typeof t === "object") {
       if (!byKey) { byKey = new Map(); for (const w of was) { const key = rowKeyOf(w); if (!byKey.has(key)) byKey.set(key, w); } }
       const w = byKey.get(rowKeyOf(t));
       if (w !== undefined && w !== was[i] && sameValue(w, t)) k = w;
     }
     if (k && k !== t) { (out ||= now.slice())[i] = k; kept++; }
+    else if (!k) misses++;
   }
   if (!out) return v;
   rowsKept += kept;
