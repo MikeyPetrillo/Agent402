@@ -7,7 +7,9 @@
 // stubbing globalThis.fetch (the handler passes ssrfDispatcher, but the call is
 // the global fetch) — no network, deterministic.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { NETWORK_TOOLS2, CERTSPOTTER_HOURLY_MAX, takeCertspotterRead, resetCertspotterReads } from "../src/tools/network-kit2.js";
+import { NETWORK_TOOLS2, CERTSPOTTER_HOURLY_MAX, takeCertspotterRead, resetCertspotterReads, CERT_LOG_WINDOW_MS, setCertLogTimingForTests, certLogTimeoutMessage } from "../src/tools/network-kit2.js";
+import { isUpstreamErrorShape } from "./lib/upstream-outage.js";
+import { HANDLER_BUDGET_MS } from "../src/upstream-deadline.js";
 import { CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, withoutAnswerOnlyFields } from "../src/data-attribution.js";
 import { isHost } from "./lib/url-host.js";
 
@@ -234,6 +236,62 @@ try {
   try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
   ok(threw?.statusCode === 502, `certspotter answering an object while crt.sh fails is a 502, not an empty answer (${threw?.statusCode ?? "answered"})`);
 } finally { restore(); }
+
+// A slow log is waited for. Every read of a call shares one window
+// (CERT_LOG_WINDOW_MS); the cases run on a clock scaled to a tenth, so the
+// stub's 900 ms, 1200 ms and 1900 ms stand for answers at 9 s, 12 s and one
+// second past the window. The stub ends a read when its signal aborts, as
+// fetch does.
+{
+  const SCALE = 10, win = CERT_LOG_WINDOW_MS / SCALE;
+  const restoreTiming = setCertLogTimingForTests({ windowMs: win, retryWithinMs: 300, hedgeMs: 150 });
+  const slow = (ms, res) => (url, init) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(res()), ms);
+    init?.signal?.addEventListener("abort", () => { clearTimeout(t); reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })); }, { once: true });
+  });
+  const slowStub = (crt, cs = null) => { globalThis.fetch = (url, init) => (isHost(String(url), "crt.sh") ? crt(url, init) : cs ? cs(url, init) : Promise.reject(new Error("unexpected host"))); };
+  const timed = async () => { const t0 = Date.now(); try { const r = await tool.handler({ domain: "example.com" }); return { r, ms: Date.now() - t0 }; } catch (e) { return { e, ms: Date.now() - t0 }; } };
+  try {
+    delete process.env.CERTSPOTTER_API_KEY;
+    ok(CERT_LOG_WINDOW_MS === 18_000 && CERT_LOG_WINDOW_MS < HANDLER_BUDGET_MS, `the call's window (${CERT_LOG_WINDOW_MS} ms) is inside the 20 s budget the keyless data kits answer in`);
+    slowStub(slow(9000 / SCALE, () => jsonRes(CRT_ROWS)));
+    const at9 = await timed();
+    ok(at9.r?.source === "crt.sh" && at9.r.count === 1 && at9.ms >= 850, `a log that answers at 9 s is served (${at9.r ? "served" : at9.e?.statusCode} at ${at9.ms * SCALE} ms scaled)`);
+    slowStub(slow(12000 / SCALE, () => jsonRes(CRT_ROWS)));
+    const at12 = await timed();
+    ok(at12.r?.source === "crt.sh" && at12.r.count === 1 && at12.r.credit === CRTSH_ATTRIBUTION && at12.ms >= 1150, `a log that answers at 12 s is served, with its credit (${at12.r ? "served" : `${at12.e?.statusCode} ${at12.e?.message}`} at ${at12.ms * SCALE} ms scaled)`);
+    let reads = 0;
+    slowStub((url, init) => { reads++; return slow((CERT_LOG_WINDOW_MS + 1000) / SCALE, () => jsonRes(CRT_ROWS))(url, init); });
+    const past = await timed();
+    ok(past.e?.statusCode === 502 && past.ms >= win - 50 && past.ms < win + 90 && reads === 1, `a log that answers one second past the window is a 502 at the window, after one read (${past.e?.statusCode ?? "served"} at ${past.ms * SCALE} ms scaled, ${reads} read)`);
+    ok(past.e?.message === certLogTimeoutMessage(win) && /within 1\.8 s;/.test(past.e.message), `its message names the wait that passed (${past.e?.message})`);
+    ok(certLogTimeoutMessage(CERT_LOG_WINDOW_MS) === "The upstream cert transparency log did not respond within 18 s; try again later" && isUpstreamErrorShape(502, { error: certLogTimeoutMessage(CERT_LOG_WINDOW_MS) }) && isUpstreamErrorShape(502, { error: certLogTimeoutMessage(CERT_LOG_WINDOW_MS, 2) }),
+      "the unscaled message names 18 s, derived from the window, in the shape the sweeps read as an upstream deadline");
+    // The one retry of a fast failure waits for the rest of the window.
+    reads = 0;
+    slowStub((url, init) => (++reads === 1 ? Promise.resolve(errRes(404)) : slow(12000 / SCALE, () => jsonRes(CRT_ROWS))(url, init)));
+    const retried = await timed();
+    ok(retried.r?.count === 1 && reads === 2, `a fast failure, then a log that answers at 12 s: the second read is waited for and served (${retried.r ? "served" : retried.e?.statusCode}, ${reads} reads)`);
+    reads = 0;
+    slowStub((url, init) => (++reads === 1 ? Promise.resolve(errRes(404)) : slow(30000 / SCALE, () => jsonRes(CRT_ROWS))(url, init)));
+    const bounded = await timed();
+    ok(bounded.e?.statusCode === 502 && bounded.ms < win + 90 && reads === 2, `a fast failure, then a log that never answers in time: one window for both reads, never two (${bounded.e?.statusCode ?? "served"} at ${bounded.ms * SCALE} ms scaled)`);
+    // A slow first read is not asked again: nothing is left to wait in.
+    reads = 0;
+    slowStub((url, init) => { reads++; return slow(9000 / SCALE, () => errRes(502))(url, init); });
+    const slowFail = await timed();
+    ok(slowFail.e?.statusCode === 502 && reads === 1 && /crt\.sh returned HTTP 502/.test(slowFail.e.message), `a slow failure is the answer's 502 after one read (${reads} reads)`);
+    // With the key: both logs silent is one window too, and says "logs".
+    process.env.CERTSPOTTER_API_KEY = KEY;
+    resetCertspotterReads();
+    slowStub(slow(60000 / SCALE, () => jsonRes(CRT_ROWS)), slow(60000 / SCALE, () => jsonRes(CS_ROWS)));
+    const both = await timed();
+    ok(both.e?.statusCode === 502 && both.e.message === certLogTimeoutMessage(win, 2) && both.ms < win + 90, `key held, both logs silent: a 502 at the window naming it (${both.e?.message} at ${both.ms * SCALE} ms scaled)`);
+    slowStub(slow(12000 / SCALE, () => jsonRes(CRT_ROWS)), () => Promise.resolve(errRes(503)));
+    const keyed = await timed();
+    ok(keyed.r?.source === "crt.sh", `key held, second log failing: crt.sh answering at 12 s is served (${keyed.r?.source ?? keyed.e?.statusCode})`);
+  } finally { restoreTiming(); restore(); delete process.env.CERTSPOTTER_API_KEY; resetCertspotterReads(); }
+}
 
 ok(!/via crt\.sh|via certspotter/i.test(tool.description), "description does not attribute every answer to one CT search");
 ok(/`source`/.test(tool.description) && "source" in tool.discovery.output.example, "description and example document the `source` field");
