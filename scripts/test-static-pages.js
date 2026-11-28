@@ -60,6 +60,7 @@ const PAGES = [
   { path: "/what-is-mpp", titleSubstr: "MPP" },
   { path: "/how-to-pay",  titleSubstr: "How to pay" },
   { path: "/start",       titleSubstr: "Start here" },
+  { path: "/recipes",     titleSubstr: "Things you can do" },
   { path: "/speech",      titleSubstr: "Speech" },
   { path: "/agentic-finance", titleSubstr: "Agentic Finance" },
   { path: "/docs",         titleSubstr: "Docs" },

@@ -66,6 +66,7 @@ export const PAGE_SOURCES = {
   "/what-is-mpp": ["src/what-is-mpp.js"],
   "/how-to-pay": ["src/how-to-pay.js"],
   "/start": ["src/start-page.js", "src/base-no-gas.js"],
+  "/recipes": ["src/recipes-page.js"],
   "/speech": ["src/speech-page.js"],
   "/agentic-finance": ["src/agentic-finance.js"],
   "/x402-test": ["src/x402-test-page.js"],

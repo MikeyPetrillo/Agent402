@@ -334,6 +334,7 @@ function pageUrls(baseUrl, catalog) {
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
     { loc: `${baseUrl}/start`, priority: "0.9" },
+    { loc: `${baseUrl}/recipes`, priority: "0.8" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -692,6 +693,7 @@ ${flatTiersLine()}
 
 ## Connect via MCP
 - [Start here](${baseUrl}/start): connect Claude on a computer or a phone, Claude Code or Cursor
+- [Things you can do](${baseUrl}/recipes): prompts to copy, each with the tool it runs and its price
 - [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockQuoteEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`

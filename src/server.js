@@ -557,6 +557,7 @@ import { transparencyPage, repoTraffic } from "./transparency.js";
 import { quickstartPage } from "./quickstart.js";
 import { startPage, START_PATH } from "./start-page.js";
 import { powLimitMessage } from "./next-step-copy.js";
+import { recipesPage, RECIPES_PATH } from "./recipes-page.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { howToPayPage } from "./how-to-pay.js";
@@ -5344,6 +5345,7 @@ app.get("/transparency", async (_req, res) => htmlCache(res, 300, 900).send(tran
 app.get("/contact", (_req, res) => res.redirect(301, "/company#contact"));
 app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPage(BASE_URL)));
 app.get(START_PATH, (_req, res) => htmlCache(res, 300, 900).send(startPage(BASE_URL, CATALOG)));
+app.get(RECIPES_PATH, (_req, res) => htmlCache(res, 300, 900).send(recipesPage(BASE_URL, CATALOG)));
 app.get("/what-is-x402", (_req, res) => htmlCache(res, 300, 900).send(whatIsX402Page(BASE_URL, {
   stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   leaderboardSnapshot: getLeaderboardSnapshot(),
