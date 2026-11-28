@@ -420,15 +420,24 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
       `a held read whose run's settlement failed, or whose handler ended with none, is answered the unpaid 503 when its place comes (${say(failedLater)}; ${say(endedLater)})`);
     // Admitted to the unpaid line, its deadline comes before any settle point.
     {
-      const { r, pace, done } = rigOf({ windowMs: 200, maxWaitMs: 2000, queueMax: 8 });
-      void r;
+      // Other callers stand ahead of it, so it is admitted to the line (its
+      // place is reachable inside its wait when it arrives) and its deadline
+      // comes there.
+      let who = ["ip:first"];
+      const { pace, done } = rigOf({ windowMs: 200, maxWaitMs: 2000, queueMax: 8, callerOf: () => who });
       await pace.paced(async () => 1);
-      const others = [pace.paced(async () => 1).catch(() => 0), pace.paced(async () => 1).catch(() => 0)];
+      const others = [];
+      who = ["ip:a"]; others.push(pace.paced(async () => 1).catch(() => 0));
+      who = ["ip:b"]; others.push(pace.paced(async () => 1).catch(() => 0));
+      who = ["ip:mine"];
       const t0 = performance.now();
-      const out = await pace.paced(async () => performance.now() - t0, { waitMs: 150 }).then((v) => ({ at: v }), (e) => ({ e, at: performance.now() - t0 }));
+      const read = pace.paced(async () => performance.now() - t0, { waitMs: 500 }).then((v) => ({ at: v }), (e) => ({ e, at: performance.now() - t0 }));
+      await sleep(20);
+      const admitted = pace.status().refused === 0 && pace.status().waiting === 3;
+      const out = await read;
       await Promise.all(others);
       done();
-      ok(!out.e && out.at >= 150 && pace.status().waiting === 0, `a waiting read of an armed run whose deadline comes before the settle point is held, not refused (${say(out)})`);
+      ok(admitted && !out.e && out.at >= 500 && pace.status().waiting === 0 && pace.status().refused === 0, `a waiting read of an armed run whose deadline comes before the settle point is held, not refused (${say(out)})`);
     }
     // The hold ends at the run's ceiling and on the caller's signal.
     {
