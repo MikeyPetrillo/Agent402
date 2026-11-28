@@ -19,7 +19,9 @@
 //   - a row whose postings a compaction is removing is posted again as a copy
 //     of its own, never moved and never posted twice;
 //   - a query that read the cache before a re-crawl moved its rows ranks as
-//     one that ran with nothing moving.
+//     one that ran with nothing moving;
+//   - the directory rebuilt after an unchanged cycle holds the rows it held,
+//     and after a changed one holds new rows and searches their text.
 // Mutation-checked: postings moved without the compaction check, the copy
 // posted as the same object, the query's moved-row read removed, rows kept
 // without comparing them, the decorated copy kept without comparing it, and
@@ -56,6 +58,12 @@ const totalRows = () => [...cache.values()].reduce((n, v) => n + (v.tools || [])
 const base = xi._routeIndexStatsForTest().indexedTools;
 ok(clean(audit()), `control: the warmed index holds every live row once (${show(audit())})`);
 
+// The directory rebuilt from the cache (its one-minute flatten memo dropped).
+// A read after the cache changed answers from the rows it holds and starts the
+// rebuild; the read after the rebuild answers from the new rows.
+const directory = async (args = {}) => { xi._resetFlatCacheForTest?.(); await xi.allIndexedToolsAsync({ limit: 1 }); await xi._indexRowsSettledForTest(); return xi.allIndexedToolsAsync({ limit: 500, ...args }); };
+const dir0 = await directory();
+
 // ---- unchanged cycles: every entry and row a new object, equal to the last -----------
 for (let cycle = 0; cycle < 2; cycle++) {
   const was = rankAll(), b0 = xi._routeIndexStatsForTest().builds, r0 = reuse(), rows = totalRows();
@@ -67,6 +75,10 @@ for (let cycle = 0; cycle < 2; cycle++) {
     `unchanged cycle ${cycle + 1}: every row kept (${d?.rowsKept} of ${rows}), no search text built (${d?.staticsBuilt}), no row decorated again (${d?.rowsDecorated}), none posted again (${d?.rowsPosted}); ${d?.rowsMoved} moved`);
   ok(clean(audit()), `unchanged cycle ${cycle + 1}: the lists hold every live row once (${show(audit())})`);
   ok(JSON.stringify(rankAll()) === JSON.stringify(was), `unchanged cycle ${cycle + 1}: the rankings are the same`);
+  const f0 = reuse();
+  const dir = await directory();
+  const kept = delta(f0, reuse())?.flatRowsKept;
+  ok(kept === dir.thirdParty && dir.thirdParty > 100000 && JSON.stringify(dir) === JSON.stringify(dir0), `unchanged cycle ${cycle + 1}: the directory rebuild keeps every row it held (${kept} of ${dir.thirdParty}) and answers the same`);
 }
 
 // ---- changed cycles: every row's text changed --------------------------------------
@@ -78,6 +90,11 @@ for (let cycle = 0; cycle < 3; cycle++) {
   worst = Math.max(worst, s.staleTools);
   ok(s.staleTools === 0 && s.builds > b0, `changed cycle ${cycle + 1}: no stale rows remain without a query (stale ${s.staleTools}, indexed ${s.indexedTools}, builds ${b0} -> ${s.builds})`);
   ok(clean(audit()), `changed cycle ${cycle + 1}: the compacted lists hold every live row once (${show(audit())})`);
+  if (cycle === 0) {
+    const f0 = reuse();
+    const found = await directory({ search: "gen0" });
+    ok(delta(f0, reuse())?.flatRowsKept === 0 && found.matched === found.thirdParty, `changed cycle 1: the directory builds every changed row again (${delta(f0, reuse())?.flatRowsKept} kept) and searches the new text (${found.matched} of ${found.thirdParty} match)`);
+  }
 }
 const end = xi._routeIndexStatsForTest();
 ok(end.indexedTools <= base * 1.01, `the index stays one copy of the pool (${end.indexedTools} rows vs ${base} at boot)`);

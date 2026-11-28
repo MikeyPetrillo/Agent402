@@ -12381,7 +12381,7 @@ export function _routeIndexAuditForTest() {
 }
 /** Test hook: what the layers built and kept (counters since boot). */
 export function _rowReuseStatsForTest() {
-  return { rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
+  return { flatRowsKept, rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
@@ -13608,17 +13608,30 @@ function* interleaveSteps(rows) {
 /** Test hook: the directory's interleave as steps (src/x402-index.js interleaveSteps). */
 export function _interleaveStepsForTest(rows) { return interleaveSteps(rows); }
 
-function flatRowsForEntry(origin, v, self, seen, out) {
+// The rows the last flatten built for each origin. A rebuild builds every row
+// again and keeps the earlier row at the same place when the two are equal in
+// every field: a directory rebuilt while a crawl runs then holds the rows it
+// already held (and their search text) instead of a second full set, and the
+// one it builds is dropped young.
+let flatRowsByOrigin = new Map();
+let flatRowsKept = 0; // test counter
+function flatRowsForEntry(origin, v, self, seen, out, next = null) {
   // Same bar as /api/index/register.
   if (!directoryListsEntry(origin, v, self)) return;
   const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
+  const was = flatRowsByOrigin.get(origin), mine = [];
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(flatRowOf(origin, t, sellerName));
+    let row = flatRowOf(origin, t, sellerName);
+    const w = was ? was[mine.length] : undefined;
+    if (w && sameValue(w, row)) { row = w; flatRowsKept++; }
+    mine.push(row);
+    out.push(row);
   }
+  if (next && mine.length) next.set(origin, mine);
 }
 /** Whether an origin's rows belong in the third-party directory at all (the
  *  bar flatRowsForEntry applies before it reads any tool). */
@@ -13735,12 +13748,14 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
   }
   const out = [];
   const seen = new Set();
-  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out);
-  return finishFlat(out, self);
+  const next = new Map();
+  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out, next);
+  return finishFlat(out, self, next);
 }
 let flatBuilds = 0;
-function finishFlat(out, self) {
+function finishFlat(out, self, next) {
   flatBuilds++;
+  flatRowsByOrigin = next;
   // No sort: every consumer groups or counts (interleaveBySeller orders the
   // rows itself), and a 100k-row sort was most of a rebuild's longest turn.
   flatCache = { at: Date.now(), rows: out, self };
@@ -13755,13 +13770,14 @@ function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
     try {
       const out = [];
       const seen = new Set();
+      const next = new Map();
       let until = performance.now() + 8;
       for (const [origin, v] of [...cache.entries()]) {
-        flatRowsForEntry(origin, v, self, seen, out);
+        flatRowsForEntry(origin, v, self, seen, out, next);
         if (performance.now() >= until) { await yieldTurn(); until = performance.now() + 8; }
       }
       await yieldTurn();
-      return finishFlat(out, self);
+      return finishFlat(out, self, next);
     } finally { flatRebuild = null; }
   })();
   return flatRebuild;
