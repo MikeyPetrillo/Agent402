@@ -342,7 +342,7 @@ await throws(() => validateVideosRequest({ prompt: "x".repeat(2001) }), "Prompt 
 
 // ---- video handler (stubbed fetch): submit -> poll -> download ----
 const MP4 = Buffer.from("\0\0\0 ftypisom-fake-mp4-bytes");
-function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, failError, submitId = "job1" } = {}) {
+function installVideoFetch({ statuses = ["pending", "in_progress", "completed"], contentStatus = 200, contentStatuses, pollHttp = [], pollingUrl, submitStatus = 202, submitError = { message: "bad" }, failError, submitId = "job1" } = {}) {
   let contentCalls = 0, pollCalls = 0;
   let polls = 0; const seen = { submit: null, submits: 0, polls: [], content: null };
   globalThis.fetch = async (url, init = {}) => {
@@ -351,7 +351,7 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
       seen.submit = { url: u, body: JSON.parse(init.body), auth: init.headers?.Authorization };
       seen.submits++;
       const j = { id: submitId, polling_url: pollingUrl ?? `${OPENROUTER_VIDEOS_URL}/${submitId}`, status: "pending" };
-      return { ok: submitStatus < 400, status: submitStatus, text: async () => JSON.stringify(submitStatus < 400 ? j : { error: { message: "bad" } }) };
+      return { ok: submitStatus < 400, status: submitStatus, text: async () => JSON.stringify(submitStatus < 400 ? j : { error: submitError }) };
     }
     if (u.includes("/content")) {
       seen.content = { url: u, auth: init.headers?.Authorization };
@@ -429,6 +429,12 @@ function installVideoFetch({ statuses = ["pending", "in_progress", "completed"],
     ok(e?.statusCode === 502 && !e.contentFiltered && toolErrorFields(e).reason === undefined, "…502, no content_filtered reason");
   }
   ok(!toolErrorFields(Object.assign(new Error("x"), { statusCode: 502, contentFiltered: true })).reason, "content_filtered rides only on a 422");
+  // A submit the filter refuses: text-to-video takes no picture, so the answer
+  // names only the prompt (image-animate's wording is in test-image-animate.js).
+  installVideoFetch({ submitStatus: 400, submitError: { message: "Your prompt violates our safety policy", code: "content_policy_violation" } });
+  const sub = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "content filter stopped this request", "a submit the filter refuses -> 422");
+  ok(sub?.statusCode === 422 && sub.contentFiltered === true && toolErrorFields(sub).reason === "content_filtered", "…422 content_filtered");
+  ok(/Nothing was charged\. Rephrase the prompt and try again\.$/.test(String(sub?.message)) && !/picture|image/i.test(String(sub?.message)), `…v1-videos names the prompt and no picture (${sub?.message})`);
 }
 // Parking is keyed on the signed EVM payer (payerFromRequest): a request with
 // no such identity never parks or resumes, so two buyers sending the same

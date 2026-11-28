@@ -213,6 +213,7 @@ try {
     videoApi({ submitStatus: 400, submitError: { message: "The input image violates our safety policy", code: "content_policy_violation" } });
     const e = await refusal({ prompt: "x", image: SQUARE.toString("base64") });
     ok(e?.statusCode === 422 && e.contentFiltered === true && toolErrorFields(e).reason === "content_filtered" && /Nothing was charged/.test(e.message), `a submit the provider's filter refuses -> 422 content_filtered (${e?.statusCode})`);
+    ok(/Nothing was charged\. Change the prompt or the picture and try again\.$/.test(String(e?.message)), `…image-animate names the prompt and the picture it takes (${e?.message})`);
   }
   {
     videoApi({ statuses: ["failed"], failError: "Video generation completed with no output (content may have been filtered)" });

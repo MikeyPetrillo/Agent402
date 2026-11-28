@@ -605,11 +605,13 @@ async function animateHandler(input, req) {
   return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio });
 }
 
-function videoSubmitFilteredError(bodyText) {
+// `tier`: image-animate takes a picture, so its caller may change either;
+// text-to-video (v1-videos) takes only the prompt.
+function videoSubmitFilteredError(bodyText, tier) {
   let why = "";
   try { const e = JSON.parse(bodyText)?.error; why = typeof e === "string" ? e : (e?.message || ""); } catch { why = ""; }
   const quoted = why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : "";
-  return Object.assign(bad(`The provider returned no video and says its content filter stopped this request${quoted}.${notChargedHere()} Change the prompt or the picture and try again.`, 422), { contentFiltered: true });
+  return Object.assign(bad(`The provider returned no video and says its content filter stopped this request${quoted}.${notChargedHere()} ${tier === "image-animate" ? "Change the prompt or the picture" : "Rephrase the prompt"} and try again.`, 422), { contentFiltered: true });
 }
 
 async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
@@ -700,7 +702,7 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
       // routes' rule, src/tools/content-filter.js): a 422 the caller can
       // branch on, not a 502. Key, balance and rate answers are never one.
       const errText = await res.text().catch(() => "");
-      if (res.status >= 400 && res.status < 500 && ![401, 402, 403, 429].includes(res.status) && providerBodyContentFiltered(errText)) throw videoSubmitFilteredError(errText);
+      if (res.status >= 400 && res.status < 500 && ![401, 402, 403, 429].includes(res.status) && providerBodyContentFiltered(errText)) throw videoSubmitFilteredError(errText, tier);
       await throwUpstreamError({ status: res.status, text: async () => errText });
     }
     const text = await readUpstreamBody(res, { req });
