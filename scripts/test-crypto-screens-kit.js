@@ -18,7 +18,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 //     flag or published example.
 
 import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, SCREEN_READS, readsPerDay, FUNDING_PAGE_CAP, FUNDING_PER_PAGE, UNKNOWN_ID_MAX, UNKNOWN_ID_TTL_MS, ANSWER_MEMO_MAX, resetScreensMemory, __test } from "../src/tools/crypto-screens-kit.js";
-import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
+import { clearCryptoMarketsCache, resetCgRateLimit, TTL, cgGet } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
 import { RAW_MARKET_FIELDS } from "../src/resale-terms.js";
@@ -393,6 +393,27 @@ reset();
       ok(at20 === 3 && at29 === 3, `page 3 read at minute 20 is kept to the end of page 1's window (${at20}, ${at29} reads)`);
       ok(at31 === 6 && fresh.scan.complete === true, `after page 1's window every page of the scan is read again, page 3 included (${at31 - at29} reads at minute 31)`);
     } finally { Date.now = realNow; }
+  }
+
+  // Page 1 read again inside the window (its entry left the bounded cache first,
+  // the oldest of the scan): the later pages kept from the earlier window are
+  // not joined to it.
+  {
+    reset();
+    routes = [
+      [path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(PAGES[n - 1] || [], { next: n < PAGES.length, page: n, last: PAGES.length }); }],
+      [(u) => u.pathname.startsWith("/api/v3/filler/"), () => jsonRes(200, { ok: 1 })],
+    ];
+    const fill = async (from, n) => { for (let k = from; k < from + n; k++) { resetCgRateLimit(); await cgGet(`/filler/${k}`, {}, 60 * 60_000); } };
+    await h("funding-screener")({ coin: "BTC", minOpenInterestUsd: 5_000_000 }); // pages 1-2
+    await fill(0, 10);
+    await h("funding-screener")({ coin: "BTC" });                                 // page 3, later
+    ok(derivReads().length === 3, "control: the scan read pages 1-3, page 3 after other entries");
+    // 13 entries; 243 more fill the cache (256) and one more pushes out the oldest: page 1.
+    await fill(10, 244);
+    const before = derivReads().length;
+    const rejoined = await h("funding-screener")({ coin: "BTC" });
+    ok(derivReads().length - before === 3 && rejoined.scan.complete === true, `page 1 read again starts a new window: page 3, still kept from the earlier one, is read again with it (${derivReads().length - before} reads)`);
   }
 
   // An unconfirmed coin: while the unsettled share has room it is read as asked;
