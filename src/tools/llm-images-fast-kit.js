@@ -58,6 +58,8 @@ import { reportProgress } from "../job-progress.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { notChargedHere } from "../not-charged.js";
 import { providerContentFiltered, providerBodyContentFiltered } from "./content-filter.js";
+import { safeFetch } from "./fetch-guard.js";
+import { assertPngHeader, assertJpegHeader } from "./image-headers.js";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -67,6 +69,7 @@ export const IMAGES_FAST_PATH = "/v1/images/fast";
 export const IMAGES_PRO_PATH = "/v1/images/pro";
 export const IMAGES_EDIT_PATH = "/v1/images/edits";
 export const VIDEOS_PATH = "/v1/videos/generations";
+export const ANIMATE_PATH = "/api/image-animate";
 export const IMAGE_MAX_PROMPT_CHARS = 4_000;
 // Reference images on the edit route. Billing is flat per output image at the
 // pinned resolution whatever the references (measured with one and two), and
@@ -180,6 +183,29 @@ export function videosWorstCaseUsd() {
   const v = upstreamCosts().media?.[VIDEOS_MODEL]?.worstCaseUsd;
   return Number.isFinite(v) ? v : null;
 }
+// Image-to-video (`/api/image-animate`): the same model, clip and SKU as the
+// text-to-video route, with the buyer's picture as the clip's first frame
+// (`frame_images`, frame_type first_frame). The listing bills an image-to-video
+// clip on the same per-second SKU (no image line), so the bound is the same
+// 4 s silent 720p clip; it has a row of its own in the private table, so a
+// reprice of either input mode is one table edit.
+export const ANIMATE_COST_KEY = `${VIDEOS_MODEL}:first-frame`;
+export const ANIMATE_PRICE = 0.25;
+// The picture: PNG or JPEG, read for its type and size from the bytes. The
+// byte cap is the edit route's; a URL is read through the SSRF guard
+// (src/tools/fetch-guard.js) under the same cap, counted on the decoded body,
+// so a compressed transfer cannot carry more. The pixel cap is the image
+// tools' source cap (MAX_SRC_PIXELS in src/tools/image-ops.js), read from the
+// container header before anything decodes it.
+export const ANIMATE_MAX_IMAGE_BYTES = IMAGE_EDIT_MAX_REF_BYTES;
+export const ANIMATE_MIN_SIDE = IMAGE_EDIT_MIN_SIDE;
+export const ANIMATE_MAX_SIDE = 8_192;
+export const ANIMATE_MAX_PIXELS = 40_000_000;
+const ANIMATE_FETCH_TIMEOUT_MS = 15_000;
+export function animateWorstCaseUsd() {
+  const v = upstreamCosts().media?.[ANIMATE_COST_KEY]?.worstCaseUsd;
+  return Number.isFinite(v) ? v : null;
+}
 const VIDEOS_POLL_MS = () => Math.max(100, parseInt(process.env.VIDEOS_POLL_MS || "5000", 10) || 5000);
 // The wait before each status poll. A clip takes about 40 s, so nothing is
 // lost by polling every 5 s for the first VIDEOS_POLL_FAST_AFTER_MS; after
@@ -221,6 +247,7 @@ export function mediaMarginTable() {
     for (const link of t.chain) rows.push({ tier, price: t.price, model: link.model, worst: linkBounds(link)?.worstCaseUsd ?? null });
   }
   rows.push({ tier: "v1-videos", price: VIDEOS_PRICE, model: VIDEOS_MODEL, worst: videosWorstCaseUsd() });
+  rows.push({ tier: "image-animate", price: ANIMATE_PRICE, model: ANIMATE_COST_KEY, worst: animateWorstCaseUsd() });
   return rows;
 }
 export function withinMargin(price, worst) {
@@ -483,6 +510,108 @@ export function validateVideosRequest(input) {
   return { prompt, aspect_ratio: aspect };
 }
 
+/** The image-to-video request, every check that needs no network: the
+ *  prompt, the locked clip, the aspect ratio and the shape of `image`. The
+ *  picture itself is read afterwards (animateImage). */
+export function validateAnimateRequest(input) {
+  if (input == null || typeof input !== "object" || Buffer.isBuffer(input)) throw bad("Request body must be a JSON object");
+  const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+  if (!prompt) throw bad('"prompt" is required - describe the motion: what moves, how, and how the camera moves');
+  if (prompt.length > VIDEOS_MAX_PROMPT_CHARS) throw bad(`Prompt too long (${prompt.length} chars). Maximum is ${VIDEOS_MAX_PROMPT_CHARS}`);
+  if (input.model !== undefined && String(input.model).trim() !== VIDEOS_MODEL) {
+    throw bad(`"model" is fixed to ${VIDEOS_MODEL} on this endpoint (omit it, or send that id)`);
+  }
+  for (const k of ["duration", "seconds"]) {
+    if (input[k] !== undefined && Number(input[k]) !== VIDEOS_DURATION_SECONDS) throw bad(`"${k}" is locked to ${VIDEOS_DURATION_SECONDS} seconds - the flat price buys one ${VIDEOS_DURATION_SECONDS}-second clip`);
+  }
+  if (input.resolution !== undefined && String(input.resolution) !== VIDEOS_RESOLUTION) throw bad(`"resolution" is locked to ${VIDEOS_RESOLUTION} on this endpoint`);
+  if (input.generate_audio === true) throw bad('"generate_audio" is not available on this endpoint; clips are silent');
+  if (input.n !== undefined && parseInt(input.n, 10) !== 1) throw bad('"n" is locked to 1 - the flat price is per clip');
+  if (input.last_frame !== undefined || input.frame_images !== undefined || input.input_references !== undefined || input.input_reference !== undefined) {
+    throw bad('Send the one picture in "image"; it becomes the first frame of the clip (no last frame or reference images on this endpoint)');
+  }
+  if (input.response_format !== undefined && input.response_format !== "b64_json") throw bad('"response_format" must be "b64_json" - the clip is returned inline, not hosted');
+  const aspect = input.aspect_ratio !== undefined ? String(input.aspect_ratio) : null;
+  if (aspect !== null && !VIDEOS_ASPECT_RATIOS.includes(aspect)) throw bad(`"aspect_ratio" must be one of ${VIDEOS_ASPECT_RATIOS.join(", ")}`);
+  let image = input.image;
+  if (image && typeof image === "object" && !Array.isArray(image)) image = image.image_url?.url ?? image.image_url ?? image.url ?? image.b64_json;
+  if (image === undefined && typeof input.image_url === "string") image = input.image_url;
+  if (typeof image !== "string" || !image.trim()) throw bad('"image" is required - the picture to animate, as base64, a data: URL or an https URL (PNG or JPEG)');
+  image = image.trim();
+  let source;
+  if (/^https:\/\//i.test(image)) source = { url: image };
+  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(image)) throw bad('"image" URL must be https');
+  else {
+    const m = /^data:([^;,]*)(;base64)?,/i.exec(image);
+    if (m && !m[2]) throw bad('"image": the data: URL must be base64-encoded');
+    const b64 = (m ? image.slice(m[0].length) : image).replace(/\s+/g, "");
+    // Four base64 characters per three bytes: a string past the byte cap is refused before it is decoded.
+    if (b64.length > Math.ceil(ANIMATE_MAX_IMAGE_BYTES / 3) * 4 + 4) throw bad(`"image" is over ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB; send a smaller picture`, 413);
+    if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(b64)) throw bad('"image" is not valid base64 (send base64, a data: URL or an https URL)');
+    source = { b64 };
+  }
+  return { prompt, aspect_ratio: aspect, source };
+}
+
+/** The picture's bytes checked from its header, never decoded: PNG or JPEG,
+ *  one IHDR or one frame header (the size any decoder reads), each side and
+ *  the pixel count inside the caps. Returns { dataUrl, width, height }. */
+export function animateImageFromBytes(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 24) throw bad('"image" is empty or too small to be a picture');
+  if (buf.length > ANIMATE_MAX_IMAGE_BYTES) throw bad(`"image" is ${(buf.length / 1048576).toFixed(1)} MB; the picture may be up to ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB`, 413);
+  const format = buf[0] === 0x89 ? "png" : buf[0] === 0xff ? "jpeg" : null;
+  if (format === "png") assertPngHeader(buf);
+  if (format === "jpeg") assertJpegHeader(buf);
+  const size = format ? imageSize(buf, format) : null;
+  if (!size) throw bad('"image" is not a PNG or JPEG picture (an animated PNG is not accepted)');
+  const { width, height } = size;
+  if (width > ANIMATE_MAX_SIDE || height > ANIMATE_MAX_SIDE || width * height > ANIMATE_MAX_PIXELS) {
+    throw bad(`"image" declares ${width}x${height}; each side may be up to ${ANIMATE_MAX_SIDE} pixels and the picture up to ${ANIMATE_MAX_PIXELS / 1_000_000} megapixels`, 413);
+  }
+  if (width < ANIMATE_MIN_SIDE || height < ANIMATE_MIN_SIDE) throw bad(`"image" is ${width}x${height}; each side must be at least ${ANIMATE_MIN_SIDE} pixels`);
+  return { dataUrl: `data:image/${format};base64,${buf.toString("base64")}`, width, height };
+}
+
+/** The picture a validated request names: decoded from base64, or read from
+ *  its https URL through the SSRF guard (every address checked, each redirect
+ *  hop checked at connect) under the byte cap. */
+export async function animateImage(source) {
+  if (source.b64 !== undefined) {
+    const b64 = source.b64;
+    return animateImageFromBytes(Buffer.from(b64, b64.includes("-") || b64.includes("_") ? "base64url" : "base64"));
+  }
+  let buffer;
+  try {
+    ({ buffer } = await safeFetch(source.url, { binary: true, maxBytes: ANIMATE_MAX_IMAGE_BYTES, timeoutMs: ANIMATE_FETCH_TIMEOUT_MS, headers: { Accept: "image/png,image/jpeg;q=0.9,*/*;q=0.1" } }));
+  } catch (e) {
+    if (e?.statusCode === 413) throw bad(`The picture at "image" is over ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB; send a smaller one`, 413);
+    throw e;
+  }
+  return animateImageFromBytes(buffer);
+}
+
+async function animateHandler(input, req) {
+  if (animateWorstCaseUsd() == null) throw bad(`${ANIMATE_PATH} is temporarily unavailable.`, 503);
+  const user = userOf(req);
+  const { prompt, aspect_ratio: asked, source } = validateAnimateRequest(input);
+  // The key check before any read of the buyer's URL: an unconfigured server
+  // fetches nothing (the submit's own check answers the same 503 later).
+  if (!OPENROUTER_KEY()) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  const { dataUrl, width, height } = await animateImage(source);
+  // Unset, the clip follows the picture: portrait for a taller one.
+  const aspect_ratio = asked ?? (height > width ? "9:16" : "16:9");
+  const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false,
+    frame_images: [{ type: "image_url", image_url: { url: dataUrl }, frame_type: "first_frame" }], ...(user ? { user } : {}) };
+  return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio });
+}
+
+function videoSubmitFilteredError(bodyText) {
+  let why = "";
+  try { const e = JSON.parse(bodyText)?.error; why = typeof e === "string" ? e : (e?.message || ""); } catch { why = ""; }
+  const quoted = why ? `: ${redactSecrets(String(why)).slice(0, 160)}` : "";
+  return Object.assign(bad(`The provider returned no video and says its content filter stopped this request${quoted}.${notChargedHere()} Change the prompt or the picture and try again.`, 422), { contentFiltered: true });
+}
+
 async function openRouterGet(url, { timeoutMs = 30_000, accept } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -548,6 +677,14 @@ async function videosHandler(input, req) {
   const user = userOf(req);
   const { prompt, aspect_ratio } = validateVideosRequest(input);
   const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false, ...(user ? { user } : {}) };
+  return runVideoJob(body, req, { tier: "v1-videos", priceUsd: VIDEOS_PRICE, worstCaseUsd: videosWorstCaseUsd(), aspect_ratio });
+}
+
+/** One clip on the Video API: submit (or resume a parked job), poll, download.
+ *  Shared by the text-to-video route and the image-to-video route: `body` is
+ *  the locked upstream request, `tier` names the route in the bound check
+ *  and telemetry. */
+async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_ratio }) {
   const started = Date.now();
   // A job that outlived the last identical request is picked up again rather
   // than paid for twice: the retry the 504 asks for collects the same clip.
@@ -558,7 +695,14 @@ async function videosHandler(input, req) {
   if (parkedId && await claimParkedVideoJob(parkKey, parkedId)) job = { id: parkedId, status: "pending" };
   else {
     const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
-    if (!res.ok) await throwUpstreamError(res);
+    if (!res.ok) {
+      // A submit the provider refuses for its content filter (the image
+      // routes' rule, src/tools/content-filter.js): a 422 the caller can
+      // branch on, not a 502. Key, balance and rate answers are never one.
+      const errText = await res.text().catch(() => "");
+      if (res.status >= 400 && res.status < 500 && ![401, 402, 403, 429].includes(res.status) && providerBodyContentFiltered(errText)) throw videoSubmitFilteredError(errText);
+      await throwUpstreamError({ status: res.status, text: async () => errText });
+    }
     const text = await readUpstreamBody(res, { req });
     try { job = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   }
@@ -645,17 +789,17 @@ async function videosHandler(input, req) {
 
   const rawUsage = st?.usage && typeof st.usage === "object" ? st.usage : null;
   const upstreamUsd = rawUsage && typeof rawUsage.cost === "number" ? rawUsage.cost : null;
-  if (upstreamUsd != null && upstreamUsd > (videosWorstCaseUsd() ?? 0) + 1e-9) {
-    console.warn(`[videos] ${VIDEOS_MODEL} billed above its bound`);
+  if (upstreamUsd != null && upstreamUsd > (worstCaseUsd ?? 0) + 1e-9) {
+    console.warn(`[videos] ${body.model} billed above its bound on ${tier}`);
   }
   try {
     const { capturePostHogGatewayUsage } = await import("../posthog.js");
-    capturePostHogGatewayUsage({ tier: "v1-videos", model: VIDEOS_MODEL, priceUsd: VIDEOS_PRICE, upstreamUsd, serviceTier: "default" });
+    capturePostHogGatewayUsage({ tier, model: body.model, priceUsd, upstreamUsd, serviceTier: "default" });
   } catch { /* telemetry must never fail a served response */ }
 
   return {
     created: Math.floor(Date.now() / 1000),
-    model: VIDEOS_MODEL,
+    model: body.model,
     data: [{ b64_json: bytes.toString("base64"), media_type: mediaType, duration_seconds: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio }],
     usage: { generation_seconds: Math.round((Date.now() - started) / 1000) },
   };
@@ -758,4 +902,34 @@ export const IMAGES_FAST_TOOLS = [
     },
     handler: videosHandler,
   },
+  {
+    route: `POST ${ANIMATE_PATH}`,
+    name: "Image to video (4-second clip)",
+    slug: "image-animate", aliases: ["image-to-video", "animate-image"],
+    category: "llm",
+    price: `$${ANIMATE_PRICE.toFixed(3)}`,
+    modelBacked: true,
+    description:
+      `Animate a still picture (model-backed) over x402 - send a PNG or JPEG as base64, a data: URL or an https URL (up to ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB, ${ANIMATE_MIN_SIDE} px a side or more) with a motion prompt, and get back one silent 4-second 720p clip (MP4, inline base64) that opens on your picture, for a flat $${ANIMATE_PRICE.toFixed(2)}, served by Veo 3.1 Lite. aspect_ratio 16:9 or 9:16 follows the picture unless you set it; duration, resolution and audio are fixed so the price is. The call returns when the clip is ready (up to 4 minutes). A failed or timed-out generation is not charged on x402 (a request the provider's content filter stops answers 422 with reason content_filtered), and a wallet payer whose request timed out can send it again unchanged to collect the same clip.`,
+    tags: ["image-to-video", "animate", "animate-image", "photo-to-video", "video-generation", "video", "clip", "animation", "veo", ...SHARED_TAGS],
+    discovery: {
+      bodyType: "json",
+      input: { prompt: "The red square slowly rises and spins as the camera pushes in", image: EDIT_EXAMPLE_IMAGE },
+      inputSchema: {
+        properties: {
+          prompt: { type: "string", maxLength: VIDEOS_MAX_PROMPT_CHARS, description: `The motion to add: what moves, how, and how the camera moves (up to ${VIDEOS_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
+          image: { type: "string", description: `The picture that opens the clip: base64, a data: URL or an https URL. PNG or JPEG, up to ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB, ${ANIMATE_MIN_SIDE} to ${ANIMATE_MAX_SIDE.toLocaleString()} px a side` },
+          aspect_ratio: { type: "string", enum: VIDEOS_ASPECT_RATIOS, description: "16:9 (1280x720) or 9:16 (720x1280); unset, a taller picture gets 9:16 and any other 16:9" },
+        },
+        required: ["prompt", "image"],
+      },
+      output: { example: { created: 1750000000, model: VIDEOS_MODEL, data: [{ b64_json: "AAAAIGZ0eXBpc29t…", media_type: "video/mp4", duration_seconds: 4, resolution: "720p", aspect_ratio: "16:9" }], usage: { generation_seconds: 40 } } },
+    },
+    handler: animateHandler,
+  },
 ];
+
+/** Routes whose upstream job is parked and resumed across calls, so they are
+ *  never settled first (src/settle-first-tools.js): a resend collects the
+ *  job a timed-out call left running. */
+export const PARKED_VIDEO_SLUGS = new Set(["v1-videos", "image-animate"]);

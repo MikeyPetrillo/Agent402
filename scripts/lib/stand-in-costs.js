@@ -81,6 +81,7 @@ export async function catalogStandInRows() {
   const media = [];
   for (const t of Object.values(img.IMAGE_TIERS)) for (const l of t.chain) media.push([l.model, t.price]);
   media.push([img.VIDEOS_MODEL, img.VIDEOS_PRICE]);
+  media.push([img.ANIMATE_COST_KEY, img.ANIMATE_PRICE]);
   const speech = [];
   for (const [slug, t] of Object.entries(tts.TTS_TIERS)) {
     // A quoted tier's price for its longest text; a flat tier's listed price.

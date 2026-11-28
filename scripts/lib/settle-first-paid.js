@@ -434,7 +434,7 @@ export async function run({ ok, parts, setRig }) {
       {
         const kits = await Promise.all([import("../../src/tools/llm-gateway-kit.js"), import("../../src/tools/llm-messages-kit.js"), import("../../src/tools/llm-gemini-kit.js"), import("../../src/tools/llm-responses-kit.js"), import("../../src/tools/llm-images-fast-kit.js")]);
         // The armed routes, as server.js lists them (SETTLE_FIRST_SLUGS).
-        const tools = [...kits[0].LLM_GATEWAY_TOOLS, ...kits[1].LLM_MESSAGES_TOOLS, ...kits[2].LLM_GEMINI_TOOLS, ...kits[3].LLM_RESPONSES_TOOLS, ...kits[4].IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos")];
+        const tools = [...kits[0].LLM_GATEWAY_TOOLS, ...kits[1].LLM_MESSAGES_TOOLS, ...kits[2].LLM_GEMINI_TOOLS, ...kits[3].LLM_RESPONSES_TOOLS, ...kits[4].IMAGES_FAST_TOOLS.filter((t) => !kits[4].PARKED_VIDEO_SLUGS.has(t.slug))];
         // Usable answers for the wires the stub does not speak, so the sweep also reads a 200 on each.
         llm(async ({ path, j, reply }) => {
           if (/\/messages$/.test(path)) return reply(200, { id: "msg_1", type: "message", role: "assistant", model: j.model, content: [{ type: "text", text: "stub answer" }], stop_reason: "end_turn", usage: { input_tokens: 3, output_tokens: 2, cost: 0.000001 } }), true;

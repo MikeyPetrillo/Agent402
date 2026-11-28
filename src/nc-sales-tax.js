@@ -39,6 +39,7 @@ export const NC_TAXABLE_SLUGS = Object.freeze({
   "v1-audio-speech": "digital audio work",
   dub: "digital audio work",
   "v1-videos": "digital audiovisual work",
+  "image-animate": "digital audiovisual work",
   "v1-images-edit": "edit of a buyer's image",
   "image-crop": "edit of a buyer's image",
   "image-resize": "edit of a buyer's image",

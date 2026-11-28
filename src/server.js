@@ -4272,7 +4272,7 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 const MB = 1024 * 1024;
 const LARGE_BODY_ROUTES = [
   ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
-  ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
+  ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB], ["/api/image-animate", 9 * MB],
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
   ["/api/onchain-sql", 256 * 1024],
@@ -4331,6 +4331,9 @@ app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBody
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
 app.use("/v1/images/edits", unlessBodyUnread(express.raw({ type: "multipart/form-data", limit: "7mb", inflate: false })));
+// Image to video: one picture up to 6 MB as base64 in JSON (about 8 MB on the
+// wire); the handler checks its size and header again.
+app.use("/api/image-animate", unlessBodyUnread(express.json({ limit: "9mb", inflate: false })));
 // The seller sweep posts its observations here (up to 8 MB). The operator
 // check runs before a byte of the body is read, and ahead of the global
 // parser, which would otherwise refuse the body at 100 KB.

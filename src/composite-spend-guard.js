@@ -180,7 +180,7 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
   // settlement, so an unsettled repeat is free to the caller and real to us.
   // Being in this set also marks them longRunning (EVM exact only) - a 40-240 s
   // run outlives an SVM blockhash, the AVM default window and a Tempo credential.
-  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",
+  "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos", "image-animate",
 ]);
 
 /** Slugs that are long-running for a reason OTHER than composite spend.
@@ -197,7 +197,7 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
  *  upstream bound, past what an SVM or Tempo credential reliably covers.
  *  `transcribe-long` (2026-11-18, listed only with TRANSCRIBE_LONG=on) runs
  *  up to 230 s on a thirty-minute file. */
-export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status", "transcribe-long"]);
+export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "image-animate", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status", "transcribe-long"]);
 
 /** True when a route runs long enough that only EVM `exact` can settle it.
  *

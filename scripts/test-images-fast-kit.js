@@ -52,7 +52,7 @@ const throws = async (fn, frag, m) => { let e = null; try { await runAsRouteCall
 const lastGatewayEvent = () => _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
 
 // ---- registration / pricing ----
-ok(IMAGES_FAST_TOOLS.length === 4, "four tools exported");
+ok(IMAGES_FAST_TOOLS.length === 5, "five tools exported");
 ok(bySlug("v1-images-edit")?.route === `POST ${IMAGES_EDIT_PATH}` && bySlug("v1-images-edit").price === "$0.020" && IMAGES_EDIT_PATH === "/v1/images/edits", "edit route at POST /v1/images/edits (OpenAI's path), $0.020");
 ok(bySlug("v1-images-fast")?.route === `POST ${IMAGES_FAST_PATH}` && bySlug("v1-images-fast").price === "$0.020", "fast tier at POST /v1/images/fast, $0.020");
 ok(bySlug("v1-images-pro")?.route === `POST ${IMAGES_PRO_PATH}` && bySlug("v1-images-pro").price === "$0.050", "pro tier at POST /v1/images/pro, $0.050");
@@ -83,7 +83,7 @@ for (const tier of ["v1-images-fast", "v1-images-pro"]) {
 }
 ok(IMAGE_TIERS["v1-images-edit"].chain[0].params.resolution === "1K" && IMAGE_TIERS["v1-images-edit"].chain[0].params.aspect_ratio === undefined, "edit link pinned to 1K, aspect left to the reference");
 const table = mediaMarginTable();
-ok(table.length === 9, `the margin table lists every link and the video tier (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+ok(table.length === 10, `the margin table lists every link and both video tiers (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
 // Rate check: the table's own bounds against the prices. Stand-in bounds are within the margin by construction and prove nothing here.
 COSTS.rate("every link's bound within the margin share of its tier price", () => ok(table.every((r) => withinMargin(r.price, r.worst)), "margin: every link's bound is within the margin share of its tier price"));
 ok(!withinMargin(1, MARGIN + 0.000001) && withinMargin(1, MARGIN), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");

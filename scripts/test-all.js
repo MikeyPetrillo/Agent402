@@ -57,7 +57,7 @@ const BRAVE_ROUTES = new Set([
 const skipBrave = process.env.BRAVE_LIVE_TEST !== "1";
 
 const NETWORK = new Set([
-  "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
+  "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations", "/api/image-animate",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
    // farcaster-social-kit.js
   "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search",

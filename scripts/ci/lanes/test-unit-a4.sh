@@ -39,6 +39,8 @@ t node scripts/test-workflow-client-pins.js
 # @step 2: Offline suites (65 scripts, one process each)
 # images-fast kit (offline)
 t node scripts/test-images-fast-kit.js
+# Image to video: inputs, SSRF and pixel-bomb refusals, filter 422, parked resend (offline)
+t node scripts/test-image-animate.js
 # Index openapi-fallback crawl tests (payment-signal gate, Bazaar merge, ranking — offline)
 t node scripts/test-openapi-fallback.js
 # Bounded response schemas from examples (clean-room behavior test, offline)

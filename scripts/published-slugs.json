@@ -272,6 +272,7 @@
     "iban-validate",
     "ics-parse",
     "id-validate",
+    "image-animate",
     "image-convert",
     "image-crop",
     "image-dominant-color",
