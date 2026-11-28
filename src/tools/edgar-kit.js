@@ -656,11 +656,23 @@ export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs =
 
 // The control query's verdict: true when the index answers it with hits. A
 // kept verdict is reused within its TTL; a read in flight is shared; a read
-// that fails throws the 503 and leaves nothing kept.
+// that fails throws the 503 and leaves nothing kept. A shared read the SEC
+// pace refused (secBusy, src/tools/sec-rate.js) was judged in the scope of
+// the request that started it, which may be unpaid: a request waiting on it
+// makes its own read, judged in its own scope, so a run already paid for is
+// never answered another run's pace refusal.
 async function eftsIndexAnswering(getJson, control, cache, clock) {
   const kept = cache ? cache.get(getJson) : null;
   if (kept?.pending) {
-    try { return await kept.pending; } catch { throw eftsNotAnswering("the confirming read failed"); }
+    try { return await kept.pending; }
+    catch (e) {
+      if (!e?.secBusy) throw eftsNotAnswering("the confirming read failed");
+      let own;
+      try { own = !eftsEmpty(await getJson(eftsUrl(typeof control === "function" ? control() : control))); }
+      catch (e2) { if (e2?.secBusy) throw e2; throw eftsNotAnswering("the confirming read failed"); }
+      if (cache && !cache.get(getJson)?.pending) cache.set(getJson, { answering: own, at: clock() });
+      return own;
+    }
   }
   if (kept && clock() - kept.at < (kept.answering ? EFTS_CONTROL_YES_TTL_MS : EFTS_CONTROL_NO_TTL_MS)) return kept.answering;
   const pending = (async () => !eftsEmpty(await getJson(eftsUrl(typeof control === "function" ? control() : control))))();

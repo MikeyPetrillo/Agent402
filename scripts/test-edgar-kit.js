@@ -169,6 +169,26 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   fail = false;
   b = await run(() => search(st));
   ok(burst.every((x) => x.e?.statusCode === 503) && !b.e && st.ctl === 2, `a failed shared control read answers the 503 to each waiter and is not kept (${st.ctl})`);
+
+  // A shared control read the SEC pace refused (judged in the scope of the
+  // request that started it, which may be unpaid): a waiter makes its own
+  // read, judged in its own scope, rather than inheriting that refusal.
+  {
+    const { secBusyError } = await import("../src/tools/sec-rate.js");
+    let first = true;
+    st = mk(() => { if (first) { first = false; throw secBusyError(); } return CTRL; });
+    st.slowMs = 50;
+    const [starter, waiter] = await Promise.all([run(() => search(st)), run(() => search(st, "S-3"))]);
+    ok(starter.e?.statusCode === 503 && !waiter.e && waiter.r.hits.hits.length === 0 && st.ctl === 2,
+      `a waiter on a shared control read the pace refused reads the control in its own turn and is answered (${waiter.e ? waiter.e.statusCode : "answered"}, ${st.ctl} control reads)`);
+    // Its own read refused by the pace too: the waiter gets the pace's own 503, not "not answering".
+    first = true;
+    let again = true;
+    st = mk(() => { if (first) { first = false; throw secBusyError(); } if (again) { again = false; throw secBusyError(); } return CTRL; });
+    st.slowMs = 50;
+    const [, w2] = await Promise.all([run(() => search(st)), run(() => search(st, "S-3"))]);
+    ok(w2.e?.statusCode === 503 && w2.e?.secBusy === true, `a waiter whose own control read the pace also refuses gets the pace's 503 ("${String(w2.e?.message).slice(0, 40)}")`);
+  }
 }
 
 // --- every eftsSearch caller, through the shared reader: truly empty, flaky
