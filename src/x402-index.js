@@ -3134,7 +3134,10 @@ function noteCrawlWalk(name, docRef, ms) {
  *  time, its longest slice read against the threshold. */
 async function crawlWalkLaned(name, from, gen) {
   let longest = 0;
-  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
+  // A slice is cut at CRAWL_SLICE_MS, but one step of the walk may run past
+  // it: a long slice is recorded under the walk's name, as a span is, so the
+  // [loop-lag] line names it (noteTurn keeps only stretches worth naming).
+  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
   finally { noteCrawlWalk(name, from, longest); }
 }
 // A crawl's synchronous stretch, timed under its name for the [loop-lag]

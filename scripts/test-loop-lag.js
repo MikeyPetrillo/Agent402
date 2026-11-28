@@ -127,10 +127,18 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
   const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
   // Each pass takes a crawl-lane turn of its own and is timed as a span named
   // with the seller's host (scripts/test-crawl-cycle-turns.js bounds the turns).
+  // A pass over a long list runs as lane steps instead (stepsPass): its whole
+  // form is the same manifestPass, and a long slice of its steps is recorded
+  // under the walk's name.
   const passStart = idx.indexOf("const passSpan = `crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`;");
-  const passEnd = idx.indexOf("tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));");
+  const passEnd = idx.indexOf("const x402Listed = x402ListedRoutes(manifestRows);");
   const passes = passStart > 0 && passEnd > passStart ? idx.slice(passStart, passEnd) : "";
-  ok(passes.includes("manifestPass(() => mergeManifestIntoTools(") && passes.includes("manifestPass(() => stampDeclared("), "the crawl's manifest passes are timed as spans named with the seller's host");
+  ok(/const manifestPass = async \(fn\) => \{ await crawlLaneTurn\(\); return laneSpan\(passSpan, fn\); \};/.test(passes) && passes.includes("manifestPass(() => mergeManifestIntoTools("), "the crawl's manifest passes are timed as spans named with the seller's host");
+  ok(/const stepsPass = \(name, rows, steps, whole\) => \(rows > FALLBACK_PASS_TURN_ROWS\s*\? crawlWalkLaned\(name, \{ origin: originUrl, doc: `\$\{rows\}-rows` \}, steps\(\)\)\s*: manifestPass\(whole\)\);/.test(passes)
+    && /await stepsPass\("stamp", tools\.length,\s*\(\) => stampDeclaredSteps\([^\n]*\),\s*\(\) => stampDeclared\(/.test(passes)
+    && /await stepsPass\("carry", tools\.length,\s*\(\) => carryForwardLearnedQuotesSteps\(tools, prev\),\s*\(\) => carryForwardLearnedQuotes\(tools, prev\)\);/.test(passes),
+    "the stamp and carry passes run whole as such a span, or over a long list as lane steps");
+  ok(/noteTurn\(`crawl-walk \$\{name\}`, Date\.now\(\) - d, d\);/.test(idx.slice(idx.indexOf("async function crawlWalkLaned("), idx.indexOf("const laneSpan = "))), "a long slice of a laned walk is recorded under the walk's name");
   ok(/finally \{\s*noteTurn\("route-index-shadow-finish", finishAt, performance\.now\(\) - finishT0\);/.test(idx), "the shadow build's unsliced finish is timed as its own span");
 }
 
