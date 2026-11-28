@@ -65,16 +65,18 @@ async function getJson(url, upstream, headers = {}, step = "lookup", opts = {}) 
 // (src/dispatch-caller.js admissionCallerOf: its signed identity, else its
 // proven address, else the shared anonymous key), so a fresh payment per call
 // or a shared edge address never makes one actor many callers. At the line's
-// bound a caller already holding a place is the one answered busy and a
-// caller holding nothing is queued over it, and the slot passes in the
-// room's order, which puts a caller that just read behind the others.
+// two bounds: past `callerWaiters` waiting reads a caller already holding a
+// place is the one answered busy while a caller holding nothing is still
+// queued, up to `maxWaiters` in all, so one caller never holds the whole line;
+// the slot passes in the room's order, which puts a caller that just read
+// behind the others.
 const WIKIMEDIA_HOSTS = new Set(["www.wikidata.org", "commons.wikimedia.org"]);
-export const WIKIMEDIA_LANE = { waitMs: 8_000, maxWaiters: 24 };
+export const WIKIMEDIA_LANE = { waitMs: 8_000, maxWaiters: 24, callerWaiters: 4 };
 const wikimediaRoom = createCallerTurns({
   maxWaiters: Infinity,
-  maxWaitersOf: () => WIKIMEDIA_LANE.maxWaiters,
+  maxWaitersOf: () => Math.min(WIKIMEDIA_LANE.callerWaiters, WIKIMEDIA_LANE.maxWaiters),
   hardWaiters: Infinity,
-  hardWaitersOf: () => 2 * WIKIMEDIA_LANE.maxWaiters,
+  hardWaitersOf: () => WIKIMEDIA_LANE.maxWaiters,
 });
 const laneBusy = (upstream) => bad(`${upstream} is busy with other reads - retry shortly`, 503);
 async function oneReadPerHost(host, upstream, read) {

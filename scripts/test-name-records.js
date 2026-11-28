@@ -255,7 +255,7 @@ try {
   // that has not just read, so one payer never refuses or starves another's.
   {
     const as = (ip, input) => runAsCallerOf({ ip, headers: {} }, () => status(input));
-    Object.assign(WIKIMEDIA_LANE, { maxWaiters: 4, waitMs: 5_000 });
+    Object.assign(WIKIMEDIA_LANE, { maxWaiters: 8, callerWaiters: 4, waitMs: 5_000 });
     let free;
     hold = new Promise((r) => { free = r; });
     const order = [];
@@ -263,7 +263,8 @@ try {
     await new Promise((r) => setTimeout(r, 20));
     const burst = [1, 2, 3, 4].map((i) => as("198.51.100.1", { name: "Example Show" }).then((c) => { order.push(`a${i}:${c}`); return c; }));
     await new Promise((r) => setTimeout(r, 5));
-    ok(await as("198.51.100.1", { name: "Example Show" }) === 503, "a caller already holding the full line is refused at once");
+    ok(await as("198.51.100.1", { name: "Example Show" }) === 503, "a caller past its own share of the line is refused at once");
+    ok(wikimediaLaneState()["www.wikidata.org"].waiting <= WIKIMEDIA_LANE.callerWaiters, `one caller holds at most its own share of the line (${wikimediaLaneState()["www.wikidata.org"].waiting} of ${WIKIMEDIA_LANE.maxWaiters})`);
     const other = as("203.0.113.9", { name: "Example Show" }).then((c) => { order.push(`b:${c}`); return c; });
     await new Promise((r) => setTimeout(r, 5));
     hold = null; free();
