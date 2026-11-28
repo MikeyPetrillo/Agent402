@@ -15,6 +15,8 @@
 // with controls in scripts/test-capability-gaps.js. Deterministic, bounded
 // patterns over bounded text; no model, no network.
 
+import { stockToolServed } from "./tools/stock-provider.js";
+
 const TEXT_MAX = 500;
 // Lowercase, every run of other characters one space, padded with a space at
 // each end so a pattern can ask for whole words.
@@ -190,6 +192,52 @@ const PAST_RES = [
 const HISTORICAL_RE = / (?:historical|historic) /;
 const namedForPastCoinPrice = (n) => COIN_RE.test(n) && COIN_PRICE_RE.test(n) && !OTHER_JOB_RE.test(n) && (HISTORICAL_RE.test(n) || PAST_RES.some((re) => re.test(n)));
 
+// ---- a stock's price history ----
+// The price-history tools here read coins and tokens. With no stock tool
+// listed, a task that asks for a stock's price history shared the words
+// "price" and "history" with them and was answered with a token tool.
+//
+// Read as a POSITIVE SHAPE, like the coin family: a stock word (or one of
+// the listed tickers), a price word, a history word, and the function words
+// below. ANY other word is another job (a token, a coin, news, filings,
+// yields, a company name the filings tools take) and is ranked and served
+// exactly as before.
+//
+// A ticker is read from a CLOSED list, never from its look: an all-caps
+// token is as often a coin symbol the token tools serve ("LINK price
+// history", "UNI price history"), so only tickers that are no coin symbol
+// the crypto tools take, no currency code and no English word are listed
+// (scripts/test-capability-gaps.js holds the list to that).
+//
+// The family is ON only while no stock history tool is listed
+// (src/tools/stock-provider.js): once one is, the task has a tool and the
+// query is ranked like any other.
+export const STOCK_TICKERS = Object.freeze(new Set(["aapl", "msft", "googl", "goog", "amzn", "tsla", "nvda", "nflx", "intc", "ibm", "orcl", "csco", "qcom", "avgo", "adbe", "pypl", "sbux", "wmt", "xom", "cvx", "pfe", "jnj", "jpm", "qqq", "voo"]));
+const STOCK_WORD_RE = /^(?:stock|stocks|share|shares|equity|equities)$/;
+const STOCK_PRICE_WORD_RE = /^(?:price|prices)$/;
+const STOCK_HISTORY_WORD_RE = /^(?:history|historical|historic)$/;
+// Beside ASK_WORDS: how the series is asked for, never what it is of.
+const STOCK_ASK_WORDS = new Set(["daily", "past", "data"]);
+function asksStockPriceHistory(n) {
+  const w = n.trim().split(" ");
+  if (w.length < 3 || w.length > ASK_MAX_WORDS) return false;
+  let stocks = 0, prices = 0, history = 0;
+  for (const t of w) {
+    if (STOCK_WORD_RE.test(t) || STOCK_TICKERS.has(t)) stocks++;
+    else if (STOCK_PRICE_WORD_RE.test(t)) prices++;
+    else if (STOCK_HISTORY_WORD_RE.test(t)) history++;
+    else if (!ASK_WORDS.has(t) && !STOCK_ASK_WORDS.has(t)) return false; // any other word: another job
+  }
+  return stocks >= 1 && prices >= 1 && history >= 1;
+}
+// A row named for it, read loosely: a stock word and a history or bars word
+// in its slug or its name, no coin word, and none of the other things a
+// stock has a history of.
+const STOCK_NAME_RE = / (?:stock|stocks|equity|equities|share prices?) /;
+const STOCK_SERIES_NAME_RE = / (?:history|historical|historic|bars|candles|candlesticks?|ohlc|ohlcv|eod) /;
+const STOCK_OTHER_JOB_RE = / (?:split|splits|dividend|dividends|earnings|insider|insiders|filing|filings|news|sentiment|forecast|forecasts|prediction|predictions|option|options|holdings|ownership|buyback|buybacks|screener|tokenized|token|tokens) /;
+const namedForStockPriceHistory = (n) => STOCK_NAME_RE.test(n) && STOCK_SERIES_NAME_RE.test(n) && !COIN_RE.test(n) && !STOCK_OTHER_JOB_RE.test(n);
+
 export const CAPABILITY_GAPS = Object.freeze([
   Object.freeze({
     id: "ip-geolocation",
@@ -211,6 +259,14 @@ export const CAPABILITY_GAPS = Object.freeze([
     // A row's slug or name ("historical-coin-price", "Coin price on a date");
     // a row named for statistics never covers it.
     covers: namedForPastCoinPrice,
+  }),
+  Object.freeze({
+    id: "stock-price-history",
+    label: "stock price history",
+    terms: Object.freeze(["stock", "history"]),
+    // The shape first: the switch is read only for a query that has it.
+    asks: (n) => asksStockPriceHistory(n) && !stockToolServed("stock-history"),
+    covers: namedForStockPriceHistory,
   }),
 ]);
 

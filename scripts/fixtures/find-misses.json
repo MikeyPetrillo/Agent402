@@ -506,6 +506,22 @@
       "top": [
         "receipt-verify"
       ]
+    },
+    {
+      "q": "bitcoin volatility last 90 days",
+      "top": "crypto-history"
+    },
+    {
+      "q": "what is 5 plus 7",
+      "top": "calc"
+    },
+    {
+      "q": "seven plus five",
+      "top": "calc"
+    },
+    {
+      "q": "current ethereum price",
+      "top": "crypto-price"
     }
   ],
   "gaps": [

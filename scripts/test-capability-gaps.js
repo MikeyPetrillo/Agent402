@@ -406,6 +406,148 @@ ok(POSITIVE.length >= 25 && NEGATIVE.length >= 25 && new Set([...POSITIVE, ...NE
   }
 }
 
+// ---- the third family: a stock's price history ----
+// The price-history tools here read coins and tokens. While no stock tool is
+// listed, a task that asks for a stock's price history is a miss on all three
+// surfaces unless a row is named for it; once a stock history tool is listed
+// the family is off. Every negative is answered with no gap field.
+{
+  const STOCK = CAPABILITY_GAPS.find((g) => g.id === "stock-price-history");
+  const { STOCK_TICKERS } = await import("../src/capability-gaps.js");
+  const { STOCK_SLUGS, stockToolServed } = await import("../src/tools/stock-provider.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+  const { ALCHEMY_DATA_TOOLS } = await import("../src/tools/alchemy-data-kit.js");
+  const { FINANCE_TOOLS } = await import("../src/tools/finance-kit.js");
+  const { readFileSync } = await import("node:fs");
+  // The catalog as a boot with no stock provider lists it: no stock tool.
+  const savedEnv = { STOCK_DATA_PROVIDER: process.env.STOCK_DATA_PROVIDER, DATABENTO_API_KEY: process.env.DATABENTO_API_KEY };
+  delete process.env.STOCK_DATA_PROVIDER;
+  const stockTools = [...TOOLS, ...CRYPTO_MARKETS_TOOLS, ...CRYPTO_TOOLS, ...ALCHEMY_DATA_TOOLS, ...FINANCE_TOOLS].filter((t) => !STOCK_SLUGS.has(t.slug));
+  const stockCatalog = {};
+  for (const t of stockTools) stockCatalog[t.route] = t;
+  const sroute = (q, extra = {}) => route(q, { catalog: stockCatalog, toolCount: stockTools.length, ...extra });
+  const STOCK_POSITIVE = ["stock price history", "historical stock prices", "AAPL price history", "stock price history for AAPL", "price history of AAPL", "tsla price history", "msft historical prices",
+    "historical share prices", "share price history", "equity price history", "daily stock price history", "historical daily stock prices", "historical stock price data", "show me the price history of nvda",
+    "what is the stock price history", "get historical stock prices", "NVDA stock price history", "stocks price history", "stock-price-history"];
+  const STOCK_NEGATIVE = ["token price history", "crypto price history", "erc20 token price history last week", "stock market news", "treasury yield history", "fx history", "company financials",
+    "sec filings for apple", "insider trades", "13f holdings", "stock quote", "stock price", "stock history", "stock news", "stock price prediction", "stock split history", "dividend history",
+    "stock dividend history", "earnings history", "price history", "historical prices", "bitcoin price history", "BTC price history", "ETH price history", "LINK price history", "UNI price history",
+    "SOL price history", "coin price history", "token price history for the last month", "nft floor price history", "gas price history", "gold price history", "house price history", "fx rate history",
+    "historical fx rate", "exchange rate history", "treasury yield curve history", "interest rate history", "inflation history", "cpi history", "unemployment rate history", "apple revenue history",
+    "company revenue history", "AAPL filings", "AAPL insider trades", "AAPL 10-k", "tesla sec filings", "stock market holidays", "stock exchange opening hours", "ticker symbol lookup",
+    "institutional holdings of AAPL", "stock token price history on robinhood chain", "tokenized stock price history", "price history of a token on base", "share of voice history", "browser history",
+    "git commit history", "wayback history of a website", "weather history", "current stock price", "stock price history for apple", "apple stock price history", "stock price history chart",
+    "stock price history news", "historical stock volatility", "stock options price history", "bond price history", "etf holdings", "AAPL price", "AAPL history", "ip geolocation", "bitcoin price on 2021-01-01"];
+  ok(!!STOCK && STOCK_POSITIVE.length >= 15 && STOCK_NEGATIVE.length >= 40 && new Set([...STOCK_POSITIVE, ...STOCK_NEGATIVE]).size === STOCK_POSITIVE.length + STOCK_NEGATIVE.length, `the stock table holds ${STOCK_POSITIVE.length} positive and ${STOCK_NEGATIVE.length} negative phrasings, each once`);
+  ok(!stockToolServed("stock-history") && !stockTools.some((t) => STOCK_SLUGS.has(t.slug)), "no stock tool is listed on this catalog");
+  const named = stockTools.filter((t) => gapNamedBy(STOCK, t.slug, t.name)).map((t) => t.slug);
+  ok(named.length === 0 && stockTools.some((t) => t.slug === "token-price-history") && stockTools.some((t) => t.slug === "crypto-history"), `no listed tool in these kits is named for a stock's price history (${named.join(", ") || "none"})`);
+  for (const [slug, name, want] of [["stock-history", "Stock historical bars", true], ["stock-price-history", "x", true], ["x", "Historical stock prices", true], ["equity-eod", "Equity EOD bars", true], ["x", "Share price history", true], ["stock-ohlc", "x", true],
+    ["stock-quote", "Stock quote", false], ["stock-news", "Stock news", false], ["stock-split-history", "Stock split history", false], ["dividend-history", "Stock dividend history", false], ["insider-history", "Stock insider trade history", false],
+    ["token-price-history", "Token price history statistics (USD)", false], ["crypto-history", "Crypto price history statistics", false], ["tokenized-stock-history", "x", false], ["treasury-yield-history", "Treasury yield history", false],
+    ["revenue-share-history", "Revenue share history", false], ["stock", "History", false]]) {
+    ok(gapNamedBy(STOCK, slug, name) === want, `a row ${slug} / "${name}" ${want ? "is" : "is not"} named for a stock's price history`);
+  }
+  // A ticker is read from a closed list: none is a coin symbol the crypto tools take, a coin word or a common word.
+  {
+    const src = readFileSync(new URL("../src/tools/crypto-kit.js", import.meta.url), "utf8");
+    const table = src.slice(src.indexOf("const SYMBOL_TO_ID = {"), src.indexOf("};", src.indexOf("const SYMBOL_TO_ID = {")));
+    const symbols = new Set([...table.matchAll(/\b([A-Z0-9]{2,10}): "/g)].map((m) => m[1].toLowerCase()));
+    ok(symbols.has("btc") && symbols.has("link") && symbols.size >= 40, `the coin symbol table is read (${symbols.size} symbols)`);
+    const clash = [...STOCK_TICKERS].filter((t) => symbols.has(t) || capabilityGap(`${t} price yesterday`)?.id === "coin-price-on-date" || !/^[a-z]{3,5}$/.test(t));
+    ok(STOCK_TICKERS.size >= 10 && clash.length === 0, `no listed ticker is a coin symbol or a coin word (${clash.join(", ") || "none"})`);
+    for (const sym of ["LINK", "UNI", "ATOM", "NEAR", "BTC", "OP", "META", "SPY", "ALL", "COST"]) ok(capabilityGap(`${sym} price history`) === null, `"${sym} price history" is in no gap family (a coin symbol or a word, never read as a ticker)`);
+  }
+  const ran = [];
+  const REQ = { headers: {} };
+  const cat = {};
+  for (const t of stockTools) cat[t.route] = { ...t, handler: async () => { ran.push(t.slug); return { ok: true, from: t.slug }; } };
+  const own = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute", execPriceUsd: 0.05, underlyingMaxUsd: 0.05 } });
+  const bought = [];
+  const ext = buildRouteExecuteTool({ getCatalog: () => cat, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, externalEnabled: () => true,
+    resolveExternal: async (task) => routeQuery({ query: task, top: 5, include: "external", ...CTX, catalog: stockCatalog }).results.map((r) => ({ seller: r.seller, slug: r.slug, name: r.name, url: r.url, method: "POST", price: "$0.01", priceUsd: 0.01, networks: ["eip155:8453"], wire: "x402" })),
+    payExternal: async (url) => { bought.push(url); return { result: { bars: [] }, quote: { usd: 0.01, network: "eip155:8453" }, receipt: { transaction: "0xTX", network: "eip155:8453" } }; } });
+  const STOCK_404 = /none of them offers stock price history/;
+  const runOwn = async (q) => { ran.length = 0; try { return { r: await own.handler({ task: q, params: { symbol: "AAPL" } }, REQ) }; } catch (e) { return { e }; } };
+  cache.clear();
+  for (const q of STOCK_POSITIVE) {
+    const f = findTools(stockCatalog, q, { k: 3 }), r = sroute(q);
+    const x = await runOwn(q);
+    ok(capabilityGap(q)?.id === "stock-price-history" && f.results.length > 0 && f.capabilityGap === "stock-price-history" && f.capabilityGapCovered === false && f.rarestTermCovered === false
+      && r.results.length > 0 && r.capabilityGap === "stock-price-history" && r.weakMatches === true && pickOf(r) === null && r.results.every((y) => y.weak === true) && /stock price history/.test(r.hint || "")
+      && x.e?.statusCode === 404 && ran.length === 0 && STOCK_404.test(x.e.message) && /Nothing was run\. Nothing was charged\./.test(x.e.message),
+    `stock positive "${q}": a miss on find, on route, and the uncharged 404 on route-and-execute (find ${f.capabilityGap}/${f.rarestTermCovered}, route ${r.capabilityGap}/${r.weakMatches}, run ${x.e?.statusCode} ${ran.join()})`);
+  }
+  for (const q of STOCK_NEGATIVE) {
+    const f = findTools(stockCatalog, q, { k: 3 }), r = sroute(q);
+    const x = await runOwn(q);
+    ok(capabilityGap(q)?.id !== "stock-price-history" && f.capabilityGap !== "stock-price-history" && r.capabilityGap !== "stock-price-history" && !(x.e && STOCK_404.test(x.e.message)),
+      `stock negative "${q}": no stock gap on find or route, no stock gap refusal on route-and-execute (${capabilityGap(q)?.id || "none"}, ${x.e ? x.e.statusCode : `ran ${ran.join()}`})`);
+  }
+  // The token tools still answer the tasks that name a token or a coin.
+  for (const [q, want] of [["token price history", ["token-price-history"]], ["crypto price history", ["crypto-history", "token-price-history"]], ["BTC price history", ["token-price-history", "crypto-history"]]]) {
+    const f = findTools(stockCatalog, q, { k: 3 }), r = sroute(q);
+    const x = await runOwn(q);
+    ok(want.includes(f.results?.[0]?.slug) && f.rarestTermCovered !== false && want.includes(pickOf(r)) && !("capabilityGap" in f) && !("capabilityGap" in r) && !x.e && want.includes(x.r?.receipt?.slug),
+      `"${q}" is served by ${want.join(" or ")} on find, route and route-and-execute (find ${f.results?.[0]?.slug}, route ${pickOf(r)}, ran ${x.e ? x.e.statusCode : ran.join()})`);
+  }
+  // The shape is positive: any positive with one more content word is another job.
+  for (const q of STOCK_POSITIVE.filter((p) => p !== "stock-price-history")) {
+    for (const extra of ["token", "crypto", "news", "chart", "split", "dividend", "prediction", "volatility", "apple", "options"]) {
+      ok(capabilityGap(`${q} ${extra}`) === null && capabilityGap(`${extra} ${q}`) === null, `"${q}" with the word "${extra}" is in no gap family`);
+    }
+  }
+  // A stuffed description clears nothing; a seller NAMED for it is the pick and the one bought.
+  cache.set("https://stuffed.example", seller("https://stuffed.example", { route: "/api/market-data", slug: "market-data", name: "Market data", tags: ["stock"], description: "stock price history historical stock prices AAPL price history daily bars" }));
+  for (const q of STOCK_POSITIVE) {
+    const r = sroute(q, { top: 10 });
+    ok(r.weakMatches === true && r.capabilityGapCovered === false && pickOf(r) === null, `stock positive "${q}": a description-only listing does not clear the miss`);
+  }
+  cache.set("https://bars.example", seller("https://bars.example", { route: "/api/stock-price-history", slug: "stock-price-history", name: "Stock price history", description: "Daily bars for a US stock." }));
+  for (const q of STOCK_POSITIVE) {
+    const r = sroute(q, { top: 10 });
+    bought.length = 0;
+    let e = null, out = null;
+    try { out = await ext.handler({ task: q, include: "external", params: { symbol: "AAPL" } }, REQ); } catch (err) { e = err; }
+    ok(pickOf(r) === "stock-price-history" && r.results[0].seller === "https://bars.example" && r.capabilityGapCovered === true && !r.weakMatches
+      && !e && bought.length === 1 && /^https:\/\/bars\.example\//.test(bought[0]) && out?.receipt?.seller === "https://bars.example",
+    `stock positive "${q}": the seller named for it is the pick on route and the one bought (route ${r.results[0]?.seller}, bought ${bought.join() || (e ? `${e.statusCode} ${String(e.message).slice(0, 80)}` : "none")})`);
+  }
+  for (const q of STOCK_NEGATIVE) {
+    const r = sroute(q, { top: 10 });
+    ok(r.capabilityGap !== "stock-price-history", `stock negative "${q}": no stock gap field with a named seller listed`);
+  }
+  cache.clear();
+  // The family turns itself off once a stock history tool is listed: the
+  // switch is read on every query, and the task is ranked like any other.
+  {
+    process.env.STOCK_DATA_PROVIDER = "databento";
+    process.env.DATABENTO_API_KEY = "test-key-not-a-secret";
+    const listed = { ...stockCatalog };
+    for (const t of FINANCE_TOOLS.filter((x) => x.slug === "stock-history")) listed[t.route] = t;
+    ok(stockToolServed("stock-history") && Object.values(listed).some((t) => t.slug === "stock-history"), "CONTROL: with a provider selected and its key present, stock-history is listed");
+    for (const q of STOCK_POSITIVE) {
+      const f = findTools(listed, q, { k: 3 }), r = route(q, { catalog: listed, toolCount: Object.keys(listed).length });
+      ok(capabilityGap(q) === null && !("capabilityGap" in f) && !("capabilityGap" in r) && r.weakMatches !== true, `listed: "${q}" is in no gap family and carries no gap field`);
+    }
+    for (const q of ["stock price history", "historical stock prices", "daily stock price history"]) {
+      const f = findTools(listed, q, { k: 3 });
+      // (Ranked by the plain weights again: the family no longer orders the rows.)
+      ok(f.results?.some((x) => x.slug === "stock-history") && f.rarestTermCovered !== false, `listed: find "${q}" ranks stock-history among its top rows, read as served (${f.results?.slice(0, 3).map((x) => x.slug).join(", ")})`);
+    }
+    // A provider named with no key lists nothing, so the family stays on.
+    delete process.env.DATABENTO_API_KEY;
+    ok(!stockToolServed("stock-history") && capabilityGap("stock price history")?.id === "stock-price-history", "a provider named with no key lists no stock tool: the family is on");
+    for (const k of Object.keys(savedEnv)) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
+  }
+  for (const s of [`${"stock ".repeat(80)}price history`, `${"historical ".repeat(40)}stock price`, `aapl ${"price ".repeat(90)}history`, `stock price history ${"of the ".repeat(60)}`]) {
+    const t0 = performance.now();
+    capabilityGap(s); gapNamedBy(STOCK, s, s);
+    ok(performance.now() - t0 < 50, `a ${s.length}-character hostile stock query is read in bounded time`);
+  }
+}
+
 // Row names: a slug or a name alone names the capability; words split across the two, or a near name, do not.
 for (const [slug, name, want] of [["ip-geolocation", "IP geolocation", true], ["geoip", "Lookup", true], ["ip-geo", "x", true], ["ip-country", "x", true], ["ip-to-city", "x", true], ["country-by-ip", "x", true], ["x", "IP locations", true], ["weather", "IP Geolocation", true], ["locate-ip", "x", true],
   ["geo", "IP", false], ["city-ip", "Weather by city", false], ["ip-location-header", "Parse the Location header", false], ["store-locator", "Locate IP cameras", false], ["ip-info", "IP address type and reverse DNS", false], ["asn-info", "IP to ASN lookup", false], ["ip-lookup", "IP lookup", false], ["country-info", "Country info", false]]) {

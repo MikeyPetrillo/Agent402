@@ -233,10 +233,12 @@ Loaded when an index, discovery, router or buyer file is read.
   as Base, so a seller's day and the lane's day are one day across chains.
   `unprovenLaneAtLivePayTo` (`src/dispatch-eligibility.js`) reads the lane's verdict at the
   address the live 402 names on the paying chain. Suite: `scripts/test-evm-unproven-chains.js`.
-- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today two
-  families: `ip-geolocation`, the time zone or local time of an IP included, and `coin-price-on-date`,
+- **Capability gaps:** `src/capability-gaps.js` is one named list (`CAPABILITY_GAPS`; today three
+  families: `ip-geolocation`, the time zone or local time of an IP included, `coin-price-on-date`,
   a coin's price on a past date, which needs a coin word, a price word and a past date or "historical"
-  and never a statistic, forecast or alert word) of tasks this host's catalog does not do, read by `/api/find`,
+  and never a statistic, forecast or alert word, and `stock-price-history`, a stock word or a ticker
+  on the closed `STOCK_TICKERS` list with a price word and a history word and no other content word,
+  on only while no stock history tool is listed, `stockToolServed`) of tasks this host's catalog does not do, read by `/api/find`,
   `/api/route` and route-and-execute so the three agree. A query is in a family only when it asks
   for the capability in so many words (`asks`); every other query is ranked and served as before.
   A gap query is a miss unless a candidate row is NAMED for the capability in its slug or name
@@ -249,6 +251,17 @@ Loaded when an index, discovery, router or buyer file is read.
   reads). A new
   family adds `asks`, `covers`, `terms` and a case with controls in
   `scripts/test-capability-gaps.js`.
+- **Phrase aliases and arithmetic in words:** `src/phrase-aliases.js` is an opt-in table
+  (`PHRASE_ALIASES`, slug to phrases) beside the curated `aliases`, read by `/api/find` and
+  `/api/route` for this host's own rows only. A phrase scores each of its words like a covered name
+  when its words stand next to each other in the query, in any order, the function words in
+  `PHRASE_SKIP` aside, and nothing for one word of it; a curated alias is read word by word as
+  before, so a name whose single words belong to other tools goes in the phrase table.
+  `arithmeticAsk` (`src/query-terms.js`) reads a number, one operator word (plus, minus, times,
+  multiplied by) and a number as the calculator's task on both surfaces: the expression's words are
+  set aside and `calc` is scored for them; the operator outside an expression is an ordinary word.
+  A new phrase or operator comes with its neighbors' controls (`scripts/test-phrase-aliases.js`,
+  the route and find tables in `scripts/test-find-ranking.js`).
 - **Route-and-execute refusals before any purchase:** a gap task with no named row answers 404
   ("No tool in this catalog does that task"), nothing run and nothing charged, with the
   `include:"external"` retry named only when external dispatch is on. The external leg holds the
