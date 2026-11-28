@@ -35,6 +35,11 @@ export const PHRASE_ALIASES = Object.freeze({
   "crypto-price": Object.freeze(["current-bitcoin-price", "current-btc-price", "current-ethereum-price", "current-eth-price"]),
   // crypto-history computes a coin's volatility over a look-back window.
   "crypto-history": Object.freeze(["bitcoin-volatility", "btc-volatility", "ethereum-volatility", "eth-volatility"]),
+  // A base64-encoded string is what base64 decodes. Its record writes "encode",
+  // never "encoded" or "string", so without the phrase it led a tool the query
+  // names only as the string's source ("scanned from a qr code") by a sliver
+  // that any new tool writing "base64" closed.
+  "base64": Object.freeze(["decode-base64-encoded-string"]),
 });
 
 // Function words a phrase is read across. Nothing that names a thing or

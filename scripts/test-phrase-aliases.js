@@ -63,12 +63,17 @@ for (const [q, slug, words] of [
   ["volatility of bitcoin", "crypto-history", "bitcoin volatility"],
   ["bitcoin volatility last 90 days", "crypto-history", "bitcoin volatility"],
   ["what was the ethereum volatility", "crypto-history", "ethereum volatility"],
+  ["decode a base64 encoded string", "base64", "base64 decode encoded string"],
+  ["decode the base64-encoded string scanned from a qr code", "base64", "base64 decode encoded string"],
+  ["base64 encoded string to decode", "base64", "base64 decode encoded string"],
 ]) ok(hit(q, slug) === words, `"${q}" writes a phrase of ${slug} (${hit(q, slug) || "none"})`);
 for (const q of ["current gold price", "current stock price", "current price", "bitcoin price", "current bitcoin", "jpy volatility", "implied volatility", "volatility", "bitcoin",
   // A qualifier between the words is another task.
   "bitcoin implied volatility", "current bitcoin etf price", "current gold price in bitcoin", "bitcoin options volatility", "current gas price on bitcoin",
   // The words in two different places are not a phrase.
   "bitcoin news and market volatility", "current weather and the price of gold in bitcoin",
+  // A base64-encoded string another tool works on, or a decode of something else.
+  "hash a base64 encoded string", "decode a base64 encoded jwt", "decode a base64 encoded gzip string", "base64 encoded string", "decode a base64 string",
   "", "   ", "the of a"]) ok(phraseAliasHits(q) === null, `"${q}" writes no phrase`);
 ok(phraseAliasHits(null) === null && phraseAliasHits(undefined) === null && phraseAliasHits({ toString: 1 }) === null, "a value that is no query writes no phrase");
 {
@@ -79,8 +84,8 @@ ok(phraseAliasHits(null) === null && phraseAliasHits(undefined) === null && phra
 
 // ---- the table ----
 ok(Object.keys(PHRASE_ALIASES).length >= 2, `the table lists ${Object.keys(PHRASE_ALIASES).length} tools`);
-ok(JSON.stringify(PHRASE_ALIASES) === JSON.stringify({ "crypto-price": ["current-bitcoin-price", "current-btc-price", "current-ethereum-price", "current-eth-price"], "crypto-history": ["bitcoin-volatility", "btc-volatility", "ethereum-volatility", "eth-volatility"] }),
-  "the table is the eight phrases these cases cover (a new phrase adds its own case and its neighbors' controls here)");
+ok(JSON.stringify(PHRASE_ALIASES) === JSON.stringify({ "crypto-price": ["current-bitcoin-price", "current-btc-price", "current-ethereum-price", "current-eth-price"], "crypto-history": ["bitcoin-volatility", "btc-volatility", "ethereum-volatility", "eth-volatility"], "base64": ["decode-base64-encoded-string"] }),
+  "the table is the nine phrases these cases cover (a new phrase adds its own case and its neighbors' controls here)");
 for (const [slug, phrases] of Object.entries(PHRASE_ALIASES)) {
   const tool = TOOLS.find((t) => t.slug === slug);
   ok(!!tool, `${slug} is a catalog tool`);
@@ -90,13 +95,14 @@ for (const [slug, phrases] of Object.entries(PHRASE_ALIASES)) {
     ok(!(tool?.aliases || []).includes(p), `${slug}: "${p}" is not also a word-by-word alias`);
   }
 }
-ok(has("crypto-price") && has("crypto-history") && has("bond-price") && has("token-price") && has("business-days") && has("calc") && has("sun-times") && has("sharpe-ratio"), "the kits hold the tools and the neighbors these cases name");
+ok(has("base64") && has("qr") && has("hash") && has("jwt-decode") && has("crypto-price") && has("crypto-history") && has("bond-price") && has("token-price") && has("business-days") && has("calc") && has("sun-times") && has("sharpe-ratio"), "the kits hold the tools and the neighbors these cases name");
 
 // ---- /api/route ----
 for (const [q, want] of [["current bitcoin price", "crypto-price"], ["what is the current price of bitcoin", "crypto-price"], ["current eth price", "crypto-price"],
   ["bitcoin volatility last 90 days", "crypto-history"], ["bitcoin volatility", "crypto-history"], ["volatility of ethereum", "crypto-history"],
   // One query per listed phrase, so a phrase taken off the table fails here.
-  ["current btc price", "crypto-price"], ["current ethereum price", "crypto-price"], ["btc volatility", "crypto-history"], ["eth volatility last 30 days", "crypto-history"]]) {
+  ["current btc price", "crypto-price"], ["current ethereum price", "crypto-price"], ["btc volatility", "crypto-history"], ["eth volatility last 30 days", "crypto-history"],
+  ["decode a base64 encoded string scanned from a qr code", "base64"]]) {
   const r = route(q);
   ok(r[0]?.slug === want, `route "${q}" picks ${want} (${r.slice(0, 4).map((x) => `${x.slug}:${x.score}`).join(", ")})`);
 }
@@ -139,6 +145,18 @@ for (const [q, want] of [["current bitcoin price", "crypto-price"], ["current et
 }
 for (const [q, want] of [["bond price", "bond-price"], ["token price", "token-price"], ["business days", "business-days"], ["bitcoin price", "crypto-price"]]) {
   ok(find(q).results[0]?.slug === want, `CONTROL find "${q}" picks ${want} (${find(q).results.slice(0, 3).map((x) => x.slug).join(", ")})`);
+}
+{
+  // The string a query decodes is base64's job even where the query names the string's source.
+  const q = "decode a base64 encoded string scanned from a qr code";
+  const r = find(q);
+  ok(r.results[0]?.slug === "base64" && r.rarestTermCovered !== false, `find "${q}" picks base64, read as served (${r.results.slice(0, 3).map((x) => x.slug).join(", ")}; rarest ${r.rarestTerm} covered ${r.rarestTermCovered})`);
+  const score = (s) => find(s).results.find((x) => x.slug === "base64")?.score ?? 0;
+  ok(score("decode a base64 encoded string gzip") > score("decode a base64 encoded gzip string"), `find credits the base64 phrase only where its words stand together (${Math.round(score("decode a base64 encoded string gzip"))} vs ${Math.round(score("decode a base64 encoded gzip string"))})`);
+}
+for (const [q, want] of [["hash a base64 encoded string", "hash"], ["decode a base64 encoded jwt", "jwt-decode"]]) {
+  // These write no phrase (above), so find ranks them as before; route names the tool on this partial catalog.
+  ok(route(q)[0]?.slug === want, `CONTROL route "${q}" stays ${want}'s (${route(q).slice(0, 2).map((x) => x.slug).join(", ")})`);
 }
 for (const q of ["jpy volatility", "implied volatility", "tip calculator dollars"]) ok(find(q).rarestTermCovered === false, `CONTROL find "${q}" stays a weak match`);
 
