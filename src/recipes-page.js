@@ -28,7 +28,7 @@ export const RECIPES_TITLE = "Things you can do";
 export const RECIPES = [
   { id: "research", task: "Research a topic", slug: "answer", prompt: () => "Use Agent402 web answer to research how solar panels are recycled today, and list the sources it cites." },
   { id: "summarize", task: "Summarize a link", slug: "summarize", prompt: () => "Use Agent402 to summarize this page in five bullet points: https://en.wikipedia.org/wiki/Honey_bee" },
-  { id: "photo-text", task: "Read the text in an image", slug: "image-ocr", prompt: (site) => `Use Agent402 image OCR to read the text in the image at ${site}/card.png`, input: "It reads an image from a public link, or one sent as base64 data. A photo attached to the chat is not passed to it, so give it a link." },
+  { id: "photo-text", task: "Read the text in an image", slug: "image-ocr", prompt: (site) => `Use Agent402 image OCR to read the text in the image at ${site}/card.png`, input: "It reads an image from a public link or from base64 data. A photo attached to the chat does not reach it, so give it a link." },
   { id: "image", task: "Make an image", slug: "image-gen", prompt: () => "Use Agent402 to generate an image of a lighthouse at sunrise, painted in watercolor." },
   { id: "qr", task: "Make a QR code", slug: "qr", prompt: () => "Use Agent402 to make a QR code for https://example.com" },
   { id: "time-zones", task: "Convert a meeting time", slug: "timezone-convert", prompt: () => "Use Agent402 to convert 2:00 PM on June 23, 2026 in New York to Tokyo time." },
@@ -76,11 +76,11 @@ export function recipesPage(baseUrl, catalog = {}, { connector = creditsConnecto
       ? `<span ${MONO}>Free</span>`
       : `<span ${MONO}>${esc(r.price)}</span> a call`;
     const kind = r.modelBacked ? " · model-backed" : "";
-    return `<div id="${esc(r.id)}" class="rc-card" style="display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);border-radius:var(--radius);padding:18px 20px;">
+    return `<div id="${esc(r.id)}" class="rc-card" style="border:1px solid var(--hairline);background:var(--card);border-radius:var(--radius);padding:18px 20px;">
         <h2 ${H2}>${esc(r.task)}</h2>
         <p ${META}><a href="/tools/${esc(r.slug)}" ${A}>${esc(r.name)}</a> · ${access}${kind}</p>
         ${r.input ? `<p ${P}>${esc(r.input)}</p>` : ""}
-        ${codeBlock(r.prompt, { name: `the ${r.task.toLowerCase()} prompt`, wrap: true, style: "margin:auto 0 0" })}
+        ${codeBlock(r.prompt, { name: `the ${r.task.toLowerCase()} prompt`, wrap: true, style: "margin:0" })}
       </div>`;
   };
   const pageLd = {
@@ -91,7 +91,7 @@ export function recipesPage(baseUrl, catalog = {}, { connector = creditsConnecto
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 20px;text-wrap:balance;">${esc(RECIPES_TITLE)}</h1>
     <p class="ml-measure" ${P}>Copy a prompt into an app with Agent402 added (<a href="/start" ${A}>start here</a>, or <a href="${START_PHONE_PATH}" ${A}>on your phone</a>). Free tools run with no wallet; ${paidLine} Model-backed means a model writes the answer.</p>
-    <div class="rc-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:28px;">
+    <div class="rc-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:14px;margin-top:28px;">
       ${recipes.map(card).join("\n      ")}
     </div>
   </div>

@@ -21,6 +21,9 @@
 //   - /start at 1024, 1280 and 1440 px: every app card's code block follows its
 //     sentence (no hollow block between them), no card ends on more than a
 //     line of empty space, and the prompt's label is one line of its own.
+//   - /recipes at 1024, 1280, 1440 and 375 px: every card's prompt follows the
+//     text above it, no card ends on more than a line of empty space, and no
+//     card note breaks raggedly (a short last line, or an inner line cut short).
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
@@ -432,6 +435,33 @@ document.addEventListener('DOMContentLoaded',function(){
     ok(r.cards.length === 4 && r.cards.every((c) => c.gap <= 16), `/start at ${width} px: every app card's code block follows its sentence (gap/tail/columns px: ${show})`);
     ok(r.cards.length === 4 && r.cards.every((c) => c.tail <= r.line + 2 && c.cols <= r.line + 2), `/start at ${width} px: no app card ends on more than a line of empty space`);
     ok(r.askLines === 1 && r.askAbove, `/start at ${width} px: the prompt's label is one line, directly above the prompt (${r.askLines} line(s))`);
+    await p.close();
+  }
+  // /recipes: a card's prompt follows the text above it (no hollow band where a
+  // card beside it is taller), no card ends on more than a line of empty space,
+  // and a note in a card does not end on a ragged tail.
+  for (const width of [1024, 1280, 1440, 375]) {
+    const p = await open("/recipes", width);
+    await p.waitForSelector(".rc-card .ml-code-copy", { timeout: 8000 }).catch(() => {});
+    const r = await p.evaluate(() => {
+      const lines = (e) => { const g = document.createRange(); g.selectNodeContents(e); return [...g.getClientRects()].filter((x) => x.width > 0); };
+      const rows = (e) => { const m = new Map(); for (const x of lines(e)) { const k = Math.round(x.top); const v = m.get(k) || { left: x.left, right: x.right }; m.set(k, { left: Math.min(v.left, x.left), right: Math.max(v.right, x.right) }); } return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v.right - v.left); };
+      const cards = [...document.querySelectorAll(".rc-card")].map((c) => {
+        const inner = c.getBoundingClientRect().bottom - parseFloat(getComputedStyle(c).paddingBottom);
+        const gaps = [...c.querySelectorAll(".ml-code")].map((b) => { const prev = b.previousElementSibling; const ls = prev ? lines(prev) : []; return ls.length ? b.getBoundingClientRect().top - Math.max(...ls.map((x) => x.bottom)) : 999; });
+        const ends = [...c.querySelectorAll("h2, p, .ml-code")].map((e) => e.getBoundingClientRect().bottom);
+        const notes = [...c.querySelectorAll("p")].slice(1).map((e) => { const w = rows(e); const words = (e.textContent.trim().split(/\s+/)); const tailWords = (() => { const ls = lines(e); if (!ls.length) return 0; const lastTop = Math.round(Math.max(...ls.map((x) => x.top))); const g = document.createRange(); let n = 0; for (const word of e.textContent.matchAll(/\S+/g)) { g.setStart(e.firstChild, word.index); g.setEnd(e.firstChild, word.index + word[0].length); const b = g.getBoundingClientRect(); if (Math.round(b.top) >= lastTop - 1) n++; } return n; })(); return { rows: w.length, tail: w.length > 1 ? w[w.length - 1] / Math.max(...w) : 1, inner: w.length > 2 ? Math.min(...w.slice(0, -1)) / Math.max(...w) : 1, tailWords, words: words.length }; });
+        return { id: c.id, gap: Math.round(Math.max(...gaps)), tail: Math.round(inner - Math.max(...ends)), notes };
+      });
+      const any = document.querySelector(".rc-card p");
+      return { cards, line: any ? parseFloat(getComputedStyle(any).lineHeight) : 0, sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    });
+    const show = r.cards.map((c) => `${c.id} ${c.gap}/${c.tail}`).join(", ");
+    ok(r.cards.length >= 6 && r.cards.every((c) => c.gap <= 16), `/recipes at ${width} px: every card's prompt follows the text above it (gap/tail px: ${show})`);
+    ok(r.cards.length >= 6 && r.cards.every((c) => c.tail <= r.line + 2), `/recipes at ${width} px: no card ends on more than a line of empty space (line ${r.line} px)`);
+    const ragged = r.cards.flatMap((c) => c.notes.filter((n) => n.rows > 1 && (n.tail < 0.3 || n.tailWords < 3 || n.inner < 0.75)).map((n) => `${c.id} tail ${Math.round(n.tail * 100)}%/${n.tailWords} words, shortest inner line ${Math.round(n.inner * 100)}%`));
+    ok(ragged.length === 0, `/recipes at ${width} px: no card note breaks raggedly: a short last line, or a line above it cut short (${ragged.join(", ") || "none"})`);
+    ok(r.sideways <= 0, `/recipes at ${width} px: the page does not scroll sideways (${r.sideways})`);
     await p.close();
   }
 } finally {
