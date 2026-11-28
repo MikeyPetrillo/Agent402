@@ -11,7 +11,7 @@
 // blocking wait (a long call such as a video or a research report is not one
 // tap from a phone, so it is not listed). The paid line reads the switch that
 // sells credits through the connector (creditsConnectorOn).
-import { ledgerShell, ledgerFooterCompact, esc, codeBlock, breadcrumbLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock, breadcrumbTrail } from "./ledger-chrome.js";
 import { siteOrgRef } from "./site-org.js";
 import { isComputePayable } from "./pow.js";
 import { creditsConnectorOn } from "./credits-sales.js";
@@ -87,8 +87,11 @@ export function recipesPage(baseUrl, catalog = {}, { connector = creditsConnecto
     "@context": "https://schema.org", "@type": "ItemList", name: title, description, url: canonical, author: siteOrgRef(baseUrl),
     itemListElement: recipes.map((r, i) => ({ "@type": "ListItem", position: i + 1, name: r.task, url: `${canonical}#${r.id}` })),
   };
+  // One list feeds both halves: the trail a reader sees and the BreadcrumbList a crawler reads.
+  const crumbs = breadcrumbTrail(baseUrl, [["Agent402", "/"], [RECIPES_TITLE, RECIPES_PATH]]);
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
+    ${crumbs.nav}
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 20px;text-wrap:balance;">${esc(RECIPES_TITLE)}</h1>
     <p class="ml-measure" ${P}>Copy a prompt into an app with Agent402 added (<a href="/start" ${A}>start here</a>, or <a href="${START_PHONE_PATH}" ${A}>on your phone</a>). Free tools run with no wallet; ${paidLine} Model-backed means a model writes the answer.</p>
     <div class="rc-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:14px;margin-top:28px;">
@@ -98,5 +101,5 @@ export function recipesPage(baseUrl, catalog = {}, { connector = creditsConnecto
   ${ledgerFooterCompact()}`;
   // The copy buttons are tapped on a phone: each is a 44px target, as on /start.
   const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}@media (max-width:900px){.rc-grid{grid-template-columns:minmax(0,1fr)!important}}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: RECIPES_PATH, jsonLd: [pageLd, breadcrumbLd(baseUrl, [["Agent402", "/"], [RECIPES_TITLE, RECIPES_PATH]])], extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: RECIPES_PATH, jsonLd: [pageLd, crumbs.ld], extraCss, body });
 }
