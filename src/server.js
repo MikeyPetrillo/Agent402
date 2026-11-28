@@ -622,7 +622,8 @@ import { submissionSlotStatus, NETWORK_VALUE_MAX } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { stopCrawlParse } from "./crawl-parse.js";
+import { stopCrawlParse, crawlParseStatus } from "./crawl-parse.js";
+import { discoveryKeptPrevious } from "./x402-index.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
 import { reputationStatus, startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
 import { setCrawlRecheckSource, setOurSideIssueHook, setOurSideControl } from "./x402-index.js";
@@ -4922,6 +4923,10 @@ app.get("/api/gateway-status", async (req, res) => {
     sanctionsReport: (() => { try { const status = sanctionsReportWord(sanctionsReportStatus()); return full ? { status, geo: sanctionedRegionsView(), geoBlock: geoBlockProvenance() } : { status }; } catch { return { status: "unknown" }; } })(),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
+    // The crawl's document parser (src/crawl-parse.js): ok / fallback / paused
+    // / registry-kept / off. One word publicly; the counters and the registry
+    // sources held from an earlier pass for the operator.
+    crawlParse: (() => { try { return crawlParseStatus({ full, registriesKept: discoveryKeptPrevious() }); } catch { return { status: "unknown" }; } })(),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
     // never an address; the itemized rows are /__operator/mpp-reconcile.json.
     mppReconcile: await mppReconciler.status({ full }).catch(() => ({ status: "unknown", chargedFailedStatus: "unknown", run: "unknown" })),

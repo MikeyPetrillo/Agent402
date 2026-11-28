@@ -170,7 +170,7 @@ const a = await crawl(A, { "/openapi.json": dense }, "crawl, document parsed off
 ok(a.entry?.tools?.length > 1000 && a.entry.discoveryPath === "/openapi.json" && !a.entry.error, `control: the crawl indexed the document (${a.entry?.tools?.length} tools kept of ${a.entry?.toolsTotal ?? a.entry?.tools?.length})`);
 ok(a.worst <= LIMIT.ms, `no turn of the crawl held the loop past ${LIMIT.ms} ms (longest ${a.worst.toFixed(0)} ms)`);
 
-const { crawlParseStats, crawlParseIdle, __setCrawlParseForTest, parseOffLoop, parsesOffLoop, OFF_LOOP_MIN_CHARS } = await import("../src/crawl-parse.js");
+const { crawlParseStats, crawlParseStatus, CRAWL_PARSE_FALLBACK_WORD_MS, crawlParseIdle, __setCrawlParseForTest, parseOffLoop, parsesOffLoop, OFF_LOOP_MIN_CHARS } = await import("../src/crawl-parse.js");
 ok(crawlParseStats().offLoop === 1 && crawlParseStats().pieces > 4 && crawlParseStats().fallbacks === 0, `the document was rebuilt from the parser's pieces (${crawlParseStats().pieces} pieces, no fallback)`);
 
 // ---- 2. the same content through the in-place path indexes the same ----------------
@@ -334,8 +334,20 @@ for (const [what, over, reason] of [
 __setCrawlParseForTest({ workerFile: join(dir, "absent.mjs") });
 {
   const starts = crawlParseStats().starts;
-  for (let q = 0; q < 3; q++) { const r = await within(parseOffLoop(dense), "failing parse"); assert.ok(r.ok === false && !/paused/.test(r.reason), r.reason); }
+  ok(crawlParseStatus().status === "ok", "control: the crawlParse word reads ok before any failure");
+  { const r = await within(parseOffLoop(dense), "failing parse"); assert.ok(r.ok === false && !/paused/.test(r.reason), r.reason); }
+  ok(crawlParseStatus().status === "fallback" && crawlParseStatus({ now: Date.now() + CRAWL_PARSE_FALLBACK_WORD_MS + 1 }).status === "ok",
+    "one parser failure reads fallback on the crawlParse word for the hour that follows, then ok");
+  for (let q = 1; q < 3; q++) { const r = await within(parseOffLoop(dense), "failing parse"); assert.ok(r.ok === false && !/paused/.test(r.reason), r.reason); }
   ok(crawlParseStats().paused && crawlParseStats().starts === starts + 3, "after three failures in a row the parser is left alone for a while");
+  ok(crawlParseStatus().status === "paused" && Object.keys(crawlParseStatus()).join() === "status", "while it is left alone the word reads paused, one word and no counter");
+  const kept = [{ source: "registry", word: "too-large-to-parse" }];
+  const full = crawlParseStatus({ full: true, registriesKept: kept });
+  ok(full.status === "registry-kept" && full.registriesKept[0].source === "registry" && typeof full.fallbacks === "number" && crawlParseStatus({ registriesKept: kept }).status === "registry-kept",
+    "a registry whose whole list was not parsed on its last pass reads registry-kept, the source named for the operator only");
+  process.env.CRAWL_PARSE_WORKER = "off";
+  ok(crawlParseStatus().status === "off", "CRAWL_PARSE_WORKER=off reads off");
+  delete process.env.CRAWL_PARSE_WORKER;
   const r = await within(parseOffLoop(dense), "paused parse");
   ok(r.ok === false && /paused/.test(r.reason) && crawlParseStats().starts === starts + 3, "while paused a document is handed back for the in-place parse at once, with no parser started");
 }

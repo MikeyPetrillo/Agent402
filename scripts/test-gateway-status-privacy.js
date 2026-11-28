@@ -274,6 +274,15 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
   ok(typeof opBody?.loopLag?.worstMs === "number" && typeof opBody?.loopLag?.stalls === "number",
      "the OPERATOR view keeps the figures - they are what you read after a bad deploy");
 }
+// crawlParse: the document parser's word (src/crawl-parse.js crawlParseStatus).
+{
+  const c = pubBody?.crawlParse || {};
+  ok(["ok", "fallback", "paused", "registry-kept", "off"].includes(c.status) && Object.keys(c).join() === "status",
+     `crawlParse publishes one word and nothing else (${JSON.stringify(c)})`);
+  const o = opBody?.crawlParse || {};
+  ok(o.status === c.status && typeof o.fallbacks === "number" && typeof o.died === "number" && typeof o.kept === "number" && Array.isArray(o.registriesKept),
+     "the OPERATOR view keeps the parser's counters and the registry sources held from an earlier pass");
+}
 
 // --- NOT hidden, and the reason is worth keeping -------------------------
 // The wish board's qualification constants stay public. An attempt to hide

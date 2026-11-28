@@ -112,7 +112,7 @@ const cfg = { ...DEFAULTS };
 /** Test hook: override settings (null restores the defaults); ends the child so the next parse starts one afresh. */
 export function __setCrawlParseForTest(over = null) {
   Object.assign(cfg, DEFAULTS, over || {});
-  failsInARow = 0; pausedUntil = 0; stopped = false;
+  failsInARow = 0; pausedUntil = 0; stopped = false; lastFellBackAt = 0;
   recalled.clear();
   endWorker("settings changed");
 }
@@ -123,6 +123,28 @@ export function stopCrawlParse() { stopped = true; endWorker("stopped"); }
 const stats = { offLoop: 0, pieces: 0, invalid: 0, fallbacks: 0, starts: 0, died: 0, kept: 0, recalled: 0, lastFallback: null };
 /** Counters since boot: documents rebuilt from the child, pieces, invalid documents, fallbacks, child starts, children that ended holding a document, documents answered `keep`, documents answered from memory with no child asked. */
 export function crawlParseStats() { return { ...stats, paused: pausedUntil > Date.now(), running: Boolean(current) }; }
+
+/** How long one parser failure (a start that failed, no answer in the step
+ *  timeout, a pause) keeps the word at "fallback": a long document parsed on
+ *  the main thread in that hour is the stall the parser exists to prevent. */
+export const CRAWL_PARSE_FALLBACK_WORD_MS = 3600_000;
+let lastFellBackAt = 0;
+/** The parser's word for /api/gateway-status: off (CRAWL_PARSE_WORKER=off) /
+ *  registry-kept (a registry's whole-list document was not parsed on its last
+ *  pass, so its rows stand from an earlier one: `registriesKept`, from
+ *  src/x402-index.js discoveryKeptPrevious) / paused (after failures in a
+ *  row, long documents are parsed in place for the pause) / fallback (a
+ *  parser failure inside the last hour) / ok. Words publicly; the counters
+ *  and the kept sources for the operator. */
+export function crawlParseStatus({ full = false, registriesKept = [], now = Date.now() } = {}) {
+  const kept = Array.isArray(registriesKept) ? registriesKept : [];
+  const status = switchedOff() ? "off"
+    : kept.length ? "registry-kept"
+      : pausedUntil > now ? "paused"
+        : lastFellBackAt && now - lastFellBackAt < CRAWL_PARSE_FALLBACK_WORD_MS ? "fallback" : "ok";
+  if (!full) return { status };
+  return { status, ...crawlParseStats(), registriesKept: kept, lastFallbackAt: lastFellBackAt ? new Date(lastFellBackAt).toISOString() : null };
+}
 
 const switchedOff = () => String(process.env.CRAWL_PARSE_WORKER || "").trim().toLowerCase() === "off";
 /** Whether `text` is parsed off the loop: long enough, and the switch not off. */
@@ -343,6 +365,7 @@ function kept(reason, keep) { stats.fallbacks++; stats.kept++; stats.lastFallbac
 function fellBack(reason) {
   stats.fallbacks++;
   stats.lastFallback = reason;
+  lastFellBackAt = Date.now();
   if (++failsInARow >= FAILS_BEFORE_PAUSE) { pausedUntil = Date.now() + PAUSE_MS; failsInARow = 0; }
   return { ok: false, reason };
 }

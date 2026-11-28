@@ -38,7 +38,7 @@ const within = (p, label) => {
   return Promise.race([p, late]).finally(() => clearTimeout(timer));
 };
 
-const { DECLINED_IN_PLACE_MAX_CHARS, KEEP_PREVIOUS, __setCrawlParseForTest, stopCrawlParse, parseOffLoop, crawlParseStats } = await import("../src/crawl-parse.js");
+const { DECLINED_IN_PLACE_MAX_CHARS, KEEP_PREVIOUS, __setCrawlParseForTest, stopCrawlParse, parseOffLoop, crawlParseStats, crawlParseStatus } = await import("../src/crawl-parse.js");
 const lines = [];
 const realWarn = console.warn, realLog = console.log;
 console.warn = (...a) => { lines.push(String(a[0])); };
@@ -104,10 +104,16 @@ for (const [kind, arrange] of KINDS) {
   const r = await p.run();
   ok(r.kept && r.word === KEEP_PREVIOUS.large && r.bigParses === 0 && /too-large-to-parse/.test(r.error || "") && notParsedLine(r),
     `${kind}: a ${LARGE}-character list is not parsed in place, the last pass's rows stand, the word and the line are recorded (kept=${r.kept} word=${r.word} bigParses=${r.bigParses} error=${r.error})`);
+  {
+    const named = idx.discoveryKeptPrevious().find((k) => k.source === p.source.name);
+    ok(named?.word === KEEP_PREVIOUS.large && crawlParseStatus({ registriesKept: idx.discoveryKeptPrevious() }).status === "registry-kept",
+      `${kind}: the registry held from its last pass is named, and the crawlParse word reads registry-kept (${JSON.stringify(named)})`);
+  }
   // Control: the same path with a list under the limit is parsed in place as before.
   const q = await pass(registryList(SMALL, `small${at}`));
   await arrange();
   const s = await q.run();
+  ok(!idx.discoveryKeptPrevious().some((k) => k.source === q.source.name), `${kind}: control, a registry whose pass was parsed is not named as held`);
   const inPlaceSaid = kind === "stopped at the drain" || s.lines.some((l) => / registry-list 1-4MB: parsed on the main thread \(/.test(l));
   ok(!s.kept && s.word === null && !s.error && s.kept_ === 0 && inPlaceSaid,
     `${kind}: control, a list under the limit is parsed in place and its rows taken (changed=${!s.kept} error=${s.error})`);
