@@ -34,6 +34,13 @@ Site:
   coin's history as computed figures, not a price series.
 - /company lists the official Agent402.tools packages and endpoints; the
   same list is in the README and in /.well-known/x402 (field `official`).
+- /start has an "On your phone" path: add the connector from a phone's
+  browser, use it in the Claude app, and check it with one free first
+  prompt; every setup step names the Customize, then Connectors menu.
+- The FAQ answers "Is it free?", "Do I need crypto?", "Does it work on my
+  phone?" and "Is my data safe?".
+- New page /recipes: prompts to copy into an AI app, each with the tool it
+  runs and its catalog price.
 Index:
 - The index crawler sends one seller route an unpaid price request at most
   once a week, and one more inside that time after a server error, a
@@ -41,9 +48,12 @@ Index:
   seller's documents do not list, or when the price those documents state
   has changed; registering again still reads at once, and /crawler says the
   same.
-- A large document read from a seller or a registry is parsed off the
-  serving thread and rebuilt in short steps, so a crawl of a multi-megabyte
-  catalog no longer delays other requests.
+- A large document read from a seller or a registry is parsed in a separate
+  process with its own memory limit and rebuilt in short steps, so a crawl
+  of a multi-megabyte catalog no longer delays other requests; a document
+  that ends that parser, or is too large to bound there, is not parsed by
+  the server, the seller's or registry's previous listing is kept unchanged,
+  and the same document is not retried until it changes or a day passes.
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
@@ -72,6 +82,27 @@ Tools:
   run whose payment is final before it runs starts ahead of the line and is
   never refused by the pace, and a read that arrives while its payment is
   settling waits for that outcome first.
+- New: `POST /api/image-animate` turns a still picture (PNG or JPEG, sent as
+  base64, a data: URL or an https URL) and a motion prompt into one silent
+  4-second 720p clip that opens on the picture, model-backed and priced flat
+  per clip.
+- Video generation answers 422 with reason `content_filtered` when the
+  provider's filter refuses the request at submit, not only when a job
+  fails.
+- New: `name-records` returns, for a name, the creator, publisher, first
+  appearance and other statements Wikidata records, the US trademark serial
+  numbers it records with links to their USPTO record pages, and the Commons
+  file page's recorded author, license and restriction tags, plus an
+  exact-copy Commons match for an uploaded image; each record carries its
+  source link and read time, and the answer makes no determination of
+  ownership or permitted use.
+- cert-transparency waits up to 18 seconds for its certificate log across
+  all of a call's reads, so a slow but healthy log is served where it used
+  to answer a retryable error.
+- A ticker pack whose payment is settled before its work no longer fails
+  because one of its report legs met this server's own pace of EDGAR reads.
+- A skill pack with no successful step names each failed step in the
+  answer's `pack` and `failedSteps` fields.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
@@ -92,6 +123,21 @@ API:
   candidate can take it, before any purchase.
 - route-and-execute no longer asks a chat-room message route for `model` and
   `messages`.
+- /api/find and /api/route answer "current bitcoin price" (and btc,
+  ethereum, eth) with crypto-price and a coin's volatility ("bitcoin
+  volatility last 90 days") with crypto-history; a query that holds only one
+  word of those phrases is ranked as before.
+- /api/find and /api/route read arithmetic written in words ("5 plus 7",
+  "seven minus five", "6 times 7") as the calculator's task; "plus" or
+  "times" outside an expression is ranked as before.
+- /api/find, /api/route and route-and-execute read a task that asks only for
+  a stock's price history as a miss (`capabilityGap: "stock-price-history"`)
+  while no stock history tool is listed, unless a listed tool is named for
+  it; route-and-execute answers 404 without running or charging anything,
+  and every other query is answered as before.
+- On the hosted connector, a paid tool asked without payment and a free tool
+  past its limit say what to do next, with a link that opens on a phone, and
+  every limit says when it resets.
 Operations:
 - The operator view of /api/gateway-status shows a projected-runway word for
   each spending and fee wallet whose balance a low-balance alarm already
