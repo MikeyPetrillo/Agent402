@@ -15,7 +15,8 @@
 // Booted half (the REAL server in paid mode, Stripe answered by a local stub,
 // mail captured by a local sink, every other egress refused):
 //   - switch off: every sign-in route is 404 and unauthenticated /mcp answers
-//     byte for byte what the switch-on boot answers
+//     byte for byte what the switch-on boot answers, but for a paid tool's
+//     next-step sentence, which names the credits connector only with it on
 //   - metadata (RFC 9728, RFC 8414), dynamic registration and its refusals
 //   - authorize: PKCE S256 only, exact redirect_uri, state required, an
 //     unknown app or return address never redirected to
