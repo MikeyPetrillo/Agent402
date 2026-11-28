@@ -689,11 +689,14 @@ for (const t of [tool("public-holidays"), ...HOLIDAY_TOOLS]) {
     `HOLIDAY_HOSTS is exactly the hosts of HOLIDAY_API and V3_API (${HOLIDAY_HOSTS}; want ${apiHosts})`);
   ok(new URL(HOLIDAY_API).pathname === "/api/v4", `the holiday source is read on its v4 path (${HOLIDAY_API})`);
   // A move of the source edits holiday-source.js alone: no other tool module
-  // names a holiday-source host in code (a comment may cite a page).
+  // names a holiday-source host in code (a comment may cite a page). The one
+  // exception is skill-runner.js: a pack writes its hosts as a literal list
+  // (CLAUDE.md, upstreamHosts), and scripts/test-skill-pack-steps.js fails that
+  // literal as soon as it differs from its steps' hosts, so a move still fails.
   const hostWords = (HOLIDAY_HOSTS || apiHosts).map((h) => h.toLowerCase());
   const elsewhere = [];
   for (const dir of ["src/tools"]) {
-    for (const f of readdirSync(dir).filter((x) => x.endsWith(".js") && x !== "holiday-source.js")) {
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".js") && x !== "holiday-source.js" && x !== "skill-runner.js")) {
       const text = readFileSync(`${dir}/${f}`, "utf8").toLowerCase().split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
       for (const h of hostWords) if (text.split(/[^a-z0-9.-]+/).some((w) => w === h || w.endsWith(`.${h}`))) elsewhere.push(`${dir}/${f}: ${h}`);
     }
