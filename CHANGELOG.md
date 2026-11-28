@@ -51,9 +51,11 @@ Index:
 - A large document read from a seller or a registry is parsed in a separate
   process with its own memory limit and rebuilt in short steps, so a crawl
   of a multi-megabyte catalog no longer delays other requests; a document
-  that ends that parser, or is too large to bound there, is not parsed by
-  the server, the seller's or registry's previous listing is kept unchanged,
-  and the same document is not retried for up to a day unless it changes.
+  that ends that parser, or is too large to parse safely (also when that
+  parser is unavailable), is not parsed by the server, the seller's or
+  registry's previous listing is kept unchanged, and a seller's scheduled
+  crawl does not fetch it again for up to a day (registering again still
+  reads at once).
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
