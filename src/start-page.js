@@ -70,8 +70,8 @@ export function startApps(baseUrl, { connector = false } = {}) {
       copy: url,
       after: connector ? "Choose Continue, then Add, and sign in with your email when Claude asks." : "Choose Continue, then Add.",
       then: `In the Claude app, select + in a chat and find Agent402 under Connectors. ${connector
-        ? "A card pays for paid tools from your credits balance, and the free tools run there too."
-        : "The free tools run from your phone with no wallet; paid tools take a wallet set up on a computer (below)."}`,
+        ? "A card pays for most paid tools from your credits balance, and the free tools run there too."
+        : "The free tools run from your phone with no wallet; paid tools run from a computer with a wallet (below)."}`,
       promptLabel: "Ask this to check the connection:",
       prompt: START_FIRST_PROMPT.text,
     },
@@ -145,7 +145,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const walletCards = wallet.apps.map((a) => card(a)).join("\n      ");
 
   const appsLead = viaCredits
-    ? `<p class="ml-measure" ${P}>This address pays for paid tools from a credits balance you buy by card: the app asks you to sign in with your email, and you set a daily cap. Free tools run there too. To use only the free tools, give the app ${code(hosted)} instead.</p>`
+    ? `<p class="ml-measure" ${P}>This address pays for most paid tools from a credits balance you buy by card: the app asks you to sign in with your email, and you set a daily cap. Free tools run there too. To use only the free tools, give the app ${code(hosted)} instead.</p>`
     : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`;
 
   const noWallet = [

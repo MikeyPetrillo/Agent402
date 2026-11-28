@@ -47,6 +47,10 @@ const B = "https://agent402.test";
       await ok(!s.includes(EM_DASH) && !/\$\d/.test(s) && (s.match(/[.!?](\s|$)/g) || []).length === 1, `one sentence, no em dash, no price (${s.slice(0, 60)})`);
     }
   }
+  // A tool the credits connector would refuse is never offered it.
+  const refusedHere = connectorNextStep(B, { connector: true, creditsPay: false });
+  await ok(!CARD_WORDS.test(refusedHere) && !refusedHere.includes("/mcp/credits") && refusedHere.includes(`${B}${START_WALLET_PATH}`), `a tool the credits connector refuses gets the wallet step, no credits clause (${refusedHere})`);
+  await ok(refusedHere === connectorNextStep(B, { connector: false }), "that step is the sales-off sentence, so the two cannot drift");
   const powOff = powLimitMessage(B, 42, { credits: false });
   const powOn = powLimitMessage(B, 42, { credits: true });
   await ok(/resets in 42 seconds\./.test(powOff) && powOff.includes(`${B}${START_WALLET_PATH}`) && !CARD_WORDS.test(powOff), `the proof-of-work limit says when it resets and links the wallet setup, nothing about cards with sales off (${powOff})`);
@@ -127,6 +131,25 @@ for (const [srv, connector, label] of [[offSrv, false, "sales off"], [onSrv, tru
   await ok(second.text.includes(connectorNextStep(SITE, { limited: true, connector })), `${label}: the limit carries its next step`);
   if (!connector) await ok(!CARD_WORDS.test(second.text), `${label}: the limit says nothing about cards or credits`);
   await resolves(srv, second.text, `${label}: the free limit`);
+}
+
+// With credits on, a tool the credits connector refuses (a wallet-identity
+// route, a route that buys from an outside seller) is not offered it; an
+// ordinary paid tool still is (the summarize control above, and again here).
+{
+  const credits = connectorNextStep(SITE, { connector: true });
+  const wallet = connectorNextStep(SITE, { connector: true, creditsPay: false });
+  for (const [args, what, offered] of [
+    [{ slug: "memory-write", params: { key: "note", value: "hello" } }, "memory-write (wallet-identity bound)", false],
+    [{ slug: "route-execute", params: { task: "hash hello" } }, "route-execute (buys from an outside seller)", false],
+    [{ slug: "summarize", params: { url: "https://example.com" } }, "summarize (control)", true],
+  ]) {
+    const r = await call(onSrv, "catalog.call", args);
+    const next = secondSentence(r.text);
+    await ok(r.json?.result?.isError === true && next.length > 0, `sales on: ${what} is refused with a next step (${r.text.slice(0, 120)})`);
+    if (offered) await ok(next.startsWith(credits), `sales on: ${what} is offered the credits connector (${next.slice(0, 160)})`);
+    else await ok(next.startsWith(wallet) && !r.text.includes(credits) && !r.text.includes("/mcp/credits"), `sales on: ${what} carries no credits clause and names the wallet step (${next.slice(0, 160)})`);
+  }
 }
 
 // The transport's own 429: when the limit resets, in words.

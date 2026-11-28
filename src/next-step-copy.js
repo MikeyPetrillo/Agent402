@@ -34,17 +34,22 @@ export function waitInWords(retryAfterSeconds) {
  * The next step for a caller on the hosted connector.
  * `limited`: the caller reached the free limit (a free tool), else it asked
  * for a paid tool with no payment. `connector` defaults to this boot's switches.
+ * `creditsPay`: whether the credits connector would pay for the tool refused
+ * (src/mcp-http.js derives it with creditsConnectorPays from the same checks
+ * the credits gate and the connector's credits path refuse on); a tool it
+ * would refuse is never offered the credits connector.
  */
-export function connectorNextStep(baseUrl, { limited = false, connector = creditsConnectorOn() } = {}) {
+export function connectorNextStep(baseUrl, { limited = false, connector = creditsConnectorOn(), creditsPay = true } = {}) {
   const b = String(baseUrl || "").replace(/\/$/, "");
-  if (connector) {
-    return limited
-      ? `Free tools on a phone: ${b}${START_PHONE_PATH}; paid tools also run from a phone through ${b}${CREDITS_CONNECTOR_PATH}, which pays from prepaid credits bought by card after an email sign-in (${b}${START_APPS_PATH}).`
-      : `To pay from a phone, add ${b}${CREDITS_CONNECTOR_PATH} as your connector and sign in with your email: it pays from prepaid credits bought by card (${b}${START_APPS_PATH}).`;
+  if (connector && limited) {
+    return `Free tools on a phone: ${b}${START_PHONE_PATH}; most paid tools also run from a phone through ${b}${CREDITS_CONNECTOR_PATH}, which pays from prepaid credits bought by card after an email sign-in (${b}${START_APPS_PATH}).`;
+  }
+  if (connector && creditsPay) {
+    return `To pay from a phone, add ${b}${CREDITS_CONNECTOR_PATH} as your connector and sign in with your email: it pays from prepaid credits bought by card (${b}${START_APPS_PATH}).`;
   }
   return limited
-    ? `Free tools on a phone: ${b}${START_PHONE_PATH}; to call past the free limit, pay per call from a wallet set up once on a computer (${b}${START_WALLET_PATH}).`
-    : `On a phone, the free tools work with no wallet (${b}${START_PHONE_PATH}); a paid tool is paid from a wallet set up once on a computer (${b}${START_WALLET_PATH}).`;
+    ? `Free tools on a phone: ${b}${START_PHONE_PATH}; to call past the free limit, run it from a computer with a wallet that pays per call (${b}${START_WALLET_PATH}).`
+    : `This tool runs from a computer with a wallet that pays per call (${b}${START_WALLET_PATH}); on a phone, the free tools work with no wallet (${b}${START_PHONE_PATH}).`;
 }
 
 /**

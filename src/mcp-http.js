@@ -57,6 +57,7 @@ import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { tempoEnabled, pushHashOf, tempoOfferedFor, tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { isIdentityBoundRoute } from "./payments.js";
+import { paysThirdParty } from "./third-party-routes.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
@@ -608,6 +609,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   /** True when this tool's run can outlast the blocking wait: the x402 wire
    *  refuses its signed retry (payOverX402), so no x402 offer is made for it. */
   const isLongCall = (def) => needsAsyncOrWait(def?.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000);
+  // Whether the credits connector (/mcp/credits) would pay for this tool: the
+  // credits gate refuses wallet-identity routes and routes that buy from an
+  // outside seller (src/credits.js, on the same two readings server.js hands
+  // it), and payOverCredits refuses a long call. A refusal's next step offers
+  // the credits connector only where it would pay (src/next-step-copy.js).
+  const creditsConnectorPays = (def) => !(Boolean(def?.identityBound) || isIdentityBoundRoute(def) || paysThirdParty(def) || isLongCall(def));
   const longCallNote = payX402
     ? `a tool whose run can outlast this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s) is not paid here over x402: ${payMpp ? "pay it here over MPP as an MCP task, or call" : "call"} its HTTP route with Prefer: respond-async`
     : "";
@@ -752,7 +759,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // paid here over MPP as a task, or on its HTTP route as a job.
   function walletRequiredText(def, { x402 = false, mpp = payMpp } = {}) {
     // The lead, then what to do next from a phone or a computer (src/next-step-copy.js).
-    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier. ${connectorNextStep(baseUrl)}`;
+    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier. ${connectorNextStep(baseUrl, { creditsPay: creditsConnectorPays(def) })}`;
     if (isLongCall(def)) {
       const asTask = mpp && Boolean(tasks);
       return [
@@ -1183,7 +1190,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const def = entry.def;
       const params = paidParamsOf(args, isNamed);
       const startedAt = Date.now();
-      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+      if (isLongCall(def)) {
         // A person signed in here holds no credits key, so the answer does not
         // send them to one: it names what this connector can run instead.
         return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s), so it cannot run here. Nothing was charged. Pick a tool that answers within ${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s (catalog.find), or run this one over HTTP with the header Prefer: respond-async from a client that pays per call (x402 or MPP).` }], isError: true };
