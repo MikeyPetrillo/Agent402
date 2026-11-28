@@ -231,6 +231,8 @@ t node scripts/test-crawl-parse-off-loop.js
 t node scripts/test-crawl-parse-contained.js
 # A document too long to parse in place is not parsed in place when the parser cannot start, times out, is paused or stopped; CRAWL_PARSE_WORKER=off still parses it (offline)
 t node scripts/test-crawl-parse-large-fallback.js
+# An origin whose document the crawl did not parse waits out the parser's memory of it: scheduled turns make no request, explicit crawls still read, the entry is kept (offline)
+t node scripts/test-crawl-kept-backoff.js
 # Ledger and index figures behind the stalled routes build across turns
 t node scripts/test-stall-routes.js
 t node scripts/test-manifest-input-schema.js

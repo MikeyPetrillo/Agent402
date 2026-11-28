@@ -327,7 +327,7 @@ import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 import { noteTurn, timeSpan, runAsJob } from "./active-jobs.js";
-import { parsesOffLoop, parseOffLoop, inPlaceRefusal } from "./crawl-parse.js";
+import { parsesOffLoop, parseOffLoop, inPlaceRefusal, crawlParseRecallMs } from "./crawl-parse.js";
 import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
@@ -6855,6 +6855,13 @@ function noteLandingHeld(origin, host) {
  *  operator's host whose landed allowance for the day is spent. Either way the
  *  entry stays as the last completed read left it. */
 async function crawlScheduled(origin, outcome = { ours: false }) {
+  // A document of this origin was not parsed on its last read (KeptPrevious):
+  // its scheduled turns pass under the same word with no request until the
+  // parser's memory of that document ends (crawlParseRecallMs), rather than
+  // fetching and hashing a document of megabytes each cycle only to keep the
+  // entry as it is. The entry is not touched either way.
+  const keptWait = keptPreviousWait(origin);
+  if (keptWait) { noteTurnNotRead(origin); return keptWait; }
   const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
   const plan = await sellerLoad.crawlPlan(origin, { landsOn });
   if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
@@ -6865,6 +6872,20 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   // A document not parsed: the turn passes with the entry as it was, under the reason word.
   if (read?.keptPrevious) { noteTurnNotRead(origin); return read.keptPrevious; }
   return null;
+}
+// origin -> { word, until }: an origin whose last read held a document the
+// crawl did not parse, and until when its scheduled turns wait (crawlScheduled).
+const keptPreviousUntil = new Map();
+function noteKeptPrevious(origin, word, at = Date.now()) {
+  keptPreviousUntil.delete(origin);
+  keptPreviousUntil.set(origin, { word, until: at + Math.max(0, Number(crawlParseRecallMs()) || 0) });
+  while (keptPreviousUntil.size > LANDING_HELD_CAP) keptPreviousUntil.delete(keptPreviousUntil.keys().next().value);
+}
+function keptPreviousWait(origin, now = Date.now()) {
+  const k = keptPreviousUntil.get(origin);
+  if (!k) return null;
+  if (k.until <= now) { keptPreviousUntil.delete(origin); return null; }
+  return k.word;
 }
 // When an origin's scheduled turn last passed without a read because of a
 // limit of ours (a spent day, a Retry-After, a landing allowance, the slow
@@ -7306,6 +7327,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
       // history, and the validators go so the next read derives afresh.
       read = false;
       clearValidatorsFor(originUrl);
+      noteKeptPrevious(originUrl, e.keptPrevious);
       return { keptPrevious: e.keptPrevious, error: String(e.message || e) };
     }
     if (!e?.landingHeld) throw e;
@@ -7314,7 +7336,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
+  finally { if (read) { keptPreviousUntil.delete(originUrl); crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;

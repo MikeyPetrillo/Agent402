@@ -321,6 +321,8 @@ function recall(key, now = Date.now()) {
   if (r.until <= now) { recalled.delete(key); return null; }
   return r;
 }
+/** How long a document that ended or was declined by the parser is answered from memory (ms). */
+export function crawlParseRecallMs() { return cfg.recallMs; }
 function remember(key, answer) {
   recalled.delete(key);
   recalled.set(key, { ...answer, until: Date.now() + cfg.recallMs });

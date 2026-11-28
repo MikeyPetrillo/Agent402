@@ -76,7 +76,9 @@ Loaded when an index, discovery, router or buyer file is read.
   crawl's top passes it on as it does a LandingHeld, and the seller's entry stays byte for byte as the
   last read left it (an origin with none stays unlisted); `crawlSeller` answers `{ keptPrevious }`,
   drops the validators, counts no read, and the scheduled turn passes under the word `parser-ended`
-  in the cycle's `skipped`. A registry pass ends the same way (its last pass's rows stand; the word is
+  in the cycle's `skipped`; its later scheduled turns pass the same way with no request until the
+  parser's memory of the document ends (`crawlParseRecallMs`, a day), an explicit crawl still reads
+  and a completed read ends the wait (`scripts/test-crawl-kept-backoff.js`). A registry pass ends the same way (its last pass's rows stand; the word is
   in its status `error` and `keptPrevious`). One line: `crawl parse <origin hash> <file> <size class>:
   not parsed, last read kept (<word>)`. The child first measures the text (`estimateTreeBytes`) and
   declines a document that plainly will not fit (half the limit); a declined document under

@@ -243,8 +243,8 @@ if (process.env.CRAWL_CONTAINED_STAND_IN === "1") {
       sellers.unread = { listed: cache.has(o), ...(await crawl(o)) };
       sellers.unread.listedAfter = cache.has(o);
     }
-    // The same document again: answered from memory, no parser started; its
-    // scheduled turn passes under the reason word. A changed one is tried again.
+    // Its next scheduled turn: no read, no parser started, the turn passes
+    // under the reason word. A changed document read by a crawl is tried again.
     {
       const o = "https://kept-fallback.example";
       const prevEntry = whole(o);
@@ -433,7 +433,7 @@ for (const name of ["fallback", "manifest"]) {
   const c = K.sellers.unread;
   ok(!c.listed && !c.listedAfter && c.answer?.keptPrevious === "parser-ended" && c.died === 1 && c.bigParses.length === 0, `a seller with no previous entry stays unlisted this cycle, under the same reason (${JSON.stringify(c.answer)})`);
 }
-ok(K.sellers.again.answer === "parser-ended" && K.sellers.again.starts === 0 && K.sellers.again.recalled === 1 && K.sellers.again.keptByte && K.sellers.again.bigParses.length === 0, `the same document on the next turn starts no parser, keeps the entry, and the turn passes under the reason word (${K.sellers.again.answer}; starts ${K.sellers.again.starts})`);
+ok(K.sellers.again.answer === "parser-ended" && K.sellers.again.starts === 0 && K.sellers.again.recalled === 0 && K.sellers.again.keptByte && K.sellers.again.bigParses.length === 0, `the next scheduled turn reads nothing (the origin waits out the parser's memory of its document, scripts/test-crawl-kept-backoff.js), starts no parser, keeps the entry, and passes under the reason word (${K.sellers.again.answer}; starts ${K.sellers.again.starts}; recalled ${K.sellers.again.recalled})`);
 ok(K.sellers.changed.answer?.keptPrevious === "parser-ended" && K.sellers.changed.starts === 1 && K.sellers.changed.died === 1 && K.sellers.changed.keptByte, `a changed document is handed to the parser again (starts ${K.sellers.changed.starts})`);
 ok(K.sellers.five.kept === 5 && K.sellers.five.bigParses === 0 && K.sellers.five.paused === false && K.sellers.five.honestOffLoop === 1 && K.sellers.five.honestTools >= 1, `five hostile documents in a row are each kept out, the parser is not paused, and the honest seller after them is parsed off the loop (${JSON.stringify(K.sellers.five)})`);
 for (const h of K.honest) console.log(`# honest crawl: ${h.name}: ${h.offLoop ? "off the loop" : "in place"}, ${h.tools} tools`);
