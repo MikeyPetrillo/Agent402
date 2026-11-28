@@ -7,7 +7,8 @@
 import { capabilityGap, gapNamedBy } from "./capability-gaps.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
-import { queryTerms, singularCandidates, versionTerms, TERM_FALSE_FRIENDS } from "./query-terms.js";
+import { queryTerms, singularCandidates, versionTerms, arithmeticAsk, TERM_FALSE_FRIENDS } from "./query-terms.js";
+import { phraseAliasHits } from "./phrase-aliases.js";
 import { applySynonyms, FIND_OPERATION_WORDS, FIND_OPERATION_SAME } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
 // An advice disclaimer ("Information, not investment advice.") is a notice,
@@ -345,6 +346,15 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   // A pasted description's attribution notice is not part of the task.
   const rawTerms = queryTerms(withoutAttributions(q), { max: 64 });
   const terms = rawTerms.filter((t) => t.length > 1 && !STOPWORDS.has(t)).slice(0, 32);
+  // Arithmetic written in words ("5 plus 7", src/query-terms.js): the
+  // expression is the value the calculator takes, so its words are set aside
+  // and the calculator's own name stands for them. The operator outside an
+  // expression ("plus tier") is a word like any other.
+  const arithmetic = arithmeticAsk(q);
+  if (arithmetic) {
+    for (let i = terms.length - 1; i >= 0; i--) if (arithmetic.words.includes(terms[i])) terms.splice(i, 1);
+    if (!terms.includes(arithmetic.term)) terms.push(arithmetic.term);
+  }
   // Unit-word synonym: "convert miles to kilometers"-style tasks used to hit a
   // dedicated pairwise slug; now they must resolve to unit-convert. One
   // synthetic "units" term (a curated unit-convert tag) is enough to break the
@@ -534,6 +544,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   const wholeQuery = q.trim().toLowerCase();
   const namesTool = (e) => e.slug === wholeQuery || (/[-_]/.test(wholeQuery) && Array.isArray(e.t.aliases) && e.t.aliases.some((a) => String(a).toLowerCase() === wholeQuery));
   const wayOf = new Map(); // slug -> { way, from, to }, only for tools that state one of the pairs
+  // Phrase aliases the query writes out whole (src/phrase-aliases.js): null
+  // for nearly every query.
+  const phraseHits = phraseAliasHits(q);
   const scored = [];
   for (const e of all) {
     const { t, slug, name, tagSet, hay, aliasWords } = e;
@@ -574,7 +587,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
       // below `checksum` although hash carries the alias (2026-09-25).
       const form = nameForm.get(term);
       const slugPart = slug === term ? 10 : segs.has(term) ? 6 : inText(slug, term) ? 2 : 0;
-      const aliasPart = aliasHitWords.has(term) ? 6 : 0;
+      const aliasPart = aliasHitWords.has(term) || (phraseHits !== null && phraseHits.get(slug)?.has(term)) ? 6 : 0;
       // A plural read as its singular names a tool one step below the word
       // as written: a singular that IS the slug scores like a slug word (6,
       // "uuids" for uuid); an alias it completes scores like a tag (3) for
@@ -727,7 +740,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
           // In its slug or name (a plural by its singular), or in an alias the query writes out whole
           // ("least common multiple" names gcd-lcm by least-common-multiple).
           const nw = nameForm.get(term) || term;
-          if (top.slug.includes(nw) || top.name.includes(nw) || top.aliasWords.some((ws) => ws.includes(term) && ws.every((w) => writtenSet.has(w)))) named = true;
+          if (top.slug.includes(nw) || top.name.includes(nw) || top.aliasWords.some((ws) => ws.includes(term) && ws.every((w) => writtenSet.has(w))) || phraseHits?.get(top.slug)?.has(term)) named = true;
           // A covered term that is a complete name of the tool: its whole slug or a whole alias.
           if (completeName(top, term) || (nameForm.has(term) && completeName(top, nameForm.get(term)))) namedN++;
         }
@@ -754,7 +767,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
         for (const term of own) {
           if (term.length < 3 || !covers(term)) continue;
           const w = nameForm.get(term) || term;
-          if (inText(top.slug, w) || inText(top.name, w) || top.tagSet.has(w) || top.aliasWords.some((ws) => ws.includes(w))) names++;
+          if (inText(top.slug, w) || inText(top.name, w) || top.tagSet.has(w) || top.aliasWords.some((ws) => ws.includes(w)) || phraseHits?.get(top.slug)?.has(w)) names++;
         }
         // A money word the hit does not cover still defines the task outside
         // a conversion ("tip calculator dollars"), as it does above.

@@ -209,7 +209,8 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns, substringMatcher } from "./query-terms.js";
+import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns, substringMatcher, arithmeticAsk } from "./query-terms.js";
+import { phraseAliasHits } from "./phrase-aliases.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -12279,7 +12280,13 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // Scored without filler words (src/query-terms.js withoutFiller); the
   // whole query's words still decide which compound slugs it covers.
   const queryWords = queryTerms(q, { max: 32 });
-  const baseTerms = withoutFiller(queryWords);
+  // Arithmetic written in words ("5 plus 7", src/query-terms.js) names the
+  // calculator: the expression's own words are its values and are not scored.
+  const arithmetic = arithmeticAsk(q);
+  const baseTerms = arithmetic ? [...withoutFiller(queryWords).filter((t) => t !== arithmetic.term && !arithmetic.words.includes(t)), arithmetic.term] : withoutFiller(queryWords);
+  // Phrase aliases of this host's tools the query writes out whole
+  // (src/phrase-aliases.js); null for nearly every query.
+  const phraseHits = phraseAliasHits(q);
   // A capability this host's catalog does not offer (src/capability-gaps.js;
   // null for nearly every query). Its lookup words join the scored terms, so
   // a row NAMED for the capability is a candidate however the query worded
@@ -12418,6 +12425,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         else if (short ? nameToks[i].includes(term) : hit(n)) s = 4;
         if (s > slugScore) slugScore = s;
       }
+      if (phraseHits !== null && slugScore < 10 && t.seller === LOCAL_SELLER && phraseHits.get(st.slug)?.has(term)) slugScore = 10;
       if (slugScore) { score += slugScore; mSlug += slugScore; }
       if (hit(name)) { score += 2; mName += 2; }
       if (hit(hay)) { score += 1; mText += 1; }
