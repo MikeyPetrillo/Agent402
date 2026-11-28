@@ -229,6 +229,8 @@ t node scripts/test-crawl-cycle-heap-turns.js
 t node scripts/test-crawl-parse-off-loop.js
 # No document under the crawl's byte caps ends the server through its parser: shapes searched for heap per character, run at the caps under the image's NODE_OPTIONS (offline)
 t node scripts/test-crawl-parse-contained.js
+# A document too long to parse in place is not parsed in place when the parser cannot start, times out, is paused or stopped; CRAWL_PARSE_WORKER=off still parses it (offline)
+t node scripts/test-crawl-parse-large-fallback.js
 # Ledger and index figures behind the stalled routes build across turns
 t node scripts/test-stall-routes.js
 t node scripts/test-manifest-input-schema.js

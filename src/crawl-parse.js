@@ -16,7 +16,11 @@
 // paused or stopped, or is switched off, `parseOffLoop` answers
 // `{ ok: false, reason }` and the caller parses on its own thread as before:
 // none of those says anything about the document. After FAILS_BEFORE_PAUSE
-// such failures in a row the parser is left alone for PAUSE_MS.
+// such failures in a row the parser is left alone for PAUSE_MS. A document of
+// DECLINED_IN_PLACE_MAX_CHARS or more is the exception on every one of those
+// paths (`inPlaceRefusal`): it is answered `keep: KEEP_PREVIOUS.large` and is
+// not parsed on the caller's thread, unless CRAWL_PARSE_WORKER=off, the
+// operator's choice to parse every document in place.
 //
 // A DOCUMENT THAT ENDS THE PARSER IS NOT PARSED HERE. A child that ends by a
 // signal while it holds a document it had accepted ended through that
@@ -120,10 +124,20 @@ const stats = { offLoop: 0, pieces: 0, invalid: 0, fallbacks: 0, starts: 0, died
 /** Counters since boot: documents rebuilt from the child, pieces, invalid documents, fallbacks, child starts, children that ended holding a document, documents answered `keep`, documents answered from memory with no child asked. */
 export function crawlParseStats() { return { ...stats, paused: pausedUntil > Date.now(), running: Boolean(current) }; }
 
+const switchedOff = () => String(process.env.CRAWL_PARSE_WORKER || "").trim().toLowerCase() === "off";
 /** Whether `text` is parsed off the loop: long enough, and the switch not off. */
 export function parsesOffLoop(text) {
   if (stopped || typeof text !== "string" || text.length < cfg.minChars) return false;
-  return String(process.env.CRAWL_PARSE_WORKER || "").trim().toLowerCase() !== "off";
+  return !switchedOff();
+}
+/** The KEEP_PREVIOUS word when `text`, not parsed off the loop, must not be
+ *  parsed in place either: DECLINED_IN_PLACE_MAX_CHARS or longer, whichever
+ *  path handed it back (start failure, timeout, pause, stop, decline). Null
+ *  when it may be parsed in place, which every text may under
+ *  CRAWL_PARSE_WORKER=off. */
+export function inPlaceRefusal(text) {
+  if (typeof text !== "string" || text.length < DECLINED_IN_PLACE_MAX_CHARS || switchedOff()) return null;
+  return KEEP_PREVIOUS.large;
 }
 
 // ---- rebuilding the value --------------------------------------------------
@@ -269,6 +283,13 @@ let queued = 0; // documents waiting for the child or in it
 export function parseOffLoop(text, { turn, span } = {}) {
   queued++;
   const run = chain.then(() => parseOne(text, turn, span || ((fn) => fn())))
+    // Handed back unparsed, by any path: too long to parse in place.
+    .then((r) => {
+      const word = !r.ok && !r.keep ? inPlaceRefusal(text) : null;
+      if (!word) return r;
+      stats.kept++;
+      return { ok: false, reason: r.reason, keep: word };
+    })
     // The queue is empty: the child goes, at once or after its idle wait.
     .finally(() => { if (--queued === 0) idle = idleSoon(); });
   chain = run.then(() => idle, () => idle);

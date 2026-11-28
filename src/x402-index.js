@@ -327,7 +327,7 @@ import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 import { noteTurn, timeSpan, runAsJob } from "./active-jobs.js";
-import { parsesOffLoop, parseOffLoop } from "./crawl-parse.js";
+import { parsesOffLoop, parseOffLoop, inPlaceRefusal } from "./crawl-parse.js";
 import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
@@ -3085,8 +3085,10 @@ function crawlLanePump() {
 // piece per lane turn (src/crawl-parse.js); the value, and the error for a
 // document that is not JSON, are the ones JSON.parse gives. When the thread
 // cannot do it the document is parsed here as before, and a line says so.
-// A document that ended the parser, or that it declined and is too long to
-// parse here, is not parsed at all: this throws a KeptPrevious error, and the
+// A document that ended the parser, or that is too long to parse here
+// (inPlaceRefusal: declined, or handed back by a parser that could not start,
+// timed out, is paused or stopped; CRAWL_PARSE_WORKER=off excepted), is not
+// parsed at all: this throws a KeptPrevious error, and the
 // crawl that read it keeps what it held from its last read (crawlSeller; the
 // registry pass, discoverOneSource), with one line naming the document by hash.
 // `docRef` ({ origin, doc }) names the document in the log lines only.
@@ -3102,6 +3104,13 @@ async function parseInCrawlLane(text, docRef = null) {
         throw new KeptPrevious(r.keep);
       }
       console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: parsed on the main thread (${r.reason})`);
+    } else {
+      const word = inPlaceRefusal(text);
+      if (word) {
+        mode = "not parsed";
+        console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: not parsed, last read kept (${word})`);
+        throw new KeptPrevious(word);
+      }
     }
     await crawlLaneTurn();
     const t0 = performance.now();

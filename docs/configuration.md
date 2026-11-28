@@ -280,7 +280,7 @@ holds it.
 | `CRAWL_GLOBAL_MAX` | Crawl global maximum. | `2` | `src/tools/crawl-kit.js` |
 | `CRAWL_ORIGINS_PER_OPERATOR` | Crawl origins per operator. | `4` | `src/x402-index.js` |
 | `CRAWL_OUR_SIDE_CONTROL_URLS` | Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer. |  | `src/our-side-control.js` |
-| `CRAWL_PARSE_WORKER` | Set to off to parse every crawled document on the serving thread (the parse only: the crawl's long-list passes and the registry fold still run as lane steps); unset, a document of 256 KB or more is parsed in a child process with its own heap limit and rebuilt a piece per turn. |  | `src/crawl-parse.js` |
+| `CRAWL_PARSE_WORKER` | Set to off to parse every crawled document on the serving thread (the parse only: the crawl's long-list passes and the registry fold still run as lane steps); unset, a document of 256 KB or more is parsed in a child process with its own heap limit and rebuilt a piece per turn. Off is also the only setting under which a document of 16 M characters or more is parsed on the serving thread: unset, such a document the child cannot parse (it cannot start, times out, is paused or stopped, or declines it) is not parsed and the last read is kept. |  | `src/crawl-parse.js` |
 | `CRAWL_SLOW_ORIGINS` | Crawl slow origins. |  | `src/crawl-cadence.js` |
 
 ## CREDITS

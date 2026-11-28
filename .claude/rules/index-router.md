@@ -64,8 +64,10 @@ Loaded when an index, discovery, router or buyer file is read.
   is parsed in place in its lane turn. When the child cannot start, answers nothing (the step timeout),
   is paused or stopped, the document is parsed in place and `[x402-index] crawl parse <origin hash>
   <file> <size class>: parsed on the main thread (<reason>)` is logged; three such failures in a row
-  leave it alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
-  nothing else: the lane-step walks below stay. The parser is a process, never a thread: a parser
+  leave it alone for ten minutes. A document of `DECLINED_IN_PLACE_MAX_CHARS` or more is never parsed
+  in place on any of those paths (`inPlaceRefusal`): it is not parsed and the last read is kept
+  (`too-large-to-parse`, below). `CRAWL_PARSE_WORKER=off` keeps every parse in place, that one
+  included, and switches nothing else: the lane-step walks below stay. The parser is a process, never a thread: a parser
   that runs out of memory inside JSON.parse ends its process, and no reading of the text bounds the
   tree for every shape (an integer-like key reserves a slot per index below it). Its own heap limit
   (`heapMb`, 512, its `--max-old-space-size`) is the bound: a document whose tree passes it ends the
