@@ -36,7 +36,7 @@ Site:
   same list is in the README and in /.well-known/x402 (field `official`).
 - /start has an "On your phone" path: add the connector from a phone's
   browser, use it in the Claude app, and check it with one free first
-  prompt; every setup step names the Customize, then Connectors menu.
+  prompt; both connector steps name the Customize, then Connectors menu.
 - The FAQ answers "Is it free?", "Do I need crypto?", "Does it work on my
   phone?" and "Is my data safe?".
 - New page /recipes: prompts to copy into an AI app, each with the tool it
@@ -53,7 +53,7 @@ Index:
   of a multi-megabyte catalog no longer delays other requests; a document
   that ends that parser, or is too large to bound there, is not parsed by
   the server, the seller's or registry's previous listing is kept unchanged,
-  and the same document is not retried until it changes or a day passes.
+  and the same document is not retried for up to a day unless it changes.
 Tools:
 - /v1/videos/generations has a higher list price, shown on /api/pricing and
   in its 402.
