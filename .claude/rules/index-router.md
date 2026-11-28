@@ -59,18 +59,25 @@ Loaded when an index, discovery, router or buyer file is read.
   quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
   over 100 ms (`scripts/test-fallback-crawl-turn.js`).
 - **Document parse:** a fetched document of 256 KB or more (`OFF_LOOP_MIN_CHARS`, `src/crawl-parse.js`)
-  is parsed in a worker thread (`src/crawl-parse-thread.js`) and rebuilt on the main thread a piece per
+  is parsed in a child process (`src/crawl-parse-child.js`) and rebuilt on the main thread a piece per
   crawl-lane turn; the value and the error for invalid JSON are JSON.parse's own, and a shorter document
-  is parsed in place in its lane turn. When the thread cannot start, answers nothing, dies or will not
+  is parsed in place in its lane turn. When the child cannot start, answers nothing, dies or will not
   take a document, the document is parsed in place and `[x402-index] crawl parse <origin hash> <file>
-  <size class>: parsed on the main thread (<reason>)` is logged; three thread failures in a row leave
-  the thread alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
-  nothing else: the lane-step walks below stay. The thread's memory is bounded by its input, not by
-  its heap limit (a thread that reaches the limit inside JSON.parse can end the process): it measures
-  the text first (`estimateTreeBytes`: containers, separators, keys, strings, nesting depth) and
-  refuses a document whose tree may pass half of `heapMb` (512), which is then parsed in place as
-  before. One document at a time; the thread is started on demand and ended when its queue is empty,
-  and `stopCrawlParse()` ends it at the start of the drain. Depth is never a refusal to split (the
+  <size class>: parsed on the main thread (<reason>)` is logged; three parser failures in a row leave
+  it alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
+  nothing else: the lane-step walks below stay. The parser is a process, never a thread: a parser
+  that runs out of memory inside JSON.parse ends its process, and no reading of the text bounds the
+  tree for every shape (an integer-like key reserves a slot per index below it). Its own heap limit
+  (`heapMb`, 512, its `--max-old-space-size`) is the bound: a document whose tree passes it ends the
+  child alone (`parser exited (SIGABRT) holding the document`, not counted toward the pause) and is
+  parsed in place as before. The child first measures the text (`estimateTreeBytes`) and declines a
+  document that plainly will not fit (half the limit); that saves a parse and bounds nothing. It gets
+  the helper allowlist environment (`childEnv`: no key, no store address, no NODE_OPTIONS) and two
+  flags of its own, takes the text a chunk per lane turn, gives a finished document's memory back at
+  once, ends 30 seconds after its queue empties (a start is a fork of the server) and at the start of
+  the drain (`stopCrawlParse()`; a parse waiting on it is handed back at once). One document at a
+  time. `scripts/test-crawl-parse-contained.js` searches shapes for heap per character and runs the
+  costliest at both byte caps under the image's NODE_OPTIONS. Depth is never a refusal to split (the
   splitter and the rebuild use explicit stacks). A registry list read in one fetch is parsed the same way
   and folded 1,000 rows per lane turn; a manifest crawl whose list passes 2,000 rows runs its merge,
   vouch, stamp and carry passes, its route list and its quote pick as lane steps. A parse or walk

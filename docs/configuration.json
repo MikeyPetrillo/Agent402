@@ -271,7 +271,7 @@
     "CRAWL_GLOBAL_MAX": "Crawl global maximum.",
     "CRAWL_ORIGINS_PER_OPERATOR": "Crawl origins per operator.",
     "CRAWL_OUR_SIDE_CONTROL_URLS": "Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer.",
-    "CRAWL_PARSE_WORKER": "Set to off to parse every crawled document on the serving thread (the parse only: the crawl's long-list passes and the registry fold still run as lane steps); unset, a document of 256 KB or more is parsed in a worker thread and rebuilt a piece per turn.",
+    "CRAWL_PARSE_WORKER": "Set to off to parse every crawled document on the serving thread (the parse only: the crawl's long-list passes and the registry fold still run as lane steps); unset, a document of 256 KB or more is parsed in a child process with its own heap limit and rebuilt a piece per turn.",
     "CRAWL_SLOW_ORIGINS": "Crawl slow origins.",
     "CREDITS_ABANDONED_HOLD_MS": "Credits abandoned hold, in milliseconds.",
     "CREDITS_BALANCE_MAX_USD": "The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered.",

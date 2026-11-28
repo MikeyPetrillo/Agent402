@@ -5,8 +5,8 @@
 // cap that is dense in small objects and distinct keys (every operation's
 // schema naming its own properties, as generated documents do) held the loop
 // for a quarter of a second here, and several times that on a slower host.
-// The crawl now has such a document parsed in a worker thread and rebuilds it
-// a piece per crawl-lane turn (src/crawl-parse.js, src/crawl-parse-thread.js).
+// The crawl now has such a document parsed in a child process and rebuilds it
+// a piece per crawl-lane turn (src/crawl-parse.js, src/crawl-parse-child.js).
 //
 // Driven through the real crawl (src/x402-index.js crawlSeller) of a stub
 // seller, in this process, with the longest main-thread turn read on the ours
@@ -19,15 +19,15 @@
 //   - a document that is not JSON is refused with the same error, and each
 //     read is still handed its byte cap, a read refused for size recorded as
 //     it was;
-//   - when the thread cannot start, answers nothing or dies part-way, the
+//   - when the parser cannot start, answers nothing or dies part-way, the
 //     document is parsed in place (never dropped) and a log line says so;
 //   - a long turn's log line names the document by a short hash of its
 //     origin, never the host, with the size class.
-// The thread's memory is bounded by its input: a document whose tree may not
+// The parser is a process of its own with its own heap limit: a document whose tree may not
 // fit is refused before it is parsed and takes the in-place path (run in a
 // child process, since the failure this guards ends the process), the exit
-// of a process does not wait on the thread, a document wrapped in tens or
-// thousands of containers is split like any other, and the thread is gone
+// of a process does not wait on the parser, a document wrapped in tens or
+// thousands of containers is split like any other, and the parser is gone
 // once its queue is empty.
 // Then the rebuild itself: values JSON text cannot carry, an own "__proto__"
 // key, integer-like keys, deep nesting, long strings, in both piece formats.
@@ -170,12 +170,12 @@ const a = await crawl(A, { "/openapi.json": dense }, "crawl, document parsed off
 ok(a.entry?.tools?.length > 1000 && a.entry.discoveryPath === "/openapi.json" && !a.entry.error, `control: the crawl indexed the document (${a.entry?.tools?.length} tools kept of ${a.entry?.toolsTotal ?? a.entry?.tools?.length})`);
 ok(a.worst <= LIMIT.ms, `no turn of the crawl held the loop past ${LIMIT.ms} ms (longest ${a.worst.toFixed(0)} ms)`);
 
-const { crawlParseStats, __setCrawlParseForTest, parseOffLoop, parsesOffLoop, OFF_LOOP_MIN_CHARS } = await import("../src/crawl-parse.js");
-ok(crawlParseStats().offLoop === 1 && crawlParseStats().pieces > 4 && crawlParseStats().fallbacks === 0, `the document was rebuilt from the thread's pieces (${crawlParseStats().pieces} pieces, no fallback)`);
+const { crawlParseStats, crawlParseIdle, __setCrawlParseForTest, parseOffLoop, parsesOffLoop, OFF_LOOP_MIN_CHARS } = await import("../src/crawl-parse.js");
+ok(crawlParseStats().offLoop === 1 && crawlParseStats().pieces > 4 && crawlParseStats().fallbacks === 0, `the document was rebuilt from the parser's pieces (${crawlParseStats().pieces} pieces, no fallback)`);
 
 // ---- 2. the same content through the in-place path indexes the same ----------------
 const b = await inPlace(() => crawl(B, { "/openapi.json": dense }, "crawl, same document parsed in place"));
-ok(crawlParseStats().offLoop === 1, "control: with the switch off the thread parsed nothing");
+ok(crawlParseStats().offLoop === 1, "control: with the switch off the parser parsed nothing");
 ok(b.worst > LIMIT.ms, `control: the in-place crawl of the same document holds a turn past the bound (${b.worst.toFixed(0)} ms)`);
 sameStored(stored(a.entry, A), stored(b.entry, B), "dense document");
 ok(true, "the entry stored from the pieces equals the entry stored from the in-place parse");
@@ -188,18 +188,35 @@ for (const levels of [70, 2001]) {
   const before = crawlParseStats();
   const w = await crawl(W, { "/openapi.json": wrapped }, `crawl, document inside ${levels} arrays`);
   const after = crawlParseStats();
-  ok(after.offLoop === before.offLoop + 1 && after.fallbacks === before.fallbacks, `inside ${levels} arrays the document is still rebuilt from the thread's pieces`);
+  ok(after.offLoop === before.offLoop + 1 && after.fallbacks === before.fallbacks, `inside ${levels} arrays the document is still rebuilt from the parser's pieces`);
   ok(w.worst <= LIMIT.ms, `inside ${levels} arrays no turn of the crawl held the loop past ${LIMIT.ms} ms (longest ${w.worst.toFixed(0)} ms)`);
   const x = await inPlace(() => crawl(X, { "/openapi.json": wrapped }, "crawl, same wrapped document parsed in place"));
   sameStored(stored(w.entry, W), stored(x.entry, X), `inside ${levels} arrays`);
   const got = await within(parseOffLoop(wrapped, { turn: () => new Promise((r) => setImmediate(r)) }), "wrapped document");
   ok(got.ok && JSON.stringify(got.value) === JSON.stringify(JSON.parse(wrapped)), `inside ${levels} arrays the rebuilt value and the stored entry equal the in-place ones`);
 }
-ok(crawlParseStats().running === false, "the thread is ended once its queue is empty: it keeps no document's tree while idle");
 {
+  // With the queue empty the parser collects and reports what it still holds:
+  // a small one stays for its idle wait (a start is a fork of this process),
+  // a large one is ended at once.
+  __setCrawlParseForTest({ idleRssMb: 1e9 });
+  const first = await within(parseOffLoop(dense), "a document, then idle");
+  await within(crawlParseIdle(), "the idle check");
   const starts = crawlParseStats().starts;
+  ok(first.ok && crawlParseStats().running === true, "a parser holding little stays through its idle wait after the queue empties");
   const [p, q] = await within(Promise.all([parseOffLoop(dense), parseOffLoop(dense)]), "two documents queued");
-  ok(p.ok && q.ok && crawlParseStats().starts === starts + 1 && crawlParseStats().running === false, "two documents queued together go through one thread, one at a time, and it ends after the second");
+  ok(p.ok && q.ok && crawlParseStats().starts === starts, "two documents queued together go through the waiting parser, one at a time, with no new start");
+  __setCrawlParseForTest({ idleRssMb: 1e9, idleMs: 40 });
+  const r = await within(parseOffLoop(dense), "a document before the idle wait");
+  const startsNow = crawlParseStats().starts;
+  await within((async () => { while (crawlParseStats().running) await new Promise((res) => setTimeout(res, 10)); })(), "the idle wait");
+  ok(r.ok && crawlParseStats().running === false && crawlParseStats().starts === startsNow, "the parser ends once its idle wait passes with nothing to do");
+  __setCrawlParseForTest({ idleRssMb: 1 });
+  const z = await within(parseOffLoop(dense), "a document, then a large idle parser");
+  await within(crawlParseIdle(), "the idle check");
+  ok(z.ok && crawlParseStats().running === false, "a parser still holding memory when its queue empties is ended at once");
+  __setCrawlParseForTest(null);
+  ok(crawlParseStats().running === false, "control: the settings hook ends the parser");
 }
 
 // ---- 3. beside a manifest, with a long row list (the passes and the pick take lane slices) ----
@@ -266,7 +283,7 @@ walkTurns.clear();
 const rebuiltBefore = crawlParseStats().offLoop;
 const r1 = await discover(`discovery, ${(list.length / MB).toFixed(1)} MB list parsed off the loop`);
 ok((walkTurns.get("registry-fold")?.size || 0) === 40, `the 40,000 listings were folded 1,000 per loop iteration (${walkTurns.get("registry-fold")?.size} iterations)`);
-ok(crawlParseStats().offLoop === rebuiltBefore + 1, "the registry list was parsed in the thread and rebuilt from its pieces");
+ok(crawlParseStats().offLoop === rebuiltBefore + 1, "the registry list was parsed in the parser and rebuilt from its pieces");
 counting = false;
 idx.__setCrawlWalkObserverForTest(null);
 ok(r1.status?.resources === 40_000 && r1.status.origins === 400 && !r1.status.error && discoveryCap === 64 * MB, `control: the pass read the whole list (${r1.status?.resources} listings, ${r1.status?.origins} origins) under its 64 MB cap`);
@@ -291,41 +308,41 @@ idx.__setDiscoveryBodyFetchForTest(null);
   ok(was === 100, "the line's threshold is 100 ms unless a test lowers it");
 }
 
-// ---- 7. the thread failing: the document is parsed in place and a line says so -----
+// ---- 7. the parser failing: the document is parsed in place and a line says so -----
 const hang = join(dir, "hang.mjs"), dies = join(dir, "dies.mjs");
-writeFileSync(hang, 'import { parentPort } from "node:worker_threads";\nparentPort.on("message", () => {});\n');
-writeFileSync(dies, 'import { parentPort } from "node:worker_threads";\nparentPort.on("message", (m) => { if (m.op === "parse") parentPort.postMessage({ id: m.id, enc: "json", piece: \'[["o"]]\', weight: 8, done: false }); else process.exit(3); });\n');
+writeFileSync(hang, 'process.on("message", () => {});\n');
+writeFileSync(dies, 'process.on("message", (m) => { if (m.op === "parse") process.send({ id: m.id, enc: "json", piece: \'[["o"]]\', weight: 8, done: false }); else if (m.op === "next") process.exit(3); });\n');
 let at = 0;
 for (const [what, over, reason] of [
-  ["cannot start", { workerFile: join(dir, "absent.mjs") }, /thread (error|exited)/],
+  ["cannot start", { workerFile: join(dir, "absent.mjs") }, /parser (error|exited|ended)|channel closed|EPIPE/i],
   ["answers nothing", { workerFile: hang, stepTimeoutMs: 150 }, /no answer in 150 ms/],
-  ["dies part-way", { workerFile: dies }, /thread (error|exited)/],
+  ["dies part-way", { workerFile: dies }, /parser (error|exited)/],
 ]) {
   __setCrawlParseForTest(over);
   const before = crawlParseStats();
   const K = `https://failing-${at++}.example`;
   lines.length = 0;
-  const k = await crawl(K, { "/openapi.json": dense }, `crawl, thread ${what}`);
+  const k = await crawl(K, { "/openapi.json": dense }, `crawl, parser ${what}`);
   const after = crawlParseStats();
-  sameStored(stored(k.entry, K), stored(a.entry, A), `thread ${what}`);
-  ok(after.fallbacks === before.fallbacks + 1 && after.offLoop === before.offLoop, `thread ${what}: the document is parsed in place and indexed as before`);
+  sameStored(stored(k.entry, K), stored(a.entry, A), `parser ${what}`);
+  ok(after.fallbacks === before.fallbacks + 1 && after.offLoop === before.offLoop, `parser ${what}: the document is parsed in place and indexed as before`);
   const key = createHash("sha256").update(K).digest("hex").slice(0, 8);
   const line = lines.find((l) => l.startsWith(`[x402-index] crawl parse ${key} /openapi.json 4-12MB: parsed on the main thread (`));
-  ok(line && reason.test(line) && !line.includes("failing-"), `thread ${what}: the log line says so, by hash (${line})`);
+  ok(line && reason.test(line) && !line.includes("failing-"), `parser ${what}: the log line says so, by hash (${line})`);
 }
-// Three failures in a row and the thread is left alone for a while; a parse still answers.
+// Three failures in a row and the parser is left alone for a while; a parse still answers.
 __setCrawlParseForTest({ workerFile: join(dir, "absent.mjs") });
 {
   const starts = crawlParseStats().starts;
   for (let q = 0; q < 3; q++) { const r = await within(parseOffLoop(dense), "failing parse"); assert.ok(r.ok === false && !/paused/.test(r.reason), r.reason); }
-  ok(crawlParseStats().paused && crawlParseStats().starts === starts + 3, "after three failures in a row the thread is left alone for a while");
+  ok(crawlParseStats().paused && crawlParseStats().starts === starts + 3, "after three failures in a row the parser is left alone for a while");
   const r = await within(parseOffLoop(dense), "paused parse");
-  ok(r.ok === false && /paused/.test(r.reason) && crawlParseStats().starts === starts + 3, "while paused a document is handed back for the in-place parse at once, with no thread started");
+  ok(r.ok === false && /paused/.test(r.reason) && crawlParseStats().starts === starts + 3, "while paused a document is handed back for the in-place parse at once, with no parser started");
 }
 __setCrawlParseForTest(null);
 {
   const r = await within(parseOffLoop(dense, { turn: () => new Promise((res) => setImmediate(res)) }), "restored parse");
-  ok(r.ok === true && !crawlParseStats().paused, "control: with the real thread restored the next document is rebuilt from pieces");
+  ok(r.ok === true && !crawlParseStats().paused, "control: with the real parser restored the next document is rebuilt from pieces");
 }
 
 // ---- 7b. bounded by its input, in a child process ----------------------------------
@@ -340,8 +357,8 @@ const child = (script) => within(new Promise((resolve) => {
 }), "child process");
 {
   // A list of empty objects costs the heap about 30 times its text. With a
-  // small limit on the thread it is refused unparsed; were it parsed there,
-  // the thread would reach the limit inside JSON.parse.
+  // small limit on the parser it is refused unparsed; were it parsed there,
+  // the parser would reach the limit inside JSON.parse.
   const r = await child(`
     import "./scripts/lib/offline-stores.js";
     const { parseOffLoop, __setCrawlParseForTest, crawlParseStats } = await import("./src/crawl-parse.js");
@@ -353,11 +370,11 @@ const child = (script) => within(new Promise((resolve) => {
     process.exit(0);
   `);
   const got = r.code === 0 ? childJson(r.out) : null;
-  ok(r.code === 0 && got.ok === false && /^unsplit: about \d+ MB parsed, past the thread's 32 MB$/.test(got.reason) && got.inPlace === 2_000_001, `a document whose tree may not fit the thread is refused unparsed and the process lives to parse it in place (exit ${r.code}${r.signal ? ` ${r.signal}` : ""}: ${got?.reason || r.err})`);
-  ok(got.smallOk === true && got.stats.paused === false, "control: under the same limit a smaller list is rebuilt from pieces, and a refusal is not a thread failure");
+  ok(r.code === 0 && got.ok === false && /^unsplit: about \d+ MB parsed, past the parser's 32 MB$/.test(got.reason) && got.inPlace === 2_000_001, `a document whose tree may not fit the parser is refused unparsed and the process lives to parse it in place (exit ${r.code}${r.signal ? ` ${r.signal}` : ""}: ${got?.reason || r.err})`);
+  ok(got.smallOk === true && got.stats.paused === false, "control: under the same limit a smaller list is rebuilt from pieces, and a refusal is not a parser failure");
 }
 {
-  // The exit of a process does not wait on the thread: with a 64 MB list of
+  // The exit of a process does not wait on the parser: with a 64 MB list of
   // empty objects handed to the parse, process.exit comes back at once.
   const LATE = bound(1000, 40);
   const r = await child(`
@@ -374,17 +391,17 @@ const child = (script) => within(new Promise((resolve) => {
   `);
   const got = r.code === 0 ? childJson(r.out) : null;
   ok(r.code === 0 && r.closedAt - got.exitAt <= LATE.ms, `a process with a 64 MB list handed to the parse exits ${r.code === 0 ? r.closedAt - got.exitAt : "?"} ms after process.exit (exit ${r.code}${r.signal ? ` ${r.signal}` : ""}; ${LATE.note})`);
-  ok(got.offLoopAfterStop === false && got.running === false, "after stopCrawlParse the thread is gone and every later parse stays in place");
+  ok(got.offLoopAfterStop === false && got.running === false, "after stopCrawlParse the parser is gone and every later parse stays in place");
   const server = await (await import("node:fs/promises")).readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const drain = server.slice(server.indexOf("function shutdown(signal"));
-  ok(/try \{ stopCrawlParse\(\); \}/.test(drain.slice(0, drain.indexOf("httpServer.close("))), "the server's drain ends the parse thread before it closes the listener");
+  ok(/try \{ stopCrawlParse\(\); \}/.test(drain.slice(0, drain.indexOf("httpServer.close("))), "the server's drain ends the parser before it closes the listener");
 }
-// A refusal for size is the document, not a failing thread: it never pauses the thread.
+// A refusal for size is the document, not a failing parser: it never pauses the parser.
 {
   const nineMb = `[${"{},".repeat(3_000_000)}{}]`;
   const before = crawlParseStats();
-  for (let q = 0; q < 4; q++) { const r = await within(parseOffLoop(nineMb), "refused document"); assert.ok(r.ok === false && /^unsplit: about \d+ MB parsed, past the thread's 256 MB$/.test(r.reason), r.reason); }
-  ok(crawlParseStats().fallbacks === before.fallbacks + 4 && !crawlParseStats().paused, "at the shipped limit a 9 MB list of empty objects is refused unparsed each time, and the thread is not paused for it");
+  for (let q = 0; q < 4; q++) { const r = await within(parseOffLoop(nineMb), "refused document"); assert.ok(r.ok === false && /^unsplit: about \d+ MB parsed, past the parser's 256 MB$/.test(r.reason), r.reason); }
+  ok(crawlParseStats().fallbacks === before.fallbacks + 4 && !crawlParseStats().paused, "at the shipped limit a 9 MB list of empty objects is refused unparsed each time, and the parser is not paused for it");
 }
 
 // ---- 8. the rebuild is the value JSON.parse returns ---------------------------------
