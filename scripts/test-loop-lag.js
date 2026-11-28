@@ -123,6 +123,23 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
   const at0 = Date.now();
   contained("thrower", () => { blockFor(40); throw new Error("x"); })();
   ok(turnsDuring(at0 - 10, Date.now()).some((t) => t.startsWith("thrower ")), "a turn that throws is timed as well");
+  // A full collection's marking is named: its steps run inside whichever turn
+  // allocates and no gc entry reports them, so a block inside the window from
+  // the marking's start to the pause that ends it says `gc-marking`.
+  {
+    const { noteGcEntry, markingDuring } = await import("../src/loop-lag.js");
+    const t = Date.now() + 500_000; // clear of every entry noted above
+    ok(markingDuring(t, t + 400) === false, "control: with no marking started a window names no marking");
+    noteGcEntry(t + 100, 0, 8);
+    ok(markingDuring(t + 150, t + 600) === true && markingDuring(t, t + 120) === true, "a window after a full collection's marking started, with no pause ending it yet, names the marking");
+    ok(markingDuring(t, t + 90) === false, "a window that ended before the marking started does not");
+    noteGcEntry(t + 700, 40, 4);
+    ok(markingDuring(t + 650, t + 720) === true && markingDuring(t + 741, t + 900) === false, "the marking ends at the pause that closes it: a later window names none");
+    noteGcEntry(t + 800, 5, 1);
+    ok(markingDuring(t + 790, t + 900) === false, "a young collection is not marking");
+    const lag = await (await import("node:fs/promises")).readFile(new URL("../src/loop-lag.js", import.meta.url), "utf8");
+    ok(/if \(markingDuring\(now - late - 50, now\)\) turns = \[\.\.\.turns, "gc-marking"\];/.test(lag), "the stall line and the stall ring carry gc-marking among the turns");
+  }
   // The index wires the two spans the crawl stalls pointed at.
   const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
   // Each pass takes a crawl-lane turn of its own and is timed as a span named

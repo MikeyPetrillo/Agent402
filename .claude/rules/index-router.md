@@ -89,7 +89,8 @@ Loaded when an index, discovery, router or buyer file is read.
   recorded under `crawl-walk <name>` (a fallback pass under `crawl-fallback <name>`) for the
   `[loop-lag]` line. On a heap of gigabytes the long turns left in a cycle are V8's marking steps
   inside whichever turn allocates while a full collection marks; no gc entry reports them and no
-  slice ends them (`scripts/test-crawl-cycle-heap-turns.js` lists them apart and bounds the rest).
+  slice ends them (`scripts/test-crawl-cycle-heap-turns.js` lists them apart and bounds the rest);
+  a stall inside such a window carries `gc-marking` among its turns (`markingDuring`, `src/loop-lag.js`).
 - **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
   seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
   matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
