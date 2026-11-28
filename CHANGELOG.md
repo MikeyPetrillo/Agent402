@@ -42,11 +42,13 @@ Site:
 - New page /recipes: prompts to copy into an AI app, each with the tool it
   runs and its catalog price.
 Index:
-- The index crawler sends one seller route an unpaid price request at most
-  once a week, and one more inside that time after a server error, a
-  redirect or no answer, to confirm a not-found answer from a route the
-  seller's documents do not list, or when the price those documents state
-  has changed; registering again still reads at once, and /crawler says the
+- The index crawler sends one seller route at most one unpaid price
+  request a week. Inside that week it asks once more only after a server
+  error, a redirect or no answer, to confirm a not-found answer from a
+  route the seller's documents do not list, or when the price those
+  documents state has changed. Registering again still reads at once, the
+  paywall check (one request to a seller's cheapest paid route, on a
+  rotation across the index) keeps its own schedule, and /crawler says the
   same.
 - A large document read from a seller or a registry is parsed in a separate
   process with its own memory limit and rebuilt in short steps, so a crawl
