@@ -455,14 +455,30 @@ const restoreResolver = stubGuardResolver((host, family) => (family === 4 ? ["93
     // Many held reads and unpaid ones together: every start is one start in the one window.
     {
       const WINDOW = 400, LIMIT = 8;
-      const { pace, done } = rigOf({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 4 });
+      // queueMax 5: the paid line takes SEC_PAID_LINE_FACTOR (4) lines of 5, so twenty armed reads all fit.
+      const { pace, done } = rigOf({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 5 });
       const t0 = performance.now(), starts = [];
       const mark = async () => { starts.push(performance.now() - t0); };
       await Promise.all(Array.from({ length: LIMIT }, () => pace.paced(mark)));
       const outs = await Promise.all(Array.from({ length: 20 }, () => pace.paced(mark).then(() => "ran", (e) => e)));
       done();
       const most = mostPerWindow(starts, WINDOW - 60);
-      ok(outs.every((o) => o === "ran") && most <= LIMIT && starts.length === LIMIT + 20, `twenty held reads of an armed run are all served, at most ${LIMIT} starts in any window (${outs.filter((o) => o === "ran").length} served, most ${most})`);
+      ok(pace.paidLineMax === 20 && outs.every((o) => o === "ran") && most <= LIMIT && starts.length === LIMIT + 20, `twenty held reads of an armed run are all served, at most ${LIMIT} starts in any window (${outs.filter((o) => o === "ran").length} served, most ${most})`);
+    }
+    // The paid line is bounded for armed reads: past it an armed read is the
+    // unpaid read it still is (the pace's 503); a run already paid for is never refused.
+    {
+      const WINDOW = 400, LIMIT = 8;
+      const { pace, done } = rigOf({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 4 });
+      await Promise.all(Array.from({ length: LIMIT }, () => pace.paced(async () => 1)));
+      const outs = await Promise.all(Array.from({ length: 24 }, () => pace.paced(async () => 1).then(() => "ran", (e) => e)));
+      done();
+      const ran = outs.filter((o) => o === "ran").length, busy = outs.filter((o) => o?.secBusy === true && o.statusCode === 503).length;
+      ok(pace.paidLineMax === 16 && ran >= 16 && busy >= 1 && ran + busy === 24 && pace.status().paidWaiting === 0, `armed reads past ${pace.paidLineMax} in the paid line are answered the pace's 503 (${ran} ran, ${busy} refused)`);
+      const paidPace = createSecPace({ perSecond: LIMIT, windowMs: WINDOW, maxWaitMs: 100, queueMax: 4, paidOf: () => true });
+      await Promise.all(Array.from({ length: LIMIT }, () => paidPace.paced(async () => 1)));
+      const paidOuts = await Promise.all(Array.from({ length: 24 }, () => paidPace.paced(async () => 1).then(() => "ran", (e) => e)));
+      ok(paidOuts.every((o) => o === "ran"), `control: reads of a run already paid for are all served past that bound (${paidOuts.filter((o) => o === "ran").length} of 24)`);
     }
     // CONTROL: the same arrivals from a run that was never armed are refused as before.
     {
@@ -812,6 +828,79 @@ ok(SEC_STARTS_PER_SECOND_TOTAL <= 8 && SEC_HOSTS.join() === "sec.gov,www.sec.gov
   const claim = server.slice(server.indexOf("try { serve = await tempoPushDebts.claimForServe(req); }"), server.indexOf("req.tempoPushRefunded = true;"));
   ok(/if \(!req\.tempoSettled \|\| !tempoPushHashOf\(req\)\) return next\(\);\s+let serve = true;\s+try \{ serve = await tempoPushDebts\.claimForServe/.test(server) && /if \(serve\) \{ markFinalBeforeHandler\(currentRequestScope\(\)\); return next\(\); \}/.test(claim),
     "the server marks a claimed Tempo push credential's run as paid before its handler");
+}
+
+// Deploy overlap: two processes pacing through one shared store (a fake clock,
+// the memory backend standing in for Redis). The old one runs alone at its
+// full share; the new one arrives; later the old one leaves. In no second do
+// the two together start more than the SEC's ten, and each ends at a full
+// share when alone.
+{
+  const { createSecPresence, SEC_SOURCE_PER_SECOND, SEC_PEER_BEAT_MS } = await import("../src/tools/sec-rate.js");
+  const { createMemoryLimits } = await import("../src/shared-limits.js");
+  const store = createMemoryLimits();
+  let t = 1_000_000;
+  const clock = () => t;
+  const env = { RATE_LIMIT_REPLICAS: "1" };
+  const mk = (id) => {
+    const presence = createSecPresence({ store, enabled: () => true, env, clock, id });
+    const pace = createSecPace({ perSecond: () => presence.share(), lineLimit: 8, now: clock, callerOf: () => [id], leftSignalOf: () => null, paidOf: () => false, pendingOf: () => null, armedOf: () => false });
+    return { presence, pace, starts: [], alive: true, nextBeat: t };
+  };
+  // One start if a place is open now (a read that would wait is withdrawn).
+  const tryStart = (p) => {
+    const before = p.pace.status().started;
+    const ac = new AbortController();
+    p.pace.turn({ signal: ac.signal, waitMs: 60_000 }).catch(() => {});
+    if (p.pace.status().started > before) { p.starts.push(t); return true; }
+    ac.abort();
+    return false;
+  };
+  const OLD = mk("old");
+  const procs = [OLD];
+  let NEW = null, aloneOld = null, aloneNew = null, mostTogether = 0;
+  const STEP = 5;
+  for (let ms = 0; ms <= 30_000; ms += STEP, t += STEP) {
+    if (ms === 8_000) { NEW = mk("new"); procs.push(NEW); }
+    if (ms === 20_000) OLD.alive = false; // the old process ends: it beats and reads no more
+    for (const p of procs) {
+      if (!p.alive) continue;
+      if (t >= p.nextBeat) { await p.presence.beat(); p.nextBeat = t + SEC_PEER_BEAT_MS; }
+      for (let k = 0; k < 12 && tryStart(p); k++) { /* saturated demand */ }
+    }
+    await new Promise((r) => setImmediate(r)); // a withdrawn read leaves its line
+    if (ms === 7_995) aloneOld = OLD.presence.share();
+    const all = procs.flatMap((p) => p.starts).filter((x) => x > t - 1000);
+    if (all.length > mostTogether) mostTogether = all.length;
+  }
+  aloneNew = NEW.presence.share();
+  const oldShare = OLD.starts.filter((x) => x > 1_000_000 + 4_000 && x <= 1_000_000 + 7_000).length / 3;
+  ok(aloneOld === 8 && Math.round(oldShare) === 8, `a process alone takes the full share (${aloneOld}/s, ${oldShare.toFixed(1)} starts a second)`);
+  ok(mostTogether <= SEC_SOURCE_PER_SECOND, `across the overlap the two processes together never start more than ${SEC_SOURCE_PER_SECOND} in a second (${mostTogether} most)`);
+  ok(aloneNew === 8, `after the old process leaves the new one returns to the full share (${aloneNew}/s)`);
+  // The same overlap with no presence (the replica count alone) goes past it: the control.
+  {
+    let tt = 0;
+    const a = createSecPace({ perSecond: 8, now: () => tt, callerOf: () => ["a"], leftSignalOf: () => null });
+    const b = createSecPace({ perSecond: 8, now: () => tt, callerOf: () => ["b"], leftSignalOf: () => null });
+    let n = 0;
+    for (const p of [a, b]) for (let k = 0; k < 12; k++) { const before = p.status().started; const ac = new AbortController(); p.turn({ signal: ac.signal }).catch(() => {}); if (p.status().started > before) n++; else ac.abort(); }
+    ok(n === 16, `control: two processes each pacing by the replica count alone start ${n} in one second`);
+  }
+  // A store that stops answering: one more process than last seen, never the full share.
+  {
+    const down = { windowAdd: async () => ({ ok: false, error: "down" }) };
+    let tt = 5_000_000;
+    const live = createSecPresence({ store, enabled: () => true, env, clock: () => tt, id: "flaky" });
+    await live.beat(); tt += 10_000; await live.beat();
+    const solo = live.share();
+    const off = createSecPresence({ store: down, enabled: () => true, env, clock: () => tt, id: "never" });
+    await off.beat();
+    ok(off.share() === 2 && createSecPresence({ store, enabled: () => false, env, clock: () => tt }).share() === 8,
+      `a process the store has never answered takes what is left under ten (${off.share()}/s); without the shared store the replica count's share stands (8/s)`);
+    tt += 60_000;
+    ok(live.share() < solo && live.share() >= 1, `a process whose store stops answering takes the share of one more process (${solo}/s, then ${live.share()}/s)`);
+  }
 }
 
 globalThis.fetch = realFetch;
