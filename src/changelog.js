@@ -116,6 +116,7 @@ const ENTRIES = [
       "Operations: A seller whose document keeps ending the parser stops having its previous listing kept after three such reads or six hours, and its entry reads as the seller's failed read.",
       "Operations: Reads of SEC filings share one pace across the server's processes, so a deploy's overlap stays under the SEC's rate.",
       "Operations: A crawl cycle in which no seller's documents changed no longer rebuilds the route index or the directory, so the full collections that stalled requests during crawls run less often.",
+      "Operations: The router's seller index frees each replaced listing after a crawl in which nothing changed, finds a listing again once a read error clears, and bounds the row compare inside one store.",
       "Packages: agent402-mcp 0.17.2 is published for the MCP Registry under tools.agent402/agent402, a name verified against the agent402.tools domain; the earlier name stays resolvable and is being marked deprecated with a pointer to it.",
     ],
   },

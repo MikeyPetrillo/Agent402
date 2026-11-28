@@ -183,6 +183,9 @@ Operations:
 - A crawl cycle in which no seller's documents changed no longer rebuilds
   the route index or the directory, so the full collections that stalled
   requests during crawls run less often.
+- The router's seller index frees each replaced listing after a crawl in
+  which nothing changed, finds a listing again once a read error clears, and
+  bounds the row compare inside one store.
 Packages:
 - agent402-mcp 0.17.2 is published for the MCP Registry under
   tools.agent402/agent402, a name verified against the agent402.tools
