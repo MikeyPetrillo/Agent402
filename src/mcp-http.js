@@ -127,7 +127,7 @@ import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled, creditsKeyQualifier, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
-import { connectorNextStep, waitInWords } from "./next-step-copy.js";
+import { connectorNextStep, waitInWords, freeModeServer } from "./next-step-copy.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
@@ -2084,13 +2084,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         const toolBudget = mcpLimiter.check(ip);
         if (toolBudget.limited) {
-          const limitText = `Free-tier rate limit reached (${RATE_LIMIT_WORDS}); it resets in ${waitInWords(toolBudget.retryAfterSeconds)}. ${connectorNextStep(baseUrl, { limited: true })}`;
+          const limitText = [`Free-tier rate limit reached (${RATE_LIMIT_WORDS}); it resets in ${waitInWords(toolBudget.retryAfterSeconds)}.`, connectorNextStep(baseUrl, { limited: true })].filter(Boolean).join(" ");
           // A free tool at its limit offers its own x402 challenge (the HTTP
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
           const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal, { reuse: true });
           return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt`, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
-            || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
+            // A FREE_MODE server takes no payment: the limit's own words stand alone.
+            || { content: [{ type: "text", text: freeModeServer() ? limitText : `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }
         // Flagship tools called by name: args IS the params (no envelope).
         // call_tool path: accept params as object, JSON string, or flattened.

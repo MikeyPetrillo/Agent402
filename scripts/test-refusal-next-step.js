@@ -37,8 +37,8 @@ const B = "https://agent402.test";
   await ok(waitInWords(720) === "about 12 minutes (720 seconds)" && waitInWords(3540) === "about 59 minutes (3540 seconds)", `a longer wait reads in minutes and keeps the seconds (${waitInWords(720)})`);
   await ok(waitInWords(3600) === "about 1 hour (3600 seconds)", `an hour reads as one (${waitInWords(3600)})`);
   for (const limited of [false, true]) {
-    const off = connectorNextStep(B, { limited, connector: false });
-    const on = connectorNextStep(B, { limited, connector: true });
+    const off = connectorNextStep(B, { limited, connector: false, freeMode: false });
+    const on = connectorNextStep(B, { limited, connector: true, freeMode: false });
     const what = limited ? "the limit's" : "the paid refusal's";
     await ok(off.includes(`${B}${START_PHONE_PATH}`) && off.includes(`${B}${START_WALLET_PATH}`), `${what} next step with sales off names /start#phone and /start#fund (${off})`);
     await ok(!CARD_WORDS.test(off), `${what} next step with sales off says nothing about cards or credits`);
@@ -51,10 +51,19 @@ const B = "https://agent402.test";
   const refusedHere = connectorNextStep(B, { connector: true, creditsPay: false });
   await ok(!CARD_WORDS.test(refusedHere) && !refusedHere.includes("/mcp/credits") && refusedHere.includes(`${B}${START_WALLET_PATH}`), `a tool the credits connector refuses gets the wallet step, no credits clause (${refusedHere})`);
   await ok(refusedHere === connectorNextStep(B, { connector: false }), "that step is the sales-off sentence, so the two cannot drift");
-  const powOff = powLimitMessage(B, 42, { credits: false });
-  const powOn = powLimitMessage(B, 42, { credits: true });
+  const powOff = powLimitMessage(B, 42, { credits: false, freeMode: false });
+  const powOn = powLimitMessage(B, 42, { credits: true, freeMode: false });
   await ok(/resets in 42 seconds\./.test(powOff) && powOff.includes(`${B}${START_WALLET_PATH}`) && !CARD_WORDS.test(powOff), `the proof-of-work limit says when it resets and links the wallet setup, nothing about cards with sales off (${powOff})`);
   await ok(powOn.includes(`${B}/credits`) && /card/.test(powOn), `with sales on it also names a credits key (${powOn})`);
+  // A FREE_MODE server takes no payment: the limit says the limit and when it
+  // resets, and points to no wallet, card or connector; a paid refusal there
+  // is unchanged.
+  for (const connector of [false, true]) {
+    await ok(connectorNextStep(B, { limited: true, connector, freeMode: true }) === "", `FREE_MODE, connector ${connector ? "on" : "off"}: the limit has no next step to buy`);
+    await ok(connectorNextStep(B, { limited: false, connector, freeMode: true }) === connectorNextStep(B, { limited: false, connector, freeMode: false }), `FREE_MODE, connector ${connector ? "on" : "off"}: the paid refusal's step is unchanged`);
+  }
+  const powFree = powLimitMessage(B, 42, { credits: true, freeMode: true });
+  await ok(powFree === "Free-tier rate limit reached for proof-of-work redemption; it resets in 42 seconds. Retry then.", `FREE_MODE: the proof-of-work limit says the limit and when it resets, nothing to buy (${powFree})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +120,8 @@ const [offSrv, onSrv] = await Promise.all([
 ]);
 
 for (const [srv, connector, label] of [[offSrv, false, "sales off"], [onSrv, true, "sales on"]]) {
-  const want = connectorNextStep(SITE, { connector });
-  const other = connectorNextStep(SITE, { connector: !connector });
+  const want = connectorNextStep(SITE, { connector, freeMode: true });
+  const other = connectorNextStep(SITE, { connector: !connector, freeMode: true });
   // A paid tool through catalog.call, and a paid flagship by its listed name.
   for (const [name, args, what] of [["catalog.call", { slug: "summarize", params: { url: "https://example.com" } }, "catalog.call summarize"], ["web.answer", { q: "What is x402?" }, "web.answer"]]) {
     const r = await call(srv, name, args);
@@ -126,11 +135,12 @@ for (const [srv, connector, label] of [[offSrv, false, "sales off"], [onSrv, tru
   const first = await call(srv, "catalog.call", { slug: "hash", params: { text: "hello world" } });
   await ok(first.json?.result && !first.json.result.isError, `${label}: the first free call runs`);
   const second = await call(srv, "catalog.call", { slug: "hash", params: { text: "hello world" } });
-  const m = /^Free-tier rate limit reached \(1 call a minute, 1000 an hour from one address\); it resets in (\d+) seconds?\. /.exec(second.text);
+  const m = /^Free-tier rate limit reached \(1 call a minute, 1000 an hour from one address\); it resets in (\d+) seconds?\.(?: |$)/.exec(second.text);
   await ok(second.json?.result?.isError === true && !!m && Number(m[1]) >= 1 && Number(m[1]) <= 60, `${label}: the limit names the calls allowed and when it resets, in seconds (${second.text.slice(0, 140)})`);
-  await ok(second.text.includes(connectorNextStep(SITE, { limited: true, connector })), `${label}: the limit carries its next step`);
+  // These boots are FREE_MODE, which takes no payment: the limit's words are the whole answer.
+  await ok(!second.text.includes(START_WALLET_PATH) && !second.text.includes(START_PHONE_PATH) && !/wallet|\/mcp\/credits|credits/i.test(second.text) && /seconds?\.$/.test(second.text.trim()), `${label}: on a FREE_MODE server the limit says the limit and when it resets, and offers nothing to buy (${second.text.slice(0, 200)})`);
   if (!connector) await ok(!CARD_WORDS.test(second.text), `${label}: the limit says nothing about cards or credits`);
-  await resolves(srv, second.text, `${label}: the free limit`);
+  await ok(pagesIn(second.text).length === 0, `${label}: the FREE_MODE limit links no page to buy from (${pagesIn(second.text).join(", ") || "none"})`);
 }
 
 // With credits on, a tool the credits connector refuses (a wallet-identity

@@ -16,6 +16,10 @@ export const START_PHONE_PATH = "/start#phone";
 export const START_WALLET_PATH = "/start#fund";
 export const START_APPS_PATH = "/start#apps";
 
+/** FREE_MODE=true: a self-hosted server that verifies and takes no payment
+ *  (read like src/payer.js freeModeOn, per call so a test can set it). */
+export const freeModeServer = (env = process.env) => env.FREE_MODE === "true";
+
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
@@ -38,9 +42,15 @@ export function waitInWords(retryAfterSeconds) {
  * (src/mcp-http.js derives it with creditsConnectorPays from the same checks
  * the credits gate and the connector's credits path refuse on); a tool it
  * would refuse is never offered the credits connector.
+ * `freeMode`: on a FREE_MODE server the limit's next step is empty (nothing
+ * there takes a payment), and the caller's own sentence stands alone.
  */
-export function connectorNextStep(baseUrl, { limited = false, connector = creditsConnectorOn(), creditsPay = true } = {}) {
+export function connectorNextStep(baseUrl, { limited = false, connector = creditsConnectorOn(), creditsPay = true, freeMode = freeModeServer() } = {}) {
   const b = String(baseUrl || "").replace(/\/$/, "");
+  // A FREE_MODE server takes no payment: past its free limit there is nothing
+  // to buy, so the limit's own words (the limit and when it resets) are the
+  // whole answer.
+  if (freeMode && limited) return "";
   if (connector && limited) {
     return `Free tools on a phone: ${b}${START_PHONE_PATH}; most paid tools also run from a phone through ${b}${CREDITS_CONNECTOR_PATH}, which pays from prepaid credits bought by card after an email sign-in (${b}${START_APPS_PATH}).`;
   }
@@ -57,8 +67,9 @@ export function connectorNextStep(baseUrl, { limited = false, connector = credit
  * limit resets and how to be served before then. A credits key is named only
  * while credits are on sale.
  */
-export function powLimitMessage(baseUrl, retryAfterSeconds, { credits = creditsSalesEnabled() } = {}) {
+export function powLimitMessage(baseUrl, retryAfterSeconds, { credits = creditsSalesEnabled(), freeMode = freeModeServer() } = {}) {
   const b = String(baseUrl || "").replace(/\/$/, "");
+  if (freeMode) return `Free-tier rate limit reached for proof-of-work redemption; it resets in ${waitInWords(retryAfterSeconds)}. Retry then.`;
   const pay = credits
     ? `pay per call in USDC via x402 (${b}${START_WALLET_PATH}) or with a prepaid credits key bought by card (${b}/credits)`
     : `pay per call in USDC via x402 (${b}${START_WALLET_PATH})`;
