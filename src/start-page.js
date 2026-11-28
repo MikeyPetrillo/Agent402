@@ -59,6 +59,10 @@ export const CONNECTOR_MENU_STEP = "In the sidebar, open Customize, then Connect
  * Otherwise the step is the hosted connector, whose tools without a wallet are
  * the free ones; a wallet pays through the npm server (walletSetup).
  */
+// Claude's Team and Enterprise plans: an Owner adds a custom connector for the
+// organization (Organization settings, Connectors), and members connect to it.
+export const START_TEAM_NOTE = "On Team and Enterprise plans, an Owner adds the connector.";
+
 export function startApps(baseUrl, { connector = false } = {}) {
   const install = mcpInstallHints(baseUrl);
   const credits = `${baseUrl}${CREDITS_CONNECTOR_PATH}`;
@@ -110,7 +114,8 @@ export function walletSetup(baseUrl) {
 export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
-  const description = "Add Agent402 to Claude desktop, Claude Code, Cursor or Claude on your phone. See what runs with no wallet, then pay by card or with USDC on Base.";
+  // The card clause reads the same switches as the body's card offers.
+  const description = `Add Agent402 to Claude desktop, Claude Code, Cursor or Claude on your phone. See what runs with no wallet, then pay ${storefront || credits ? "by card or " : ""}with USDC on Base.`;
   const tools = Object.values(catalog || {}).filter((d) => d && d.slug);
   const powCount = tools.filter(isComputePayable).length;
   const reportRange = storefront ? cardReportPriceRange(HUMAN_PRODUCTS) : null;
@@ -144,9 +149,10 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const appCards = apps.map((a) => card(a, "margin:0")).join("\n      ");
   const walletCards = wallet.apps.map((a) => card(a)).join("\n      ");
 
-  const appsLead = viaCredits
+  const appsLead = (viaCredits
     ? `<p class="ml-measure" ${P}>This address pays for most paid tools from a credits balance you buy by card: the app asks you to sign in with your email, and you set a daily cap. Free tools run there too. To use only the free tools, give the app ${code(hosted)} instead.</p>`
-    : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`;
+    : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`)
+    .replace("</p>", ` ${esc(START_TEAM_NOTE)}</p>`);
 
   const noWallet = [
     powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a> or <a href="/recipes" ${A}>things you can do</a>.</li>` : "",

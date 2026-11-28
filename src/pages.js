@@ -56,6 +56,7 @@ import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
 import { CARD_ART_VERSION } from "./brand-mark.js";
 import { SETTLE_FIRST_SENTENCE, settleFirstClause } from "./settle-first-copy.js";
+import { publicIndexNoSaleText } from "./facilitator-public-index.js";
 import { ATTRIBUTION_TAILS } from "./data-attribution.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
@@ -909,9 +910,14 @@ export const FAQ_FREE_Q = "Is it free?";
 export const FAQ_CRYPTO_Q = "Do I need crypto?";
 export const FAQ_PHONE_Q = "Does it work on my phone?";
 export const FAQ_DATA_Q = "Is my data safe?";
-export const FAQ_DATA_SENTENCES = ["Data you send to a tool is processed in memory and not stored", "We do not sell or share data with anyone for advertising or any other purpose."];
+// Read per render: the no-sale sentence is /privacy's own, scoped while the
+// facilitator public index disclosure renders there.
+export function faqDataSentences() {
+  return ["Data you send to a tool is processed in memory and not stored", "Tools that read an outside source send it what the lookup needs", publicIndexNoSaleText()];
+}
 export function faqItems({ creditsOnSale = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const viaCredits = Boolean(creditsOnSale && connector);
+  const data = faqDataSentences();
   const byCard = [storefront ? 'finished reports at <a href="/reports">/reports</a>' : "", creditsOnSale ? 'prepaid credits at <a href="/credits">/credits</a>' : ""].filter(Boolean).join(" and ");
   return [
   { g: "paying", q: FAQ_FREE_Q, a: `Most pure-CPU tools are: they accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set with no wallet and no signup (rate-limited). Every other tool is priced per call, at the price listed in <a href="/pricing">/pricing</a>.` },
@@ -929,7 +935,7 @@ export function faqItems({ creditsOnSale = creditsSalesEnabled(), connector = cr
   { g: "protocols", q: "What is MPP, and does Agent402 support it?", a: 'Yes. MPP (Machine Payments Protocol) carries the same pay-per-call handshake in HTTP&rsquo;s standard auth headers. Every paid endpoint accepts its evm method, and most also accept its tempo method (memory and the long-running report routes take evm only), at the same URL and price. Header by header: <a href="/what-is-x402#compare">the comparison table</a>; how a payment works here: <a href="/what-is-mpp">MPP on Agent402</a>.' },
   { g: "models", q: "Does using this spend my AI tokens?", a: "No. You never hand us a model key; a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser). The model-backed ones are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the router's judgment model, and the image, speech, transcription, embedding and AI-answer tools." },
   { g: "models", q: "Is there an OpenAI-compatible endpoint?", a: 'Yes. Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> (with <code>/v1/metered/messages</code> and <code>/v1/metered/responses</code> twins), paid per call in USDC over x402 or MPP with no API key. How each request is quoted: <a href="/guides/x402-in-5-minutes">the five-minute guide</a>; flat tiers, embeddings and images: <a href="/pricing">/pricing</a>.' },
-  { g: "models", q: FAQ_DATA_Q, a: `${FAQ_DATA_SENTENCES[0]}, except in the cases <a href="/privacy">/privacy</a> lists: the memory tools store data by design (wallet-keyed, owner-deletable, optional TTL), and there are short-lived response caches and decisions bought on /api/decide (30 days). ${FAQ_DATA_SENTENCES[1]}` },
+  { g: "models", q: FAQ_DATA_Q, a: `${data[0]}, except in the cases <a href="/privacy">/privacy</a> lists: the memory tools store data by design (wallet-keyed, owner-deletable, optional TTL), and there are short-lived response caches and decisions bought on /api/decide (30 days). ${data[1]}, and a model-backed tool forwards your input to the AI model provider that answers it; <a href="/privacy#third-parties">Third parties</a> names them. ${data[2]}` },
   { g: "sellers", q: "Can I find tools on other x402 sellers from here?", a: `Yes. <code>POST /api/route</code> ranks tools across every x402 seller we have crawled, found in public discovery registries re-read ${discoveryIntervalLabel()} and re-probed ${crawlIntervalLabel()}; a seller whose latest crawl failed is skipped until a crawl succeeds (its last five crawls set its health score), and a new one starts routable. Browse <a href="/marketplace">/marketplace</a> or page through <a href="/api/index">/api/index</a> (<code>?seller=&lt;host&gt;</code> for one origin), both free.` },
   { g: "sellers", q: "How do I list my own API?", a: 'For free: your origin is auto-discovered from public x402 discovery registries once it is live, or paste it on <a href="/sell">/sell</a> (or call <code>POST /api/index/register</code>) for an immediate probe. Settlement lands straight in your wallet, with 0% take.' },
   { g: "sellers", q: "How do I see which x402 sellers are most used?", a: `<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the head of the on-chain ranking of x402 sellers by Base USDC settled volume: 25 rows by default, up to 50 with <code>?top=N</code>, and <code>totalSellers</code> for the full count. It refreshes ${leaderboardCadence()}, leaves Agent402 out unless you add <code>?include=all</code>, and <a href="/leaderboard">/leaderboard</a> shows how it is built.` },

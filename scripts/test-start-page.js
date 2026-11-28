@@ -32,7 +32,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { bootServer } from "./lib/boot-server.js";
 
-const { startPage, startApps, START_PATH, START_FIRST_PROMPT, START_PHONE_ID } = await import("../src/start-page.js");
+const { startPage, startApps, START_PATH, START_FIRST_PROMPT, START_PHONE_ID, START_TEAM_NOTE } = await import("../src/start-page.js");
 const { FREE_TIER_SLUGS } = await import("../src/free-tier.js");
 const { createHash } = await import("node:crypto");
 const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT, BASE_NO_GAS_PLAIN } = await import("../src/base-no-gas.js");
@@ -76,6 +76,13 @@ ok(apps.map((a) => a.name).join() === "On your phone,Claude desktop,Cursor,Claud
   ok(phoneOn?.copy === CONNECTOR_URL && cardOf(onHtml).includes(CONNECTOR_URL), "credits and the sign-in on: the phone card pastes the credits connector address");
   ok(phoneOff && !/card|credit/i.test(`${phoneOff.step} ${phoneOff.after} ${phoneOff.then} ${phoneOff.promptLabel}`) && /free tools run from your phone with no wallet/.test(phoneOff.then) && /paid tools run from a computer with a wallet/.test(phoneOff.then), "sales off: the phone steps say what runs with no wallet and offer no card or credits");
   ok(phoneOn && /A card pays for most paid tools/.test(phoneOn.then) && /sign in with your email/.test(phoneOn.after) && cardOf(onHtml).includes("A card pays for most paid tools"), "credits and the sign-in on: the phone steps say a card pays for paid tools after an email sign-in");
+  ok([offHtml, onHtml].every((h) => plain(h).includes(START_TEAM_NOTE)) && readFileSync(join(ROOT, "wiki/MCP-Connector.md"), "utf8").includes("an Owner adds it under Organization settings → Connectors → Add → Custom → *Web*"), "both switch states: /start says an Owner adds the connector on Team and Enterprise plans, and the wiki gives that path");
+  // The meta description offers card payment only while a card offer is on the page.
+  const metaOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  const storeOnlyHtml = startPage(ORIGIN, catalog, { credits: false, connector: false, storefront: true });
+  const creditsNoConnHtml = startPage(ORIGIN, catalog, { credits: true, connector: false, storefront: false });
+  ok(metaOf(offHtml) && !/card/i.test(metaOf(offHtml)) && /with USDC on Base/.test(metaOf(offHtml)), `every switch off: the meta description offers no card (${metaOf(offHtml)})`);
+  ok([onHtml, storeOnlyHtml, creditsNoConnHtml].every((h) => /pay by card or with USDC on Base/.test(metaOf(h))), "the card storefront or credits on sale: the meta description offers card payment");
   ok(phoneOff && /claude\.ai/.test(phoneOff.step) && /Add custom connector/.test(phoneOff.step) && /Claude app/.test(phoneOff.then), "the phone steps add the connector in the browser and use it in the Claude app");
   ok(FREE_TIER_SLUGS.has(START_FIRST_PROMPT.slug) && isComputePayable({ slug: START_FIRST_PROMPT.slug, route: "POST /api/x", price: "$0.001" }), `the first prompt's tool is on the free list (${START_FIRST_PROMPT.slug})`);
   ok(phoneOff?.prompt === START_FIRST_PROMPT.text && cardOf(offHtml).includes(START_FIRST_PROMPT.text) && cardOf(onHtml).includes(START_FIRST_PROMPT.text), "the phone card ends on the first prompt, in both states");
@@ -163,7 +170,8 @@ ok(allOn.includes(BASE_NO_GAS_PLAIN) && allOff.includes(BASE_NO_GAS_PLAIN) && !a
 
 // ---- /faq: the newcomer's four questions ---------------------------------------
 {
-  const { faqItems, faqPage, FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q, FAQ_DATA_SENTENCES } = await import("../src/pages.js");
+  const { faqItems, faqPage, FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q, faqDataSentences } = await import("../src/pages.js");
+  const { setPublicIndexOfferedChains } = await import("../src/facilitator-public-index.js");
   const { privacyPage } = await import("../src/privacy.js");
   const off = faqItems({ creditsOnSale: false, connector: false, storefront: false });
   const on = faqItems({ creditsOnSale: true, connector: true, storefront: true });
@@ -175,8 +183,22 @@ ok(allOn.includes(BASE_NO_GAS_PLAIN) && allOff.includes(BASE_NO_GAS_PLAIN) && !a
   ok(/most paid tools by card from a credits balance/.test(a(on, FAQ_PHONE_Q)) && !/card|credit/i.test(a(salesOnly, FAQ_PHONE_Q)) && /Paid tools run from a computer with a wallet/.test(a(salesOnly, FAQ_PHONE_Q)), "the phone answer says a card pays only with credits on sale and the connector sign-in on");
   ok([off, on].every((items) => a(items, FAQ_PHONE_Q).includes(`href="${START_PATH}#${START_PHONE_ID}"`)) && startPage(ORIGIN, catalog).includes(`id="${START_PHONE_ID}"`), "the phone answer links the phone card on /start");
   ok(!/\$\d/.test(a(off, FAQ_FREE_Q) + a(off, FAQ_CRYPTO_Q) + a(off, FAQ_PHONE_Q) + a(off, FAQ_DATA_Q)) && a(off, FAQ_FREE_Q).includes('href="/pricing"'), "the four answers type no price; the free answer links /pricing");
-  const privacy = plain(privacyPage(ORIGIN));
-  ok(FAQ_DATA_SENTENCES.length === 2 && FAQ_DATA_SENTENCES.every((s) => privacy.includes(s) && a(off, FAQ_DATA_Q).includes(s)) && a(off, FAQ_DATA_Q).includes('href="/privacy"'), "the data answer links /privacy and its sentences are on /privacy word for word");
+  // Both states of the facilitator public index disclosure: /privacy scopes its
+  // no-sale sentence while the disclosure renders, and the FAQ says the same.
+  const prevChains = process.env.FACILITATOR_PUBLIC_INDEX_CHAINS;
+  for (const chains of ["", "robinhood"]) {
+    if (chains) process.env.FACILITATOR_PUBLIC_INDEX_CHAINS = chains; else delete process.env.FACILITATOR_PUBLIC_INDEX_CHAINS;
+    setPublicIndexOfferedChains(chains ? [chains] : []);
+    const privacy = plain(privacyPage(ORIGIN));
+    const answer = a(faqItems({ creditsOnSale: false, connector: false, storefront: false }), FAQ_DATA_Q);
+    const sentences = faqDataSentences();
+    const label = chains ? "public index listed" : "public index unset";
+    ok(sentences.length === 3 && sentences.every((s) => privacy.includes(s) && answer.includes(s)) && answer.includes('href="/privacy"'), `${label}: the data answer links /privacy and its sentences are on /privacy word for word`);
+    ok(chains ? /beyond what this list describes/.test(answer) : /or any other purpose\./.test(answer), `${label}: the data answer's no-sale sentence is /privacy's for that state`);
+    ok(/AI model provider/.test(answer) && /forwarded to the upstream model\s+provider/.test(privacy) && answer.includes('href="/privacy#third-parties"'), `${label}: the data answer says model-backed tools forward input to the model provider, as /privacy does`);
+  }
+  if (prevChains === undefined) delete process.env.FACILITATOR_PUBLIC_INDEX_CHAINS; else process.env.FACILITATOR_PUBLIC_INDEX_CHAINS = prevChains;
+  setPublicIndexOfferedChains([]);
   // The structured data and the page a reader sees carry the same answers.
   const html = faqPage(ORIGIN);
   const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => JSON.parse(m.replace(/^<script[^>]*>|<\/script>$/g, ""))).flat().find((j) => j["@type"] === "FAQPage");

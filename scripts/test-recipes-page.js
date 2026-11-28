@@ -78,6 +78,7 @@ const mainText = (html) => pageText(String(html).replace(/^[\s\S]*?<main\b/i, "<
   // The paid line reads the switch.
   const on = recipesPage(ORIGIN, catalogOf(), { connector: true });
   ok(!/\bcards?\b(?!\.png)|credit/i.test(mainText(off)) && off.includes('href="/start#fund"'), "credits connector off: nothing about cards or credits, the wallet setup linked");
+  ok(/paid ones run from a computer with a wallet/.test(mainText(off)) && !/computer/.test(mainText(on)), "credits connector off: paid recipes run from a computer with a wallet, as /start says (the phone app cannot pay from one)");
   ok(/credits/i.test(mainText(on)) && on.includes('href="/start#apps"') && !on.includes('href="/start#fund"'), "credits connector on: the connector sign-in linked");
   for (const h of [off, on]) {
     const t = mainText(h);

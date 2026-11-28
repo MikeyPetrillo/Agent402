@@ -66,11 +66,11 @@ const MONO = 'style="font-family:var(--font-mono);font-size:var(--fs-sm);color:v
 export function recipesPage(baseUrl, catalog = {}, { connector = creditsConnectorOn() } = {}) {
   const canonical = `${baseUrl}${RECIPES_PATH}`;
   const title = "Things you can do with Agent402";
-  const description = "Prompts to copy into Claude or any app with Agent402 added: research a topic, summarize a link, read text in an image, make an image or a QR code, and more.";
+  const description = "Prompts to copy into Claude or any app with Agent402 added: research a topic, summarize a link, read text in an image, make an image or a QR code.";
   const recipes = servedRecipes(baseUrl, catalog);
   const paidLine = connector
     ? `paid ones are paid from prepaid credits after an email sign-in (<a href="${START_APPS_PATH}" ${A}>connect your app</a>).`
-    : `paid ones are paid from a wallet (<a href="${START_WALLET_PATH}" ${A}>set one up</a>).`;
+    : `paid ones run from a computer with a wallet (<a href="${START_WALLET_PATH}" ${A}>set one up</a>).`;
   const card = (r) => {
     const access = r.free
       ? `<span ${MONO}>Free</span>`
