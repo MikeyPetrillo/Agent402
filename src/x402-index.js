@@ -3165,6 +3165,12 @@ export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof f
 function noteCrawlWalk(name, docRef, ms) {
   if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(docRef)}: longest=${Math.round(ms)}ms`);
 }
+// The slice a laned walk is cut at. A suite that counts slices sets it to 0
+// (every step its own slice): at 10 ms the count depended on whether one
+// document's walk happened to run past 10 ms on that machine, that run.
+let crawlWalkSliceMs = CRAWL_SLICE_MS;
+/** Test hook: the laned walks' slice length in ms (0 = one step per slice); returns the earlier one. */
+export function __setCrawlWalkSliceForTest(ms) { const was = crawlWalkSliceMs; crawlWalkSliceMs = Number.isFinite(ms) && ms >= 0 ? ms : CRAWL_SLICE_MS; return was; }
 /** The same for a walk written as steps: run in the crawl lane a slice at a
  *  time, its longest slice read against the threshold. */
 async function crawlWalkLaned(name, from, gen) {
@@ -3173,7 +3179,7 @@ async function crawlWalkLaned(name, from, gen) {
   // A slice is cut at CRAWL_SLICE_MS, but one step of the walk may run past
   // it: a long slice is recorded under the walk's name, as a span is, so the
   // [loop-lag] line names it (noteTurn keeps only stretches worth naming).
-  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
+  try { return await runCrawlLaneAsync(gen, crawlWalkSliceMs, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
   finally { noteCrawlWalk(name, from, longest); }
 }
 // A crawl's synchronous stretch, timed under its name for the [loop-lag]
