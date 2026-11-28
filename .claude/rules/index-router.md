@@ -61,17 +61,28 @@ Loaded when an index, discovery, router or buyer file is read.
 - **Document parse:** a fetched document of 256 KB or more (`OFF_LOOP_MIN_CHARS`, `src/crawl-parse.js`)
   is parsed in a child process (`src/crawl-parse-child.js`) and rebuilt on the main thread a piece per
   crawl-lane turn; the value and the error for invalid JSON are JSON.parse's own, and a shorter document
-  is parsed in place in its lane turn. When the child cannot start, answers nothing, dies or will not
-  take a document, the document is parsed in place and `[x402-index] crawl parse <origin hash> <file>
-  <size class>: parsed on the main thread (<reason>)` is logged; three parser failures in a row leave
-  it alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
+  is parsed in place in its lane turn. When the child cannot start, answers nothing (the step timeout),
+  is paused or stopped, the document is parsed in place and `[x402-index] crawl parse <origin hash>
+  <file> <size class>: parsed on the main thread (<reason>)` is logged; three such failures in a row
+  leave it alone for ten minutes. `CRAWL_PARSE_WORKER=off` keeps every parse in place and switches
   nothing else: the lane-step walks below stay. The parser is a process, never a thread: a parser
   that runs out of memory inside JSON.parse ends its process, and no reading of the text bounds the
   tree for every shape (an integer-like key reserves a slot per index below it). Its own heap limit
   (`heapMb`, 512, its `--max-old-space-size`) is the bound: a document whose tree passes it ends the
-  child alone (`parser exited (SIGABRT) holding the document`, not counted toward the pause) and is
-  parsed in place as before. The child first measures the text (`estimateTreeBytes`) and declines a
-  document that plainly will not fit (half the limit); that saves a parse and bounds nothing. It gets
+  child alone (killed by a signal while holding it) and is NOT parsed in place (`KEEP_PREVIOUS`,
+  "skip and keep previous"): `parseInCrawlLane` throws `KeptPrevious`, every catch between it and the
+  crawl's top passes it on as it does a LandingHeld, and the seller's entry stays byte for byte as the
+  last read left it (an origin with none stays unlisted); `crawlSeller` answers `{ keptPrevious }`,
+  drops the validators, counts no read, and the scheduled turn passes under the word `parser-ended`
+  in the cycle's `skipped`. A registry pass ends the same way (its last pass's rows stand; the word is
+  in its status `error` and `keptPrevious`). One line: `crawl parse <origin hash> <file> <size class>:
+  not parsed, last read kept (<word>)`. The child first measures the text (`estimateTreeBytes`) and
+  declines a document that plainly will not fit (half the limit); a declined document under
+  `DECLINED_IN_PLACE_MAX_CHARS` (16 M characters: every seller document) is parsed in place, a longer
+  one is not (`too-large-to-parse`: the costliest declined shapes take about 50 bytes of heap per
+  character in place, about 3 GB for a 64 MB registry list). Neither counts toward the pause. A document
+  that ended or was declined is known by the hash of its text (taken a chunk per turn) and answered the
+  same way with no child started until its text changes or a day passes (`recallMs`). It gets
   the helper allowlist environment (`childEnv`: no key, no store address, no NODE_OPTIONS) and two
   flags of its own, takes the text a chunk per lane turn, gives a finished document's memory back at
   once, ends 30 seconds after its queue empties (a start is a fork of the server) and at the start of

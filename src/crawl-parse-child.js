@@ -14,13 +14,15 @@
 // a slot for every index below it), so nothing here depends on one: this
 // process has its own heap limit (the --max-old-space-size the server starts
 // it with), and when a document's tree passes it, this process ends and the
-// server parses the document itself, as it did before there was a parser.
+// server does not parse that document at all: the crawl keeps what it held
+// from the last read (src/crawl-parse.js KEEP_PREVIOUS).
 // On Linux it also marks itself the first process the kernel ends when the
 // machine is out of memory, ahead of the server.
 //
 // The estimate below is kept as a courtesy, not a bound: a document whose
 // tree plainly will not fit (`maxTreeBytes`) is answered "unsplit" unparsed,
-// which saves starting a parse that would end this process.
+// which saves starting a parse that would end this process (the server parses
+// a short one itself and keeps its last read of a long one).
 //
 // The text arrives in chunks ("text") and is joined here; a piece travels
 // back as JSON text, which the server parses at JSON.parse's own speed

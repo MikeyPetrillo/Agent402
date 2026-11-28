@@ -166,6 +166,7 @@ if (process.env.CRAWL_CONTAINED_STAND_IN === "1") {
     let outcome, equal = null;
     if (threw) outcome = `threw ${threw.name}`;
     else if (r.ok) { outcome = "rebuilt"; equal = sameValue(r.value, JSON.parse(text)); }
+    else if (r.keep) outcome = after.died > before.died ? `parser ended, not parsed (${r.keep})` : `not parsed (${r.keep})`;
     else {
       outcome = after.died > before.died ? "parser ended, handed back" : /^unsplit/.test(r.reason) ? "declined, handed back" : `handed back (${r.reason})`;
       // The in-place parse the crawl then makes, as it did before there was a parser.
@@ -187,8 +188,12 @@ if (process.env.CRAWL_CONTAINED_STAND_IN === "1") {
   }
   out({ worstTurn: Math.round(worstTurn), stats: crawlParseStats() });
 
-  // ---- the review's documents through the index's own crawl ----
+  // ---- documents through the index's own crawl ----
+  // A document that ends the parser (or that it declines and is too long to
+  // parse here) is not parsed in this process: the crawl keeps what it held.
+  // JSON.parse is watched for any text of a document's size while it runs.
   {
+    __setCrawlParseForTest(null); // nothing remembered from the documents above
     Object.assign(process.env, { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", ROUTER_WORKERS: "0", SELLER_PROBE_DAILY_BUDGET: "off" });
     const quietLog = console.log, kept = [];
     console.log = (...a) => { if (String(a[0]).startsWith("@@")) quietLog(...a); else kept.push(String(a[0])); };
@@ -204,20 +209,105 @@ if (process.env.CRAWL_CONTAINED_STAND_IN === "1") {
     });
     idx.__setProbeFetchForTest(async () => { await new Promise((r) => setTimeout(r, 2)); return new Response("{}", { status: 404 }); });
     const cache = idx._cacheForTests();
+    const realParse = JSON.parse, bigParses = [];
+    JSON.parse = function watched(text, reviver) { if (typeof text === "string" && text.length >= 2 * MB) bigParses.push(text.length); return realParse.call(JSON, text, reviver); };
     const stored = (e) => JSON.stringify({ tools: e?.tools, error: e?.error, path: e?.discoveryPath, total: e?.toolsTotal }, (k, v) => (/(At|Until)$/.test(k) && typeof v === "number" ? 0 : v));
-    for (const [name, text] of [["openapi head, index chains", FIXED["openapi head, index chains"](SELLER_CAP - 64)], ["flat rows of one index key", `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"paths":{"/a":{"get":{"summary":"A","x-payment-info":{"price":"0.01","currency":"USDC","network":"base"}}}},"x":${FIXED["key 34"](SELLER_CAP - 300)}}`]]) {
-      const A = `https://reviewed-${name.length}-a.example`, B = `https://reviewed-${name.length}-b.example`;
-      served.set(A, { "/openapi.json": text }); served.set(B, { "/openapi.json": text });
+    const whole = (o) => (cache.has(o) ? JSON.stringify(cache.get(o)) : null);
+    const hostile = FIXED["openapi head, index chains"](SELLER_CAP - 64);
+    const variant = (i) => hostile.replace('"title":"t"', `"title":"${String.fromCharCode(97 + i)}"`); // same length, another text
+    const manifest = (o) => JSON.stringify({ x402Version: 2, name: "Stub", homepage: o, resources: [{ resource: `${o}/api/tool0`, description: "Tool 0.", accepts: [{ scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", maxAmountRequired: "10000", payTo: "0x00000000000000000000000000000000000000aa" }] }] });
+    const honestDoc = denseOpenapi(2 * MB);
+    /** One crawl: what it answered, what moved, the lines it logged, the large parses it made here. */
+    const crawl = async (o, scheduled = false) => {
       const before = crawlParseStats();
-      kept.length = 0;
-      await idx.__crawlSellerForTest(A, {});
+      kept.length = 0; bigParses.length = 0;
+      const answer = scheduled ? await idx.__crawlScheduledForTest(o) : await idx.__crawlSellerForTest(o, {});
       const after = crawlParseStats();
-      const line = kept.find((l) => /crawl parse .*parsed on the main thread/.test(l)) || null;
-      process.env.CRAWL_PARSE_WORKER = "off";
-      await idx.__crawlSellerForTest(B, {});
-      delete process.env.CRAWL_PARSE_WORKER;
-      out({ crawl: { name, bytes: Buffer.byteLength(text), sameAsInPlace: stored(cache.get(A)).replaceAll(A, "O") === stored(cache.get(B)).replaceAll(B, "O"), tools: cache.get(A)?.tools?.length ?? null, error: cache.get(A)?.error || null, rebuilt: after.offLoop > before.offLoop, handedBack: after.fallbacks > before.fallbacks, line } });
+      return { answer, starts: after.starts - before.starts, died: after.died - before.died, recalled: after.recalled - before.recalled, offLoop: after.offLoop - before.offLoop, lines: [...kept], bigParses: [...bigParses] };
+    };
+    const sellers = {};
+    // A seller read before through its OpenAPI fallback, and one with a manifest.
+    for (const [name, docs] of [["fallback", (o) => ({ "/openapi.json": honestDoc })], ["manifest", (o) => ({ "/.well-known/x402": manifest(o), "/openapi.json": honestDoc })]]) {
+      const o = `https://kept-${name}.example`;
+      served.set(o, docs(o));
+      const first = await crawl(o);
+      const prevEntry = whole(o);
+      served.set(o, { ...docs(o), "/openapi.json": variant(name === "fallback" ? 0 : 1) });
+      const second = await crawl(o);
+      sellers[name] = { tools: cache.get(o)?.tools?.length ?? 0, firstOffLoop: first.offLoop, keptByte: whole(o) === prevEntry, ...second };
     }
+    // A seller never read before.
+    {
+      const o = "https://kept-new.example";
+      served.set(o, { "/openapi.json": variant(2) });
+      sellers.unread = { listed: cache.has(o), ...(await crawl(o)) };
+      sellers.unread.listedAfter = cache.has(o);
+    }
+    // The same document again: answered from memory, no parser started; its
+    // scheduled turn passes under the reason word. A changed one is tried again.
+    {
+      const o = "https://kept-fallback.example";
+      const prevEntry = whole(o);
+      const again = await crawl(o, true);
+      served.set(o, { "/openapi.json": variant(3) });
+      const changed = await crawl(o);
+      sellers.again = { ...again, keptByte: whole(o) === prevEntry };
+      sellers.changed = { ...changed, keptByte: whole(o) === prevEntry };
+    }
+    // Five hostile documents in a row (five sellers), then honest ones.
+    {
+      const runs = [];
+      for (let i = 0; i < 5; i++) { const o = `https://hostile-${i}.example`; served.set(o, { "/openapi.json": variant(10 + i) }); runs.push(await crawl(o)); }
+      const o = "https://after-hostile.example";
+      served.set(o, { "/openapi.json": honestDoc });
+      const after = await crawl(o);
+      sellers.five = { kept: runs.filter((r) => r.answer?.keptPrevious === "parser-ended" && r.died === 1).length, bigParses: runs.reduce((n, r) => n + r.bigParses.length, 0), paused: crawlParseStats().paused, honestOffLoop: after.offLoop, honestTools: cache.get(o)?.tools?.length ?? 0 };
+    }
+    // Honest documents of every size measured: stored as the in-place path stores them.
+    const honest = [];
+    for (const [name, docs] of [
+      ...[1, 4, 8, 12].map((mb) => [`dense OpenAPI ${mb} MB`, () => ({ "/openapi.json": denseOpenapi(mb * MB - 64) })]),
+      ["manifest and a dense OpenAPI of 12 MB", (o) => ({ "/.well-known/x402": manifest(o), "/openapi.json": denseOpenapi(SELLER_CAP - 64) })],
+      ["flat rows of one index key", () => ({ "/openapi.json": `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"paths":{"/a":{"get":{"summary":"A","x-payment-info":{"price":"0.01","currency":"USDC","network":"base"}}}},"x":${FIXED["key 34"](SELLER_CAP - 300)}}` })],
+    ]) {
+      const A = `https://honest-${honest.length}-a.example`, B = `https://honest-${honest.length}-b.example`;
+      served.set(A, docs(A)); served.set(B, docs(B));
+      const a = await crawl(A);
+      process.env.CRAWL_PARSE_WORKER = "off";
+      bigParses.length = 0;
+      await idx.__crawlSellerForTest(B, {});
+      const inPlaceSeen = bigParses.length;
+      delete process.env.CRAWL_PARSE_WORKER;
+      honest.push({ name, offLoop: a.offLoop, inPlaceSeen, aBigParses: a.bigParses.length, kept: Boolean(a.answer?.keptPrevious), tools: cache.get(A)?.tools?.length ?? 0, same: stored(cache.get(A)).replaceAll(A, "O") === stored(cache.get(B)).replaceAll(B, "O") });
+      served.delete(A); served.delete(B);
+    }
+    // A registry's list: a hostile one keeps the rows of its last pass.
+    const registries = [];
+    {
+      const source = { name: "contained registry", url: "https://registry-contained.example/discovery/resources", synthesizeTools: true };
+      let body = null;
+      idx.__setDiscoveryBodyFetchForTest(async () => ({ html: body }));
+      const rows = () => { const s = idx.__discoveryStateForTest(); return JSON.stringify([[...s.bazaarTools].sort(), [...s.discoveredSeeds].sort()]); };
+      body = registryList(2 * MB);
+      await idx.__discoverSourceForTest(source);
+      const firstRows = rows(), firstStatus = idx.__discoveryStateForTest().status.get(source.name);
+      for (const [name, text] of [["index rows at 64 MB", `{"x402Version":2,"resources":${FIXED["key 34"](REGISTRY_CAP - 64 - 40)}}`], ["index chains at 12 MB", `{"x402Version":2,"resources":${rep(chain("34", 8), SELLER_CAP - 64)}}`]]) {
+        body = text;
+        const before = crawlParseStats();
+        kept.length = 0; bigParses.length = 0;
+        await idx.__discoverSourceForTest(source);
+        const after = crawlParseStats();
+        const st = idx.__discoveryStateForTest().status.get(source.name);
+        registries.push({ name, firstResources: firstStatus.resources, firstRowsNonEmpty: firstRows.length > 100, rowsKept: rows() === firstRows, word: st.keptPrevious || null, error: st.error, died: after.died - before.died, bigParses: bigParses.length, lines: [...kept] });
+      }
+      // An honest list after them is folded as before.
+      body = registryList(3 * MB);
+      await idx.__discoverSourceForTest(source);
+      registries.push({ name: "honest after", rowsChanged: rows() !== firstRows, error: idx.__discoveryStateForTest().status.get(source.name).error });
+      idx.__setDiscoveryBodyFetchForTest(null);
+    }
+    JSON.parse = realParse;
+    out({ kept: { sellers, honest, registries, stats: crawlParseStats() } });
     idx.stopCrawler?.();
     console.log = quietLog;
   }
@@ -315,23 +405,45 @@ const search = one("search");
 console.log(`# searched ${search.shapes} shapes; the most heap per character: ${search.worst.map((w) => `${w.perChar} B (${w.name})`).join("; ")}`);
 ok(search.shapes >= 150 && search.worst[0].perChar >= 30, `control: the search found shapes that cost many times their text (${search.worst[0].perChar} bytes of heap per character at most)`);
 const by = (re) => cases.filter((c) => re.test(c.name));
-const fine = (c) => (c.outcome === "rebuilt" && c.equal === true) || (/handed back/.test(c.outcome) && c.equal !== false);
+const fine = (c) => (c.outcome === "rebuilt" && c.equal === true) || (c.outcome === "declined, handed back" && c.equal !== false) || /^(parser ended, )?not parsed \((parser-ended|too-large-to-parse)\)$/.test(c.outcome);
 const bad = cases.filter((c) => !fine(c));
-ok(cases.length >= 60 && bad.length === 0, `every document was rebuilt equal to JSON.parse's value or handed back to be parsed in place (${cases.filter((c) => c.outcome === "rebuilt").length} rebuilt, ${cases.filter((c) => c.outcome === "declined, handed back").length} declined unparsed, ${cases.filter((c) => c.outcome === "parser ended, handed back").length} ended the parser alone${bad[0] ? `; first other: ${bad[0].name}: ${bad[0].outcome}` : ""})`);
-const endedParser = cases.filter((c) => c.outcome === "parser ended, handed back");
-ok(endedParser.length >= 2, `control: some documents under the caps do end the parser, and only the parser (${endedParser.slice(0, 4).map((c) => c.name).join("; ")})`);
+ok(cases.length >= 60 && bad.length === 0, `every document was rebuilt equal to JSON.parse's value, declined and handed back to be parsed in place, or not parsed (${cases.filter((c) => c.outcome === "rebuilt").length} rebuilt, ${cases.filter((c) => c.outcome === "declined, handed back").length} declined and handed back, ${cases.filter((c) => /not parsed \(too-large/.test(c.outcome)).length} declined and not parsed, ${cases.filter((c) => /^parser ended, not parsed/.test(c.outcome)).length} ended the parser alone${bad[0] ? `; first other: ${bad[0].name}: ${bad[0].outcome}` : ""})`);
+const endedParser = cases.filter((c) => c.outcome === "parser ended, not parsed (parser-ended)");
+ok(endedParser.length >= 2, `control: some documents under the caps do end the parser, and only the parser, and are not handed back (${endedParser.slice(0, 4).map((c) => c.name).join("; ")})`);
+ok(cases.every((c) => !/@ seller cap$/.test(c.name) || !/too-large/.test(c.outcome)) && by(/@ registry cap$/).every((c) => /not parsed \(too-large-to-parse\)|rebuilt/.test(c.outcome)), "a declined document at the seller cap is still handed back to be parsed in place; a declined one at the registry cap is not parsed");
 ok(by(/@ registry cap$/).length >= 5 && by(/@ seller cap$/).length >= 50, `control: shapes were run at both caps (${by(/@ seller cap$/).length} at 12 MB, ${by(/@ registry cap$/).length} at 64 MB)`);
 for (const c of cases.filter((x) => /^honest/.test(x.name))) console.log(`# ${c.name}: ${c.outcome} (${c.wall} ms, longest turn ${c.longestTurn} ms)`);
 const honest = by(/^honest: (ordinary|dense) OpenAPI/);
 ok(honest.length === 8 && honest.every((c) => c.outcome === "rebuilt"), "an honest OpenAPI document of 1 to 12 MB, ordinary or dense, is rebuilt off the loop");
 ok(by(/^honest: registry list (8|20|36) MB/).every((c) => c.outcome === "rebuilt"), "an honest registry list of 8 to 36 MB is rebuilt off the loop");
+ok(by(/^honest: registry list 64 MB/).every((c) => c.outcome === "not parsed (too-large-to-parse)"), "a registry list of 64 MB the parser declines is not parsed here (a registry is read in pages far smaller)");
 console.log(`# longest turn of the stand-in while a document was with the parser: ${one("worstTurn")} ms (wall); parser starts ${one("stats").starts}, ended holding a document ${one("stats").died}`);
 ok(one("stats").paused === false, "a document that ends the parser does not pause it for the documents after");
 
-const crawls = records.filter((r) => r.crawl).map((r) => r.crawl);
-ok(crawls.length === 2 && crawls.every((c) => c.sameAsInPlace && !c.error && c.tools >= 1), `the review's two documents are crawled and stored as the in-place path stores them (${crawls.map((c) => `${c.name}: ${c.bytes} bytes, ${c.rebuilt ? "rebuilt" : "parsed in place"}`).join("; ")})`);
-const handed = crawls.find((c) => c.handedBack);
-ok(handed && /parsed on the main thread \(parser exited \(SIG[A-Z]+\) holding the document\)/.test(handed.line || "") && !/reviewed-/.test(handed.line), `a document that ended the parser is parsed in place and the log line says why, by hash (${handed?.line})`);
+const K = one("kept");
+const LINE = /^\[x402-index\] crawl parse [0-9a-f]{8} \/openapi\.json 4-12MB: not parsed, last read kept \(parser-ended\)$/;
+for (const name of ["fallback", "manifest"]) {
+  const c = K.sellers[name];
+  ok(c.firstOffLoop === 1 && c.tools >= 1, `control: the ${name} seller was read and listed from an honest document off the loop (${c.tools} tools)`);
+  ok(c.answer?.keptPrevious === "parser-ended" && c.died === 1 && c.keptByte, `a ${name} seller whose OpenAPI ends the parser keeps its previous entry byte for byte, under the reason word (${JSON.stringify(c.answer)})`);
+  ok(c.bigParses.length === 0, `the server built no tree of that document in its own process (large JSON.parse calls during the crawl: ${c.bigParses.length})`);
+  ok(c.lines.filter((l) => /crawl parse/.test(l)).length === 1 && LINE.test(c.lines.find((l) => /crawl parse/.test(l)) || "") && !c.lines.some((l) => /kept-|\.example/.test(l) && /crawl parse/.test(l)), `one line names it by origin hash, document and size class, no host (${c.lines.find((l) => /crawl parse/.test(l))})`);
+}
+{
+  const c = K.sellers.unread;
+  ok(!c.listed && !c.listedAfter && c.answer?.keptPrevious === "parser-ended" && c.died === 1 && c.bigParses.length === 0, `a seller with no previous entry stays unlisted this cycle, under the same reason (${JSON.stringify(c.answer)})`);
+}
+ok(K.sellers.again.answer === "parser-ended" && K.sellers.again.starts === 0 && K.sellers.again.recalled === 1 && K.sellers.again.keptByte && K.sellers.again.bigParses.length === 0, `the same document on the next turn starts no parser, keeps the entry, and the turn passes under the reason word (${K.sellers.again.answer}; starts ${K.sellers.again.starts})`);
+ok(K.sellers.changed.answer?.keptPrevious === "parser-ended" && K.sellers.changed.starts === 1 && K.sellers.changed.died === 1 && K.sellers.changed.keptByte, `a changed document is handed to the parser again (starts ${K.sellers.changed.starts})`);
+ok(K.sellers.five.kept === 5 && K.sellers.five.bigParses === 0 && K.sellers.five.paused === false && K.sellers.five.honestOffLoop === 1 && K.sellers.five.honestTools >= 1, `five hostile documents in a row are each kept out, the parser is not paused, and the honest seller after them is parsed off the loop (${JSON.stringify(K.sellers.five)})`);
+for (const h of K.honest) console.log(`# honest crawl: ${h.name}: ${h.offLoop ? "off the loop" : "in place"}, ${h.tools} tools`);
+ok(K.honest.filter((h) => /12 MB/.test(h.name)).every((h) => h.inPlaceSeen >= 1 && h.aBigParses === 0), "control: the watch on JSON.parse sees the in-place parse of a 12 MB document with the switch off, and none when it is parsed off the loop");
+ok(K.honest.length === 6 && K.honest.every((h) => h.same && !h.kept && h.tools >= 1) && K.honest.filter((h) => /dense/.test(h.name)).every((h) => h.offLoop === 1), "honest documents of every size measured are stored exactly as the in-place path stores them");
+const [r64, r12, rAfter] = K.registries;
+ok(r64.firstRowsNonEmpty && r64.firstResources > 100, `control: the registry's first pass listed rows (${r64.firstResources})`);
+ok(r64.rowsKept && r64.word === "too-large-to-parse" && r64.bigParses === 0 && /too-large-to-parse/.test(r64.error) && r64.lines.some((l) => /^\[x402-index\] crawl parse [0-9a-f]{8} registry-list 12-64MB: not parsed, last read kept \(too-large-to-parse\)$/.test(l)), `a hostile 64 MB registry list is not parsed and the registry's previous rows stand (${r64.error})`);
+ok(r12.rowsKept && r12.word === "parser-ended" && r12.died === 1 && r12.bigParses === 0, `a registry list that ends the parser is not parsed and the previous rows stand (${r12.error})`);
+ok(rAfter.rowsChanged && !rAfter.error, "an honest list after them is folded as before");
 
 const child = one("child");
 ok(child.o === null && child.s === null && child.db === null && child.p === false, "the parser process gets no NODE_OPTIONS, no preload, no store address and no variable outside the allowlist");

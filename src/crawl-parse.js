@@ -12,12 +12,25 @@
 // text cannot carry), put back in order. Invalid JSON throws a SyntaxError
 // with the text V8 gave in the child, which is the text it gives here.
 //
-// Never the only path: when the child cannot start, dies, answers nothing
-// inside the step timeout or will not take a document, `parseOffLoop` answers
-// `{ ok: false, reason }` and the caller parses on its own thread as before.
-// After FAILS_BEFORE_PAUSE such failures in a row the parser is left alone
-// for PAUSE_MS. A child that ends while it holds a document it had accepted
-// is that document's doing (its tree did not fit) and counts toward no pause.
+// When the child cannot start, answers nothing inside the step timeout, is
+// paused or stopped, or is switched off, `parseOffLoop` answers
+// `{ ok: false, reason }` and the caller parses on its own thread as before:
+// none of those says anything about the document. After FAILS_BEFORE_PAUSE
+// such failures in a row the parser is left alone for PAUSE_MS.
+//
+// A DOCUMENT THAT ENDS THE PARSER IS NOT PARSED HERE. A child that ends by a
+// signal while it holds a document it had accepted ended through that
+// document (its tree did not fit the child's heap), and that tree would take
+// the same memory, or more, on this process's heap. The answer is then
+// `{ ok: false, reason, keep: KEEP_PREVIOUS.ended }`: the caller does not
+// parse the document and keeps what it held from the last read. The same for
+// a document the child declined unparsed (its estimate) that is longer than
+// DECLINED_IN_PLACE_MAX_CHARS (`keep: KEEP_PREVIOUS.large`); a shorter
+// declined one is parsed in place as before. Neither counts toward the pause.
+// Each document is known by a hash of its text (taken a chunk per turn
+// before the child is asked): one that ended the parser or was declined is
+// answered the same way, with no child started, until its text changes or
+// RECALL_MS passes.
 //
 // MEMORY. A parser that runs out of memory inside JSON.parse ends its
 // process, so the parser is a process of its own: its heap limit (`heapMb`,
@@ -39,6 +52,7 @@
 // at once. The child ends itself when this process goes away.
 // CRAWL_PARSE_WORKER=off keeps every parse on the caller's thread.
 import { fork } from "node:child_process";
+import { createHash } from "node:crypto";
 import { deserialize } from "node:v8";
 import { fileURLToPath } from "node:url";
 import { childEnv } from "./tools/child-env.js";
@@ -54,6 +68,24 @@ export const OFF_LOOP_MIN_CHARS = 256 * 1024;
 export const TREE_SHARE = 0.5;
 const FAILS_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
+/** Why a document is not parsed in place (the caller keeps its previous read):
+ *  it ended the parser, or the parser declined it and it is too long to parse
+ *  here. These are the words the crawl records. */
+export const KEEP_PREVIOUS = Object.freeze({ ended: "parser-ended", large: "too-large-to-parse" });
+/** A declined document this long or longer is not parsed in place. Measured in
+ *  place on a heap with room for it, the costliest declined shapes took about
+ *  50 bytes of heap per character of text (chains of integer-like keys; 51 at
+ *  most over the shape search of scripts/test-crawl-parse-contained.js), so a
+ *  document under this many characters stays under about 800 MB: every
+ *  seller document (12 MB cap) is still parsed in place when declined, and a
+ *  64 MB registry list, which can take about 3 GB, is not. */
+export const DECLINED_IN_PLACE_MAX_CHARS = 16 * 1024 * 1024;
+/** How long a document that ended or was declined by the parser is answered
+ *  from memory (by the hash of its text) instead of handed to it again: until
+ *  its text changes, or a day at most, so a cause that has passed (memory the
+ *  machine was short of at the time) gets one new attempt a day. */
+const RECALL_MS = 24 * 3600_000;
+const RECALL_MAX = 1_000; // documents remembered; the oldest goes first
 const DEFAULTS = Object.freeze({
   minChars: OFF_LOOP_MIN_CHARS,
   workerFile: fileURLToPath(new URL("./crawl-parse-child.js", import.meta.url)),
@@ -70,20 +102,22 @@ const DEFAULTS = Object.freeze({
   maxPieceBytes: 1024 * 1024,
   targetMs: 6, // what one piece's rebuild should hold this thread
   clone: false, // every document as structured clones (a test's setting)
+  recallMs: RECALL_MS, // a document that ended or was declined by the parser is answered from memory this long
 });
 const cfg = { ...DEFAULTS };
 /** Test hook: override settings (null restores the defaults); ends the child so the next parse starts one afresh. */
 export function __setCrawlParseForTest(over = null) {
   Object.assign(cfg, DEFAULTS, over || {});
   failsInARow = 0; pausedUntil = 0; stopped = false;
+  recalled.clear();
   endWorker("settings changed");
 }
 let stopped = false;
 /** End the child now and keep every later parse in place (a draining process). */
 export function stopCrawlParse() { stopped = true; endWorker("stopped"); }
 
-const stats = { offLoop: 0, pieces: 0, invalid: 0, fallbacks: 0, starts: 0, died: 0, lastFallback: null };
-/** Counters since boot: documents rebuilt from the child, pieces, invalid documents, fallbacks, child starts, children that ended holding a document. */
+const stats = { offLoop: 0, pieces: 0, invalid: 0, fallbacks: 0, starts: 0, died: 0, kept: 0, recalled: 0, lastFallback: null };
+/** Counters since boot: documents rebuilt from the child, pieces, invalid documents, fallbacks, child starts, children that ended holding a document, documents answered `keep`, documents answered from memory with no child asked. */
 export function crawlParseStats() { return { ...stats, paused: pausedUntil > Date.now(), running: Boolean(current) }; }
 
 /** Whether `text` is parsed off the loop: long enough, and the switch not off. */
@@ -228,7 +262,9 @@ let queued = 0; // documents waiting for the child or in it
  * through `span(fn)`.
  * Resolves `{ ok: true, value, pieces, longestMs, totalMs }`, or
  * `{ ok: false, reason }` when the child could not do it (the caller then
- * parses in place). Rejects with a SyntaxError when the document is not JSON.
+ * parses in place), or `{ ok: false, reason, keep }` when the caller must not
+ * parse it (`keep` is a KEEP_PREVIOUS word). Rejects with a SyntaxError when
+ * the document is not JSON.
  */
 export function parseOffLoop(text, { turn, span } = {}) {
   queued++;
@@ -254,6 +290,33 @@ async function idleSoon() {
   idleTimer = setTimeout(() => { idleTimer = null; if (queued === 0) endWorker("idle"); }, cfg.idleMs);
   idleTimer.unref?.();
 }
+// ---- documents already known --------------------------------------------------
+// The hash of a document that ended or was declined by the parser -> how it
+// was answered, until when (RECALL_MS).
+const recalled = new Map();
+function recall(key, now = Date.now()) {
+  const r = recalled.get(key);
+  if (!r) return null;
+  if (r.until <= now) { recalled.delete(key); return null; }
+  return r;
+}
+function remember(key, answer) {
+  recalled.delete(key);
+  recalled.set(key, { ...answer, until: Date.now() + cfg.recallMs });
+  while (recalled.size > RECALL_MAX) recalled.delete(recalled.keys().next().value);
+}
+/** The text's hash, a chunk per turn: its UTF-16 code units, so two texts that differ anywhere differ here. */
+async function textKey(text, turn, span) {
+  const h = createHash("sha256");
+  const step = Math.max(1024, cfg.chunkChars);
+  for (let at = 0; at < text.length; at += step) {
+    if (turn && at > 0) await turn();
+    span(() => h.update(text.slice(at, at + step), "utf16le"));
+  }
+  return `${text.length}:${h.digest("hex")}`;
+}
+function kept(reason, keep) { stats.fallbacks++; stats.kept++; stats.lastFallback = reason; return { ok: false, reason, keep }; }
+
 function fellBack(reason) {
   stats.fallbacks++;
   stats.lastFallback = reason;
@@ -261,6 +324,17 @@ function fellBack(reason) {
   return { ok: false, reason };
 }
 async function parseOne(text, turn, span) {
+  if (stopped) return { ok: false, reason: "stopped" };
+  // A document this parser already ended on, or declined, is answered as it
+  // was then, with no child asked (paused or not).
+  const key = await textKey(text, turn, span);
+  const known = recall(key);
+  if (known) {
+    stats.recalled++;
+    if (known.keep) return kept(known.reason, known.keep);
+    stats.fallbacks++; stats.lastFallback = known.reason;
+    return { ok: false, reason: known.reason };
+  }
   if (stopped) return { ok: false, reason: "stopped" };
   if (pausedUntil > Date.now()) { stats.fallbacks++; stats.lastFallback = "paused after failures"; return { ok: false, reason: "paused after failures" }; }
   let w;
@@ -306,11 +380,27 @@ async function parseOne(text, turn, span) {
     if (current === w) endWorker(reason);
     // The child ended by itself while it held this document (not stopped, not
     // timed out by us): the tree did not fit its heap. The parser is sound.
-    if (died && /^parser exited \(SIG(ABRT|KILL|TRAP|ILL|SEGV|BUS)\)/.test(reason)) { stats.fallbacks++; stats.died++; stats.lastFallback = reason; return { ok: false, reason: `${reason} holding the document` }; }
+    // It is not parsed in place either (see the head of this file).
+    if (died && /^parser exited \(SIG(ABRT|KILL|TRAP|ILL|SEGV|BUS)\)/.test(reason)) {
+      stats.died++;
+      const answer = { reason: `${reason} holding the document`, keep: KEEP_PREVIOUS.ended };
+      remember(key, answer);
+      return kept(answer.reason, answer.keep);
+    }
     return fellBack(reason);
   }
   failsInARow = 0;
-  if (unsplit) { stats.fallbacks++; stats.lastFallback = unsplit; return { ok: false, reason: unsplit }; }
+  if (unsplit) {
+    // Declined by the estimate: parsed in place when short enough to bound
+    // (DECLINED_IN_PLACE_MAX_CHARS), else not parsed. Either way the child is
+    // not asked again for this text.
+    if (/^unsplit:/.test(unsplit)) {
+      const answer = text.length >= DECLINED_IN_PLACE_MAX_CHARS ? { reason: unsplit, keep: KEEP_PREVIOUS.large } : { reason: unsplit };
+      remember(key, answer);
+      if (answer.keep) return kept(answer.reason, answer.keep);
+    }
+    stats.fallbacks++; stats.lastFallback = unsplit; return { ok: false, reason: unsplit };
+  }
   if (invalid) { stats.invalid++; throw new SyntaxError(invalid.message); }
   if (b.stack.length) return fellBack("pieces ended with a container open");
   stats.offLoop++; stats.pieces += pieces;

@@ -1984,7 +1984,7 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   const doCrawl = crawl || (async (o, opts) => {
     const read = await crawlSeller(o, opts);
     if (read?.heldBy && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60, heldBy: read.heldBy };
-    return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
+    return cache.get(o) || (read?.landingHeld || read?.keptPrevious ? { error: read.error } : undefined);
   });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
@@ -2497,7 +2497,10 @@ async function discoverOneSource(source, selfOrigin) {
       discoveredSeeds.add(o);
     }
   } catch (e) {
+    // A registry document not parsed (KeptPrevious) ends the pass like a
+    // failed read: nothing above was swapped in, so the rows of the last pass stand.
     status.error = String(e.message || e);
+    if (e?.keptPrevious) status.keptPrevious = e.keptPrevious;
   }
   discoveryStatus.set(source.name, status);
 }
@@ -3082,6 +3085,10 @@ function crawlLanePump() {
 // piece per lane turn (src/crawl-parse.js); the value, and the error for a
 // document that is not JSON, are the ones JSON.parse gives. When the thread
 // cannot do it the document is parsed here as before, and a line says so.
+// A document that ended the parser, or that it declined and is too long to
+// parse here, is not parsed at all: this throws a KeptPrevious error, and the
+// crawl that read it keeps what it held from its last read (crawlSeller; the
+// registry pass, discoverOneSource), with one line naming the document by hash.
 // `docRef` ({ origin, doc }) names the document in the log lines only.
 async function parseInCrawlLane(text, docRef = null) {
   let mode = "in place", longest = 0, total = 0, pieces = 1;
@@ -3089,6 +3096,11 @@ async function parseInCrawlLane(text, docRef = null) {
     if (parsesOffLoop(text)) {
       const r = await parseOffLoop(text, { turn: crawlLaneTurn, span: (fn) => laneSpan("crawl-parse", fn) });
       if (r.ok) { mode = "in pieces"; longest = r.longestMs; total = r.totalMs; pieces = r.pieces; return r.value; }
+      if (r.keep) {
+        mode = "not parsed";
+        console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: not parsed, last read kept (${r.keep})`);
+        throw new KeptPrevious(r.keep);
+      }
       console.warn(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: parsed on the main thread (${r.reason})`);
     }
     await crawlLaneTurn();
@@ -3098,6 +3110,12 @@ async function parseInCrawlLane(text, docRef = null) {
   } finally {
     if (longest >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl parse ${crawlDocLabel(docRef, text)}: ${mode} longest=${Math.round(longest)}ms total=${Math.round(total)}ms pieces=${pieces}`);
   }
+}
+/** A document the crawl does not parse (src/crawl-parse.js KEEP_PREVIOUS):
+ *  `keptPrevious` is the reason word. Every catch between the parse and the
+ *  crawl's top passes it on, as it does a LandingHeld. */
+class KeptPrevious extends Error {
+  constructor(word) { super(`document not parsed (${word}); the last read is kept`); this.keptPrevious = word; }
 }
 // One line per crawl-parse or document-walk stretch of this length or more,
 // so a long turn names its document: a short hash of the origin (the key the
@@ -6822,9 +6840,11 @@ function noteLandingHeld(origin, host) {
 }
 /** One origin's turn in a scheduled crawl cycle: its load controls
  *  (src/seller-load.js) decide whether it is read; null when it was, else why
- *  it waits ("throttled", "budget", "landing" or "unchanged"). "landing": its
- *  documents are read from another operator's host whose landed allowance for
- *  the day is spent; the entry stays as the last completed read left it. */
+ *  it waits ("throttled", "budget", "landing" or "unchanged") or why its read
+ *  did not count (a KEEP_PREVIOUS word of src/crawl-parse.js: a document it
+ *  served was not parsed). "landing": its documents are read from another
+ *  operator's host whose landed allowance for the day is spent. Either way the
+ *  entry stays as the last completed read left it. */
 async function crawlScheduled(origin, outcome = { ours: false }) {
   const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
   const plan = await sellerLoad.crawlPlan(origin, { landsOn });
@@ -6833,6 +6853,8 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   sellerLoad.noteSlowRead(origin, "x402");
   const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
   if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
+  // A document not parsed: the turn passes with the entry as it was, under the reason word.
+  if (read?.keptPrevious) { noteTurnNotRead(origin); return read.keptPrevious; }
   return null;
 }
 // When an origin's scheduled turn last passed without a read because of a
@@ -7193,7 +7215,7 @@ async function previousOpenapiRows(prev, originUrl = null) {
   try {
     const { tools, routes } = await parseInCrawlLane((await gunzipAsync(prev.openapiPacked)).toString("utf8"), { origin: originUrl, doc: "kept-openapi-rows" });
     return Array.isArray(tools) ? { tools, routes: Array.isArray(routes) ? routes : [] } : null;
-  } catch { return null; }
+  } catch (e) { if (e?.keptPrevious) throw e; return null; }
 }
 /** The previous crawl's parsed manifest, for a 304: the full document when the
  *  entry still holds one (a synthesized manifest, an entry seeded by a test),
@@ -7202,7 +7224,7 @@ async function previousManifestDoc(prev, originUrl = null) {
   const m = prev?.manifest;
   if (m && typeof m === "object" && !m.slimmed) return m;
   if (Buffer.isBuffer(prev?.manifestBody)) {
-    try { return await parseInCrawlLane((await gunzipAsync(prev.manifestBody)).toString("utf8"), { origin: originUrl, doc: "kept-manifest" }); } catch { return null; }
+    try { return await parseInCrawlLane((await gunzipAsync(prev.manifestBody)).toString("utf8"), { origin: originUrl, doc: "kept-manifest" }); } catch (e) { if (e?.keptPrevious) throw e; return null; }
   }
   return null;
 }
@@ -7262,11 +7284,21 @@ function oncePerCrawl() {
  *  were, the cycle's tally does not count it, and `{ landingHeld, error }` is
  *  returned. The validators kept during it are dropped, so the next read
  *  derives every document afresh rather than pairing a 304 with an entry this
- *  crawl never wrote. */
+ *  crawl never wrote. A crawl that read a document the crawl does not parse
+ *  (KeptPrevious) is the same: `{ keptPrevious, error }`, the entry untouched. */
 async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
   let read = true;
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
   catch (e) {
+    if (e?.keptPrevious) {
+      // A document this crawl read was not parsed (KeptPrevious): the entry
+      // stays exactly as the last read left it (an origin with none stays
+      // unlisted), and like a read not sent this is no read: no tally, no
+      // history, and the validators go so the next read derives afresh.
+      read = false;
+      clearValidatorsFor(originUrl);
+      return { keptPrevious: e.keptPrevious, error: String(e.message || e) };
+    }
     if (!e?.landingHeld) throw e;
     read = false;
     clearValidatorsFor(originUrl);
@@ -7355,7 +7387,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         openapiExamples = await crawlWalkLaned("examples", from, openapiProbeExamplesSteps(openapi, originUrl, new Map()));
       }
     } catch (e) {
-      if (e?.landingHeld) throw e;
+      if (e?.landingHeld || e?.keptPrevious) throw e;
       /* manifest-only seller — fine */
     }
 
@@ -7483,9 +7515,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Outcome recording moved into probePath, which records every path it
     // fetches. Recording again here would double-count the manifest failure
     // and deepen its backoff twice per cycle.
-    // A read that was not sent (LandingHeld) ends the crawl with nothing
-    // changed; crawlSeller answers for it.
-    if (e?.landingHeld) throw e;
+    // A read that was not sent (LandingHeld), or a document not parsed
+    // (KeptPrevious), ends the crawl with nothing changed; crawlSeller answers for it.
+    if (e?.landingHeld || e?.keptPrevious) throw e;
     // No manifest this crawl (or the read failed): the origin is back on the
     // normal cycle, so a seller who fixes or publishes one is read promptly.
     await sellerLoad.resetRevisit(originUrl, "listing-failure");
@@ -7503,7 +7535,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // is kept as it was (crawlHoldsLastGood).
     let oursFailed = crawlReadFailureIsOurs(e);
     const noteFallback = (path, err) => {
-      if (err?.landingHeld) throw err;
+      if (err?.landingHeld || err?.keptPrevious) throw err;
       if (crawlReadFailureIsOurs(err)) oursFailed = true;
       fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
     };
