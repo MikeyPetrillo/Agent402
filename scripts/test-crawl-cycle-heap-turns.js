@@ -32,8 +32,8 @@
 //     (scripts/lib/ours-clock.js), and one past the naming threshold names a
 //     span (a crawl turn) or its job (the save, the reputation pass);
 //   - the probe-example walk, the payment-signal walk and the packing of an
-//     OpenAPI seller's rows run over several lane slices (counted, so the
-//     machine's speed does not decide it);
+//     OpenAPI seller's rows run over several lane slices (counted with every
+//     step cut into its own slice, so the machine's speed does not decide it);
 //   - what a long document stores, and the rows kept packed for a 304, are
 //     the same whether its walks ran in slices or whole;
 //   - a reader that runs between the turns of a cycle is handed whole entries
@@ -402,8 +402,12 @@ ok(stores >= 3 * SELLERS, `control: the cycles stored their origins (${stores} s
       if (manifestBody.has(from)) manifestBody.set(twin, manifestBody.get(from).map((t) => t.replaceAll(from, twin)));
       openapiBody.set(twin, openapiBody.get(from));
     }
+    // Every step of a laned walk its own slice: the count is then the walk's
+    // steps, whatever this machine's speed (at the crawl's 10 ms slice it was
+    // decided by whether one document's walk ran past 10 ms in this run).
     counting = slices;
-    await within(idx.__crawlSellerForTest(A, {}), "sliced twin");
+    const sliceWas = idx.__setCrawlWalkSliceForTest(0);
+    try { await within(idx.__crawlSellerForTest(A, {}), "sliced twin"); } finally { idx.__setCrawlWalkSliceForTest(sliceWas); }
     idx.__setCrawlWalksWholeForTest(true); counting = wholes;
     try { await within(idx.__crawlSellerForTest(B, {}), "whole twin"); } finally { idx.__setCrawlWalksWholeForTest(false); }
     const a = stored(cache.get(A), A), b = stored(cache.get(B), B);

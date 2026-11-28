@@ -799,8 +799,12 @@ class IndexCache extends Map {
     // (src/seller-tool-cap.js) and then cleaned, so the route index, the
     // persist, the replica and every reader hold the same list.
     v = cleanSellerEntry(capSellerEntry(v));
+    const prev = super.get(origin);
+    // A row equal in every field to the one it replaces stays that object
+    // (see keepUnchangedRows): what readers built from it is kept with it.
+    v = keepUnchangedRows(prev, v);
     cacheVersion++;
-    routeIndexNoteSet(origin, super.get(origin), v);
+    routeIndexNoteSet(origin, prev, v);
     super.set(origin, v);
     if (listings) listingsChanged(origin);
     if (replicaObserver) replicaObserver("cache", "set", origin, v);
@@ -810,13 +814,14 @@ class IndexCache extends Map {
     if (super.has(origin)) {
       cacheVersion++;
       routeIndexNoteSet(origin, super.get(origin), null);
+      decoratedByOrigin.delete(origin);
       if (replicaObserver) replicaObserver("cache", "delete", origin);
     }
     const had = super.delete(origin);
     if (had && listings) listingsChanged(origin);
     return had;
   }
-  clear() { cacheVersion++; super.clear(); routeIndexReset(); if (replicaObserver) replicaObserver("cache", "clear"); }
+  clear() { cacheVersion++; super.clear(); routeIndexReset(); decoratedByOrigin.clear(); if (replicaObserver) replicaObserver("cache", "clear"); }
 }
 const cache = new IndexCache();
 // The Bazaar maps the router reads, observed the same way (keyed by name so
@@ -3170,6 +3175,12 @@ export function __setCrawlWalkObserverForTest(fn) { crawlWalkObserver = typeof f
 function noteCrawlWalk(name, docRef, ms) {
   if (ms >= CRAWL_TURN_LOG.turnMs) console.log(`[x402-index] crawl walk ${name} ${crawlDocLabel(docRef)}: longest=${Math.round(ms)}ms`);
 }
+// The slice a laned walk is cut at. A suite that counts slices sets it to 0
+// (every step its own slice): at 10 ms the count depended on whether one
+// document's walk happened to run past 10 ms on that machine, that run.
+let crawlWalkSliceMs = CRAWL_SLICE_MS;
+/** Test hook: the laned walks' slice length in ms (0 = one step per slice); returns the earlier one. */
+export function __setCrawlWalkSliceForTest(ms) { const was = crawlWalkSliceMs; crawlWalkSliceMs = Number.isFinite(ms) && ms >= 0 ? ms : CRAWL_SLICE_MS; return was; }
 /** The same for a walk written as steps: run in the crawl lane a slice at a
  *  time, its longest slice read against the threshold. */
 async function crawlWalkLaned(name, from, gen) {
@@ -3178,7 +3189,7 @@ async function crawlWalkLaned(name, from, gen) {
   // A slice is cut at CRAWL_SLICE_MS, but one step of the walk may run past
   // it: a long slice is recorded under the walk's name, as a span is, so the
   // [loop-lag] line names it (noteTurn keeps only stretches worth naming).
-  try { return await runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
+  try { return await runCrawlLaneAsync(gen, crawlWalkSliceMs, (d) => { if (d > longest) longest = d; noteTurn(`crawl-walk ${name}`, Date.now() - d, d); if (crawlWalkObserver) crawlWalkObserver(name, from); }); }
   finally { noteCrawlWalk(name, from, longest); }
 }
 // A crawl's synchronous stretch, timed under its name for the [loop-lag]
@@ -11496,6 +11507,115 @@ function decorationContext(v, fold = newDecorationFold(v)) {
   const home = /^https?:\/\//i.test(String(v.manifest?.homepage || "")) ? String(v.manifest.homepage) : null;
   return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home, name: sellerOrigin ? servedSellerNameOn(v, v.manifest?.name, sellerOrigin) : null, health: healthScore(v) };
 }
+// ---- kept rows ------------------------------------------------------------------
+// A crawl stores new row objects for a seller whose documents did not change
+// (a 304, or the same body), and every reader keyed on row identity (the
+// decorated pool, a row's statics, the route index postings, the directory's
+// screen) then built its part again: a cycle with no changed document passed
+// gigabytes through the old generation and freed them, and the collections that
+// paid for it stalled the loop. Each layer now keeps what it built when its
+// input is the same: IndexCache.set keeps the previous row object for a row
+// that is equal to it in every field (keepUnchangedRows), decoration keeps the
+// decorated copy whose every field the fresh one would repeat, and the route
+// index moves a kept row's postings to the new entry instead of posting it again
+// (routeIndexAddEntry). A row with any field changed is built again at each layer.
+const SAME_DEPTH_MAX = 64; // deeper than any listing nests; past it, "not the same"
+const plainProto = (o) => { const p = Object.getPrototypeOf(o); return p === Object.prototype || p === null; };
+/** Equal as stored and served: the same keys in the same order, equal values all the
+ *  way down (Object.is for scalars). Anything but plain objects and arrays is
+ *  equal only to itself. */
+function sameValue(a, b, depth = 0) {
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || depth >= SAME_DEPTH_MAX) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i], depth + 1)) return false;
+    return true;
+  }
+  if (Array.isArray(b) || !plainProto(a) || !plainProto(b)) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i];
+    if (k !== kb[i] || !sameValue(a[k], b[k], depth + 1)) return false;
+  }
+  return true;
+}
+/** Same own keys in the same order, each value the same one (Object.is). */
+function sameShallow(a, b) {
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i] || !Object.is(a[ka[i]], b[ka[i]])) return false;
+  return true;
+}
+const KEEP_GIVE_UP = 64;
+const rowKeyOf = (t) => (t && typeof t === "object" ? `${t.method} ${t.route}` : "");
+let rowsKept = 0, serviceKeysKept = 0; // test counters
+/** The entry as stored, with each row equal to the previous entry's row for the
+ *  same place (or the same method and route) replaced by that previous row
+ *  object; the list itself is the previous one when every row is. The rows are
+ *  equal in every field, so every reader sees the same entry either way. */
+function keepUnchangedRows(prev, v) {
+  const was = prev?.tools, now = v?.tools;
+  if (!Array.isArray(was) || !Array.isArray(now) || was === now || !was.length || !now.length) return v;
+  let out = null, byKey = null, kept = 0, misses = 0;
+  // A list whose rows changed stops being compared once KEEP_GIVE_UP rows in a
+  // row differ and none matched: a store's turn then costs a few rows, not
+  // two walks of a list that kept nothing. Rows are looked up by method and
+  // route only when the list grew or shrank (rows moved place).
+  const shifted = now.length !== was.length;
+  for (let i = 0; i < now.length; i++) {
+    if (!kept && misses >= KEEP_GIVE_UP) break;
+    const t = now[i];
+    let k = i < was.length && sameValue(was[i], t) ? was[i] : null;
+    if (!k && shifted && t && typeof t === "object") {
+      if (!byKey) { byKey = new Map(); for (const w of was) { const key = rowKeyOf(w); if (!byKey.has(key)) byKey.set(key, w); } }
+      const w = byKey.get(rowKeyOf(t));
+      if (w !== undefined && w !== was[i] && sameValue(w, t)) k = w;
+    }
+    if (k && k !== t) { (out ||= now.slice())[i] = k; kept++; }
+    else if (!k) misses++;
+  }
+  if (!out) return v;
+  rowsKept += kept;
+  // Every row the previous one, in its order: the previous list, and the
+  // entry's service key (a function of its rows alone) is the previous one's.
+  if (out.length === was.length && out.every((t, i) => t === was[i])) {
+    const next = { ...v, tools: was };
+    if (serviceKeyMemo.has(prev)) { serviceKeyMemo.set(next, serviceKeyMemo.get(prev)); serviceKeysKept++; }
+    return next;
+  }
+  return { ...v, tools: out };
+}
+// The last pool decorated for each origin's live entry, with its context.
+// A new entry's row is decorated as before and then compared with the row at
+// the same place in that pool: when every field holds the same value (so a row
+// written in place since, as a re-price writes, is decorated again) and the
+// route index can move its postings (routeIndexCanMove), the earlier copy is
+// kept. A new entry's context equal to the last one in every field is that
+// object, so a kept copy's inherited networks and domains are the values the
+// fresh copy carries. Nothing is written on the crawled rows themselves.
+const decoratedByOrigin = new Map(); // origin -> { c, pool }
+const poolCtx = new WeakMap(); // decorated pool -> the context it was decorated with (one per entry)
+function sameDecorationCtx(a, b) {
+  return a.home === b.home && a.name === b.name && Object.is(a.health, b.health) && a.hasDomains === b.hasDomains
+    && sameValue(a.sellerNets, b.sellerNets) && sameValue(a.sellerDomains, b.sellerDomains);
+}
+// What a row's statics read (computeToolStatics, routeExcludedCategory): a
+// decorated copy that holds the same values here has the same statics.
+const STATICS_INPUTS = ["name", "slug", "tags", "aliases", "description", "category", "seller", "route", "path", "url", "price"];
+let rowsDecorated = 0, decorationsKept = 0, staticsCarried = 0; // test counters
+function decorateRowKept(t, c, was, origin, pos) {
+  const fresh = decorateRow(t, c);
+  if (!was) { rowsDecorated++; return fresh; }
+  if (sameShallow(was, fresh) && routeIndexCanMove(was, origin, pos)) { decorationsKept++; return was; }
+  rowsDecorated++;
+  // A new copy (its context changed, or a field the statics do not read):
+  // the statics carry over when every field they read is the same value.
+  const st = was[TOOL_STATICS];
+  if (st && !st.broken && STATICS_INPUTS.every((k) => Object.is(was[k], fresh[k]))) { setHidden(fresh, TOOL_STATICS, st); staticsCarried++; }
+  return fresh;
+}
 function decorateRow(t, c) {
   return {
     ...t,
@@ -11514,14 +11634,24 @@ function decorateRow(t, c) {
 const decoratePartial = new WeakMap();
 function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   const memo = remotePoolMemo.get(v);
-  if (memo) return memo;
+  if (memo) {
+    // A pool decorated while its entry was out of the cache (or before an
+    // earlier entry's) becomes the origin's last pool once it is the live one.
+    if (typeof origin === "string" && decoratedByOrigin.get(origin)?.pool !== memo && cache.get(origin) === v && poolCtx.has(memo)) decoratedByOrigin.set(origin, { c: poolCtx.get(memo), pool: memo });
+    return memo;
+  }
   let p = decoratePartial.get(v);
   try {
-    if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null }; decoratePartial.set(v, p); }
+    if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null, prev: null }; decoratePartial.set(v, p); }
     if (!p.c) {
       if (!foldDecorationContext(p.fold, until)) return null;
       p.c = decorationContext(v, p.fold);
       p.fold = null;
+      const last = typeof origin === "string" ? decoratedByOrigin.get(origin) : null;
+      if (last) {
+        if (sameDecorationCtx(last.c, p.c)) p.c = last.c;
+        p.prev = last.pool;
+      }
     }
     const tools = v.tools || [];
     for (; p.i < tools.length; p.i++) {
@@ -11532,7 +11662,8 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
       // route-execute would 402-dance against an endpoint that never
       // quotes, and "cheapest tool" rankings would fill with $0 rows.
       if (t.paid === false) continue;
-      p.out.push(decorateRow(t, p.c));
+      const pos = p.out.length;
+      p.out.push(decorateRowKept(t, p.c, p.prev ? p.prev[pos] : undefined, origin, pos));
     }
   } catch (e) {
     // One listing whose rows cannot be read fails alone: the entry is dropped
@@ -11547,6 +11678,8 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   }
   decoratePartial.delete(v);
   remotePoolMemo.set(v, p.out);
+  poolCtx.set(p.out, p.c);
+  if (typeof origin === "string" && cache.get(origin) === v) decoratedByOrigin.set(origin, { c: p.c, pool: p.out });
   return p.out;
 }
 const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
@@ -11765,7 +11898,9 @@ function routeLeavesSeller(seller, route) {
 export function _routeLeavesSellerForTest(seller, route) { return routeLeavesSeller(seller, route); }
 export function _routeLeavesSellerParsedForTest(seller, route) { return routeLeavesSellerParsed(seller, route); }
 export function _computeToolStaticsForTest(t) { return computeToolStatics(t); }
+let staticsBuilt = 0; // test counter
 function computeToolStatics(t) {
+  staticsBuilt++;
   if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
@@ -11938,29 +12073,61 @@ export function wholeTokenMatcher(term) {
 // queue, decorating and indexing the new entries. A replaced entry's postings
 // go stale rather than being removed (removing a tool from the posting of a
 // common token is O(posting)), are filtered at query time by "is this tool's
-// entry still the live one", and the whole index is rebuilt once the stale
-// share passes ROUTE_INDEX_REBUILD_STALE_SHARE - a few hundred milliseconds
-// a few times per crawl cycle, instead of on every query.
+// entry still the live one", and the posting lists are compacted once the
+// stale share passes ROUTE_INDEX_REBUILD_STALE_SHARE: each list is copied
+// without the stale rows, in slices, and nothing is tokenized again.
+//
+// A row a new entry kept (the same decorated object, at the same place in the
+// pool: see decorateRowKept) is not posted again: its home record moves to the
+// new entry, and every posting it already has serves it. So a crawl cycle in
+// which no document changed posts nothing, leaves nothing stale and compacts
+// nothing. Each entry's posted rows are counted (`rowsOf`), which is what lets a
+// compaction remove exactly the rows of the entries it set out to remove and
+// lets a move be refused for a row a compaction may have removed anywhere: such
+// a row is posted again as a copy of its own, never twice as one object.
 // ---------------------------------------------------------------------------
 const ROUTE_INDEX_REBUILD_STALE_SHARE = 0.15;
 const ROUTE_INDEX_TERM_CACHE_MAX = 4096;
 const routeIdx = {
   postings: new Map(), // token -> tool[] (decorated remote pool objects)
   indexed: new WeakSet(), // entries whose pool is in `postings`
-  indexedTools: 0,
-  staleTools: 0,
+  indexedTools: 0, // rows counted under an entry in rowsOf (live and stale)
+  staleTools: 0, // of those, rows counted under a replaced or deleted entry
   pending: new Map(), // origin -> entry awaiting indexing
   termCache: new Map(), // long term -> matching vocabulary tokens
   builds: 0,
   queryStamp: 0, // per-query dedupe stamp written onto each tool's home record
-  shadow: null, // background rebuild in progress (see routeIndexStartShadow)
+  shadow: null, // background compaction in progress (see routeIndexStartShadow)
   partial: null, // live entry being indexed across slices { origin, v, pos }
+  gen: 0, // the postings map's generation: a home record from another one is not posted here
+  rowsOf: new Map(), // entry -> { origin, n, dead }: the rows posted (or moved) under it
+  unmovable: new Set(), // entries a compaction is removing (or removed part of): their rows never move
+  rowsMoved: 0, rowsPosted: 0, rowsCopied: 0, // test counters
 };
 function routeIndexNoteSet(origin, prev, next) {
   if (prev === next) return;
-  if (prev && routeIdx.indexed.has(prev)) { routeIdx.staleTools += (remotePoolMemo.get(prev) || []).length; routeIdx.indexed.delete(prev); }
-  if (next && typeof next === "object") { routeIdx.pending.set(origin, next); routeIndexScheduleDrain(); }
+  if (prev && routeIdx.indexed.has(prev)) routeIdx.indexed.delete(prev);
+  // The replaced entry's rows are stale until a compaction removes them, or
+  // until the entry that replaced it moves them (they are then live again).
+  const rec = prev ? routeIdx.rowsOf.get(prev) : null;
+  if (rec && !rec.dead) { rec.dead = true; routeIdx.staleTools += rec.n; }
+  if (next && typeof next === "object") routeIdx.pending.set(origin, next);
   else routeIdx.pending.delete(origin);
+  // A deletion too: the drain's last turn checks the stale share.
+  routeIndexScheduleDrain();
+}
+// An origin whose newest entry is still to be indexed: its older entry's rows
+// may yet be moved to it, so a compaction leaves them.
+const routeIndexAwaiting = (origin) => routeIdx.pending.has(origin) || routeIdx.partial?.origin === origin;
+// Can this decorated row's postings serve the entry being indexed at `pos` for
+// `origin`? Yes when it was never posted in this generation; when it was, only
+// if it was posted for the same origin at the same place, under an entry that
+// is still counted and that no compaction is removing (so every posting it
+// was given is still there).
+function routeIndexCanMove(t, origin, pos) {
+  const h = t[TOOL_HOME];
+  if (!h || h.gen !== routeIdx.gen) return true;
+  return h.origin === origin && h.pos === pos && routeIdx.rowsOf.has(h.v) && !routeIdx.unmovable.has(h.v);
 }
 // The crawler replaces entries one at a time as its fetches land. Draining
 // them in the background, in short slices, keeps the pending queue near empty,
@@ -12006,8 +12173,11 @@ function routeIndexReset() {
   routeIdx.staleTools = 0;
   routeIdx.pending.clear();
   routeIdx.termCache.clear();
-  routeIdx.shadow = null; // an in-flight background rebuild is abandoned
+  routeIdx.shadow = null; // an in-flight compaction is abandoned
   routeIdx.partial = null;
+  routeIdx.gen++;
+  routeIdx.rowsOf.clear();
+  routeIdx.unmovable.clear();
 }
 // Continue the live index's partly indexed entry until `until`. Returns true
 // when the entry is finished (or no longer live), false when time ran out.
@@ -12016,37 +12186,56 @@ function routeIndexAdvancePartial(until = Infinity) {
   if (!p) return true;
   if (cache.get(p.origin) !== p.v) { routeIdx.partial = null; return true; }
   let next;
-  try { next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until); }
+  try { next = routeIndexAddEntry(p.origin, p.v, p.pos, until); }
   catch (e) { routeIndexEntryBroken(p.origin, p.v, e); routeIdx.partial = null; return true; }
   if (next !== -1) { p.pos = next; return false; }
   routeIdx.partial = null;
-  if (routeIdx.shadow) routeIdx.shadow.late.push([p.origin, p.v]);
   routeIdx.termCache.clear();
   return true;
-}
-function newRouteIndexShard() {
-  return { postings: new Map(), indexed: new WeakSet(), indexedTools: 0 };
 }
 // Index one entry's tools from `from`, stopping (and returning the position to
 // resume at) once `until` passes; returns -1 when the entry is complete. The
 // time check sits inside the entry because one seller can carry thousands of
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
-function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
+function routeIndexAddEntry(origin, v, from = 0, until = Infinity) {
   const pool = decorateRemoteToolsStep(v, until, origin);
   if (!pool) return from; // decoration ran out of time: resume here next slice
-  const { postings } = target;
+  const { postings, gen, rowsOf } = routeIdx;
+  let rec = rowsOf.get(v);
+  if (!rec) { rec = { origin, n: 0, dead: cache.get(origin) !== v }; rowsOf.set(v, rec); }
   for (let pos = from; pos < pool.length; pos++) {
     // A clock read per tool (it costs far less than one tool's statics): with
     // 64 tools between reads, tools of long seller-written text let a 12 ms
     // slice run several times its length.
     if (pos > from && until !== Infinity && performance.now() >= until) return pos;
-    const t = pool[pos];
-    const st = toolStatics(t, origin);
-    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
+    let t = pool[pos];
     // The home record is a property of the tool (its entry and position in
-    // that entry's pool), the same whichever shard indexes it.
-    t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
+    // that entry's pool).
+    const h = t[TOOL_HOME];
+    if (h && h.gen === gen && h.v === v) continue; // posted for this entry already
+    const st = toolStatics(t, origin);
+    rec.n++; routeIdx.indexedTools++;
+    if (rec.dead) routeIdx.staleTools++;
+    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
+    if (h && h.gen === gen) {
+      if (routeIndexCanMove(t, origin, pos)) {
+        // Kept from the entry it replaced: every posting it has serves it.
+        const was = rowsOf.get(h.v);
+        was.n--; routeIdx.indexedTools--;
+        if (was.dead) routeIdx.staleTools--;
+        h.v = v;
+        routeIdx.rowsMoved++;
+        continue;
+      }
+      // Posted under an entry whose rows may be partly removed: a copy of its
+      // own is posted (the pool takes the copy), never the same object twice.
+      const copy = { ...t };
+      setHidden(copy, TOOL_STATICS, st);
+      t = pool[pos] = copy;
+      routeIdx.rowsCopied++;
+    }
+    if (!setHidden(t, TOOL_HOME, { origin, v, pos, gen })) continue;
     // Tokens of the haystack (name, description, category, tags) plus those
     // of every scored name (slug, aliases, name-as-slug), deduplicated per
     // tool so one tool sits once in each posting.
@@ -12056,12 +12245,12 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
       const list = postings.get(tok);
       if (list) list.push(t); else postings.set(tok, [t]);
     }
+    routeIdx.rowsPosted++;
   }
   // Primes the alias-set memo off the query path, inside the same time budget:
   // out of time, the entry resumes past its last tool and finishes the key.
   if (!primeServiceKey(v, until)) return pool.length;
-  target.indexed.add(v);
-  target.indexedTools += pool.length;
+  routeIdx.indexed.add(v);
   return -1;
 }
 /** Build the /api/route candidate index now instead of on the first query.
@@ -12071,74 +12260,82 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
  *  warm start, past the post-listen stall. Idempotent: a built index is a
  *  no-op here, and a later mutation still drains on the next query. */
 export function warmRouteIndex() { routeIndexSync({ sync: true }); return routeIdx.indexedTools; }
-// A pool this small rebuilds inline (a few ms); a larger one rebuilds in the
-// background, in slices, while the current index keeps answering.
+// A pool this small rebuilds inline (a few ms); a larger one is compacted in
+// the background, in slices, while the current index keeps answering.
 const ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS = 20000;
 const ROUTE_INDEX_SLICE_MS = 12;
 // Every crawl cycle (30 min) replaces every entry, so the stale share passes
-// its threshold three or four times per cycle. A synchronous rebuild of the
-// prod pool is ~1 s here and 2 s+ on prod, and it ran INSIDE whichever buyer
-// query tripped it - blocking every other request, payment relays included,
-// for that long. The rebuild now runs as a shadow index filled in slices of
-// ~12 ms between event-loop turns; queries keep reading the current index
-// (its stale postings are filtered by liveness, as always) until the shadow
-// is complete and swapped in.
-// Test hook: the next background rebuild's finish throws this once.
+// its threshold three or four times per cycle when the documents changed. A
+// synchronous rebuild of the prod pool is ~1 s here and 2 s+ on prod, and it
+// ran INSIDE whichever buyer query tripped it - blocking every other request,
+// payment relays included, for that long. The stale rows are now removed by a
+// compaction run in slices of ~12 ms between event-loop turns; queries keep
+// reading the posting lists (each list a compaction rewrites is replaced by
+// its copy, so a query part way through a list keeps the array it read).
+// A shadow index that tokenized and posted every live row again ran here
+// until 2026-11-28: its new lists were most of the old generation each crawl
+// cycle passed through and freed.
+// Test hook: the next compaction's finish throws this once.
 let shadowFinishFaultForTest = null;
 export function _setShadowFinishFaultForTest(err) { shadowFinishFaultForTest = err || null; }
 function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
-  const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], li: 0, cur: null };
+  // The entries whose rows this pass removes: replaced or deleted ones whose
+  // origin has no newer entry still to index (that entry may move them),
+  // dropped ones, and any an abandoned pass removed part of.
+  const drop = new Set(routeIdx.unmovable);
+  for (const [v, rec] of routeIdx.rowsOf) {
+    if (isBrokenEntry(v) || (cache.get(rec.origin) !== v && !routeIndexAwaiting(rec.origin))) drop.add(v);
+  }
+  for (const v of drop) routeIdx.unmovable.add(v);
+  const shadow = { drop, tokens: [...routeIdx.postings.keys()], i: 0, cur: null };
   routeIdx.shadow = shadow;
-  // Each slice runs contained (a throw an entry's step did not catch is
-  // counted under route-index-shadow, that entry is dropped and the build
-  // goes on with the next); a throw inside one entry's step drops that entry.
+  // Each slice runs contained: a throw abandons the pass (the lists it
+  // rewrote stay rewritten, the entries it was removing stay unmovable and the
+  // next pass removes them), and clears routeIdx.shadow so a later pass starts.
   const step = contained("route-index-shadow", () => {
     if (routeIdx.shadow !== shadow) return; // reset or superseded
-    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
     let clean = false;
     try {
-      while (performance.now() < until) {
+      const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+      const postings = routeIdx.postings;
+      let checks = 0;
+      while (shadow.i < shadow.tokens.length) {
         if (!shadow.cur) {
-          // The snapshot first, then the entries the live index took while
-          // the shadow was filling (`late`), each in slices: carried over in
-          // the finish's one turn they held the loop for all of them at once.
-          let origin, v;
-          if (shadow.i < shadow.entries.length) [origin, v] = shadow.entries[shadow.i++];
-          else if (shadow.li < shadow.late.length) [origin, v] = shadow.late[shadow.li++];
-          else break;
-          if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
-          shadow.cur = { origin, v, pos: 0 };
+          const tok = shadow.tokens[shadow.i];
+          const list = postings.get(tok);
+          if (!list) { shadow.i++; continue; }
+          shadow.cur = { tok, list, j: 0, out: null };
         }
-        let next;
-        try { next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until); }
-        catch (e) { routeIndexEntryBroken(shadow.cur.origin, shadow.cur.v, e); shadow.cur = null; continue; }
-        if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
+        const c = shadow.cur;
+        // A long list runs across slices; the drain may append to it between
+        // them (live rows), and those are read too.
+        for (; c.j < c.list.length; c.j++) {
+          const t = c.list[c.j];
+          if (drop.has(t[TOOL_HOME]?.v)) { if (!c.out) c.out = c.list.slice(0, c.j); }
+          else if (c.out) c.out.push(t);
+          if ((++checks & 4095) === 0 && performance.now() >= until) { c.j++; break; }
+        }
+        if (c.j < c.list.length) break; // out of time inside this list
+        if (c.out && postings.get(c.tok) === c.list) { if (c.out.length) postings.set(c.tok, c.out); else postings.delete(c.tok); }
+        shadow.cur = null; shadow.i++;
+        if (performance.now() >= until) break;
       }
       clean = true;
     } finally {
-      if (!clean) {
-        if (shadow.cur) { const c = shadow.cur; shadow.cur = null; brokenEntries.add(c.v); noteBrokenListing(c.origin, ROUTE_INDEX_DRAIN_THREW); }
-        if (routeIdx.shadow === shadow) setImmediate(step);
-      }
+      if (!clean && routeIdx.shadow === shadow) routeIdx.shadow = null;
     }
-    if (shadow.cur || shadow.i < shadow.entries.length || shadow.li < shadow.late.length) { setImmediate(step); return; }
-    // The finish. A throw here abandons this build (the live index keeps
-    // answering) and clears routeIdx.shadow, which gates every later rebuild:
-    // left set, no rebuild would ever start again. contained() counts it.
-    let stale = 0;
-    // The finish is unsliced: timed as its own span for the [loop-lag] line.
+    if (shadow.cur || shadow.i < shadow.tokens.length) { setImmediate(step); return; }
+    // The finish: the removed entries leave the counts. A throw here abandons
+    // the pass and clears routeIdx.shadow, which gates every later pass: left
+    // set, no compaction would ever start again. contained() counts it.
     const finishAt = Date.now(), finishT0 = performance.now();
     try {
       if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
-      // Entries the current index took from `pending` while the shadow was
-      // being filled were set after its snapshot: carry the live ones over.
-      for (const [origin, v] of shadow.late) {
-        if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
-        try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
-      }
-      for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
-        if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+      for (const v of drop) {
+        const rec = routeIdx.rowsOf.get(v);
+        if (rec) { routeIdx.indexedTools -= rec.n; if (rec.dead) routeIdx.staleTools -= rec.n; routeIdx.rowsOf.delete(v); }
+        routeIdx.unmovable.delete(v);
       }
     } catch (e) {
       if (routeIdx.shadow === shadow) routeIdx.shadow = null;
@@ -12146,29 +12343,25 @@ function routeIndexStartShadow() {
     } finally {
       noteTurn("route-index-shadow-finish", finishAt, performance.now() - finishT0);
     }
-    routeIdx.postings = shadow.postings;
-    routeIdx.indexed = shadow.indexed;
-    routeIdx.indexedTools = shadow.indexedTools;
-    routeIdx.staleTools = stale;
     routeIdx.termCache.clear();
     routeIdx.shadow = null;
     routeIdx.builds++;
   });
   setImmediate(step);
 }
-/** Test hook: start a background rebuild now (the stale-share rule starts the real ones). */
+/** Test hook: start a compaction now (the stale-share rule starts the real ones). */
 export function _routeIndexStartShadowForTest() { routeIndexStartShadow(); }
 // Stale rows were cleared only by routeIndexSync, which only a route query on
 // this thread and the boot warm-up call. With a router worker loaded this
 // thread answers no queries, so every crawl cycle's replaced entries piled up
 // as stale rows (and the old entries they hold) until the heap ran out. The
-// drain that indexes a crawl's changes now starts the same shadow rebuild.
+// drain that indexes a crawl's changes now starts the same compaction.
 function routeIndexCompactIfStale() {
-  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  const total = routeIdx.indexedTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) routeIndexStartShadow();
 }
 function routeIndexSync({ sync = false, drain = true } = {}) {
-  const total = routeIdx.indexedTools + routeIdx.staleTools;
+  const total = routeIdx.indexedTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) {
     if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
       routeIndexReset();
@@ -12179,7 +12372,10 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
       }
       return;
     }
-    routeIndexStartShadow();
+    // While entries wait to be indexed the rows they replaced may move to
+    // them, so the pass would remove few of them: the drain starts it once
+    // nothing waits (routeIndexCompactIfStale).
+    if (!routeIdx.pending.size && !routeIdx.partial) routeIndexStartShadow();
   }
   // A query does not index the backlog: a peer pull or a crawl burst can leave
   // thousands of entries pending, and draining them here held the event loop
@@ -12192,9 +12388,8 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
     if (cache.get(origin) !== v) continue; // replaced again before we got to it
-    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed (a swapped-in shadow took it), or dropped
+    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed, or dropped
     try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
-    if (routeIdx.shadow) routeIdx.shadow.late.push([origin, v]);
   }
   routeIdx.pending.clear();
   routeIdx.termCache.clear(); // new vocabulary may match a cached term
@@ -12232,6 +12427,40 @@ function routeIndexTokensFor(term, short) {
 }
 export function _routeIndexStatsForTest() {
   return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
+}
+/** Test hook: the postings read whole. `duplicates` counts a row held twice in
+ *  one list; `missing` a live row (an indexed live entry's, statics intact)
+ *  without its home record there or absent from a list of one of its tokens;
+ *  `staleRefs` a reference whose home entry is not the live one. */
+export function _routeIndexAuditForTest() {
+  let refs = 0, duplicates = 0, staleRefs = 0, homeless = 0, missing = 0, liveRows = 0;
+  const member = new Map();
+  for (const [tok, list] of routeIdx.postings) {
+    const set = new Set(list);
+    duplicates += list.length - set.size;
+    refs += list.length;
+    member.set(tok, set);
+    for (const t of list) { const h = t[TOOL_HOME]; if (!h) homeless++; else if (cache.get(h.origin) !== h.v) staleRefs++; }
+  }
+  for (const [origin, v] of cache) {
+    if (!v || typeof v !== "object" || !routeIdx.indexed.has(v)) continue;
+    const pool = remotePoolMemo.get(v) || [];
+    for (let pos = 0; pos < pool.length; pos++) {
+      const t = pool[pos], st = toolStatics(t, origin);
+      if (st.broken) continue;
+      liveRows++;
+      const h = t[TOOL_HOME];
+      if (!h || h.v !== v || h.pos !== pos || h.origin !== origin) { missing++; continue; }
+      const toks = new Set(splitTokens(st.hay));
+      for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
+      for (const tok of toks) if (!member.get(tok)?.has(t)) { missing++; break; }
+    }
+  }
+  return { refs, duplicates, staleRefs, homeless, missing, liveRows, tokens: routeIdx.postings.size };
+}
+/** Test hook: what the layers built and kept (counters since boot). */
+export function _rowReuseStatsForTest() {
+  return { flatRowsKept, serviceKeysKept, rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
@@ -12396,6 +12625,10 @@ const yieldToLoop = () => new Promise((r) => setImmediate(r));
 // thread, so a caller's CPU budget is charged while the query runs, not only
 // when it ends (a burst of queries would otherwise all pass a budget check
 // that none of them had charged yet).
+// Test hook: a query's steps, driven by the suite, and how many queries have
+// read their view of the cache (so a suite can stop one right after it has).
+let routeQueryViews = 0;
+export function _routeQueryStepsForTest(args) { return { steps: routeQuerySteps({ ...args, drainBacklog: false }), views: () => routeQueryViews }; }
 export async function routeQueryAsyncInThread(args, { sliceMs = 8, onBusy = null } = {}) {
   // In this thread a backlog is scanned, never indexed inline (see routeIndexSync).
   const steps = routeQuerySteps({ ...args, drainBacklog: false });
@@ -12631,8 +12864,10 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // ties resolve) and the ones the index does not hold yet. The async driver
     // may let a crawl or the drain write between slices; nothing written after
     // this line changes what this query ranks.
-    const liveOrder = [...cache.values()];
+    const liveOrder = [], liveAt = new Map();
+    for (const [o, v] of cache) { liveOrder.push(v); liveAt.set(o, v); }
     const live = new Set(liveOrder);
+    routeQueryViews++;
     const unindexed = routeIndexUnindexedLive(); // entry -> origin, scanned whole
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
@@ -12670,9 +12905,18 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
           const home = t[TOOL_HOME];
           if (!home || seen.has(t)) continue;
           seen.add(t);
-          if (unindexed.has(home.v) || !okOf(home.v, home.origin)) continue;
-          let arr = byEntry.get(home.v);
-          if (!arr) byEntry.set(home.v, (arr = []));
+          // A row a newer entry kept moves its home there; to a query that
+          // read the cache before that, it is still the row of the entry it
+          // read (that entry's pool holds it at the same place).
+          let hv = home.v;
+          if (!live.has(hv)) {
+            const at = liveAt.get(home.origin);
+            if (!at || remotePoolMemo.get(at)?.[home.pos] !== t) continue;
+            hv = at;
+          }
+          if (unindexed.has(hv) || !okOf(hv, home.origin)) continue;
+          let arr = byEntry.get(hv);
+          if (!arr) byEntry.set(hv, (arr = []));
           arr.push(t);
         }
       }
@@ -13448,17 +13692,30 @@ function* interleaveSteps(rows) {
 /** Test hook: the directory's interleave as steps (src/x402-index.js interleaveSteps). */
 export function _interleaveStepsForTest(rows) { return interleaveSteps(rows); }
 
-function flatRowsForEntry(origin, v, self, seen, out) {
+// The rows the last flatten built for each origin. A rebuild builds every row
+// again and keeps the earlier row at the same place when the two are equal in
+// every field: a directory rebuilt while a crawl runs then holds the rows it
+// already held (and their search text) instead of a second full set, and the
+// one it builds is dropped young.
+let flatRowsByOrigin = new Map();
+let flatRowsKept = 0; // test counter
+function flatRowsForEntry(origin, v, self, seen, out, next = null) {
   // Same bar as /api/index/register.
   if (!directoryListsEntry(origin, v, self)) return;
   const sellerName = servedSellerNameOn(v, v?.manifest?.name, origin);
+  const was = flatRowsByOrigin.get(origin), mine = [];
   for (const t of v?.tools || []) {
     const route = t?.route || "/";
     const key = `${t?.method || "POST"} ${origin}${route}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(flatRowOf(origin, t, sellerName));
+    let row = flatRowOf(origin, t, sellerName);
+    const w = was ? was[mine.length] : undefined;
+    if (w && sameValue(w, row)) { row = w; flatRowsKept++; }
+    mine.push(row);
+    out.push(row);
   }
+  if (next && mine.length) next.set(origin, mine);
 }
 /** Whether an origin's rows belong in the third-party directory at all (the
  *  bar flatRowsForEntry applies before it reads any tool). */
@@ -13575,12 +13832,14 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
   }
   const out = [];
   const seen = new Set();
-  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out);
-  return finishFlat(out, self);
+  const next = new Map();
+  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out, next);
+  return finishFlat(out, self, next);
 }
 let flatBuilds = 0;
-function finishFlat(out, self) {
+function finishFlat(out, self, next) {
   flatBuilds++;
+  flatRowsByOrigin = next;
   // No sort: every consumer groups or counts (interleaveBySeller orders the
   // rows itself), and a 100k-row sort was most of a rebuild's longest turn.
   flatCache = { at: Date.now(), rows: out, self };
@@ -13595,13 +13854,14 @@ function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
     try {
       const out = [];
       const seen = new Set();
+      const next = new Map();
       let until = performance.now() + 8;
       for (const [origin, v] of [...cache.entries()]) {
-        flatRowsForEntry(origin, v, self, seen, out);
+        flatRowsForEntry(origin, v, self, seen, out, next);
         if (performance.now() >= until) { await yieldTurn(); until = performance.now() + 8; }
       }
       await yieldTurn();
-      return finishFlat(out, self);
+      return finishFlat(out, self, next);
     } finally { flatRebuild = null; }
   })();
   return flatRebuild;
