@@ -203,6 +203,16 @@ for (const pack of SKILL_PACKS) {
   const big = packFailureOf({ pack: "p", failedSteps: Array.from({ length: 90 }, (_, i) => ({ slug: `s-${i}`, statusCode: 502, error: "x".repeat(5000), attribution: "Upstream <b>", after: ["../x"], blocked: true, starved: true })) });
   ok(big.failedSteps.length === 40 && big.failedSteps[0].error.length === 400 && big.failedSteps[0].attribution === undefined && big.failedSteps[0].after.length === 0 && big.failedSteps[0].blocked === true && big.failedSteps[0].starved === undefined && packFailureOf({ pack: "Bad Pack", failedSteps: [{ slug: "a" }] }) === null && packFailureOf(new Error("x")) === null,
     "the fields are bounded: at most forty steps, a capped message, checked slugs and attribution words, and none for any other error");
+  // A step's message is scrubbed like the answer's own (src/tools/redact.js):
+  // a key-shaped string in a step's error never reaches failedSteps[].error.
+  // The shapes are built at runtime and are no real credential.
+  const FAKE_CREDITS_KEY = ["a402_ck_", "Canary", "Pack", "Step", "x".repeat(30)].join("");
+  const FAKE_QUERY_KEY = ["pack", "Canary", "Query", "Key", "9".repeat(8)].join("");
+  let e4 = null;
+  try { await runPack("macro-snapshot", {}, { packIndex, catalog: {}, inlineHandlers: { "us-macro-series": async () => { throw Object.assign(new Error(`upstream echoed Bearer ${FAKE_CREDITS_KEY} at https://feed.example.test/v1?api_key=${FAKE_QUERY_KEY}&fmt=json`), { statusCode: 502 }); } } }); } catch (x) { e4 = x; }
+  const leaked = (packFailureOf(e4)?.failedSteps || []).map((st) => st.error);
+  ok(leaked.length >= 1 && leaked.every((t) => !t.includes(FAKE_CREDITS_KEY.slice(8)) && !t.includes(FAKE_QUERY_KEY) && t.includes("a402_[redacted]") && /api_key=\[redacted\]/.test(t)), `a key-shaped string in a step's message is removed from failedSteps[].error (${String(leaked[0]).slice(0, 120)})`);
+  ok(!JSON.stringify(toolErrorFields(e4)).includes(FAKE_CREDITS_KEY.slice(8)) && !JSON.stringify(toolErrorFields(e4)).includes(FAKE_QUERY_KEY), "...and from the answer's fields whole");
   // A partial answer's envelope is unchanged: the facts ride the refusal only.
   const partial = await runPack("macro-snapshot", {}, { packIndex, catalog: {}, inlineHandlers: { "us-macro-series": async (i) => { if (i.seriesId === "UNRATE") throw Object.assign(new Error(REFUSED), { statusCode: 503, attribution: "upstream" }); return { observations: [] }; } } });
   const pf = partial.steps.find((st) => !st.ok);
