@@ -150,7 +150,7 @@
     "src/tools/llm-context-kit.js": "2026-11-21",
     "src/tools/llm-gateway-kit.js": "2026-11-26",
     "src/tools/llm-gemini-kit.js": "2026-11-24",
-    "src/tools/llm-images-fast-kit.js": "2026-11-27",
+    "src/tools/llm-images-fast-kit.js": "2026-11-28",
     "src/tools/llm-kit.js": "2026-11-26",
     "src/tools/llm-messages-kit.js": "2026-11-27",
     "src/tools/llm-responses-kit.js": "2026-11-27",

@@ -555,7 +555,9 @@ export function validateAnimateRequest(input) {
 
 /** The picture's bytes checked from its header, never decoded: PNG or JPEG,
  *  one IHDR or one frame header (the size any decoder reads), each side and
- *  the pixel count inside the caps. Returns { dataUrl, width, height }. */
+ *  the pixel count inside the caps. Returns { dataUrl, width, height, digest }:
+ *  `digest` is the sha256 of the bytes, which the parked-job key reads in
+ *  place of the data URL. */
 export function animateImageFromBytes(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 24) throw bad('"image" is empty or too small to be a picture');
   if (buf.length > ANIMATE_MAX_IMAGE_BYTES) throw bad(`"image" is ${(buf.length / 1048576).toFixed(1)} MB; the picture may be up to ${ANIMATE_MAX_IMAGE_BYTES / 1048576} MB`, 413);
@@ -569,7 +571,7 @@ export function animateImageFromBytes(buf) {
     throw bad(`"image" declares ${width}x${height}; each side may be up to ${ANIMATE_MAX_SIDE} pixels and the picture up to ${ANIMATE_MAX_PIXELS / 1_000_000} megapixels`, 413);
   }
   if (width < ANIMATE_MIN_SIDE || height < ANIMATE_MIN_SIDE) throw bad(`"image" is ${width}x${height}; each side must be at least ${ANIMATE_MIN_SIDE} pixels`);
-  return { dataUrl: `data:image/${format};base64,${buf.toString("base64")}`, width, height };
+  return { dataUrl: `data:image/${format};base64,${buf.toString("base64")}`, width, height, digest: createHash("sha256").update(buf).digest("hex") };
 }
 
 /** The picture a validated request names: decoded from base64, or read from
@@ -597,12 +599,18 @@ async function animateHandler(input, req) {
   // The key check before any read of the buyer's URL: an unconfigured server
   // fetches nothing (the submit's own check answers the same 503 later).
   if (!OPENROUTER_KEY()) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
-  const { dataUrl, width, height } = await animateImage(source);
+  const { dataUrl, width, height, digest } = await animateImage(source);
   // Unset, the clip follows the picture: portrait for a taller one.
   const aspect_ratio = asked ?? (height > width ? "9:16" : "16:9");
-  const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false,
-    frame_images: [{ type: "image_url", image_url: { url: dataUrl }, frame_type: "first_frame" }], ...(user ? { user } : {}) };
-  return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio });
+  const frame = (url) => [{ type: "image_url", image_url: { url }, frame_type: "first_frame" }];
+  const head = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false };
+  const body = { ...head, frame_images: frame(dataUrl), ...(user ? { user } : {}) };
+  // The parked-job key reads the picture by its bytes' hash: the same picture
+  // gives the same key, and the megabytes of the data URL are never serialized
+  // for it. `dropAfterSubmit` names what runVideoJob lets go of once the
+  // provider holds the job, so a call waiting minutes on its clip holds no copy.
+  const parkBody = { ...head, frame_images: frame(`sha256:${digest}`), ...(user ? { user } : {}) };
+  return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio, parkBody, dropAfterSubmit: ["frame_images"] });
 }
 
 // `tier`: image-animate takes a picture, so its caller may change either;
@@ -686,12 +694,13 @@ async function videosHandler(input, req) {
  *  Shared by the text-to-video route and the image-to-video route: `body` is
  *  the locked upstream request, `tier` names the route in the bound check
  *  and telemetry. */
-async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_ratio }) {
+async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_ratio, parkBody = body, dropAfterSubmit = [] }) {
   const started = Date.now();
   // A job that outlived the last identical request is picked up again rather
   // than paid for twice: the retry the 504 asks for collects the same clip.
   const payer = payerFromRequest(req);
-  const parkKey = payer ? videoParkKey(payer, body) : null;
+  const parkKey = payer ? videoParkKey(payer, parkBody) : null;
+  parkBody = null;
   let job = null;
   const parkedId = parkKey ? await parkedVideoJob(parkKey) : null;
   if (parkedId && await claimParkedVideoJob(parkKey, parkedId)) job = { id: parkedId, status: "pending" };
@@ -710,6 +719,8 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
   }
   const id = typeof job?.id === "string" ? job.id : "";
   if (!id) throw bad("Upstream accepted no video job", 502);
+  // The provider holds the job: the request's large parts are not read again.
+  for (const k of dropAfterSubmit) delete body[k];
   // Job progress (src/job-progress.js): a no-op outside an async job or task.
   reportProgress({ stage: "submitted" }, req);
   // Only ever poll OUR upstream with our key - never a URL the response named

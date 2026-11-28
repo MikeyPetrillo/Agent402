@@ -245,6 +245,58 @@ try {
     const other = videoApi();
     await call({ prompt: "the square rises", image: SQUARE.toString("base64") }, payReq(`0x${"d".repeat(40)}`));
     ok(other.submits.length === 1, "another wallet never collects it");
+    // The key reads the picture by its bytes: the same picture sent as base64
+    // collects a clip parked for its URL form; another picture never does.
+    const t2 = videoApi({ statuses: ["pending"] });
+    const late2 = await refusal({ prompt: "the square turns", image: SQUARE.toString("base64") }, payReq(buyer));
+    ok(late2?.statusCode === 504 && t2.submits.length === 1, "control: a second timed-out generation is parked");
+    const otherPicture = videoApi();
+    await call({ prompt: "the square turns", image: PORTRAIT.toString("base64") }, payReq(buyer));
+    ok(otherPicture.submits.length === 1, "the same prompt with another picture from the same wallet never collects it");
+    const same = videoApi();
+    await call({ prompt: "the square turns", image: `data:image/png;base64,${SQUARE.toString("base64")}` }, payReq(buyer));
+    ok(same.submits.length === 0 && same.polls > 0, "the same picture as a data: URL collects it (the key is the picture's bytes, not the text it came in)");
+  }
+
+  // ---- a call waiting on its clip holds no copy of the picture ----
+  {
+    const payReq = (from) => { const h = Buffer.from(JSON.stringify({ x402Version: 2, payload: { signature: "0x00", authorization: { from } } })).toString("base64"); return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined), ip: "203.0.113.9" }; };
+    const { setFlagsFromString } = await import("node:v8");
+    const { runInNewContext } = await import("node:vm");
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc");
+    const held = () => { gc(); gc(); const m = process.memoryUsage(); return m.heapUsed + m.external; };
+    // A PNG of about 3 MB: the IDAT is random bytes (stored, so the file is that large).
+    const { randomBytes } = await import("node:crypto");
+    const big = Buffer.concat([SIG, ihdr(1024, 1024), chunk("IDAT", randomBytes(3 * 1048576)), chunk("IEND", Buffer.alloc(0))]);
+    const N = 4;
+    const inputs = Array.from({ length: N }, (_, i) => ({ prompt: `held ${i}`, image: big.toString("base64") }));
+    let pending = true, submitted = 0;
+    video = async (u, init) => {
+      if (init.method === "POST") { submitted++; return { ok: true, status: 202, text: async () => JSON.stringify({ id: `held${submitted}`, status: "pending" }) }; }
+      if (u.includes("/content")) return { ok: true, status: 200, headers: { get: () => "video/mp4" }, arrayBuffer: async () => MP4.buffer.slice(MP4.byteOffset, MP4.byteOffset + MP4.byteLength), text: async () => "" };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "held", status: pending ? "pending" : "completed" }) };
+    };
+    const before = held();
+    const runs = inputs.map((inp) => call(inp));
+    const deadline = Date.now() + 5000;
+    while (submitted < N && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 50));
+    const perCall = (held() - before) / N;
+    const submittedN = submitted;
+    pending = false;
+    await Promise.all(runs);
+    // One paid call serializes the picture once, for the submit: the parked-job key reads its hash.
+    {
+      const realStringify = JSON.stringify;
+      let large = 0;
+      JSON.stringify = function counted(...a) { const out = realStringify.apply(JSON, a); if (typeof out === "string" && out.length >= big.length) large++; return out; };
+      pending = false;
+      try { await call({ prompt: "held paid", image: big.toString("base64") }, payReq(`0x${"e".repeat(40)}`)); } finally { JSON.stringify = realStringify; }
+      ok(large === 1, `a paid call serializes the picture once, for the submit, and its parked-job key never does (${large} serializations of the picture's size)`);
+      pending = true;
+    }
+    ok(submittedN === N && perCall < big.length / 2, `a call waiting on its clip holds under half the picture's size beyond its request (${(perCall / 1048576).toFixed(2)} MB per call; the data URL alone is ${(big.length * 4 / 3 / 1048576).toFixed(2)} MB)`);
   }
 } finally {
   restoreResolver();
