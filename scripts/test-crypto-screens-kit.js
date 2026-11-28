@@ -344,12 +344,105 @@ reset();
   routes = [[path("/derivatives"), () => jsonRes(500, "x")]];
   await throws(h("funding-screener")({ coin: "BTC" }), 502, "the first page failing is the call's failure");
 
+  // Our own limiter refusing a later page (the minute bucket here) is told apart from the upstream failing.
+  reset();
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(PAGES[n - 1] || [], { next: n < PAGES.length, page: n, last: PAGES.length }); }]];
+  process.env.COINGECKO_MAX_PER_MIN = "2";
+  const limited = await h("funding-screener")({ coin: "BTC" });
+  delete process.env.COINGECKO_MAX_PER_MIN; resetCgRateLimit();
+  ok(limited.scan.stoppedBy === "read-limit" && limited.complete === false && derivReads().length === 2 && limited.venues === 4, `this server's own read limit ends the reading as read-limit, not upstream (${limited.scan.stoppedBy}, ${derivReads().length} reads)`);
+
+  // The deadline: a page after the first is not started without room in the budget.
+  reset();
+  process.env.UPSTREAM_HANDLER_BUDGET_MS = "2000";
+  const late = await h("funding-screener")({ coin: "BTC" });
+  const lateBoard = await h("funding-screener")({});
+  delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+  ok(late.scan.stoppedBy === "deadline" && late.complete === false && late.scan.pagesRead === 1 && derivReads().length === 1 && lateBoard.scan.stoppedBy === "deadline", `a spent budget stops before page 2 (${late.scan.stoppedBy}, ${derivReads().length} reads)`);
+  // The same pages ending for another reason are another answer, in both modes (the kept answer's key names how the scan ended).
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return n === 1 ? pagedRes(P1, { next: true }) : jsonRes(500, "x"); }]];
+  const failedCoin = await h("funding-screener")({ coin: "BTC" });
+  const failedBoard = await h("funding-screener")({});
+  ok(failedCoin.scan.stoppedBy === "upstream" && failedBoard.scan.stoppedBy === "upstream", `over the same kept page, an upstream stop is not answered as the earlier deadline stop (${failedCoin.scan.stoppedBy}, ${failedBoard.scan.stoppedBy})`);
+
+  // The list holds the perpetuals first, then the dated futures: a page that turns
+  // to futures ends the scan, complete for perpetuals, whatever the futures' open interest.
+  reset();
+  const fut = (k, oi) => perp(`Fut ${k}`, `FUT${k}`, "BTC", 0.01, oi, 0.05, { contract_type: "futures" });
+  const Q2 = [...filler(5, 100, 3_000_000, 2_000_000), perp("G Perps", "BTCG", "BTC", 0.02, 1_900_000), ...Array.from({ length: 148 }, (_, k) => fut(k, 60_000_000 - k * 10_000)), fut(148, 1_500_000)];
+  const Q3 = Array.from({ length: 250 }, (_, k) => fut(200 + k, 30_000_000 - k * 10_000));
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes([P1, Q2, Q3][n - 1] || [], { next: true, page: n }); }]];
+  const perpsEnd = await h("funding-screener")({ coin: "BTC" });
+  ok(perpsEnd.scan.stoppedBy === "perpetuals-end" && perpsEnd.complete === true && derivReads().length === 2 && perpsEnd.venues === 4, `the page where the futures begin ends the reading, complete (${perpsEnd.scan.stoppedBy}, ${derivReads().length} reads, ${perpsEnd.venues} venues)`);
+  ok(__test.reducePerps.fn(Q2).lowestOi === 1_900_000, "a page's lowest open interest is its perpetuals' (the futures after them are not the floor)");
+
+  // All the pages of one scan belong to page 1's window: once page 1 is read
+  // again, a later page kept from the earlier window is read again too.
+  {
+    reset();
+    routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(PAGES[n - 1] || [], { next: n < PAGES.length, page: n, last: PAGES.length }); }]];
+    const realNow = Date.now, t0 = realNow(), at = (m) => { Date.now = () => t0 + m * 60_000; };
+    try {
+      at(0); await h("funding-screener")({ coin: "BTC", minOpenInterestUsd: 5_000_000 });   // pages 1-2
+      at(20); await h("funding-screener")({ coin: "BTC" });                                  // page 3, inside page 1's window
+      const at20 = derivReads().length;
+      at(29); await h("funding-screener")({ coin: "BTC" });
+      const at29 = derivReads().length;
+      at(31); const fresh = await h("funding-screener")({ coin: "BTC" });
+      const at31 = derivReads().length;
+      ok(at20 === 3 && at29 === 3, `page 3 read at minute 20 is kept to the end of page 1's window (${at20}, ${at29} reads)`);
+      ok(at31 === 6 && fresh.scan.complete === true, `after page 1's window every page of the scan is read again, page 3 included (${at31 - at29} reads at minute 31)`);
+    } finally { Date.now = realNow; }
+  }
+
+  // An unconfirmed coin: while the unsettled share has room it is read as asked;
+  // once the share is full, a coin neither on page 1 nor named in the coin list
+  // is answered from page 1 alone (one read a window), and a real coin is still read.
+  {
+    reset();
+    const SYMS = [{ id: "bitcoin", symbol: "btc" }, { id: "deep-coin", symbol: "deepc" }];
+    const D3 = [perp("E Perps", "DEEPCUSDT", "DEEPC", 0.01, 1_500_000), perp("F Perps", "DEEPC-PERP", "DEEPC", 0.02, 1_400_000), perp("NS Perps", "NOSYM", "NOSYMBOL", 0.01, 1_300_000), ...filler(6, 247, 1_200_000, 50_000)];
+    const GP = [P1, P2, D3];
+    routes = [
+      [path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(GP[n - 1] || [], { next: n < GP.length, page: n, last: GP.length }); }],
+      [path("/coins/list"), () => jsonRes(200, SYMS)],
+    ];
+    const listReads = () => calls.filter((c) => c.url.pathname === "/api/v3/coins/list").length;
+    await throws(h("funding-screener")({ coin: "ZZQQ" }), 422, "keyless (room to read): an unknown coin is read to the floor as before");
+    ok(derivReads().length === 3 && listReads() === 0, `with room in the share, no list is read and the pages are read as asked (${derivReads().length} pages)`);
+    reset();
+    process.env.COINGECKO_API_KEY = "placeholder-not-a-key"; process.env.COINGECKO_UNSETTLED_SHARE = "0"; process.env.COINGECKO_DAILY_MAX = "1000";
+    try {
+      await throws(h("funding-screener")({ coin: "ZZQQ" }), 422, "share full: an unknown coin", /among the venues read/);
+      ok(derivReads().length === 1 && listReads() === 1, `share full: an unknown coin costs page 1 and the coin list (${derivReads().length} page, ${listReads()} list)`);
+      await throws(h("funding-screener")({ coin: "ZZQQ" }), 422, "share full: the same unknown coin again");
+      await throws(h("funding-screener")({ coin: "QQZZ" }), 422, "share full: another unknown coin");
+      ok(derivReads().length === 1 && listReads() === 1, `and the next unknown coins in the window read nothing (${derivReads().length}, ${listReads()})`);
+      const btcKnown = await h("funding-screener")({ coin: "BTC" });
+      ok(btcKnown.venues === 4 && btcKnown.scan.stoppedBy === "floor" && derivReads().length === 3, `share full: a coin on page 1 is read to the floor (${btcKnown.venues} venues, ${derivReads().length} pages)`);
+      reset();
+      const deep = await h("funding-screener")({ coin: "DEEPC" });
+      ok(deep.venues === 2 && deep.complete === true && derivReads().length === 3 && listReads() === 1, `share full: a real coin the list names is read to the floor though it is not on page 1 (${deep.venues} venues)`);
+    } finally { delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_UNSETTLED_SHARE; delete process.env.COINGECKO_DAILY_MAX; resetCgRateLimit(); }
+  }
+
+  // A hostile link header (64 KB of "<" with no ">") is read in linear time.
+  {
+    const t250 = JSON.stringify(P1);
+    const evil = { get: (k) => (k.toLowerCase() === "link" ? "<".repeat(65_536) : null) };
+    const t1 = performance.now();
+    const pg = await __test.reducePerps.fromText(t250, evil);
+    const took = performance.now() - t1;
+    ok(pg.next === false && took < 150, `a 64 KB link header of "<" is read in ${took.toFixed(0)} ms and names no next page`);
+  }
   // The link header: rel="next" decides, and an upstream that did not page is the whole list.
   {
     const hdr = (link) => ({ get: (k) => (k.toLowerCase() === "link" ? link : null) });
     const t250 = JSON.stringify(P1);
     ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?page=2>; rel="next", <https://x/?page=9>; rel="last"'))).next === true, "a link naming rel=next is a next page");
     ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?page=1>; rel="first", <https://x/?page=8>; rel="prev"'))).next === false, "a link without rel=next is the last page, even when the page is full");
+    ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?page=1>; rel="prev next"'))).next === true && (await __test.reducePerps.fromText(t250, hdr('<https://x/?page=2>; type="application/json"; rel=next'))).next === true, "rel is a space-separated token list, wherever it sits among the link's parameters");
+    ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?rel=next>; rel="last", <https://x/?p=2>; rel="nextish"'))).next === false, "rel=next inside a URL, or a token that only starts with next, is no next page");
     ok((await __test.reducePerps.fromText(JSON.stringify([...P1, ...P2]), hdr('<https://x/?page=2>; rel="next"'))).next === false, "a page holding more than 250 tickers is an upstream that did not page: the whole list");
     ok(__test.edgeOf(833_360.39) === 830_000 && __test.edgeOf(1_016_371) === 1_000_000 && __test.edgeOf(null) === null, "the open interest reached is stated at two significant figures, rounded down");
   }

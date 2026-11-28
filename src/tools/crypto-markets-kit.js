@@ -116,7 +116,7 @@ function headers() {
 }
 
 // One upstream GET with the cache in front. `ttlMs` picks the cache class.
-// Returns { data, fetchedAt, cached }.
+// Returns { data, fetchedAt, cached, expiresAt } (expiresAt: when the kept entry ends, ms).
 // The key's per-minute limit covers the whole deployment, so paid
 // traffic has to be paced here rather than discovered at the upstream 429. A
 // caller that arrives with an empty bucket gets 503 (capacity) and is not
@@ -145,7 +145,7 @@ export async function cgGet(path, params, ttlMs, reduce = null) {
   const cacheKey = reduce ? `${key}#${reduce.name}` : key;
   const { entry, cached } = await cache.through(cacheKey, ttlMs, () => cgLoad(key, path, reduce));
   entry.data ??= JSON.parse(entry.text);
-  return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
+  return { data: entry.data, fetchedAt: entry.fetchedAt, cached, expiresAt: entry.expiresAt };
 }
 
 // --- ids confirmed before they are read ---------------------------------------

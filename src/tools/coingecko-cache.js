@@ -45,6 +45,9 @@ export function createCgCache(name, { max = 200, maxBody = Infinity, keepParsed 
   function localPut(key, entry) {
     if (entry.text.length > maxBody) return;
     local.delete(key);
+    // Full: expired entries leave first (a paged document's earlier window
+    // ends under keys never read again), then the oldest live one.
+    if (local.size >= max) { const now = Date.now(); for (const [k, e] of local) if (e.expiresAt <= now) local.delete(k); }
     if (local.size >= max) { const oldest = local.keys().next().value; if (oldest !== undefined) local.delete(oldest); }
     local.set(key, entry);
   }
