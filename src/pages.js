@@ -29,7 +29,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
-import { HUMAN_PRODUCTS } from "./human-checkout.js";
+import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { routeFailedCallLine, TEMPO_PUSH_SHORT } from "./settlement-footnote.js";
@@ -40,7 +40,7 @@ import { defHasLastingEffect } from "./hangup-forgiveness.js";
 import { mppOffersFor, mppRailsPhrase, mppOfferShortProse, mppOfferGateClauseIfOffered, mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsConnectorOn } from "./credits-sales.js";
 import { paysThirdParty } from "./third-party-routes.js";
 import { ncTaxableKind } from "./nc-sales-tax.js";
 import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
@@ -901,23 +901,35 @@ export const FAQ_GROUPS = [
   ["sellers", "Sellers and the index"],
   ["service", "The service"],
 ];
-export function faqItems() {
-  const creditsOnSale = creditsSalesEnabled();
+// The newcomer's four questions, by the words a newcomer uses. Each reads the
+// switch behind what it offers (card reports, credits, the credits connector),
+// and the data answer states only what /privacy states
+// (scripts/test-start-page.js holds its sentences to that page).
+export const FAQ_FREE_Q = "Is it free?";
+export const FAQ_CRYPTO_Q = "Do I need crypto?";
+export const FAQ_PHONE_Q = "Does it work on my phone?";
+export const FAQ_DATA_Q = "Is my data safe?";
+export const FAQ_DATA_SENTENCES = ["Data you send to a tool is processed in memory and not stored", "We do not sell or share data with anyone for advertising or any other purpose."];
+export function faqItems({ creditsOnSale = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
+  const viaCredits = Boolean(creditsOnSale && connector);
+  const byCard = [storefront ? 'finished reports at <a href="/reports">/reports</a>' : "", creditsOnSale ? 'prepaid credits at <a href="/credits">/credits</a>' : ""].filter(Boolean).join(" and ");
   return [
+  { g: "paying", q: FAQ_FREE_Q, a: `Most pure-CPU tools are: they accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set with no wallet and no signup (rate-limited). Every other tool is priced per call, at the price listed in <a href="/pricing">/pricing</a>.` },
+  { g: "paying", q: FAQ_CRYPTO_Q, a: `Not to start. The free tools run with no wallet${byCard ? `, and a card buys ${byCard}` : ""}. An agent that pays per call from a wallet pays in a stablecoin: ${RAILS_SHORT}. <a href="/start#fund">/start</a> shows how to fund a wallet.` },
+  { g: "paying", q: FAQ_PHONE_Q, a: `Yes. Add the Agent402 connector to Claude from your phone's browser and its tools run in the Claude app: the free tools with no wallet${viaCredits ? ", and paid tools by card from a credits balance" : ""}. The steps are on <a href="/start#phone">/start</a>.${viaCredits ? "" : " Paid tools take a wallet set up on a computer."}` },
   { g: "paying", q: "Do I need an account or API key?", a: `No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key${creditsOnSale ? ' you bought at <a href="/credits">/credits</a>' : " you already hold"} - is the only credential, charged per call.` },
   { g: "paying", q: "Can I pay by card instead of crypto?", a: `Yes: buy a finished report at <a href="/reports">/reports</a> (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per report"} by card, refunded if it fails) or subscribe to a monitor at <a href="/monitors">/monitors</a> (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly || "priced per month"} a month, cancel anytime).${creditsOnSale ? ' Prepaid credits at <a href="/credits">/credits</a> pay any paid tool except the wallet-scoped ones and the routes that buy from an outside seller, with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds; the unspent balance is refunded to your card on request.' : " Prepaid card credits are not on sale; a credits key bought earlier still pays any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds."}` },
   // DERIVED. Every figure in this answer was typed once and then outlived two
   // repricings: the pack ceiling was over ten times the real one and the card
   // range was quoted below its own floor, which a reader meets at checkout.
   { g: "paying", q: "What does it cost?", a: `Flat per-call prices from $0.001; most tools are ${TYPICAL_PRICE_RANGE.text}, premium AI and media tiers higher, skill packs ${PACK_PRICE_RANGE.text}, and report products ${agentReportPriceRange()?.text || "priced per product"} for an agent (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per product"} by card, which includes payment processing). Every price is in <a href="/api/pricing">/api/pricing</a> and quoted in each 402; the metered model route quotes each request from its body.` },
-  { g: "paying", q: "Can I use it without any money or a wallet?", a: `Yes. Most pure-CPU tools accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set for free (rate-limited).` },
   { g: "paying", q: "Which blockchain and asset does it use?", a: `${RAILS_PAREN}. The buyer needs only the stablecoin - gas is sponsored by the facilitator on EVM chains.` },
   { g: "paying", q: "What happens if a tool fails after I pay?", a: `Over x402 an error is not charged: settlement runs only after a successful (under-400) response. ${SETTLE_FIRST_SENTENCE} A payment final before the call runs (a Tempo push transfer over MPP) is recorded when the call fails and repaid on chain; look one up with <code>GET /api/refunds/lookup?tx=&lt;hash&gt;</code>. A few tools charge a partial result by design and say so in their description.` },
   { g: "protocols", q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. How a paid request works here: <a href="/what-is-x402">x402 and MPP on Agent402</a>.' },
   { g: "protocols", q: "What is MPP, and does Agent402 support it?", a: 'Yes. MPP (Machine Payments Protocol) carries the same pay-per-call handshake in HTTP&rsquo;s standard auth headers. Every paid endpoint accepts its evm method, and most also accept its tempo method (memory and the long-running report routes take evm only), at the same URL and price. Header by header: <a href="/what-is-x402#compare">the comparison table</a>; how a payment works here: <a href="/what-is-mpp">MPP on Agent402</a>.' },
   { g: "models", q: "Does using this spend my AI tokens?", a: "No. You never hand us a model key; a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser). The model-backed ones are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the router's judgment model, and the image, speech, transcription, embedding and AI-answer tools." },
   { g: "models", q: "Is there an OpenAI-compatible endpoint?", a: 'Yes. Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> (with <code>/v1/metered/messages</code> and <code>/v1/metered/responses</code> twins), paid per call in USDC over x402 or MPP with no API key. How each request is quoted: <a href="/guides/x402-in-5-minutes">the five-minute guide</a>; flat tiers, embeddings and images: <a href="/pricing">/pricing</a>.' },
-  { g: "models", q: "Is my data stored?", a: 'Tool inputs are processed in memory. The memory tools store data by design (wallet-keyed, owner-deletable, optional TTL); the other cases, such as short-lived response caches and decisions bought on /api/decide (30 days), are listed in <a href="/privacy">/privacy</a>.' },
+  { g: "models", q: FAQ_DATA_Q, a: `${FAQ_DATA_SENTENCES[0]}, except in the cases <a href="/privacy">/privacy</a> lists: the memory tools store data by design (wallet-keyed, owner-deletable, optional TTL), and there are short-lived response caches and decisions bought on /api/decide (30 days). ${FAQ_DATA_SENTENCES[1]}` },
   { g: "sellers", q: "Can I find tools on other x402 sellers from here?", a: `Yes. <code>POST /api/route</code> ranks tools across every x402 seller we have crawled, found in public discovery registries re-read ${discoveryIntervalLabel()} and re-probed ${crawlIntervalLabel()}; a seller whose latest crawl failed is skipped until a crawl succeeds (its last five crawls set its health score), and a new one starts routable. Browse <a href="/marketplace">/marketplace</a> or page through <a href="/api/index">/api/index</a> (<code>?seller=&lt;host&gt;</code> for one origin), both free.` },
   { g: "sellers", q: "How do I list my own API?", a: 'For free: your origin is auto-discovered from public x402 discovery registries once it is live, or paste it on <a href="/sell">/sell</a> (or call <code>POST /api/index/register</code>) for an immediate probe. Settlement lands straight in your wallet, with 0% take.' },
   { g: "sellers", q: "How do I see which x402 sellers are most used?", a: `<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the head of the on-chain ranking of x402 sellers by Base USDC settled volume: 25 rows by default, up to 50 with <code>?top=N</code>, and <code>totalSellers</code> for the full count. It refreshes ${leaderboardCadence()}, leaves Agent402 out unless you add <code>?include=all</code>, and <a href="/leaderboard">/leaderboard</a> shows how it is built.` },

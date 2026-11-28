@@ -15,6 +15,9 @@
 //     people card ends under its buttons at 1440 px;
 //   - a changed width re-measures the wraps (assets/js/site-chrome.js a402Rebind),
 //     and the re-measure waits for the web fonts.
+//   - /start at 375 px: the phone card is the first app card, its address and
+//     first prompt each have a copy button of 44 px or more that does not sit
+//     on the text, and the page does not scroll sideways.
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
@@ -380,6 +383,26 @@ document.addEventListener('DOMContentLoaded',function(){
     const before = await snap(p);
     await p.setViewportSize({ width: 1440, height: 500 }); await p.waitForTimeout(500);
     ok((await snap(p)) === before, "a change of height alone (a phone's address bar) re-measures nothing");
+    await p.close();
+  }
+  {
+    const p = await open("/start");
+    await p.waitForSelector("#phone .ml-code-copy", { timeout: 8000 }).catch(() => {});
+    const r = await p.evaluate(() => {
+      const box = (e) => { const b = e.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom, w: b.width, h: b.height }; };
+      const cards = [...document.querySelectorAll("#apps .st-card")].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      const blocks = [...document.querySelectorAll("#phone .ml-code")].map((b) => {
+        const btn = b.querySelector(".ml-code-copy"), code = b.querySelector("code");
+        const rng = document.createRange(); rng.selectNodeContents(code);
+        return { name: b.getAttribute("data-name"), label: btn?.getAttribute("aria-label"), btn: btn && box(btn), text: [...rng.getClientRects()].filter((x) => x.width > 0).map((x) => ({ left: x.left, right: x.right, top: x.top, bottom: x.bottom })) };
+      });
+      return { first: cards[0]?.id, blocks, sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    });
+    ok(r.first === "phone", `/start at 375 px: the phone card is the first app card (${r.first})`);
+    ok(r.blocks.length === 2 && r.blocks.every((b) => b.btn && b.btn.w >= 44 && b.btn.h >= 44), `/start at 375 px: the phone card's copy buttons are 44 px targets (${r.blocks.map((b) => b.btn && `${Math.round(b.btn.w)}x${Math.round(b.btn.h)}`).join(", ")})`);
+    ok(r.blocks.length === 2 && r.blocks.every((b) => b.btn && b.text.length && !b.text.some((t) => overlap(t, b.btn))), "/start at 375 px: neither copy button sits on the text it copies");
+    ok(r.blocks.map((b) => b.label).join() === "Copy the connector address,Copy the first prompt", `/start: each copy button is named for what it copies (${r.blocks.map((b) => b.label).join(", ")})`);
+    ok(r.sideways <= 0, `/start at 375 px: the page does not scroll sideways (${r.sideways})`);
     await p.close();
   }
 } finally {

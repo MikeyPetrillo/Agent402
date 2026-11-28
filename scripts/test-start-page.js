@@ -16,6 +16,13 @@
 //     connector's payment.info, the README, the wiki pages on paying and
 //     getting started, and the agent402-client README.
 //   - /start is in the docs nav, the sitemap, /llms.txt and the page dates.
+//   - The phone path is an app entry like the others: the hosted address, or
+//     the credits connector address only with credits on sale and the sign-in
+//     on; no card or credits word with sales off; its first prompt names a
+//     tool on the free list, and that tool answers through a local /mcp.
+//   - /faq answers the newcomer's four questions; each reads its switch, the
+//     structured data carries the visible answers, and the data answer's
+//     sentences are on /privacy.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { pageText } from "./lib/html-text.js";
@@ -25,7 +32,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { bootServer } from "./lib/boot-server.js";
 
-const { startPage, startApps, START_PATH } = await import("../src/start-page.js");
+const { startPage, startApps, START_PATH, START_FIRST_PROMPT, START_PHONE_ID } = await import("../src/start-page.js");
+const { FREE_TIER_SLUGS } = await import("../src/free-tier.js");
+const { createHash } = await import("node:crypto");
 const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT, BASE_NO_GAS_PLAIN } = await import("../src/base-no-gas.js");
 const { mcpInstallHints, AGENT402_MCP_VERSION } = await import("../src/mcp-flagship.js");
 const { HUMAN_PRODUCTS } = await import("../src/human-checkout.js");
@@ -56,7 +65,26 @@ const creditsOnly = plain(startPage(ORIGIN, catalog, { credits: true, connector:
 const CONNECTOR_URL = `${ORIGIN}/mcp/credits`;
 
 const apps = startApps(ORIGIN);
-ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
+ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor,On your phone", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
+{
+  // The phone path, in both switch states, from the same list the page renders.
+  const offHtml = startPage(ORIGIN, catalog, { credits: false, connector: false, storefront: false });
+  const onHtml = startPage(ORIGIN, catalog, { credits: true, connector: true, storefront: true });
+  const phoneOff = apps.find((a) => a.id === START_PHONE_ID), phoneOn = startApps(ORIGIN, { connector: true }).find((a) => a.id === START_PHONE_ID);
+  const cardOf = (html) => { const at = html.indexOf(`id="${START_PHONE_ID}"`); return at < 0 ? "" : plain(html.slice(at, html.indexOf('<div id="', at + 10) > 0 ? html.indexOf('<div id="', at + 10) : html.indexOf("</section>", at))); };
+  ok(phoneOff?.copy === install.hostedUrl && cardOf(offHtml).includes(install.hostedUrl) && !cardOf(offHtml).includes("/mcp/credits"), "sales off: the phone card pastes the hosted connector address");
+  ok(phoneOn?.copy === CONNECTOR_URL && cardOf(onHtml).includes(CONNECTOR_URL), "credits and the sign-in on: the phone card pastes the credits connector address");
+  ok(phoneOff && !/card|credit/i.test(`${phoneOff.step} ${phoneOff.then}`) && /free tools run from your phone with no wallet/.test(phoneOff.then) && /wallet set up on a computer/.test(phoneOff.then), "sales off: the phone steps say what runs with no wallet and offer no card or credits");
+  ok(phoneOn && /A card pays for paid tools/.test(phoneOn.then) && /sign in with your email/.test(phoneOn.then) && cardOf(onHtml).includes("A card pays for paid tools"), "credits and the sign-in on: the phone steps say a card pays for paid tools after an email sign-in");
+  ok(phoneOff && /claude\.ai/.test(phoneOff.step) && /Add custom connector/.test(phoneOff.step) && /Claude app/.test(phoneOff.then), "the phone steps add the connector in the browser and use it in the Claude app");
+  ok(FREE_TIER_SLUGS.has(START_FIRST_PROMPT.slug) && isComputePayable({ slug: START_FIRST_PROMPT.slug, route: "POST /api/x", price: "$0.001" }), `the first prompt's tool is on the free list (${START_FIRST_PROMPT.slug})`);
+  ok(phoneOff?.prompt === START_FIRST_PROMPT.text && cardOf(offHtml).includes(START_FIRST_PROMPT.text) && cardOf(onHtml).includes(START_FIRST_PROMPT.text), "the phone card ends on the first prompt, in both states");
+  ok(/data-name="the connector address"/.test(offHtml) && /data-name="the first prompt"/.test(offHtml), "the address and the prompt sit in code blocks (each gets a copy button)");
+  const ld = JSON.parse(offHtml.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => m.replace(/^<script[^>]*>|<\/script>$/g, "")).find((j) => /"HowTo"/.test(j)));
+  const step = ld.step.find((x) => x.name === "On your phone");
+  ok(step && step.text.includes(install.hostedUrl) && step.text.includes(START_FIRST_PROMPT.text) && !/credit/i.test(JSON.stringify(ld)), "the page's structured data carries the phone step and offers no credits with sales off");
+  ok(/order:-1/.test(offHtml) && offHtml.includes(`#${START_PHONE_ID}{order:-1}`), "at phone width the phone card is first");
+}
 ok(apps.find((a) => a.id === "claude-desktop").copy === install.hostedUrl && allOff.includes(install.hostedUrl), "Claude desktop pastes the hosted connector address from the install hints");
 ok(apps.find((a) => a.id === "claude-code").copy === install.claudeCodeHosted && allOff.includes(install.claudeCodeHosted), "Claude Code runs the hosted install line from the install hints");
 ok(apps.find((a) => a.id === "cursor").copy === `"agent402": ${JSON.stringify(install.cursorMcpJson.mcpServers.agent402, null, 2)}` && allOff.includes('"url": "https://agent402.tools/mcp"'), "Cursor adds the install hints' agent402 entry, the server alone");
@@ -129,6 +157,31 @@ ok(allOn.includes(BASE_NO_GAS_PLAIN) && allOff.includes(BASE_NO_GAS_PLAIN) && !a
   ok(balanceName(a, [a, c]) === "Balance bought Nov 23, 2026" && balanceName(a, [a, b]) === "Balance bought Nov 23, 2026 (de8f)" && balanceName(b, [a, b]) === "Balance bought Nov 23, 2026 (9e01)", "a balance is named by its purchase day, with the key id's last four only beside a same-day twin");
 }
 
+// ---- /faq: the newcomer's four questions ---------------------------------------
+{
+  const { faqItems, faqPage, FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q, FAQ_DATA_SENTENCES } = await import("../src/pages.js");
+  const { privacyPage } = await import("../src/privacy.js");
+  const off = faqItems({ creditsOnSale: false, connector: false, storefront: false });
+  const on = faqItems({ creditsOnSale: true, connector: true, storefront: true });
+  const salesOnly = faqItems({ creditsOnSale: true, connector: false, storefront: false });
+  const a = (items, q) => items.find((it) => it.q === q)?.a || "";
+  for (const q of [FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q]) ok(off.filter((it) => it.q === q).length === 1 && a(off, q).length > 40, `/faq answers "${q}" once`);
+  ok([FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q].every((q) => !/credit|card|\/reports/i.test(a(off, q))), "every switch off: the free, crypto and phone answers offer no card, credits or reports");
+  ok(a(on, FAQ_CRYPTO_Q).includes('href="/reports"') && a(on, FAQ_CRYPTO_Q).includes('href="/credits"') && !a(salesOnly, FAQ_CRYPTO_Q).includes("/reports") && a(salesOnly, FAQ_CRYPTO_Q).includes("/credits"), "the crypto answer names card reports and credits each by its own switch");
+  ok(/paid tools by card from a credits balance/.test(a(on, FAQ_PHONE_Q)) && !/card|credit/i.test(a(salesOnly, FAQ_PHONE_Q)) && /wallet set up on a computer/.test(a(salesOnly, FAQ_PHONE_Q)), "the phone answer says a card pays only with credits on sale and the connector sign-in on");
+  ok([off, on].every((items) => a(items, FAQ_PHONE_Q).includes(`href="${START_PATH}#${START_PHONE_ID}"`)) && startPage(ORIGIN, catalog).includes(`id="${START_PHONE_ID}"`), "the phone answer links the phone card on /start");
+  ok(!/\$\d/.test(a(off, FAQ_FREE_Q) + a(off, FAQ_CRYPTO_Q) + a(off, FAQ_PHONE_Q) + a(off, FAQ_DATA_Q)) && a(off, FAQ_FREE_Q).includes('href="/pricing"'), "the four answers type no price; the free answer links /pricing");
+  const privacy = plain(privacyPage(ORIGIN));
+  ok(FAQ_DATA_SENTENCES.length === 2 && FAQ_DATA_SENTENCES.every((s) => privacy.includes(s) && a(off, FAQ_DATA_Q).includes(s)) && a(off, FAQ_DATA_Q).includes('href="/privacy"'), "the data answer links /privacy and its sentences are on /privacy word for word");
+  // The structured data and the page a reader sees carry the same answers.
+  const html = faqPage(ORIGIN);
+  const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g).map((m) => JSON.parse(m.replace(/^<script[^>]*>|<\/script>$/g, ""))).flat().find((j) => j["@type"] === "FAQPage");
+  const seen = plain(html);
+  const qs = (ld?.mainEntity || []).map((e) => e.name);
+  ok(ld && [FAQ_FREE_Q, FAQ_CRYPTO_Q, FAQ_PHONE_Q, FAQ_DATA_Q].every((q) => qs.includes(q)) && new Set(qs).size === qs.length, `the FAQ structured data parses and holds the four questions once each (${qs.length} questions)`);
+  ok(ld && ld.mainEntity.every((e) => e["@type"] === "Question" && e.acceptedAnswer?.["@type"] === "Answer" && seen.includes(plain(`<p>${e.name}</p>`)) && seen.includes(plain(`<p>${e.acceptedAnswer.text}</p>`))), "every structured answer is the answer the page shows");
+}
+
 // ---- the static trees --------------------------------------------------------
 for (const f of ["README.md", "wiki/Paying-with-x402.md", "wiki/Getting-Started.md", "client/README.md"]) {
   ok(readFileSync(join(ROOT, f), "utf8").includes(BASE_NO_GAS_SENTENCE), `${f} states the Base gas sentence`);
@@ -167,6 +220,10 @@ try {
   ok(gasAt > 0 && /^- \[[^\]]+\]\([^)]+\): /.test(llmsLines[gasAt - 1]) && llmsLines.slice(llmsLines.indexOf("## Settlement chains"), gasAt).includes(baseLine), `/llms.txt states the short Base gas sentence on its own line after the settlement chains (line ${gasAt})`);
   ok(baseLine && !baseLine.includes("ETH") && llmsLines.filter((l) => l.includes(BASE_NO_GAS_SHORT)).length === 1, "the Base chain line stays chain, asset and id; the sentence appears once");
   ok(/^- \[Start here\]\(\S+\/start\): /m.test(llms.text), "/llms.txt links /start under Connect via MCP");
+  ok(/^- \[Start here\]\(\S+\/start\): [^\n]*phone/m.test(llms.text), "/llms.txt says /start covers a phone");
+  ok(new RegExp(`id="${START_PHONE_ID}"`).test(start.text) && startText.includes(START_FIRST_PROMPT.text) && !/credit/i.test(startText), "the served page carries the phone card and its first prompt, and no credits word while CREDITS_SALES is unset");
+  const faq = await get("/faq");
+  ok(faq.status === 200 && /Does it work on my phone\?/.test(faq.text) && new RegExp(`href="${START_PATH}#${START_PHONE_ID}"`).test(faq.text), "the served /faq answers the phone question and links the phone card");
 
   const pages = await get("/sitemap-pages.xml");
   const all = await get("/sitemap.xml");
@@ -179,6 +236,13 @@ try {
   ok(info.pay?.baseGas === BASE_NO_GAS_SENTENCE, "payment.info states the Base gas sentence (pay.baseGas)");
   ok(/\/start$/.test(String(info.pay?.start || "")), "payment.info points at /start");
   ok(info.credits && !("connector" in info.credits), "payment.info names no credits connector while CREDITS_SALES and MCP_OAUTH are unset");
+  // The first prompt's tool, run the way a connected app runs it, on the connector.
+  const run = await client.callTool({ name: "catalog.call", arguments: { slug: START_FIRST_PROMPT.slug, params: START_FIRST_PROMPT.input } });
+  const want = createHash("sha256").update(START_FIRST_PROMPT.input.text).digest("hex");
+  ok(!run.isError && JSON.stringify(run.structuredContent || run.content).includes(want) && START_FIRST_PROMPT.text.includes(START_FIRST_PROMPT.input.text), `the first prompt's tool answers on a local /mcp (${START_FIRST_PROMPT.slug}: ${want.slice(0, 12)}…)`);
+  const pricing = await (await fetch(`${srv.url}/api/pricing`)).json();
+  const row = (pricing.tools || pricing.endpoints || []).find((t) => t.slug === START_FIRST_PROMPT.slug);
+  ok(row && (row.computePayable === true || row.free === true), `the live catalog lists that tool as free with compute (${JSON.stringify(row && { computePayable: row.computePayable })})`);
 } finally {
   try { await client?.close(); } catch {}
   await srv.stop();

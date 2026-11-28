@@ -5,7 +5,10 @@
 // same object the connector's own instructions print, so a new connector URL
 // or package version reaches this page with no edit here. Only apps with a
 // path this server's own docs give step by step are listed (Claude desktop,
-// Claude Code, Cursor).
+// Claude Code, Cursor), plus the phone path: the same custom connector, added
+// from the phone's browser and used in the Claude app. Its steps follow the
+// app publisher's own connector documentation, and its first prompt runs a
+// free tool, so a phone user sees the connection work with no wallet.
 //
 // Each offer reads the switch that sells it: the card report line only while
 // the storefront is on (humanCheckoutEnabled), the credits line only while
@@ -37,7 +40,13 @@ const entry = (server) => `"agent402": ${JSON.stringify(server, null, 2)}`;
 // A command wraps at its spaces only: each token is held whole (a browser
 // would otherwise break after a hyphen, splitting --transport or -s), and a
 // token wider than the card scrolls inside its block. The copied text is unchanged.
-const block = (text, name) => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) => `<span class="st-tok">${t}</span>`)}</code>`, { html: true, name, wrap: true, style: "margin:auto 0 0" });
+const block = (text, name, style = "margin:auto 0 0") => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) => `<span class="st-tok">${t}</span>`)}</code>`, { html: true, name, wrap: true, style });
+
+// The first prompt a new connection is checked with: it asks for one free tool
+// (a slug on the free list, run by the hosted connector with no wallet;
+// scripts/test-start-page.js runs it through a local /mcp).
+export const START_FIRST_PROMPT = { slug: "hash", input: { text: "hello" }, text: "Use Agent402 to get the SHA-256 hash of the word hello." };
+export const START_PHONE_ID = "phone";
 
 /**
  * The apps this page names, each with its one step, read from the install hints.
@@ -55,6 +64,15 @@ export function startApps(baseUrl, { connector = false } = {}) {
     { id: "claude-desktop", name: "Claude desktop", step: "In Settings, open Connectors, choose Add custom connector, name it Agent402 and paste this address:", copy: url },
     { id: "claude-code", name: "Claude Code", step: "Run this in a terminal:", copy: connector ? install.claudeCodeHosted.replace(install.hostedUrl, credits) : install.claudeCodeHosted },
     { id: "cursor", name: "Cursor", step: "In ~/.cursor/mcp.json, add this agent402 entry under mcpServers:", copy: entry(connector ? { url: credits } : install.cursorMcpJson.mcpServers.agent402) },
+    {
+      id: START_PHONE_ID, name: "On your phone", copyName: "the connector address",
+      step: "In your phone's browser, sign in at claude.ai and open Customize, then Connectors. Choose Add, then Add custom connector, name it Agent402 and paste this address:",
+      copy: url,
+      then: `${connector ? "Choose Continue, then Add, and sign in with your email when Claude asks." : "Choose Continue, then Add."} In the Claude app, select + in a chat and find Agent402 under Connectors. ${connector
+        ? "A card pays for paid tools from your credits balance, and the free tools run there too."
+        : "The free tools run from your phone with no wallet; paid tools take a wallet set up on a computer (below)."} Ask this to check the connection:`,
+      prompt: START_FIRST_PROMPT.text,
+    },
   ];
 }
 
@@ -87,7 +105,7 @@ export function walletSetup(baseUrl) {
 export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
-  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step. See what runs with no wallet, then pay by card or with USDC on Base.";
+  const description = "Add Agent402 to Claude desktop, Claude Code, Cursor or Claude on your phone. See what runs with no wallet, then pay by card or with USDC on Base.";
   const tools = Object.values(catalog || {}).filter((d) => d && d.slug);
   const powCount = tools.filter(isComputePayable).length;
   const reportRange = storefront ? cardReportPriceRange(HUMAN_PRODUCTS) : null;
@@ -99,7 +117,9 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const card = (a) => `<div id="${esc(a.id)}" class="st-card" style="display:flex;flex-direction:column;border:1px solid var(--hairline);background:var(--card);border-radius:var(--radius);padding:18px 20px;">
         <h3 ${H3}>${esc(a.name)}</h3>
         <p ${P}>${esc(a.step).replace(esc("~/.cursor/mcp.json"), code("~/.cursor/mcp.json")).replace("claude_desktop_config.json", code("claude_desktop_config.json"))}</p>
-        ${block(a.copy, `${a.name} setup`)}
+        ${block(a.copy, a.copyName || `${a.name} setup`, a.then ? "margin:0 0 14px" : undefined)}${a.then ? `
+        <p ${P}>${esc(a.then)}</p>
+        ${block(a.prompt, "the first prompt")}` : ""}
       </div>`;
   const appCards = apps.map(card).join("\n      ");
   const walletCards = wallet.apps.map(card).join("\n      ");
@@ -135,7 +155,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     </section>`;
 
   const pageLd = { "@context": "https://schema.org", "@type": "HowTo", name: title, description, url: canonical, author: siteOrgRef(baseUrl),
-    step: [...apps, ...wallet.apps].map((a) => ({ "@type": "HowToStep", name: a.name, text: `${a.step} ${a.copy}` })) };
+    step: [...apps, ...wallet.apps].map((a) => ({ "@type": "HowToStep", name: a.name, text: [a.step, a.copy, ...(a.then ? [a.then, a.prompt] : [])].join(" ") })) };
 
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
@@ -144,7 +164,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     <section id="apps" style="margin-bottom:56px;">
       <h2 ${H2}>${viaCredits ? "Add Agent402 and pay by card" : "Add Agent402 to your app"}</h2>
       ${appsLead}
-      <div class="st-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;">
+      <div class="st-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;">
       ${appCards}
       </div>
     </section>
@@ -161,7 +181,8 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   ${ledgerFooterCompact()}`;
 
   // The copy buttons are this page's only body buttons, and a newcomer taps them
-  // on a phone: each is a 44px target.
-  const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}.st-tok{white-space:nowrap}@media (max-width:900px){.st-grid{grid-template-columns:minmax(0,1fr)!important}}`;
+  // on a phone: each is a 44px target. At phone width the cards stack, and the
+  // phone card comes first.
+  const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}.st-tok{white-space:nowrap}@media (max-width:900px){.st-grid{grid-template-columns:minmax(0,1fr)!important}#${START_PHONE_ID}{order:-1}}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: START_PATH, jsonLd: [pageLd], extraCss, body });
 }
