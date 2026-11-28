@@ -52,10 +52,13 @@ export function stallsInWindow(windowMs = 3600_000, now = Date.now()) {
 // their ages, background jobs), newest last, for the operator reads and the
 // serving-health culprit names. Route keys are already value-free.
 const STALL_RING = 50;
+// The named turns a stall keeps: the three longest (turnsDuring) and the
+// `gc-marking` name after them, so the marking is never the one cut.
+const STALL_TURNS = 4;
 const stallRing = [];
 /** Record one stall (the monitor calls this; tests feed it directly). */
 export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [], turns = [] } = {}) {
-  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String), turns: [...turns].slice(0, 3).map(String) };
+  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String), turns: [...turns].slice(0, STALL_TURNS).map(String) };
   row.mostlyGc = gcDominated(row);
   stallTimes.push([at, row.ms]); if (stallTimes.length > 1000) stallTimes.shift();
   stallRing.push(row); if (stallRing.length > STALL_RING) stallRing.shift();

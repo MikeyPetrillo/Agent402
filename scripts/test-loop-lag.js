@@ -140,6 +140,27 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
     const lag = await (await import("node:fs/promises")).readFile(new URL("../src/loop-lag.js", import.meta.url), "utf8");
     ok(/if \(markingDuring\(now - late - 50, now\)\) turns = \[\.\.\.turns, "gc-marking"\];/.test(lag), "the stall line and the stall ring carry gc-marking among the turns");
   }
+  // Three named turns and the marking: the ring keeps all four, the marking included.
+  {
+    const { recordStall, recentStalls, noteGcEntry } = await import("../src/loop-lag.js");
+    const row = recordStall({ ms: 300, turns: ["a 90ms", "b 80ms", "c 70ms", "gc-marking"] });
+    ok(row.turns.length === 4 && row.turns[3] === "gc-marking" && recentStalls()[0].turns.includes("gc-marking"), `a stall with three named turns and the marking keeps the marking (${row.turns.join(", ")})`);
+    // Through the monitor: three turns of our own inside a stall while a full collection marks.
+    _resetTurnsForTest();
+    resetLoopLag();
+    const marked = [];
+    const stop3 = startLoopLagMonitor({ tickMs: 50, warnMs: 200, log: (m) => marked.push(m) });
+    await sleep(120);
+    setTimeout(() => {
+      noteGcEntry(Date.now(), 0, 8); // a full collection's marking starts, no pause ends it yet
+      contained("turn-one", () => blockFor(90))(); contained("turn-two", () => blockFor(80))(); contained("turn-three", () => blockFor(70))();
+    }, 0);
+    await sleep(400);
+    stop3();
+    noteGcEntry(Date.now(), 1, 4); // and ends, so later windows name no marking
+    const ring = recentStalls()[0]?.turns || [];
+    ok(["turn-one ", "turn-two ", "turn-three "].every((n) => ring.some((t) => t.startsWith(n))) && ring.includes("gc-marking"), `through the monitor the ring keeps the three turns and the marking (${ring.join(", ")})`);
+  }
   // The index wires the two spans the crawl stalls pointed at.
   const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
   // Each pass takes a crawl-lane turn of its own and is timed as a span named
