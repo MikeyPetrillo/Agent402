@@ -26,6 +26,7 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET
 import { upstreamKeyFor, runWithUpstreamKey, upstreamKeyRefusedError, upstreamKeySentence } from "../upstream-key.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 import { createHash } from "node:crypto";
+import { atCeiling, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.05 to 1.6 s when measured
@@ -41,7 +42,61 @@ function bad(message, statusCode = 400) {
 // an SSRF surface, but every fetch still rides the guarded dispatcher.
 // 404 passes through as { status: 404 } so handlers can return structured
 // misses instead of errors.
-async function getJson(url, upstream, headers = {}, step = "lookup", { buyerKey = false } = {}) {
+async function getJson(url, upstream, headers = {}, step = "lookup", opts = {}) {
+  const host = new URL(url).host;
+  return WIKIMEDIA_HOSTS.has(host) ? oneReadPerHost(host, upstream, () => readJson(url, upstream, headers, step, opts)) : readJson(url, upstream, headers, step, opts);
+}
+
+// ONE READ PER WIKIMEDIA HOST, across the server (the Wikimedia robot
+// policy's concurrency of 1 for an unauthenticated client, and the API usage
+// guidelines' bar on concurrent connections): every Wikidata or Commons read
+// any caller makes, from any tool in this kit, waits for the one before it on
+// the same host to end, body included. The wait is bounded: at most
+// `maxWaiters` reads wait per host and each waits at most `waitMs`, then
+// answers a retryable 503 naming the upstream (a 5xx, never charged); inside
+// a run with a ceiling (src/run-ceiling.js) the wait also ends at the ceiling
+// as its 504. A read that ends, however it ends, hands the slot to the
+// longest waiter.
+const WIKIMEDIA_HOSTS = new Set(["www.wikidata.org", "commons.wikimedia.org"]);
+export const WIKIMEDIA_LANE = { waitMs: 8_000, maxWaiters: 24 };
+const wikimediaLanes = new Map();
+async function oneReadPerHost(host, upstream, read) {
+  let lane = wikimediaLanes.get(host);
+  if (!lane) wikimediaLanes.set(host, (lane = { busy: false, waiters: [] }));
+  if (lane.busy) {
+    if (lane.waiters.length >= WIKIMEDIA_LANE.maxWaiters) throw bad(`${upstream} is busy with other reads - retry shortly`, 503);
+    await new Promise((resolve, reject) => {
+      const waiter = {};
+      const done = (err) => {
+        clearTimeout(timer);
+        cancelCeiling();
+        const at = lane.waiters.indexOf(waiter);
+        if (at >= 0) lane.waiters.splice(at, 1);
+        if (err) reject(err); else resolve();
+      };
+      const timer = setTimeout(() => done(bad(`${upstream} is busy with other reads - retry shortly`, 503)), WIKIMEDIA_LANE.waitMs);
+      const cancelCeiling = atCeiling(() => done(ceilingCutError()));
+      waiter.grant = () => done();
+      lane.waiters.push(waiter);
+    });
+  } else {
+    lane.busy = true;
+  }
+  try {
+    assertBeforeCeiling();
+    return await read();
+  } finally {
+    const next = lane.waiters[0];
+    if (next) next.grant(); else lane.busy = false;
+  }
+}
+
+/** Test view: the reads waiting per Wikimedia host and whether one runs. */
+export function wikimediaLaneState() {
+  return Object.fromEntries([...wikimediaLanes].map(([h, l]) => [h, { busy: l.busy, waiting: l.waiters.length }]));
+}
+
+async function readJson(url, upstream, headers = {}, step = "lookup", { buyerKey = false } = {}) {
   const ctx = { label: upstream, step, timeoutMs: TIMEOUT_MS, tag: "[enrich]" };
   const res = await upstreamFetch(url, {
     headers: { Accept: "application/json", "User-Agent": "Agent402/1.0 (+https://agent402.tools)", ...headers },
@@ -241,8 +296,8 @@ async function wdAttachLabels(factSets) {
 // Terms: Wikidata's data is CC0 and Structured Data on Commons is CC0; a
 // file page's short fields (author name, license name, restriction tags) are
 // relayed as recorded, never the image or the page's description text.
-// Reads are one at a time (the Wikimedia robot policy's concurrency of 1
-// for an unauthenticated client).
+// Reads are one at a time per Wikimedia host across the server, whoever
+// calls (oneReadPerHost, above).
 // ============================================================================
 const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
 export const NAME_RECORDS_PROPS = Object.freeze({

@@ -11,13 +11,16 @@
 //   4. the image match is Commons SHA-1 only (byte-identical files), match and
 //      no match; an item with no image; a capped list says so in fields;
 //   5. an upstream 429 or outage is a 5xx (never a charged 200), and the
-//      Wikimedia reads run one at a time.
+//      Wikimedia reads run one at a time;
+//   6. across concurrent callers, one read per Wikimedia host at a time, with
+//      a bounded wait (503 past it, 504 at a run's ceiling) and no slot left held.
 //
 //   node scripts/test-name-records.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { ENRICH_TOOLS, NAME_RECORDS_SCOPE, USPTO_CREDIT, usptoRecordUrl, NAME_RECORDS_IMAGE_MAX_BYTES } from "../src/tools/enrich-kit.js";
+import { ENRICH_TOOLS, NAME_RECORDS_SCOPE, USPTO_CREDIT, usptoRecordUrl, NAME_RECORDS_IMAGE_MAX_BYTES, WIKIMEDIA_LANE, wikimediaLaneState } from "../src/tools/enrich-kit.js";
+import { withRunCeiling } from "../src/run-ceiling.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 
 let pass = 0, fail = 0;
@@ -77,14 +80,18 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 let mode = {};
 let reads = [];
 let inFlight = 0, maxInFlight = 0;
+const hostInFlight = {}, hostMax = {};
+let hold = null; // a promise a stubbed read waits on, to keep it in flight
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input) => {
   const u = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
   const q = u.searchParams;
   reads.push(`${u.host} ${q.get("action")}${q.get("list") ? `:${q.get("list")}` : ""}${q.get("generator") ? `:${q.get("generator")}` : ""}`);
   inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+  hostInFlight[u.host] = (hostInFlight[u.host] || 0) + 1; hostMax[u.host] = Math.max(hostMax[u.host] || 0, hostInFlight[u.host]);
   try {
     await new Promise((r) => setTimeout(r, 2));
+    if (hold) await hold;
     if (u.host === "www.wikidata.org") {
       if (mode.wikidata) return new Response("busy", { status: mode.wikidata });
       if (q.get("action") === "wbsearchentities") {
@@ -113,7 +120,7 @@ globalThis.fetch = async (input) => {
       }
     }
     return new Response("not stubbed", { status: 404 });
-  } finally { inFlight--; }
+  } finally { inFlight--; hostInFlight[u.host]--; }
 };
 const undoDns = stubGuardResolver(offlineGuardAnswer);
 
@@ -204,6 +211,42 @@ try {
   mode = { commons: 503 };
   ok(await status({ name: "Season Only", image: LOGO_BYTES.toString("base64") }) === 502, "a Commons outage on the image match is a 502");
   mode = {};
+
+  // --- 6. one read per Wikimedia host across the server -------------------
+  // Concurrent callers (name-records twice, with an image, and wikidata-entity)
+  // never overlap two reads on one host, and every one of them is answered.
+  for (const h of Object.keys(hostMax)) hostMax[h] = 0;
+  const entity = ENRICH_TOOLS.find((t) => t.slug === "wikidata-entity");
+  const together = await Promise.all([
+    status({ name: "Example Show" }),
+    status({ name: "Character", image: LOGO_BYTES.toString("base64") }),
+    status({ name: "Example Show", limit: 1 }),
+    entity ? entity.handler({ name: "Example Show" }).then(() => 200, (e) => e.statusCode || 500) : 200,
+  ]);
+  ok(together.every((c) => c === 200), `four concurrent callers are all answered (${together.join(", ")})`);
+  ok(hostMax["www.wikidata.org"] === 1 && hostMax["commons.wikimedia.org"] === 1, `concurrent callers never overlap reads on one host (most in flight: wikidata ${hostMax["www.wikidata.org"]}, commons ${hostMax["commons.wikimedia.org"]})`);
+  ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "every slot is released once the reads end");
+
+  // A wait is bounded: past waitMs a waiting read is a retryable 503, past
+  // maxWaiters a read is refused at once, and inside a run's ceiling the wait
+  // ends at the ceiling as a 504. The slot is freed after each.
+  const keep = { ...WIKIMEDIA_LANE };
+  let release;
+  hold = new Promise((r) => { release = r; });
+  const stuck = status({ name: "Example Show" });
+  await new Promise((r) => setTimeout(r, 20));
+  WIKIMEDIA_LANE.waitMs = 30;
+  ok(await status({ name: "Example Show" }) === 503, "a read that waits past the bound is a retryable 503");
+  WIKIMEDIA_LANE.waitMs = 5_000; WIKIMEDIA_LANE.maxWaiters = 1;
+  const waiting = status({ name: "Example Show" });
+  await new Promise((r) => setTimeout(r, 5));
+  ok(await status({ name: "Example Show" }) === 503, "a read past the waiter bound is refused at once with a 503");
+  WIKIMEDIA_LANE.maxWaiters = 2;
+  ok(await withRunCeiling(40, () => status({ name: "Example Show" })) === 504, "a waiting read ends at the run's ceiling as a 504");
+  hold = null; release();
+  ok(await stuck === 200 && await waiting === 200, "the held read and its waiter are answered once it ends");
+  Object.assign(WIKIMEDIA_LANE, keep);
+  ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "no slot is left held after timeouts, refusals and the ceiling");
 } catch (e) {
   ok(false, `a stubbed run threw: ${e?.stack || e}`);
 } finally {
