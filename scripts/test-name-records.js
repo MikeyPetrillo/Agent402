@@ -249,13 +249,13 @@ try {
   Object.assign(WIKIMEDIA_LANE, keep);
   ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "no slot is left held after timeouts, refusals and the ceiling");
 
-  // Fair across callers: one caller's burst holds at most its own share of
-  // the line, a caller holding nothing is queued over that burst's newest
-  // place when the line is full, and the freed slot goes to the caller served
-  // least recently, so one payer never refuses or starves another's read.
+  // Fair across callers (the shared room, src/caller-turns.js): at the
+  // line's bound a caller already holding places is the one refused, a caller
+  // holding nothing is still queued, and the freed slot goes to the caller
+  // that has not just read, so one payer never refuses or starves another's.
   {
     const as = (ip, input) => runAsCallerOf({ ip, headers: {} }, () => status(input));
-    Object.assign(WIKIMEDIA_LANE, { maxWaiters: 4, maxWaitersPerCaller: 4, waitMs: 5_000 });
+    Object.assign(WIKIMEDIA_LANE, { maxWaiters: 4, waitMs: 5_000 });
     let free;
     hold = new Promise((r) => { free = r; });
     const order = [];
@@ -263,13 +263,16 @@ try {
     await new Promise((r) => setTimeout(r, 20));
     const burst = [1, 2, 3, 4].map((i) => as("198.51.100.1", { name: "Example Show" }).then((c) => { order.push(`a${i}:${c}`); return c; }));
     await new Promise((r) => setTimeout(r, 5));
-    ok(await as("198.51.100.1", { name: "Example Show" }) === 503, "a caller past its own share of the line is refused at once");
+    ok(await as("198.51.100.1", { name: "Example Show" }) === 503, "a caller already holding the full line is refused at once");
     const other = as("203.0.113.9", { name: "Example Show" }).then((c) => { order.push(`b:${c}`); return c; });
     await new Promise((r) => setTimeout(r, 5));
     hold = null; free();
     const codes = await Promise.all([held, ...burst, other]);
-    ok(codes[5] === 200 && codes.slice(1, 5).filter((c) => c === 503).length === 1, `a new caller is queued over the burst's newest place when the line is full (burst ${codes.slice(1, 5).join(",")}, other ${codes[5]})`);
-    ok(order.find((x) => x.endsWith(":200")) === "b:200", `the freed slot goes to the caller served least recently (${order.join(" ")})`);
+    // The other caller is answered; the busy caller's own excess (here its
+    // first call's second read, standing behind its own full line) is the
+    // only read refused, a retryable 503 that charges nothing.
+    ok(codes[5] === 200 && codes.slice(0, 5).filter((c) => c !== 200).every((c) => c === 503) && codes.slice(0, 5).filter((c) => c === 503).length <= 1, `a caller holding nothing is queued past the full line and answered; only the busy caller's own excess is refused (${codes.join(",")})`);
+    ok(order[0] === "b:200", `the freed slot goes to the caller that has not just read (${order.join(" ")})`);
     Object.assign(WIKIMEDIA_LANE, keep);
     ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "no slot is left held after the fair-turn reads");
   }

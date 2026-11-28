@@ -27,7 +27,8 @@ import { upstreamKeyFor, runWithUpstreamKey, upstreamKeyRefusedError, upstreamKe
 import { partialFields, clampFields } from "../partial-answer.js";
 import { createHash } from "node:crypto";
 import { atCeiling, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
-import { currentDispatchCaller } from "../dispatch-caller.js";
+import { admissionCallerOf } from "../dispatch-caller.js";
+import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.05 to 1.6 s when measured
@@ -59,74 +60,49 @@ async function getJson(url, upstream, headers = {}, step = "lookup", opts = {}) 
 // as its 504. A read that ends, however it ends, hands the slot to the
 // longest waiter.
 //
-// Fair across callers (the caller key the dispatch scope names,
-// src/dispatch-caller.js): one caller holds at most `maxWaitersPerCaller` of
-// the waiting places, a caller holding nothing is queued over the newest
-// place of the caller holding the most when the line is full (that place is
-// the one answered busy), and the slot passes to the oldest waiter of the
-// caller served least recently, so one payer's burst never refuses or starves
-// another caller's read.
+// Fair across callers, on the server's shared room (src/caller-turns.js, as
+// the SEC pace and the OCR engines use it): a caller is its admission keys
+// (src/dispatch-caller.js admissionCallerOf: its signed identity, else its
+// proven address, else the shared anonymous key), so a fresh payment per call
+// or a shared edge address never makes one actor many callers. At the line's
+// bound a caller already holding a place is the one answered busy and a
+// caller holding nothing is queued over it, and the slot passes in the
+// room's order, which puts a caller that just read behind the others.
 const WIKIMEDIA_HOSTS = new Set(["www.wikidata.org", "commons.wikimedia.org"]);
-export const WIKIMEDIA_LANE = { waitMs: 8_000, maxWaiters: 24, maxWaitersPerCaller: 4 };
-const wikimediaLanes = new Map();
+export const WIKIMEDIA_LANE = { waitMs: 8_000, maxWaiters: 24 };
+const wikimediaRoom = createCallerTurns({
+  maxWaiters: Infinity,
+  maxWaitersOf: () => WIKIMEDIA_LANE.maxWaiters,
+  hardWaiters: Infinity,
+  hardWaitersOf: () => 2 * WIKIMEDIA_LANE.maxWaiters,
+});
 const laneBusy = (upstream) => bad(`${upstream} is busy with other reads - retry shortly`, 503);
-function heldBy(lane, caller) { let n = 0; for (const w of lane.waiters) if (w.caller === caller) n++; return n; }
-function nextWaiter(lane) {
-  let pick = null;
-  for (const w of lane.waiters) {
-    const at = lane.served.get(w.caller) ?? 0;
-    if (!pick || at < pick.at) pick = { w, at };
-  }
-  return pick?.w || null;
-}
 async function oneReadPerHost(host, upstream, read) {
-  let lane = wikimediaLanes.get(host);
-  if (!lane) wikimediaLanes.set(host, (lane = { busy: false, waiters: [], served: new Map(), turn: 0 }));
-  const caller = currentDispatchCaller() || "in-process";
-  if (lane.busy) {
-    if (heldBy(lane, caller) >= WIKIMEDIA_LANE.maxWaitersPerCaller) throw laneBusy(upstream);
-    if (lane.waiters.length >= WIKIMEDIA_LANE.maxWaiters) {
-      // Full: a caller already holding the most places gives up its newest.
-      let top = null, most = 0;
-      const counts = new Map();
-      for (const w of lane.waiters) counts.set(w.caller, (counts.get(w.caller) || 0) + 1);
-      for (const [c, n] of counts) if (n > most) { most = n; top = c; }
-      if (!top || most <= heldBy(lane, caller) + 1) throw laneBusy(upstream);
-      const victim = [...lane.waiters].reverse().find((w) => w.caller === top);
-      victim.refuse(laneBusy(upstream));
-    }
-    await new Promise((resolve, reject) => {
-      const waiter = { caller };
-      const done = (err) => {
-        clearTimeout(timer);
-        cancelCeiling();
-        const at = lane.waiters.indexOf(waiter);
-        if (at >= 0) lane.waiters.splice(at, 1);
-        if (err) reject(err); else resolve();
-      };
-      const timer = setTimeout(() => done(laneBusy(upstream)), WIKIMEDIA_LANE.waitMs);
-      const cancelCeiling = atCeiling(() => done(ceilingCutError()));
-      waiter.grant = () => done();
-      waiter.refuse = (err) => done(err);
-      lane.waiters.push(waiter);
-    });
-  } else {
-    lane.busy = true;
+  assertBeforeCeiling();
+  const pending = wikimediaRoom.acquire(host, admissionCallerOf(null), { waitMs: WIKIMEDIA_LANE.waitMs });
+  let cut = false;
+  const cancelCeiling = atCeiling(() => { cut = true; pending.cancel(); });
+  let turn;
+  try {
+    turn = await pending;
+  } catch (e) {
+    if (cut) throw ceilingCutError();
+    if (e instanceof TurnRefused) throw laneBusy(upstream);
+    throw e;
+  } finally {
+    cancelCeiling();
   }
-  lane.served.set(caller, ++lane.turn);
-  if (lane.served.size > 1000) for (const c of lane.served.keys()) { if (!lane.waiters.some((w) => w.caller === c)) lane.served.delete(c); if (lane.served.size <= 500) break; }
   try {
     assertBeforeCeiling();
     return await read();
   } finally {
-    const next = nextWaiter(lane);
-    if (next) next.grant(); else lane.busy = false;
+    turn.release();
   }
 }
 
 /** Test view: the reads waiting per Wikimedia host and whether one runs. */
 export function wikimediaLaneState() {
-  return Object.fromEntries([...wikimediaLanes].map(([h, l]) => [h, { busy: l.busy, waiting: l.waiters.length }]));
+  return Object.fromEntries([...WIKIMEDIA_HOSTS].map((h) => { const st = wikimediaRoom.state(h); return [h, { busy: st.busy, waiting: st.waiting }]; }));
 }
 
 async function readJson(url, upstream, headers = {}, step = "lookup", { buyerKey = false } = {}) {
