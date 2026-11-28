@@ -19,6 +19,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
+import { runAsCallerOf } from "../src/dispatch-caller.js";
 import { ENRICH_TOOLS, NAME_RECORDS_SCOPE, USPTO_CREDIT, usptoRecordUrl, NAME_RECORDS_IMAGE_MAX_BYTES, WIKIMEDIA_LANE, wikimediaLaneState } from "../src/tools/enrich-kit.js";
 import { withRunCeiling } from "../src/run-ceiling.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -247,6 +248,31 @@ try {
   ok(await stuck === 200 && await waiting === 200, "the held read and its waiter are answered once it ends");
   Object.assign(WIKIMEDIA_LANE, keep);
   ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "no slot is left held after timeouts, refusals and the ceiling");
+
+  // Fair across callers: one caller's burst holds at most its own share of
+  // the line, a caller holding nothing is queued over that burst's newest
+  // place when the line is full, and the freed slot goes to the caller served
+  // least recently, so one payer never refuses or starves another's read.
+  {
+    const as = (ip, input) => runAsCallerOf({ ip, headers: {} }, () => status(input));
+    Object.assign(WIKIMEDIA_LANE, { maxWaiters: 4, maxWaitersPerCaller: 4, waitMs: 5_000 });
+    let free;
+    hold = new Promise((r) => { free = r; });
+    const order = [];
+    const held = as("198.51.100.1", { name: "Example Show" });
+    await new Promise((r) => setTimeout(r, 20));
+    const burst = [1, 2, 3, 4].map((i) => as("198.51.100.1", { name: "Example Show" }).then((c) => { order.push(`a${i}:${c}`); return c; }));
+    await new Promise((r) => setTimeout(r, 5));
+    ok(await as("198.51.100.1", { name: "Example Show" }) === 503, "a caller past its own share of the line is refused at once");
+    const other = as("203.0.113.9", { name: "Example Show" }).then((c) => { order.push(`b:${c}`); return c; });
+    await new Promise((r) => setTimeout(r, 5));
+    hold = null; free();
+    const codes = await Promise.all([held, ...burst, other]);
+    ok(codes[5] === 200 && codes.slice(1, 5).filter((c) => c === 503).length === 1, `a new caller is queued over the burst's newest place when the line is full (burst ${codes.slice(1, 5).join(",")}, other ${codes[5]})`);
+    ok(order.find((x) => x.endsWith(":200")) === "b:200", `the freed slot goes to the caller served least recently (${order.join(" ")})`);
+    Object.assign(WIKIMEDIA_LANE, keep);
+    ok(Object.values(wikimediaLaneState()).every((l) => !l.busy && l.waiting === 0), "no slot is left held after the fair-turn reads");
+  }
 } catch (e) {
   ok(false, `a stubbed run threw: ${e?.stack || e}`);
 } finally {
