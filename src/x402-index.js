@@ -327,7 +327,7 @@ import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 import { noteTurn, timeSpan, runAsJob } from "./active-jobs.js";
-import { parsesOffLoop, parseOffLoop, inPlaceRefusal, crawlParseRecallMs } from "./crawl-parse.js";
+import { parsesOffLoop, parseOffLoop, inPlaceRefusal, crawlParseRecallMs, KEEP_PREVIOUS } from "./crawl-parse.js";
 import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
@@ -2068,6 +2068,16 @@ function sellerSummary(origin, v) {
 
 // Per-source state for the discovery panel on /index.
 const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origins, error }
+/** The registry sources whose last pass held a document the crawl did not
+ *  parse (KeptPrevious): their rows stand from an earlier pass. The
+ *  `crawlParse` word on /api/gateway-status reads it (src/crawl-parse.js
+ *  crawlParseStatus), so a whole-list document past the parse limit is named
+ *  rather than kept in silence. */
+export function discoveryKeptPrevious() {
+  const out = [];
+  for (const [source, st] of discoveryStatus) if (st?.keptPrevious) out.push({ source, word: st.keptPrevious });
+  return out;
+}
 // Per-origin synthesized tool list assembled directly from Bazaar resource
 // entries. Used as a fallback for sellers whose /.well-known/x402 endpoint
 // 404s (the bulk of the unhealthy cohort — they only ever published settled
@@ -3081,9 +3091,9 @@ function crawlLanePump() {
 //
 // A long document is not parsed here at all: one JSON.parse is one stretch,
 // and a document of a few megabytes dense in small objects held the loop for
-// over a second. It is parsed in a worker thread and rebuilt on this one a
+// over a second. It is parsed in a child process and rebuilt on this thread a
 // piece per lane turn (src/crawl-parse.js); the value, and the error for a
-// document that is not JSON, are the ones JSON.parse gives. When the thread
+// document that is not JSON, are the ones JSON.parse gives. When the child
 // cannot do it the document is parsed here as before, and a line says so.
 // A document that ended the parser, or that is too long to parse here
 // (inPlaceRefusal: declined, or handed back by a parser that could not start,
@@ -6873,8 +6883,11 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   // parser's memory of that document ends (crawlParseRecallMs), rather than
   // fetching and hashing a document of megabytes each cycle only to keep the
   // entry as it is. The entry is not touched either way.
+  // A document that ended the parser is the seller's document, not a limit
+  // of ours, so its waiting turns never move the hold of the last good
+  // listing (noteTurnNotRead); one too long to parse here is our limit.
   const keptWait = keptPreviousWait(origin);
-  if (keptWait) { noteTurnNotRead(origin); return keptWait; }
+  if (keptWait) { if (keptWait !== KEEP_PREVIOUS.ended) noteTurnNotRead(origin); return keptWait; }
   const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
   const plan = await sellerLoad.crawlPlan(origin, { landsOn });
   if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
@@ -6883,7 +6896,7 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
   if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
   // A document not parsed: the turn passes with the entry as it was, under the reason word.
-  if (read?.keptPrevious) { noteTurnNotRead(origin); return read.keptPrevious; }
+  if (read?.keptPrevious) { if (read.keptPrevious !== KEEP_PREVIOUS.ended) noteTurnNotRead(origin); return read.keptPrevious; }
   return null;
 }
 // origin -> { word, until }: an origin whose last read held a document the
@@ -6893,6 +6906,43 @@ function noteKeptPrevious(origin, word, at = Date.now()) {
   keptPreviousUntil.delete(origin);
   keptPreviousUntil.set(origin, { word, until: at + Math.max(0, Number(crawlParseRecallMs()) || 0) });
   while (keptPreviousUntil.size > LANDING_HELD_CAP) keptPreviousUntil.delete(keptPreviousUntil.keys().next().value);
+}
+// THE KEEP IS BOUNDED. origin -> { since, count }: the reads in a row whose
+// document was not parsed, from the first of them. A read that completes
+// ends the run. Once the run reaches KEPT_PREVIOUS_MAX_IN_A_ROW reads, or has
+// lasted the hold of a last good listing (CRAWL_HOLD_MS), the entry reads the
+// seller's failed read (keptPreviousExpired): its listing is no longer held,
+// so a document that keeps ending the parser cannot keep an old listing, its
+// prices and its description standing past that bound.
+const KEPT_PREVIOUS_MAX_IN_A_ROW = 3;
+const keptRuns = new Map();
+let keptBoundHoldMs = null; // a test's hold in place of CRAWL_HOLD_MS
+/** Test seam: the time bound of a run of kept reads (null restores CRAWL_HOLD_MS). */
+export function __setKeptBoundForTest(holdMs = null) { keptBoundHoldMs = holdMs; keptRuns.clear(); }
+function noteKeptRun(origin, now = Date.now()) {
+  const r = keptRuns.get(origin) || { since: now, count: 0 };
+  r.count++;
+  keptRuns.delete(origin);
+  keptRuns.set(origin, r);
+  while (keptRuns.size > LANDING_HELD_CAP) keptRuns.delete(keptRuns.keys().next().value);
+  return r;
+}
+function keptPreviousExpired(origin, word, message, now = Date.now()) {
+  const run = noteKeptRun(origin, now);
+  const holdMs = keptBoundHoldMs ?? CRAWL_HOLD_MS;
+  if (run.count < KEPT_PREVIOUS_MAX_IN_A_ROW && now - run.since < holdMs) return false;
+  const prev = cache.get(origin);
+  if (!prev || typeof prev !== "object") return false;
+  cache.set(origin, {
+    ...prev,
+    readIncomplete: undefined,
+    holdFromAt: undefined,
+    errorOurs: undefined,
+    error: `a document this origin serves was not parsed on ${run.count} reads in a row (${word}); the listing from the last completed read is no longer held: ${String(message || "").slice(0, 120)}`,
+    fetchedAt: now,
+    history: rollHistory(prev, false),
+  });
+  return true;
 }
 function keptPreviousWait(origin, now = Date.now()) {
   const k = keptPreviousUntil.get(origin);
@@ -6913,6 +6963,8 @@ function noteTurnNotRead(origin, at = Date.now()) {
   while (turnNotReadAt.size > LANDING_HELD_CAP) turnNotReadAt.delete(turnNotReadAt.keys().next().value);
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
+/** Test seam: when an origin's scheduled turn last passed for a limit of ours (null when never). */
+export function __turnNotReadAtForTest(originUrl) { return turnNotReadAt.get(originUrl) ?? null; }
 /** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
 export async function __runCrawlCycleForTest() { await runCrawl(); return lastCycleSummary; }
 
@@ -7341,7 +7393,8 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
       read = false;
       clearValidatorsFor(originUrl);
       noteKeptPrevious(originUrl, e.keptPrevious);
-      return { keptPrevious: e.keptPrevious, error: String(e.message || e) };
+      const expired = keptPreviousExpired(originUrl, e.keptPrevious, e.message);
+      return { keptPrevious: e.keptPrevious, error: String(e.message || e), ...(expired ? { keptExpired: true } : {}) };
     }
     if (!e?.landingHeld) throw e;
     read = false;
@@ -7349,7 +7402,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { keptPreviousUntil.delete(originUrl); crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
+  finally { if (read) { keptPreviousUntil.delete(originUrl); keptRuns.delete(originUrl); crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
