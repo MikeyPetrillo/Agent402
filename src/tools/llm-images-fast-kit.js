@@ -59,7 +59,9 @@ import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { notChargedHere } from "../not-charged.js";
 import { providerContentFiltered, providerBodyContentFiltered } from "./content-filter.js";
 import { safeFetch } from "./fetch-guard.js";
-import { assertPngHeader, assertJpegHeader } from "./image-headers.js";
+import { assertPngHeader, assertJpegHeader, pngChunks } from "./image-headers.js";
+import { EVM_RUN_SECONDS, SETTLE_MARGIN_SECONDS, evmCredentialBudgetMs } from "../evm-validity.js";
+import { inflateSync, constants as zlibConstants } from "node:zlib";
 
 export const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images";
 export const OPENROUTER_VIDEOS_URL = "https://openrouter.ai/api/v1/videos";
@@ -571,7 +573,58 @@ export function animateImageFromBytes(buf) {
     throw bad(`"image" declares ${width}x${height}; each side may be up to ${ANIMATE_MAX_SIDE} pixels and the picture up to ${ANIMATE_MAX_PIXELS / 1_000_000} megapixels`, 413);
   }
   if (width < ANIMATE_MIN_SIDE || height < ANIMATE_MIN_SIDE) throw bad(`"image" is ${width}x${height}; each side must be at least ${ANIMATE_MIN_SIDE} pixels`);
+  assertAnimatePixelsReadable(buf, format, width);
   return { dataUrl: `data:image/${format};base64,${buf.toString("base64")}`, width, height, digest: createHash("sha256").update(buf).digest("hex") };
+}
+
+// How much of a PNG's compressed image data is inflated to check its first
+// rows: at most about a thousand times this many bytes come out (deflate's
+// largest ratio), so the check is a few milliseconds whatever the picture.
+const ANIMATE_PNG_PROBE_BYTES = 4096;
+const PNG_SAMPLES = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+/** The picture's pixel data starts as its header says, read cheaply before
+ *  anything is sent to the provider (a job submitted with a picture no
+ *  decoder can read is a job we may be billed for): a PNG's compressed data
+ *  must inflate, its first rows must each begin with a valid filter byte, and
+ *  data that ends inside the probe must hold every row the header declares;
+ *  a JPEG must carry a start of scan after its frame header. Nothing is
+ *  decoded to pixels. */
+export function assertAnimatePixelsReadable(buf, format, width) {
+  if (format === "jpeg") {
+    // The top-level walk (jpegFrameHeaders) stops at the scan; a file with a
+    // frame header and no scan has no picture data at all.
+    const sof = buf.indexOf(Buffer.from([0xff, 0xc0])) >= 0 || buf.indexOf(Buffer.from([0xff, 0xc2])) >= 0 || buf.indexOf(Buffer.from([0xff, 0xc1])) >= 0;
+    const sos = buf.indexOf(Buffer.from([0xff, 0xda]));
+    if (!sof || sos < 0 || sos + 4 >= buf.length) throw bad('"image" is a JPEG with no picture data (no start of scan); send the picture itself');
+    return;
+  }
+  if (format !== "png" || buf.length < 29) return;
+  const depth = buf[24], samples = PNG_SAMPLES[buf[25]], interlaced = buf[28] === 1;
+  if (!samples || ![1, 2, 4, 8, 16].includes(depth)) throw bad('"image" is a PNG whose header names no valid color type or bit depth');
+  const { idat } = pngChunks(buf, { payloads: true });
+  let total = 0;
+  for (const d of idat) total += d.length;
+  if (!total) throw bad('"image" is a PNG with no image data');
+  const parts = [];
+  let taken = 0;
+  for (const d of idat) { if (taken >= ANIMATE_PNG_PROBE_BYTES) break; const p = d.subarray(0, ANIMATE_PNG_PROBE_BYTES - taken); parts.push(p); taken += p.length; }
+  const stride = 1 + Math.ceil((width * depth * samples) / 8);
+  const height = buf.readUInt32BE(20);
+  const declared = interlaced ? null : stride * height;
+  let rows;
+  try {
+    rows = inflateSync(Buffer.concat(parts), { finishFlush: zlibConstants.Z_SYNC_FLUSH, ...(declared ? { maxOutputLength: declared + 64 } : { maxOutputLength: 8 * 1048576 }) });
+  } catch (e) {
+    if (e?.code === "ERR_BUFFER_TOO_LARGE" && declared) throw bad('"image" is a PNG whose data inflates past the size its header declares');
+    if (e?.code === "ERR_BUFFER_TOO_LARGE") return;
+    throw bad('"image" is a PNG whose image data cannot be read (it does not inflate); send the picture itself');
+  }
+  if (interlaced) { if (rows.length && rows[0] > 4) throw bad('"image" is a PNG whose first row is not readable'); return; }
+  for (let at = 0; at < rows.length; at += stride) {
+    if (rows[at] > 4) throw bad('"image" is a PNG whose rows are not readable (a row starts with no valid filter); send the picture itself');
+  }
+  // All of the data was read: it must hold every row the header declares.
+  if (total <= ANIMATE_PNG_PROBE_BYTES && rows.length < declared) throw bad(`"image" is a PNG whose data ends before its last row (it declares ${width}x${height})`);
 }
 
 /** The picture a validated request names: decoded from base64, or read from
@@ -593,6 +646,10 @@ export async function animateImage(source) {
 }
 
 async function animateHandler(input, req) {
+  // The run's clock starts here: the picture's read counts against the same
+  // wait as the clip (runVideoJob), so a slow picture shortens the wait
+  // rather than running past the payment's settle window.
+  const started = Date.now();
   if (animateWorstCaseUsd() == null) throw bad(`${ANIMATE_PATH} is temporarily unavailable.`, 503);
   const user = userOf(req);
   const { prompt, aspect_ratio: asked, source } = validateAnimateRequest(input);
@@ -610,7 +667,7 @@ async function animateHandler(input, req) {
   // for it. `dropAfterSubmit` names what runVideoJob lets go of once the
   // provider holds the job, so a call waiting minutes on its clip holds no copy.
   const parkBody = { ...head, frame_images: frame(`sha256:${digest}`), ...(user ? { user } : {}) };
-  return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio, parkBody, dropAfterSubmit: ["frame_images"] });
+  return runVideoJob(body, req, { tier: "image-animate", priceUsd: ANIMATE_PRICE, worstCaseUsd: animateWorstCaseUsd(), aspect_ratio, parkBody, dropAfterSubmit: ["frame_images"], started });
 }
 
 // `tier`: image-animate takes a picture, so its caller may change either;
@@ -683,19 +740,48 @@ async function unparkVideoJob(key, id) {
 }
 
 async function videosHandler(input, req) {
+  const started = Date.now();
   if (videosWorstCaseUsd() == null) throw bad("/v1/videos is temporarily unavailable.", 503);
   const user = userOf(req);
   const { prompt, aspect_ratio } = validateVideosRequest(input);
   const body = { model: VIDEOS_MODEL, prompt, duration: VIDEOS_DURATION_SECONDS, resolution: VIDEOS_RESOLUTION, aspect_ratio, generate_audio: false, ...(user ? { user } : {}) };
-  return runVideoJob(body, req, { tier: "v1-videos", priceUsd: VIDEOS_PRICE, worstCaseUsd: videosWorstCaseUsd(), aspect_ratio });
+  return runVideoJob(body, req, { tier: "v1-videos", priceUsd: VIDEOS_PRICE, worstCaseUsd: videosWorstCaseUsd(), aspect_ratio, started });
+}
+
+// The clip's download is left this much of the run (a quarter of a short
+// one): the polls end that long before the run does (videoRunEndsAt).
+const VIDEO_CONTENT_RESERVE_MS = 20_000;
+// No upstream request starts with less than this left of the run.
+const VIDEO_MIN_STEP_MS = 250;
+/** When a video run's upstream work must end (epoch ms): the route's run time
+ *  on the EVM floor (src/evm-validity.js EVM_RUN_SECONDS, which a payment is
+ *  checked against on arrival) less the settle margin, counted from the
+ *  handler's start, so the picture's read and the submit are inside it; and
+ *  never past this request's own EVM authorization budget
+ *  (evmCredentialBudgetMs), so a clip is never delivered on a payment that
+ *  can no longer settle. Exported for the test. */
+export function videoRunEndsAt(req, tier, started = Date.now(), nowMs = Date.now()) {
+  const runS = Object.hasOwn(EVM_RUN_SECONDS, tier) ? EVM_RUN_SECONDS[tier] : EVM_RUN_SECONDS["v1-videos"];
+  let end = started + (runS - SETTLE_MARGIN_SECONDS) * 1000;
+  try {
+    const b = req && typeof req === "object" ? evmCredentialBudgetMs(req, { nowMs }) : null;
+    if (b !== null && Number.isFinite(b)) end = Math.min(end, nowMs + b);
+  } catch { /* no authorization to read: the route's own bound stands */ }
+  return end;
 }
 
 /** One clip on the Video API: submit (or resume a parked job), poll, download.
  *  Shared by the text-to-video route and the image-to-video route: `body` is
  *  the locked upstream request, `tier` names the route in the bound check
- *  and telemetry. */
-async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_ratio, parkBody = body, dropAfterSubmit = [] }) {
-  const started = Date.now();
+ *  and telemetry. `started` is the handler's start: the wait, and every
+ *  upstream request's timeout, count from it (videoRunEndsAt). */
+async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_ratio, parkBody = body, dropAfterSubmit = [], started = Date.now() }) {
+  const endsAt = videoRunEndsAt(req, tier, started);
+  const left = () => endsAt - Date.now();
+  // The polls end at the wait cap or where the download's reserve begins.
+  const pollEndsAt = Math.min(started + VIDEOS_MAX_WAIT_MS(), endsAt - Math.min(VIDEO_CONTENT_RESERVE_MS, Math.max(0, endsAt - started) / 4));
+  const pollLeft = () => pollEndsAt - Date.now();
+  const stepMs = (capMs, leftMs) => Math.max(1, Math.min(capMs, Math.floor(leftMs)));
   // A job that outlived the last identical request is picked up again rather
   // than paid for twice: the retry the 504 asks for collects the same clip.
   const payer = payerFromRequest(req);
@@ -705,7 +791,9 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
   const parkedId = parkKey ? await parkedVideoJob(parkKey) : null;
   if (parkedId && await claimParkedVideoJob(parkKey, parkedId)) job = { id: parkedId, status: "pending" };
   else {
-    const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
+    // Nothing is submitted that could not be polled inside the run.
+    if (pollLeft() < VIDEO_MIN_STEP_MS) throw bad(`There is not enough of this payment's time left to make the clip.${notChargedHere()} Send the request again with a fresh payment.`, 504);
+    const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: stepMs(30_000, left()) });
     if (!res.ok) {
       // A submit the provider refuses for its content filter (the image
       // routes' rule, src/tools/content-filter.js): a 422 the caller can
@@ -728,6 +816,12 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
   const pollUrl = typeof job.polling_url === "string" && job.polling_url.startsWith(`${OPENROUTER_VIDEOS_URL}/`) ? job.polling_url : `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}`;
 
   let status = job.status || "pending", st = job, pollFailures = 0, c;
+  // The run's time is spent: a parked job is collected by the same request
+  // again (the clip may already be done); without a payer the 504 asks for a new one.
+  const outOfTime = (what) => {
+    if (!parkKey) return bad(`${what}${notChargedHere()} Send the request again to start a new clip.`, 504);
+    return Object.assign(bad(`${what}${notChargedHere()} Send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip.`, 504), { videoParked: true, parkNow: true });
+  };
   try {
   while (status !== "completed") {
     if (status === "failed") {
@@ -737,23 +831,19 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
       // has to change, so the answer is a 422 the caller can branch on
       // (reason content_filtered), not a 502 that reads as our failure.
       if (videoFailureFiltered(st)) {
-        throw Object.assign(bad(`The provider returned no video and says its content filter may have stopped it${quoted}.${notChargedHere()} Rephrase the prompt and try again.`, 422), { contentFiltered: true });
+        throw Object.assign(bad(`The provider returned no video and says its content filter may have stopped it${quoted}.${notChargedHere()} ${tier === "image-animate" ? "Change the prompt or the picture" : "Rephrase the prompt"} and try again.`, 422), { contentFiltered: true });
       }
       throw bad(`Video generation failed upstream${quoted}.${notChargedHere()}`, 502);
     }
-    if (Date.now() - started > VIDEOS_MAX_WAIT_MS()) {
-      const waited = `Video generation did not finish within ${Math.round(VIDEOS_MAX_WAIT_MS() / 1000)} s.${notChargedHere()}`;
-      if (!parkKey) throw bad(`${waited} Send the request again to start a new clip.`, 504);
-      await parkVideoJob(parkKey, id);
-      throw Object.assign(bad(`${waited} Send the same request again, paid from the same wallet, within ${Math.round(VIDEO_PARK_MS() / 60_000)} minutes to collect this clip.`, 504), { videoParked: true });
-    }
-    await sleep(videosPollWaitMs(Date.now() - started));
+    if (pollLeft() <= 0) throw outOfTime(`Video generation did not finish within ${Math.max(1, Math.round((pollEndsAt - started) / 1000))} s.`);
+    await sleep(stepMs(videosPollWaitMs(Date.now() - started), pollLeft()));
     // A transient poll failure (5xx, 429, network, timeout, garbled body)
     // keeps polling until the deadline; a run of them, or any other status,
     // ends the request.
     let next = null, failure = null;
     try {
-      const p = await openRouterGet(pollUrl, { timeoutMs: 20_000 });
+      if (pollLeft() < VIDEO_MIN_STEP_MS) { await sleep(Math.max(1, pollLeft())); continue; } // too little left for a poll: the deadline check answers
+      const p = await openRouterGet(pollUrl, { timeoutMs: stepMs(20_000, pollLeft()) });
       if (!p.ok && !videoTransientStatus(p.status)) await throwUpstreamError(p);
       if (!p.ok) {
         await p.text().catch(() => "");
@@ -778,11 +868,14 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
 
   const contentUrl = `${OPENROUTER_VIDEOS_URL}/${encodeURIComponent(id)}/content?index=0`;
   for (let attempt = 0; ; attempt++) {
-    const canRetry = attempt < VIDEOS_CONTENT_RETRIES && Date.now() - started < VIDEOS_MAX_WAIT_MS();
+    const canRetry = attempt < VIDEOS_CONTENT_RETRIES && left() > videoContentBackoffMs(attempt) + VIDEO_MIN_STEP_MS;
+    if (left() < VIDEO_MIN_STEP_MS) throw outOfTime("The finished clip could not be downloaded inside this payment's time.");
     try {
-      c = await openRouterGet(contentUrl, { timeoutMs: 60_000 });
+      c = await openRouterGet(contentUrl, { timeoutMs: stepMs(60_000, left()) });
     } catch (e) {
       if (canRetry && videoTransientError(e)) { await sleep(videoContentBackoffMs(attempt)); continue; }
+      // Our own deadline ended the download: the clip is kept for the retry.
+      if (videoTransientError(e) && left() < VIDEO_MIN_STEP_MS) throw outOfTime("The finished clip could not be downloaded inside this payment's time.");
       throw e;
     }
     if (c.ok) break;
@@ -790,8 +883,10 @@ async function runVideoJob(body, req, { tier, priceUsd, worstCaseUsd, aspect_rat
     await throwUpstreamError(c);
   }
   } catch (e) {
-    // Any end other than a fresh park releases the id: a terminal poll or
-    // content error, the poll-failure limit, or "failed".
+    // Out of time: the job is parked for the same request again. Any other
+    // end releases the id: a terminal poll or content error, the
+    // poll-failure limit, or "failed".
+    if (e?.parkNow) { delete e.parkNow; await parkVideoJob(parkKey, id); throw e; }
     if (parkKey && !e?.videoParked) void unparkVideoJob(parkKey, id);
     throw e;
   }

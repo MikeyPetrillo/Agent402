@@ -55,7 +55,9 @@ const SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // A PNG that declares w x h: its image data is a few bytes, whatever it declares.
 const pngDeclaring = (w, h, { twoHeaders = false } = {}) => Buffer.concat([SIG, ihdr(w, h), ...(twoHeaders ? [ihdr(300, 300)] : []), chunk("IDAT", deflateSync(Buffer.alloc(64))), chunk("IEND", Buffer.alloc(0))]);
 const SQUARE = Buffer.from(examplePngBase64(), "base64");      // 300 x 300
-const PORTRAIT = pngDeclaring(720, 1280);
+// A PNG whose data holds every row it declares (black RGB rows, filter 0).
+const pngWithRows = (w, h, fill = (row) => row) => { const stride = 1 + w * 3; const raw = Buffer.alloc(stride * h); for (let y = 0; y < h; y++) fill(raw.subarray(y * stride + 1, (y + 1) * stride)); return Buffer.concat([SIG, ihdr(w, h), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]); };
+const PORTRAIT = pngWithRows(720, 1280);
 // A JPEG whose only frame header declares w x h.
 const jpegDeclaring = (w, h) => { const sof = Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]); return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xfe, 0x00, 0x04, 0x00, 0x00]), sof, Buffer.from([0xff, 0xd9])]); };
 
@@ -191,6 +193,19 @@ try {
   await noSubmit({ prompt: "x", image: pngDeclaring(300, 300, { twoHeaders: true }).toString("base64") }, 400, "IHDR", "a PNG with a second IHDR (the size a decoder reads is not the first)");
   await noSubmit({ prompt: "x", image: pngDeclaring(100, 300).toString("base64") }, 400, "at least 256", "a picture under the minimum side");
   await noSubmit({ prompt: "x", image: Buffer.from("GIF89a" + "x".repeat(40)).toString("base64") }, 400, "not a PNG or JPEG", "a GIF");
+  // ---- picture data a decoder cannot read: refused before the provider sees it ----
+  {
+    const { randomBytes } = await import("node:crypto");
+    const garbage = Buffer.concat([SIG, ihdr(300, 300), chunk("IDAT", randomBytes(5000)), chunk("IEND", Buffer.alloc(0))]);
+    await noSubmit({ prompt: "x", image: garbage.toString("base64") }, 400, "cannot be read", "a PNG whose image data is random bytes (no zlib stream)");
+    await noSubmit({ prompt: "x", image: pngDeclaring(720, 1280).toString("base64") }, 400, "ends before its last row", "a PNG whose data holds a few bytes of a 720x1280 picture");
+    const badFilter = (() => { const stride = 1 + 300 * 3; const raw = Buffer.alloc(stride * 300); raw[stride] = 9; return Buffer.concat([SIG, ihdr(300, 300), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]); })();
+    await noSubmit({ prompt: "x", image: badFilter.toString("base64") }, 400, "no valid filter", "a PNG whose second row starts with no valid filter byte");
+    await noSubmit({ prompt: "x", image: jpegDeclaring(300, 300).toString("base64") }, 400, "no start of scan", "a JPEG with a frame header and no scan data");
+    const seen = videoApi();
+    await call({ prompt: "x", image: pngWithRows(300, 300, (row) => randomBytes(row.length).copy(row)).toString("base64") });
+    ok(seen.submits.length === 1, "control: a PNG of random pixels whose rows are well formed is submitted");
+  }
   await noSubmit({ prompt: "x", image: "A".repeat(Math.ceil(ANIMATE_MAX_IMAGE_BYTES / 3) * 4 + 8) }, 413, "over 6 MB", "base64 past the cap (refused before it is decoded)");
   await noSubmit({ prompt: "x", image: "not base64!!" }, 400, "not valid base64", "a string that is not base64");
   await noSubmit({ image: SQUARE.toString("base64") }, 400, '"prompt" is required', "no prompt");
@@ -219,6 +234,7 @@ try {
     videoApi({ statuses: ["failed"], failError: "Video generation completed with no output (content may have been filtered)" });
     const e = await refusal({ prompt: "x", image: SQUARE.toString("base64") });
     ok(e?.statusCode === 422 && toolErrorFields(e).reason === "content_filtered", "a job the filter stopped -> 422 content_filtered");
+    ok(/Nothing was charged\. Change the prompt or the picture and try again\.$/.test(String(e?.message)), `…on the poll path too, image-animate names the prompt and the picture (${e?.message})`);
   }
   {
     videoApi({ submitStatus: 400, submitError: { message: "duration must be one of 4, 6, 8" } });
@@ -258,6 +274,42 @@ try {
     ok(same.submits.length === 0 && same.polls > 0, "the same picture as a data: URL collects it (the key is the picture's bytes, not the text it came in)");
   }
 
+  // ---- the run's clock starts at the handler: a slow picture shortens the wait ----
+  {
+    const payReq = (from, validForS = null) => { const h = Buffer.from(JSON.stringify({ x402Version: 2, payload: { signature: "0x00", authorization: { from, ...(validForS != null ? { validBefore: String(Math.floor(Date.now() / 1000) + validForS) } : {}) } } })).toString("base64"); return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined), ip: "203.0.113.9" }; };
+    // The picture takes 700 ms of the 1 s wait (VIDEOS_MAX_WAIT_MS here).
+    site.intercept({ path: "/slow.png" }).reply(200, SQUARE).delay(700);
+    const t = videoApi({ statuses: ["pending"] });
+    const t0 = Date.now();
+    const late = await refusal({ prompt: "the square rises", image: "https://img.example.test/slow.png" }, payReq(`0x${"f".repeat(40)}`));
+    const took = Date.now() - t0;
+    ok(late?.statusCode === 504 && t.submits.length === 1 && took < 1400, `a slow picture read counts against the clip's wait: the run ends near 1 s from the handler's start, not 1 s after the picture (${took} ms, ${late?.statusCode})`);
+    // A finished clip whose download would outlive the payment's own
+    // authorization is cut at that budget and kept for the same request again.
+    let hung = 0;
+    video = async (u, init) => {
+      if (init.method === "POST") return { ok: true, status: 202, text: async () => JSON.stringify({ id: "budget1", status: "pending" }) };
+      if (u.includes("/content")) { hung++; return new Promise((_, rej) => { init.signal?.addEventListener("abort", () => rej(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }))); }); }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "budget1", status: "completed" }) };
+    };
+    const t1 = Date.now();
+    // validBefore 12 s ahead: 12 - 6 (the settle rule) - 4 (the settle margin) = about 2 s of budget.
+    const cut = await Promise.race([refusal({ prompt: "the budget clip", image: SQUARE.toString("base64") }, payReq(`0x${"9".repeat(40)}`, 12)), new Promise((r) => setTimeout(() => r("hung"), 6000))]);
+    const took1 = Date.now() - t1;
+    ok(cut !== "hung" && cut?.statusCode === 504 && /collect this clip/.test(cut.message) && hung >= 1 && took1 < 3500, `a download that would outlive the payment's authorization ends at its budget, the clip parked for the same request (${cut === "hung" ? "still waiting at 6 s" : `${took1} ms, ${cut?.statusCode}`})`);
+    {
+      const short = videoApi();
+      const e = await refusal({ prompt: "no time", image: SQUARE.toString("base64") }, payReq(`0x${"8".repeat(40)}`, 10));
+      ok(e?.statusCode === 504 && short.submits.length === 0, `a payment with no time left for a clip is answered 504 before anything is submitted (${e?.statusCode}, ${short.submits.length} submits)`);
+    }
+    const again = videoApi();
+    const out = await call({ prompt: "the budget clip", image: SQUARE.toString("base64") }, payReq(`0x${"9".repeat(40)}`));
+    ok(again.submits.length === 0 && out.data[0].b64_json === MP4.toString("base64"), "the same request again collects that clip with no new submit");
+    const { videoRunEndsAt } = K;
+    const s0 = 1_000_000;
+    ok(videoRunEndsAt(null, "image-animate", s0, s0) === s0 + 236_000 && videoRunEndsAt(null, "v1-videos", s0, s0) === s0 + 236_000, "the run ends at the route's EVM run time less the settle margin, counted from the handler's start");
+  }
+
   // ---- a call waiting on its clip holds no copy of the picture ----
   {
     const payReq = (from) => { const h = Buffer.from(JSON.stringify({ x402Version: 2, payload: { signature: "0x00", authorization: { from } } })).toString("base64"); return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined), ip: "203.0.113.9" }; };
@@ -268,7 +320,7 @@ try {
     const held = () => { gc(); gc(); const m = process.memoryUsage(); return m.heapUsed + m.external; };
     // A PNG of about 3 MB: the IDAT is random bytes (stored, so the file is that large).
     const { randomBytes } = await import("node:crypto");
-    const big = Buffer.concat([SIG, ihdr(1024, 1024), chunk("IDAT", randomBytes(3 * 1048576)), chunk("IEND", Buffer.alloc(0))]);
+    const big = pngWithRows(1024, 1024, (row) => randomBytes(row.length).copy(row));
     const N = 4;
     const inputs = Array.from({ length: N }, (_, i) => ({ prompt: `held ${i}`, image: big.toString("base64") }));
     let pending = true, submitted = 0;
