@@ -125,7 +125,8 @@ Tools:
   anything is sent to the provider, and its content-filter answer on a
   finished job says to change the prompt or the picture.
 - name-records and wikidata-entity make one Wikimedia read per host at a
-  time across all callers.
+  time across all callers, taking fair turns so one caller's burst never
+  refuses another's read.
 API:
 - /api/find, /api/route and route-and-execute read a task that asks for IP
   geolocation, in phrasings such as "which country is this IP in" and for
