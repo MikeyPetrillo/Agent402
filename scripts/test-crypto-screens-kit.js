@@ -17,11 +17,12 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 //   - wording: no advice, rating or trade-direction words in any description,
 //     flag or published example.
 
-import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, SCREEN_READS, readsPerDay, UNKNOWN_ID_MAX, UNKNOWN_ID_TTL_MS, ANSWER_MEMO_MAX, resetScreensMemory, __test } from "../src/tools/crypto-screens-kit.js";
+import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, SCREEN_READS, readsPerDay, FUNDING_PAGE_CAP, FUNDING_PER_PAGE, UNKNOWN_ID_MAX, UNKNOWN_ID_TTL_MS, ANSWER_MEMO_MAX, resetScreensMemory, __test } from "../src/tools/crypto-screens-kit.js";
 import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
 import { RAW_MARKET_FIELDS } from "../src/resale-terms.js";
+import { cgDayCaps } from "../src/tools/coingecko-rate.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -60,6 +61,14 @@ globalThis.fetch = async (url, init) => {
   return jsonRes(404, { error: "not found" });
 };
 const path = (p) => (u) => u.pathname === `/api/v3${p}`;
+// A paged list answer: its body and the `link` and `total` headers the upstream sends.
+const pagedRes = (body, { next, page = 1, last = 110 } = {}) => {
+  const link = [`<https://api.coingecko.com/api/v3/derivatives?page=1&per_page=250>; rel="first"`, `<https://api.coingecko.com/api/v3/derivatives?page=${last}&per_page=250>; rel="last"`, ...(next ? [`<https://api.coingecko.com/api/v3/derivatives?page=${page + 1}&per_page=250>; rel="next"`] : [])].join(", ");
+  const h = { link, total: String(last * 250), "per-page": "250" };
+  return { ...jsonRes(200, body), headers: { get: (k) => h[String(k).toLowerCase()] ?? null } };
+};
+// 250 tickers, all above every floor, distinct per page (three coins on three venues each, the rest filler).
+const fullPage = (n) => Array.from({ length: 250 }, (_, k) => ({ market: `Venue ${k % 3}`, symbol: `S${n}-${k}`, index_id: k < 9 ? `C${Math.floor(k / 3)}` : `F${n}X${k}`, funding_rate: 0.01 * (k % 3), open_interest: 900_000_000 - n * 1_000_000 - k * 100, basis: 0.05, volume_24h: 1, contract_type: "perpetual", expired_at: null }));
 const reset = () => { calls.length = 0; clearCryptoMarketsCache(); resetCgRateLimit(); resetScreensMemory(); };
 for (const k of ["COINGECKO_API_KEY", "COINGECKO_API_TIER", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX"]) delete process.env[k];
 
@@ -99,8 +108,16 @@ ok(JSON.stringify(SCREEN_TTL) === JSON.stringify({ funding: 30 * MINUTE, depeg: 
   const perDay = Object.fromEntries(SLUGS.map((s) => [s, readsPerDay(s)]));
   const total = Object.values(perDay).reduce((a, b) => a + b, 0);
   console.log(`  reads a day, one caller per tool polling without pause: ${JSON.stringify(perDay)} total ${total}`);
-  ok(Object.keys(SCREEN_READS).sort().join() === [...SLUGS].sort().join() && JSON.stringify(perDay) === JSON.stringify({ "funding-screener": 48, "stablecoin-depeg-watch": 96, "exchange-spread": 288, "defi-screener": 48, "chain-board": 100, "dex-volume-board": 240, "dex-pool-health": 336 }), "reads a day per tool are (documents read) x (1440 / window minutes)");
-  ok(total <= 1200, `continuous polling of every tool stays within 1,200 upstream reads a day (${total})`);
+  ok(Object.keys(SCREEN_READS).sort().join() === [...SLUGS].sort().join() && JSON.stringify(perDay) === JSON.stringify({ "funding-screener": 1152, "stablecoin-depeg-watch": 96, "exchange-spread": 288, "defi-screener": 48, "chain-board": 100, "dex-volume-board": 240, "dex-pool-health": 336 }), "reads a day per tool are (documents read) x (1440 / window minutes)");
+  ok(SCREEN_READS["funding-screener"][0][1] === FUNDING_PAGE_CAP && FUNDING_PER_PAGE === 250, `funding-screener's documents per call are its page cap (${FUNDING_PAGE_CAP} pages of ${FUNDING_PER_PAGE})`);
+  // The production day (COINGECKO_DAILY_MAX 3000 on the deployment) less the
+  // reserve kept for the other CoinGecko tools is the screens' ceiling: one
+  // caller per tool polling without pause fits inside it.
+  const PROD_DAILY_MAX = 3000;
+  const screensDay = cgDayCaps(PROD_DAILY_MAX).screens;
+  ok(total <= screensDay, `continuous polling of every tool stays within the screens' share of the production day (${total} of ${screensDay} reads)`);
+  // A cold funding call reads at most half of the default minute bucket (80), so the other tools keep the rest of the minute.
+  ok(FUNDING_PAGE_CAP <= 80 / 2, `a cold funding call's pages fit in half the minute bucket (${FUNDING_PAGE_CAP} of 80)`);
 }
 {
   const d = (slug) => CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug).description;
@@ -142,7 +159,8 @@ const DERIVATIVES = [
 routes = [[path("/derivatives"), () => jsonRes(200, DERIVATIVES)]];
 reset();
 {
-  const kept = __test.reducePerps.fn(DERIVATIVES);
+  const keptPage = __test.reducePerps.fn(DERIVATIVES), kept = keptPage.rows;
+  ok(keptPage.objects === DERIVATIVES.length && keptPage.next === false && keptPage.lowestOi === 50_000, "a page records its ticker count, its lowest open interest and that a short page is the last");
   ok(kept.length === 10 && kept.every((r) => r.length === 7), `the derivatives document is reduced to live perpetuals with funding above the floor (${kept.length} of ${DERIVATIVES.length} rows, 7 fields each)`);
   const out = await h("funding-screener")({ coin: "eth" });
   ok(out.mode === "coin" && out.coin === "ETH" && out.venues === 4 && out.minOpenInterestUsd === 1_000_000, "coin mode: the four venues above the default floor, ticker case-folded");
@@ -228,10 +246,10 @@ reset();
     const took = performance.now() - started;
     worst = Math.max(worst, performance.now() - last); // a read that never yielded is one turn, ending here
     clearInterval(tick);
-    ok(text.length > 11_000_000 && JSON.stringify(sliced) === JSON.stringify(whole) && sliced.length === 40_000, `a ${(text.length / 1e6).toFixed(1)} MB document read in slices reduces to the same rows as a whole parse (${sliced.length})`);
+    ok(text.length > 11_000_000 && JSON.stringify(sliced) === JSON.stringify(whole) && sliced.rows.length === 40_000 && sliced.next === false, `a ${(text.length / 1e6).toFixed(1)} MB document read in slices reduces to the same rows as a whole parse (${sliced.length})`);
     console.log(`# sliced reduce of ${(text.length / 1e6).toFixed(1)} MB: ${took.toFixed(0)} ms in all, longest event-loop turn ${worst.toFixed(1)} ms`);
     const one = await __test.reducePerps.fromText(` \n[ ${JSON.stringify(DERIVATIVES[0])} , 7, "x", null, [1, {"a": 2}], ${JSON.stringify(DERIVATIVES[1])} ]\n`);
-    ok(one.length === 2 && one[0][0] === "Alpha Futures" && one[1][0] === "Beta Futures", "whitespace and non-object elements are passed over");
+    ok(one.rows.length === 2 && one.rows[0][0] === "Alpha Futures" && one.rows[1][0] === "Beta Futures", "whitespace and non-object elements are passed over");
     for (const [badText, why] of [['{"a":1}', "an object"], ["", "an empty body"], ['[{"market":"x"', "a truncated list"], ["<html>", "a page"], ['[{"market":"x"}] trailing', "text after the list"]]) {
       let threw = false; try { await __test.reducePerps.fromText(badText); } catch { threw = true; }
       ok(threw, `${why} is refused, never read as an empty list`);
@@ -255,6 +273,88 @@ reset();
   await throws(h("funding-screener")({ coin: "ETH", minOpenInterestUsd: 10 }), 400, "a floor under the minimum");
   await throws(h("funding-screener")({ sort: "best" }), 400, "an unknown sort");
   await throws(h("funding-screener")({ coin: "ETH", limit: 26 }), 400, "limit above 25 in coin mode");
+}
+
+// ----------------------------------------------------------------------------
+// funding-screener reads the paged derivatives list: pages in descending open
+// interest, read until one holds a ticker under the floor, the list ends, or
+// the page cap is reached (then the answer is marked partial).
+// ----------------------------------------------------------------------------
+{
+  reset();
+  // Three pages of 250 tickers in descending open interest, a fourth behind them.
+  const filler = (page, n, hi, lo) => Array.from({ length: n }, (_, k) => perp(`Filler ${page}-${k}`, `F${page}X${k}`, `F${page}X${k}`, 0.001, hi - ((hi - lo) * k) / Math.max(1, n - 1)));
+  const P1 = [perp("A Perps", "BTCUSDT", "BTC", 0.01, 60_000_000), perp("B Perps", "BTC-PERP", "BTC", 0.02, 59_000_000), perp("C Perps", "BTC_USDT", "BTC", 0.03, 58_000_000), ...filler(1, 247, 57_000_000, 20_000_000)];
+  const P2 = [perp("D Perps", "BTCUSD", "BTC", 0.04, 15_000_000), perp("A Perps", "ETHUSDT", "ETH", 0.01, 14_000_000), perp("B Perps", "ETH-PERP", "ETH", 0.02, 13_000_000), perp("C Perps", "ETH_USDT", "ETH", 0.03, 12_000_000), ...filler(2, 246, 11_000_000, 2_000_000)];
+  const P3 = [perp("E Perps", "BTCUSDC", "BTC", 0.05, 1_200_000), perp("F Perps", "BTCUSDC", "BTC", 0.5, 800_000), ...filler(3, 248, 700_000, 50_000)];
+  const P4 = filler(4, 250, 49_000, 1_000);
+  const PAGES = [P1, P2, P3, P4];
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(PAGES[n - 1] || [], { next: n < PAGES.length, page: n, last: PAGES.length }); }]];
+  const derivReads = () => calls.filter((c) => c.url.pathname === "/api/v3/derivatives");
+  ok(P1.length === 250 && P2.length === 250 && P3.length === 250, "control: the fixture's first three pages are full");
+
+  const board = await h("funding-screener")({ minOpenInterestUsd: 1_000_000 });
+  const btcRow = board.coins.find((c) => c.coin === "BTC");
+  ok(board.venuesScreened === 250 + 250 + 1 && btcRow?.venues === 5 && board.coins.some((c) => c.coin === "ETH"), `the board counts the venues on later pages (${board.venuesScreened} screened, BTC on ${btcRow?.venues} venues, ETH from page 2 alone)`);
+  ok(derivReads().length === 3 && derivReads().every((c, k) => c.url.searchParams.get("page") === String(k + 1) && c.url.searchParams.get("per_page") === "250"), `reading pages 1-3 at 250 a page and stopping at the page that falls under the floor (${derivReads().map((c) => c.url.search).join(" ")})`);
+  ok(board.scan?.pagesRead === 3 && board.scan.stoppedBy === "floor" && board.scan.complete === true && board.complete === true && !("openInterestReachedUsd" in board.scan), `a scan that reaches the floor is complete (${JSON.stringify(board.scan)})`);
+
+  const btc = await h("funding-screener")({ coin: "BTC" });
+  ok(btc.venues === 5 && btc.complete === true && btc.truncated === false && derivReads().length === 3, `coin mode counts the venues from every page read, from the kept pages (${btc.venues} venues, ${derivReads().length} reads)`);
+  const again = await h("funding-screener")({ minOpenInterestUsd: 1_000_000 });
+  ok(again.cached === true && derivReads().length === 3 && JSON.stringify({ ...again, cached: false }) === JSON.stringify(board), "one kept entry per page serves a repeat inside the window with no read");
+  ok(board.coins.every((c) => !("openInterestUsd" in c)), "no venue's open interest is answered");
+
+  // A higher floor stops sooner; a deeper floor reads only the pages it adds.
+  reset();
+  const high = await h("funding-screener")({ coin: "BTC", minOpenInterestUsd: 5_000_000 });
+  ok(high.venues === 4 && derivReads().length === 2 && high.scan.stoppedBy === "floor", `a $5M floor stops at page 2, whose lowest ticker is under it (${derivReads().length} reads, ${high.venues} venues)`);
+  const deep = await h("funding-screener")({ coin: "BTC", minOpenInterestUsd: 100_000 });
+  ok(deep.venues === 6 && derivReads().length === 3 && deep.scan.pagesRead === 3, `the $100k floor reads page 3 only, the first two from the window's entries (${derivReads().length} reads)`);
+
+  // The list's end: a page whose link names no next page ends the reading.
+  reset();
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(n === 1 ? P1 : P2, { next: n < 2, page: n, last: 2 }); }]];
+  const ended = await h("funding-screener")({ coin: "BTC", minOpenInterestUsd: 1_000_000 });
+  ok(ended.scan.stoppedBy === "last-page" && ended.scan.complete === true && derivReads().length === 2 && ended.venues === 4, `the last page ends the reading (${ended.scan.stoppedBy}, ${derivReads().length} reads)`);
+
+  // A ticker that moved across a page edge between reads is counted once.
+  reset();
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return pagedRes(n === 1 ? P1 : [P1[2], ...P2.slice(1)], { next: n < 2, page: n, last: 2 }); }]];
+  const dup = await h("funding-screener")({ coin: "BTC" });
+  ok(dup.venues === 3, `a venue on two pages is one venue (${dup.venues})`);
+
+  // The page cap: every page full and above the floor. The answer is marked
+  // partial in fields and names the open interest the reading reached.
+  reset();
+  routes = [[path("/derivatives"), (u) => pagedRes(fullPage(Number(u.searchParams.get("page") || 1)), { next: true })]];
+  const capped = await h("funding-screener")({ minOpenInterestUsd: 100_000 });
+  ok(derivReads().length === FUNDING_PAGE_CAP && capped.scan.pagesRead === FUNDING_PAGE_CAP && capped.scan.stoppedBy === "page-cap", `the cap stops the reading at ${FUNDING_PAGE_CAP} pages (${derivReads().length} reads)`);
+  ok(capped.scan.complete === false && capped.complete === false && capped.truncated === true && typeof capped.scan.openInterestReachedUsd === "number" && capped.scan.openInterestReachedUsd >= 100_000, `a capped board is partial in fields and names the open interest reached (${JSON.stringify(capped.scan)})`);
+  const cappedCoin = await h("funding-screener")({ coin: "C1", minOpenInterestUsd: 100_000 });
+  ok(cappedCoin.complete === false && cappedCoin.truncated === true && cappedCoin.scan.stoppedBy === "page-cap" && derivReads().length === FUNDING_PAGE_CAP, "a capped coin answer is partial too, from the kept pages");
+  await throws(h("funding-screener")({ coin: "NOPE", minOpenInterestUsd: 100_000 }), 422, "a coin missing from a capped scan names how far the reading went", /among the venues read \(down to about \$\d+/);
+
+  // A later page that cannot be read ends the reading with what was read; the first page's failure is the call's.
+  reset();
+  routes = [[path("/derivatives"), (u) => { const n = Number(u.searchParams.get("page") || 1); return n === 1 ? pagedRes(P1, { next: true }) : jsonRes(500, "x"); }]];
+  const broken = await h("funding-screener")({ coin: "BTC" });
+  ok(broken.venues === 3 && broken.scan.stoppedBy === "upstream" && broken.complete === false, `a failed later page leaves a partial answer (${broken.scan.stoppedBy})`);
+  reset();
+  routes = [[path("/derivatives"), () => jsonRes(500, "x")]];
+  await throws(h("funding-screener")({ coin: "BTC" }), 502, "the first page failing is the call's failure");
+
+  // The link header: rel="next" decides, and an upstream that did not page is the whole list.
+  {
+    const hdr = (link) => ({ get: (k) => (k.toLowerCase() === "link" ? link : null) });
+    const t250 = JSON.stringify(P1);
+    ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?page=2>; rel="next", <https://x/?page=9>; rel="last"'))).next === true, "a link naming rel=next is a next page");
+    ok((await __test.reducePerps.fromText(t250, hdr('<https://x/?page=1>; rel="first", <https://x/?page=8>; rel="prev"'))).next === false, "a link without rel=next is the last page, even when the page is full");
+    ok((await __test.reducePerps.fromText(JSON.stringify([...P1, ...P2]), hdr('<https://x/?page=2>; rel="next"'))).next === false, "a page holding more than 250 tickers is an upstream that did not page: the whole list");
+    ok(__test.edgeOf(833_360.39) === 830_000 && __test.edgeOf(1_016_371) === 1_000_000 && __test.edgeOf(null) === null, "the open interest reached is stated at two significant figures, rounded down");
+  }
+  routes = [[path("/derivatives"), () => jsonRes(200, DERIVATIVES)]];
+  reset();
 }
 
 // ----------------------------------------------------------------------------
@@ -689,7 +789,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   reset();
   poolDoc = POOL(); tradesDoc = TRADES;
   routes = [
-    [path("/derivatives"), () => jsonRes(200, DERIVATIVES)],
+    [path("/derivatives"), (u) => pagedRes(fullPage(Number(u.searchParams.get("page") || 1)), { next: true })], // every page full and above the floor: the cap is reached
     [(u) => u.pathname === "/api/v3/coins/markets" && u.searchParams.get("category") === "stablecoins", () => jsonRes(200, STABLES)],
     [path("/coins/ethereum/tickers"), () => jsonRes(200, TICKERS)],
     [(u) => u.pathname === "/api/v3/coins/markets" && u.searchParams.get("category") === "decentralized-finance-defi", () => jsonRes(200, DEFI)],
@@ -709,7 +809,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   Date.now = realNow;
   const want = Object.fromEntries(SLUGS.map((s) => [s, readsPerDay(s)]));
   ok(JSON.stringify(spent) === JSON.stringify(want), `a day of one-minute polls spends each tool's stated reads (${JSON.stringify(spent)})`);
-  ok(calls.length === 1156, `a day of one-minute polls of all seven tools, one fixed input each, is ${calls.length} upstream reads (not a ceiling: inputs that change each call miss the cache; the screens' share of the day bounds those, test-coingecko-rate.js)`);
+  ok(calls.length === 2260, `a day of one-minute polls of all seven tools, one fixed input each, is ${calls.length} upstream reads (not a ceiling: inputs that change each call miss the cache; the screens' share of the day bounds those, test-coingecko-rate.js)`);
   ok(__test.memoCounts.computed === 864 && __test.memoCounts.kept === 1440 * 7 - 864, `and an answer was worked out only when one of its documents was read again (${__test.memoCounts.computed} of ${1440 * 7} calls)`);
   reset();
 }

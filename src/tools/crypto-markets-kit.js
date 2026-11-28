@@ -277,12 +277,13 @@ async function cgLoad(key, path, reduce = null) {
   }
   // A reducer with `fromText` reads the body itself (a large list, in slices
   // that leave the event loop free between them); the body is then never
-  // parsed whole.
+  // parsed whole. It is handed the response headers too (a paged list names
+  // its next page in `link`).
   let text, data;
   try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); if (!reduce?.fromText) data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
   if (reduce) {
-    try { data = reduce.fromText ? await reduce.fromText(text) : reduce.fn(data); text = JSON.stringify(data); }
+    try { data = reduce.fromText ? await reduce.fromText(text, res.headers) : reduce.fn(data); text = JSON.stringify(data); }
     catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
   }
   // Every document read here is an object or a list. A body that parses to
