@@ -24,6 +24,8 @@ import { assertRobotsAllow } from "./robots-gate.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { upstreamKeyFor, runWithUpstreamKey, upstreamKeyRefusedError, upstreamKeySentence } from "../upstream-key.js";
+import { partialFields, clampFields } from "../partial-answer.js";
+import { createHash } from "node:crypto";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The reads answered in 0.05 to 1.6 s when measured
@@ -167,6 +169,318 @@ function renderSnak(snak) {
     default:
       return null;
   }
+}
+
+// The values of one property's statements: preferred rank first, then
+// normal; deprecated dropped; repeated values (the same value with other
+// qualifiers) kept once; at most `max`.
+function wdValues(statements, max = WD_MAX_VALUES_PER_PROP) {
+  if (!Array.isArray(statements) || !statements.length) return [];
+  const ranked = [
+    ...statements.filter((s) => s.rank === "preferred"),
+    ...statements.filter((s) => s.rank === "normal"),
+  ];
+  const seen = new Set();
+  return ranked
+    .map((s) => renderSnak(s.mainsnak))
+    .filter((v) => {
+      if (v === null) return false;
+      const key = JSON.stringify(v);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, max);
+}
+
+/** The curated facts of one entity's claims, keyed by `props`' names. */
+function wdFacts(claims, props) {
+  const facts = {};
+  for (const [prop, key] of Object.entries(props)) {
+    const values = wdValues(claims?.[prop]);
+    if (values.length) facts[key] = values;
+  }
+  return facts;
+}
+
+// One batched follow-up gives every item reference in these fact sets its
+// English label (at most 50 ids). Labels are an enhancement: when the read
+// fails, the ids stand alone.
+async function wdAttachLabels(factSets) {
+  const refIds = new Set();
+  for (const facts of factSets) for (const values of Object.values(facts)) {
+    for (const v of values) if (v && typeof v === "object" && v.id) refIds.add(v.id);
+  }
+  if (!refIds.size) return;
+  const ids = [...refIds].slice(0, 50).join("|");
+  try {
+    const { data: labelData } = await getJson(
+      `${WD_API}?action=wbgetentities&ids=${encodeURIComponent(ids)}&props=labels&languages=en&format=json&origin=*`,
+      "Wikidata"
+    );
+    const labelOf = (qid) => labelData?.entities?.[qid]?.labels?.en?.value ?? null;
+    for (const facts of factSets) for (const values of Object.values(facts)) {
+      for (const v of values) if (v && typeof v === "object" && v.id) v.label = labelOf(v.id);
+    }
+  } catch { /* labels are an enhancement — the Q-ids still stand alone */ }
+}
+
+// ============================================================================
+// name-records — what public sources record for a name: Wikidata statements,
+// the Commons file page of the item's image, the US trademark serial numbers
+// Wikidata records (each linked to its USPTO record page), and, for a given
+// image, the Commons file with the same SHA-1.
+//
+// Facts only. The answer relays records, each labeled with the source that
+// holds it and the time it was read; it never concludes anything about
+// ownership or use. Left out on purpose: Wikidata's copyright status (P6216)
+// and copyright license (P275), which read as a conclusion they are not, and
+// "owned by" (P127). Trademark owner, status and classes are at the USPTO
+// link (`trademarkDetails: "linked"`); nothing is read from USPTO.
+//
+// Terms: Wikidata's data is CC0 and Structured Data on Commons is CC0; a
+// file page's short fields (author name, license name, restriction tags) are
+// relayed as recorded, never the image or the page's description text.
+// Reads are one at a time (the Wikimedia robot policy's concurrency of 1
+// for an unauthenticated client).
+// ============================================================================
+const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
+export const NAME_RECORDS_PROPS = Object.freeze({
+  P170: "creator",
+  P50: "author",
+  P287: "designedBy",
+  P123: "publisher",
+  P272: "productionCompany",
+  P176: "manufacturer",
+  P571: "inception",
+  P577: "publicationDate",
+  P4584: "firstAppearance",
+  P144: "basedOn",
+  P138: "namedAfter",
+});
+export const US_TRADEMARK_SERIAL_PROP = "P10482";
+const NAME_IMAGE_PROPS = [["P18", "image"], ["P154", "logo image"]];
+export const NAME_RECORDS_MAX_ITEMS = 5;
+const NAME_RECORDS_DEFAULT_ITEMS = 3;
+const NAME_RECORDS_SEARCH_LIMIT = 10;
+export const NAME_RECORDS_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const NAME_RECORDS_IMAGE_B64_MAX = Math.ceil(NAME_RECORDS_IMAGE_MAX_BYTES / 3) * 4;
+const NAME_RECORDS_SHA1_MATCH_MAX = 5;
+const FILE_FIELD_MAX = 200;
+export const USPTO_CREDIT = "Source: United States Patent and Trademark Office, www.uspto.gov";
+export const NAME_RECORDS_SCOPE = "This answer lists what Wikidata and Wikimedia Commons record for this name, with links to the USPTO record pages Wikidata names, each with its source link and read time. It makes no determination of ownership or of permitted use.";
+export const NAME_RECORDS_SOURCES = Object.freeze([
+  Object.freeze({ name: "Wikidata", url: "https://www.wikidata.org", dataLicense: "CC0 1.0" }),
+  Object.freeze({ name: "Wikimedia Commons", url: "https://commons.wikimedia.org", fileLicenses: "each file's license line as recorded on its file page" }),
+]);
+const NAME_RECORDS_AFFILIATION = "Not affiliated with or endorsed by the Wikimedia Foundation or the United States Patent and Trademark Office.";
+
+/** The USPTO record page (TSDR) for an 8-digit US serial number. */
+export function usptoRecordUrl(serial) {
+  return `https://tsdr.uspto.gov/#caseNumber=${serial}&caseSearchType=US_APPLICATION&caseType=DEFAULT&searchType=statusSearch`;
+}
+
+// A Commons field is HTML (an author is often a link). Its text, tags
+// dropped in one linear pass, the common entities decoded, whitespace
+// collapsed and cut to FILE_FIELD_MAX characters.
+function fileFieldText(html) {
+  if (typeof html !== "string" || !html) return null;
+  let out = "";
+  let inTag = false;
+  for (let i = 0; i < html.length && out.length < FILE_FIELD_MAX * 4; i++) {
+    const c = html[i];
+    if (inTag) { if (c === ">") { inTag = false; out += " "; } continue; }
+    if (c === "<") { inTag = true; continue; }
+    out += c;
+  }
+  const text = out
+    .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#0?39;/g, "'").replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, FILE_FIELD_MAX) : null;
+}
+
+// One Commons file page's recorded facts, from imageinfo's extmetadata.
+function commonsFileFacts(page, readAt) {
+  const info = Array.isArray(page?.imageinfo) ? page.imageinfo[0] : null;
+  if (!info) return null;
+  const m = info.extmetadata || {};
+  const restrictions = String(m.Restrictions?.value ?? "").split("|").map((s) => s.trim()).filter(Boolean).slice(0, 10);
+  const licenseUrl = typeof m.LicenseUrl?.value === "string" && /^https?:\/\//.test(m.LicenseUrl.value) ? m.LicenseUrl.value.slice(0, 300) : null;
+  return {
+    file: page.title,
+    url: info.descriptionurl || `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title).replace(/ /g, "_"))}`,
+    recordedOnFilePage: {
+      author: fileFieldText(m.Artist?.value),
+      license: fileFieldText(m.LicenseShortName?.value),
+      licenseUrl,
+      restrictions,
+    },
+    source: "commons.wikimedia.org",
+    readAt,
+  };
+}
+
+const commonsTitleKey = (t) => {
+  const s = String(t || "").replace(/^File:/i, "").replace(/_/g, " ").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+};
+
+// The file page facts of each named file, in one Commons read.
+async function commonsFiles(fileNames) {
+  const out = new Map();
+  if (!fileNames.length) return out;
+  const titles = fileNames.map((f) => `File:${f}`).join("|");
+  const { data } = await getJson(
+    `${COMMONS_API}?action=query&titles=${encodeURIComponent(titles)}&prop=imageinfo&iiprop=extmetadata%7Curl&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicenseUrl%7CRestrictions&format=json&formatversion=2&origin=*`,
+    "Wikimedia Commons"
+  );
+  const readAt = new Date().toISOString();
+  for (const page of Array.isArray(data?.query?.pages) ? data.query.pages : []) {
+    const facts = commonsFileFacts(page, readAt);
+    if (facts) out.set(commonsTitleKey(page.title), facts);
+  }
+  return out;
+}
+
+// The Commons files whose SHA-1 equals the given one (byte-identical files).
+async function commonsSha1Matches(sha1) {
+  const { data } = await getJson(
+    `${COMMONS_API}?action=query&generator=allimages&gaisha1=${sha1}&gailimit=${NAME_RECORDS_SHA1_MATCH_MAX}&prop=imageinfo&iiprop=extmetadata%7Curl&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicenseUrl%7CRestrictions&format=json&formatversion=2&origin=*`,
+    "Wikimedia Commons"
+  );
+  const readAt = new Date().toISOString();
+  const files = (Array.isArray(data?.query?.pages) ? data.query.pages : []).map((p) => commonsFileFacts(p, readAt)).filter(Boolean);
+  return { files, more: Boolean(data?.continue) };
+}
+
+// The first file name an item records for one of the image properties.
+function itemImage(claims) {
+  for (const [prop, label] of NAME_IMAGE_PROPS) {
+    const statements = Array.isArray(claims?.[prop]) ? claims[prop] : [];
+    const ranked = [...statements.filter((s) => s.rank === "preferred"), ...statements.filter((s) => s.rank === "normal")];
+    for (const s of ranked) {
+      const v = s?.mainsnak?.snaktype === "value" ? s.mainsnak.datavalue?.value : null;
+      if (typeof v === "string" && v && v.length <= 255) return { file: v, fromProperty: `${prop} ${label}` };
+    }
+  }
+  return null;
+}
+
+// The caller's image: base64 or a data URL, decoded and bounded.
+function nameRecordsImage(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw !== "string") throw bad(`"image" must be a base64 string or a data URL`);
+  if (raw.length > NAME_RECORDS_IMAGE_B64_MAX + 512) throw bad(`"image" is capped at ${NAME_RECORDS_IMAGE_MAX_BYTES / (1024 * 1024)} MB`, 413);
+  let b64 = raw;
+  if (raw.startsWith("data:")) {
+    const comma = raw.indexOf(",");
+    const head = comma > 0 && comma <= 200 ? raw.slice(0, comma) : "";
+    if (!/^data:[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+;base64$/.test(head)) throw bad(`"image" data URL must be data:<type>/<subtype>;base64,<data>`);
+    b64 = raw.slice(comma + 1);
+  }
+  b64 = b64.replace(/\s+/g, "");
+  if (!b64 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw bad(`"image" must be valid base64 (A-Z, a-z, 0-9, +, / and = padding)`);
+  const bytes = Buffer.from(b64, "base64");
+  if (!bytes.length) throw bad(`"image" decoded to no bytes`);
+  if (bytes.length > NAME_RECORDS_IMAGE_MAX_BYTES) throw bad(`"image" is capped at ${NAME_RECORDS_IMAGE_MAX_BYTES / (1024 * 1024)} MB`, 413);
+  return bytes;
+}
+
+async function nameRecords(input = {}) {
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!name) throw bad(`"name" is required: a character, meme, logo, artwork, brand or work name`);
+  if (name.length > 200) throw bad(`"name" is capped at 200 characters`);
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw bad(`"name" must not contain control characters`);
+  let limit = NAME_RECORDS_DEFAULT_ITEMS;
+  let clamp = {};
+  if (input.limit !== undefined && input.limit !== null && input.limit !== "") {
+    const n = Number(input.limit);
+    if (!Number.isInteger(n) || n < 1) throw bad(`"limit" must be a whole number from 1 to ${NAME_RECORDS_MAX_ITEMS}`);
+    clamp = clampFields(n, NAME_RECORDS_MAX_ITEMS, "limit");
+    limit = Math.min(n, NAME_RECORDS_MAX_ITEMS);
+  }
+  const image = nameRecordsImage(input.image);
+
+  const { data: search } = await getJson(
+    `${WD_API}?action=wbsearchentities&search=${encodeURIComponent(name)}&language=en&uselang=en&type=item&limit=${NAME_RECORDS_SEARCH_LIMIT}&format=json&origin=*`,
+    "Wikidata", {}, "search"
+  );
+  const candidates = (Array.isArray(search?.search) ? search.search : []).filter((m) => typeof m?.id === "string" && QID_RE.test(m.id));
+  const picked = candidates.slice(0, limit);
+  const items = [];
+  if (picked.length) {
+    const { data } = await getJson(
+      `${WD_API}?action=wbgetentities&ids=${picked.map((m) => m.id).join("%7C")}&props=labels%7Cdescriptions%7Cclaims&languages=en&format=json&origin=*`,
+      "Wikidata", {}, "entities"
+    );
+    const readAt = new Date().toISOString();
+    for (const m of picked) {
+      const ent = data?.entities?.[m.id];
+      if (!ent || ent.missing !== undefined) continue;
+      const claims = ent.claims || {};
+      const serials = wdValues(claims[US_TRADEMARK_SERIAL_PROP]).filter((v) => typeof v === "string");
+      items.push({
+        id: m.id,
+        label: ent.labels?.en?.value ?? m.label ?? null,
+        description: ent.descriptions?.en?.value ?? m.description ?? null,
+        url: `https://www.wikidata.org/wiki/${m.id}`,
+        recordedOnWikidata: wdFacts(claims, NAME_RECORDS_PROPS),
+        trademarkSerialNumbers: serials.map((s) => {
+          const linkable = /^\d{8}$/.test(s);
+          return {
+            serialNumber: s,
+            recordedOn: "wikidata.org",
+            usptoRecordUrl: linkable ? usptoRecordUrl(s) : null,
+            trademarkDetails: linkable ? "linked" : "not linked: the recorded value is not an 8-digit US serial number",
+          };
+        }),
+        image: itemImage(claims),
+        commonsFile: null,
+        source: "wikidata.org",
+        readAt,
+      });
+    }
+    await wdAttachLabels(items.map((it) => it.recordedOnWikidata));
+    const files = items.map((it) => it.image?.file).filter(Boolean);
+    const byTitle = await commonsFiles([...new Set(files)]);
+    for (const it of items) {
+      if (it.image) it.commonsFile = byTitle.get(commonsTitleKey(it.image.file)) ?? null;
+    }
+  }
+
+  let imageMatch;
+  if (image) {
+    const sha1 = createHash("sha1").update(image).digest("hex");
+    const { files, more } = await commonsSha1Matches(sha1);
+    imageMatch = {
+      method: "Commons SHA-1 lookup",
+      byteIdenticalFilesOnly: true,
+      note: "Matches only a Commons file with exactly these bytes; a resized, cropped or re-encoded copy does not match. No other image search is made.",
+      sha1,
+      bytes: image.length,
+      found: files.length > 0,
+      files,
+      ...partialFields(files.length + (more ? 1 : 0), files.length),
+      ...(more ? { matchedIsLowerBound: true } : {}),
+    };
+  }
+
+  const linksUspto = items.some((it) => it.trademarkSerialNumbers.some((t) => t.usptoRecordUrl));
+  const more = Boolean(search?.["search-continue"]);
+  return {
+    query: name,
+    found: items.length > 0,
+    items,
+    ...partialFields(candidates.length, items.length),
+    ...(more ? { matchedIsLowerBound: true } : {}),
+    ...clamp,
+    ...(imageMatch ? { imageMatch } : {}),
+    scope: NAME_RECORDS_SCOPE,
+    sources: NAME_RECORDS_SOURCES,
+    ...(linksUspto ? { usptoCredit: USPTO_CREDIT } : {}),
+    affiliation: NAME_RECORDS_AFFILIATION,
+    ...(items.length ? {} : { note: "No Wikidata item matched this name in the search read." }),
+  };
 }
 
 // ============================================================================
@@ -430,46 +744,9 @@ export const ENRICH_TOOLS = [
           return { found: false, id, note: "No Wikidata entity with this id.", source: "wikidata.org" };
         }
         const claims = ent.claims || {};
-        const facts = {};
-        const refIds = new Set();
-        for (const [prop, key] of Object.entries(WD_PROPS)) {
-          const statements = claims[prop];
-          if (!Array.isArray(statements) || !statements.length) continue;
-          // Preferred-rank statements first, then normal; deprecated dropped.
-          const ranked = [
-            ...statements.filter((s) => s.rank === "preferred"),
-            ...statements.filter((s) => s.rank === "normal"),
-          ];
-          const seen = new Set();
-          const values = ranked
-            .map((s) => renderSnak(s.mainsnak))
-            .filter((v) => {
-              if (v === null) return false;
-              // Dedupe repeated statements (same value with different qualifiers).
-              const key = JSON.stringify(v);
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            })
-            .slice(0, WD_MAX_VALUES_PER_PROP);
-          if (!values.length) continue;
-          facts[key] = values;
-          for (const v of values) if (v && typeof v === "object" && v.id) refIds.add(v.id);
-        }
+        const facts = wdFacts(claims, WD_PROPS);
         // One batched follow-up resolves item references to labels (≤50 ids).
-        if (refIds.size) {
-          const ids = [...refIds].slice(0, 50).join("|");
-          try {
-            const { data: labelData } = await getJson(
-              `${WD_API}?action=wbgetentities&ids=${encodeURIComponent(ids)}&props=labels&languages=en&format=json&origin=*`,
-              "Wikidata"
-            );
-            const labelOf = (qid) => labelData?.entities?.[qid]?.labels?.en?.value ?? null;
-            for (const values of Object.values(facts)) {
-              for (const v of values) if (v && typeof v === "object" && v.id) v.label = labelOf(v.id);
-            }
-          } catch { /* labels are an enhancement — the Q-ids still stand alone */ }
-        }
+        await wdAttachLabels([facts]);
         let statementCount = 0;
         for (const arr of Object.values(claims)) statementCount += Array.isArray(arr) ? arr.length : 0;
         return {
@@ -502,6 +779,67 @@ export const ENRICH_TOOLS = [
         source: "wikidata.org",
       };
     },
+  },
+
+  // ===========================================================================
+  // name-records — recorded creator, publisher, trademark serial numbers and
+  // Commons file facts for a name; the Commons SHA-1 match for an image.
+  // ===========================================================================
+  {
+    route: "POST /api/name-records",
+    name: "Name records lookup",
+    slug: "name-records",
+    category: "data",
+    price: "$0.005",
+    upstreamHosts: ["www.wikidata.org", "commons.wikimedia.org"],
+    description:
+      "Look up what public sources record for a name: a character, meme, logo, artwork, brand or work. Returns the best-matching Wikidata items with their recorded creator, author, designer, publisher, production company, manufacturer, inception, publication date, first appearance, based-on and named-after statements; each item's US trademark serial numbers as Wikidata records them, with a link to each USPTO record page, where the owner, status and classes are shown; and the Wikimedia Commons file page of the item's image with its author, license and restriction tags as that file page records them. Pass an image (base64 or a data URL, up to 4 MB) to find the Commons file with the same SHA-1: byte-identical files only. Every record carries its source link and read time, and a fixed field states that the answer lists records and makes no determination of ownership or permitted use. Up to 5 items per call; a capped list says so in fields. Keyless: Wikidata (CC0) and Wikimedia Commons.",
+    tags: ["data", "wikidata", "commons", "trademark", "creator", "records", "attribution"],
+    discovery: {
+      bodyType: "json",
+      input: { name: "BeBox" },
+      inputSchema: {
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 200, description: "The name to look up: a character, meme, logo, artwork, brand or work." },
+          limit: { type: "integer", minimum: 1, maximum: NAME_RECORDS_MAX_ITEMS, description: `Wikidata items to return, best match first (default ${NAME_RECORDS_DEFAULT_ITEMS}, at most ${NAME_RECORDS_MAX_ITEMS}).` },
+          image: { type: "string", maxLength: NAME_RECORDS_IMAGE_B64_MAX + 512, description: "Optional image as base64 or a data URL (up to 4 MB decoded), matched against Commons by SHA-1: byte-identical files only." },
+        },
+        required: ["name"],
+      },
+      output: {
+        example: {
+          query: "BeBox",
+          found: true,
+          items: [{
+            id: "Q812806",
+            label: "BeBox",
+            description: "Personal computer sold by Be Inc.",
+            url: "https://www.wikidata.org/wiki/Q812806",
+            recordedOnWikidata: {
+              creator: [{ id: "Q1254581", label: "Jean-Louis Gassée" }, { id: "Q7613836", label: "Steve Sakoman" }],
+              manufacturer: [{ id: "Q791615", label: "Be Inc." }],
+            },
+            trademarkSerialNumbers: [{ serialNumber: "75054089", recordedOn: "wikidata.org", usptoRecordUrl: usptoRecordUrl("75054089"), trademarkDetails: "linked" }],
+            image: { file: "Bebox Face.jpg", fromProperty: "P18 image" },
+            commonsFile: {
+              file: "File:Bebox Face.jpg",
+              url: "https://commons.wikimedia.org/wiki/File:Bebox_Face.jpg",
+              recordedOnFilePage: { author: "Josh Carlson", license: "CC BY 2.0", licenseUrl: "https://creativecommons.org/licenses/by/2.0", restrictions: [] },
+              source: "commons.wikimedia.org",
+              readAt: "2026-11-27T20:20:00.000Z",
+            },
+            source: "wikidata.org",
+            readAt: "2026-11-27T20:20:00.000Z",
+          }],
+          returned: 1, matched: 1, complete: true, truncated: false,
+          scope: NAME_RECORDS_SCOPE,
+          sources: NAME_RECORDS_SOURCES,
+          usptoCredit: USPTO_CREDIT,
+          affiliation: NAME_RECORDS_AFFILIATION,
+        },
+      },
+    },
+    handler: (i) => nameRecords(i),
   },
 
   // ===========================================================================

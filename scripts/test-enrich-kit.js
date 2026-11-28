@@ -17,11 +17,12 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(ENRICH_TOOLS.length === 4, `4 tools exported (got ${ENRICH_TOOLS.length})`);
+ok(ENRICH_TOOLS.length === 5, `5 tools exported (got ${ENRICH_TOOLS.length})`);
 ok(!ENRICH_TOOLS.some((t) => t.slug === "gravatar-check"), "gravatar-check is retired (src/retired-tools.js), not served");
 const SPEC = {
   "lei-lookup": { price: "$0.002", category: "data" },
   "wikidata-entity": { price: "$0.005", category: "data" },
+  "name-records": { price: "$0.005", category: "data" },
   "github-repo": { price: "$0.005", category: "data" },
   "favicon-grab": { price: "$0.001", category: "web" },
 };
@@ -35,7 +36,7 @@ for (const t of ENRICH_TOOLS) {
   ok(typeof t.handler === "function", `${t.slug}: has handler`);
   const d = t.discovery;
   ok(d && d.input && d.inputSchema && d.output?.example, `${t.slug}: full discovery envelope`);
-  // All four reach the network — they must be wallet-only (PoW can't farm egress).
+  // All five reach the network — they must be wallet-only (PoW can't farm egress).
   ok(WALLET_ONLY_SLUGS.has(t.slug), `${t.slug}: in WALLET_ONLY_SLUGS`);
 }
 

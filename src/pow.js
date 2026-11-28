@@ -349,7 +349,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), api.github.com
   // (github-repo — shared 60/hr per-IP keyless quota PoW must not farm), and
   // arbitrary caller sites (favicon-grab). All egress → wallet-only.
-  "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab",
+  "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab", "name-records",
   // Web-content kit: arbitrary caller feed URLs (feed-parse) and
   // redirect-chain following against arbitrary caller URLs (unshorten-url),
   // both egress. archive-snapshot builds its Wayback Machine link here with no

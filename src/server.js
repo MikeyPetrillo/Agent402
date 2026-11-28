@@ -4279,6 +4279,8 @@ const LARGE_BODY_ROUTES = [
   // The Office builders take 100,000 characters of text or 50,000 cells
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
+  // name-records takes an optional image of up to 4 MB as base64 (NAME_RECORDS_IMAGE_MAX_BYTES).
+  ["/api/name-records", 6 * MB],
 ];
 // A referral copy takes the body its direct route takes: the same limit, the
 // same gate, and (below) a parser of the same size on its own path.
@@ -4327,6 +4329,8 @@ app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", infla
 app.use(["/api/onchain-sql"], unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
 // Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
 app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
+// name-records: the handler checks the image's base64 and its 4 MB cap again.
+app.use("/api/name-records", unlessBodyUnread(express.json({ limit: "6mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));

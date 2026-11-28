@@ -21,6 +21,8 @@ t node scripts/test-bls-run-cap.js
 t node scripts/test-macro-computed-sources.js
 # Open-Meteo answers carry the credit with links to Open-Meteo and the CC BY 4.0 licence; fema-disasters carries the OpenFEMA disclaimer, endpoint and access date (stubbed upstream - offline)
 t node scripts/test-source-credits.js
+# name-records: recorded facts only (no copyright status, owned-by or verdict wording), USPTO credit beside every USPTO link, Commons SHA-1 match, capped list fields, 429/outage are 5xx (stubbed upstream - offline)
+t node scripts/test-name-records.js
 # World Bank license check and credit; Open Food Facts credit, contact User-Agent and pace; country-info ODbL notice and /data/countries.json (stubbed upstream, booted server)
 t node scripts/test-open-data-terms.js
 # MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper - offline)
