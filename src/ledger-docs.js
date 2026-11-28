@@ -163,7 +163,7 @@ node demo.js
 <span style="color:var(--on-panel-faint);"># any host, one-shot install
 </span>curl -fsSL agent402.sh/install | sh`, { name: "the MCP setup", html: true, wrap: true, style: "margin-bottom:22px" })}
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:-12px 0 22px;">${getWalletHtml({ link: DOC_LINK })}</p>
-      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Other apps and hosts: ${DOC_LINK("/start", "Start here")} and ${DOC_LINK("/guides/agent-hosts", "the host guide")}. ${DOC_LINK(OFFICIAL_PAGE_PATH, "Official packages")}.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Other hosts: ${DOC_LINK("/start", "Start here")} and ${DOC_LINK("/guides/agent-hosts", "the host guide")}. ${DOC_LINK(OFFICIAL_PAGE_PATH, "Official packages")}.</p>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>B / x402 client</span><span>pay in code</span></div>
       ${codeBlock(`<span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem

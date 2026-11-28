@@ -802,7 +802,7 @@ export const ENRICH_TOOLS = [
         properties: {
           name: { type: "string", minLength: 1, maxLength: 200, description: "The name to look up: a character, meme, logo, artwork, brand or work." },
           limit: { type: "integer", minimum: 1, maximum: NAME_RECORDS_MAX_ITEMS, description: `Wikidata items to return, best match first (default ${NAME_RECORDS_DEFAULT_ITEMS}, at most ${NAME_RECORDS_MAX_ITEMS}).` },
-          image: { type: "string", maxLength: NAME_RECORDS_IMAGE_B64_MAX + 512, description: "Optional image as base64 or a data URL (up to 4 MB decoded), matched against Commons by SHA-1: byte-identical files only." },
+          image: { type: "string", description: "Optional image as base64 or a data URL (up to 4 MB decoded), matched against Commons by SHA-1: byte-identical files only." },
         },
         required: ["name"],
       },

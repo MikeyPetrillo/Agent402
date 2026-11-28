@@ -31,6 +31,7 @@ import { SKILL_PACKS, PACK_PRICES, STOCK_TRIMMED_PACK_SLUGS, packServedInFull } 
 import { STOCK_SLUGS, stockDataEnabled } from "./stock-provider.js";
 import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
+import { HOLIDAY_HOSTS } from "./holiday-source.js";
 import { assertRobotsAllow } from "./robots-gate.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
@@ -1869,7 +1870,7 @@ export const PACK_STEPS = {
   // by country-info.
   "locale-brief": {
     mode: "chain",
-    upstreamHosts: ["nagerholidays.com", "date.nager.at"],
+    upstreamHosts: HOLIDAY_HOSTS,
     steps: [
       { slug: "country-info",     mapInput: (a) => ({ name: a.country }) },
       { slug: "public-holidays",  mapInput: (_a, p) => ({
