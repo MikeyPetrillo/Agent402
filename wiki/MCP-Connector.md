@@ -8,11 +8,11 @@ Agent402 speaks [MCP](https://modelcontextprotocol.io) two ways. Both are publis
 
 Add **`https://agent402.tools/mcp`** as a remote MCP server:
 
-- **claude.ai / Claude desktop:** Customize → Connectors → Add → *Add custom connector* → name `Agent402`, that URL, no auth. From a phone, do the same at claude.ai in the browser; the connector then shows in the Claude mobile app.
+- **claude.ai / Claude desktop:** Customize → Connectors → Add → *Add custom connector* → name `Agent402`, that URL, no sign-in. On a Team or Enterprise plan an Owner adds it under Organization settings → Connectors → Add → Custom, and members connect from Customize → Connectors. From a phone, do the same at claude.ai in the browser; the connector then shows in the Claude mobile app.
 - **Claude Code:** run `claude mcp add --transport http -s user agent402 https://agent402.tools/mcp` in a terminal.
 - **Copy-paste blocks for Claude Code, Cursor, Continue, ElizaOS and AgentCore:** https://agent402.tools/guides/agent-hosts
 - **Cursor:** Settings → MCP → *Add new MCP server* → name `agent402`, transport `streamable-http`, URL `https://agent402.tools/mcp`. (Or add directly to `~/.cursor/mcp.json`.)
-- **ChatGPT (on the web):** Plugins → + → *Add custom MCP server* → that URL, no auth (where your plan offers custom MCP servers).
+- **ChatGPT (on the web):** Plugins → + → *Add custom MCP server* → a name, that URL, no auth → *Create as a plugin* (where your plan offers custom MCP servers).
 - **VS Code (GitHub Copilot Chat with MCP):** *MCP: Add Server* → HTTP → `https://agent402.tools/mcp`.
 - Any client speaking **streamable HTTP** (the endpoint is stateless - every JSON-RPC message is self-contained).
 
