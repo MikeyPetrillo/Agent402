@@ -90,6 +90,8 @@ t node scripts/test-discovery-refusals.js
 t node scripts/test-router-worker.js
 t node scripts/test-router-worker-prod-boot.js
 t node scripts/test-route-index-compaction.js
+# Route index retention: replaced entries collected after unchanged cycles, broken statics heal, partly kept lists build their own service key, a bounded row compare per store (offline, a child with --expose-gc)
+t node scripts/test-route-index-retention.js
 t node scripts/test-health-router-warming.js
 t node scripts/test-plan-sketch.js
 # Report synthesis: a length stop is retried once, then trimmed to a complete block and marked (offline)

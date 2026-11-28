@@ -11521,10 +11521,14 @@ function decorationContext(v, fold = newDecorationFold(v)) {
 // (routeIndexAddEntry). A row with any field changed is built again at each layer.
 const SAME_DEPTH_MAX = 64; // deeper than any listing nests; past it, "not the same"
 const plainProto = (o) => { const p = Object.getPrototypeOf(o); return p === Object.prototype || p === null; };
+// Values a store's row compare may still read (keepUnchangedRows sets it for
+// its own walk; everywhere else it is unbounded). Past it, "not the same".
+let compareLeft = Infinity;
 /** Equal as stored and served: the same keys in the same order, equal values all the
  *  way down (Object.is for scalars). Anything but plain objects and arrays is
  *  equal only to itself. */
 function sameValue(a, b, depth = 0) {
+  if (--compareLeft < 0) return false;
   if (Object.is(a, b)) return true;
   if (!a || !b || typeof a !== "object" || typeof b !== "object" || depth >= SAME_DEPTH_MAX) return false;
   if (Array.isArray(a)) {
@@ -11549,8 +11553,14 @@ function sameShallow(a, b) {
   return true;
 }
 const KEEP_GIVE_UP = 64;
+// The values one store compares at most. A store runs in its caller's turn,
+// and 5,000 rows each carrying a large input schema compared whole held it
+// 30 to 40 ms; this many values is about 2 ms. Rows past it are stored as the
+// new rows (built again at each layer, as a changed row is), never kept
+// uncompared.
+const KEEP_COMPARE_VALUES = 60_000;
 const rowKeyOf = (t) => (t && typeof t === "object" ? `${t.method} ${t.route}` : "");
-let rowsKept = 0, serviceKeysKept = 0; // test counters
+let rowsKept = 0, serviceKeysKept = 0, rowsCompareCut = 0; // test counters
 /** The entry as stored, with each row equal to the previous entry's row for the
  *  same place (or the same method and route) replaced by that previous row
  *  object; the list itself is the previous one when every row is. The rows are
@@ -11564,18 +11574,24 @@ function keepUnchangedRows(prev, v) {
   // two walks of a list that kept nothing. Rows are looked up by method and
   // route only when the list grew or shrank (rows moved place).
   const shifted = now.length !== was.length;
-  for (let i = 0; i < now.length; i++) {
-    if (!kept && misses >= KEEP_GIVE_UP) break;
-    const t = now[i];
-    let k = i < was.length && sameValue(was[i], t) ? was[i] : null;
-    if (!k && shifted && t && typeof t === "object") {
-      if (!byKey) { byKey = new Map(); for (const w of was) { const key = rowKeyOf(w); if (!byKey.has(key)) byKey.set(key, w); } }
-      const w = byKey.get(rowKeyOf(t));
-      if (w !== undefined && w !== was[i] && sameValue(w, t)) k = w;
+  compareLeft = KEEP_COMPARE_VALUES;
+  try {
+    for (let i = 0; i < now.length; i++) {
+      if (!kept && misses >= KEEP_GIVE_UP) break;
+      const t = now[i];
+      let k = i < was.length && sameValue(was[i], t) ? was[i] : null;
+      if (!k && shifted && t && typeof t === "object") {
+        if (!byKey) { byKey = new Map(); for (const w of was) { const key = rowKeyOf(w); if (!byKey.has(key)) byKey.set(key, w); } }
+        const w = byKey.get(rowKeyOf(t));
+        if (w !== undefined && w !== was[i] && sameValue(w, t)) k = w;
+      }
+      // Out of values: this row's answer is not known, so neither it nor any
+      // later row is kept.
+      if (compareLeft < 0) { rowsCompareCut += now.length - i; break; }
+      if (k && k !== t) { (out ||= now.slice())[i] = k; kept++; }
+      else if (!k) misses++;
     }
-    if (k && k !== t) { (out ||= now.slice())[i] = k; kept++; }
-    else if (!k) misses++;
-  }
+  } finally { compareLeft = Infinity; }
   if (!out) return v;
   rowsKept += kept;
   // Every row the previous one, in its order: the previous list, and the
@@ -11608,7 +11624,9 @@ let rowsDecorated = 0, decorationsKept = 0, staticsCarried = 0; // test counters
 function decorateRowKept(t, c, was, origin, pos) {
   const fresh = decorateRow(t, c);
   if (!was) { rowsDecorated++; return fresh; }
-  if (sameShallow(was, fresh) && routeIndexCanMove(was, origin, pos)) { decorationsKept++; return was; }
+  // A copy whose statics threw is never kept: kept, it would stay unserved
+  // for as long as its seller's rows stay equal.
+  if (!(was[TOOL_STATICS] || toolStaticsMemo.get(was))?.broken && sameShallow(was, fresh) && routeIndexCanMove(was, origin, pos)) { decorationsKept++; return was; }
   rowsDecorated++;
   // A new copy (its context changed, or a field the statics do not read):
   // the statics carry over when every field they read is the same value.
@@ -12100,7 +12118,7 @@ const routeIdx = {
   shadow: null, // background compaction in progress (see routeIndexStartShadow)
   partial: null, // live entry being indexed across slices { origin, v, pos }
   gen: 0, // the postings map's generation: a home record from another one is not posted here
-  rowsOf: new Map(), // entry -> { origin, n, dead }: the rows posted (or moved) under it
+  rowsOf: new Map(), // entry -> { origin, n, broken, dead }: the rows posted (or moved) under it, and of those the ones whose statics threw
   unmovable: new Set(), // entries a compaction is removing (or removed part of): their rows never move
   rowsMoved: 0, rowsPosted: 0, rowsCopied: 0, // test counters
 };
@@ -12111,10 +12129,22 @@ function routeIndexNoteSet(origin, prev, next) {
   // until the entry that replaced it moves them (they are then live again).
   const rec = prev ? routeIdx.rowsOf.get(prev) : null;
   if (rec && !rec.dead) { rec.dead = true; routeIdx.staleTools += rec.n; }
+  if (rec) routeIndexForgetIfBare(prev, rec);
   if (next && typeof next === "object") routeIdx.pending.set(origin, next);
   else routeIdx.pending.delete(origin);
   // A deletion too: the drain's last turn checks the stale share.
   routeIndexScheduleDrain();
+}
+// A replaced entry none of whose rows is in a posting list any more (every
+// posted row moved to the entry that replaced it, or it posted none: no paid
+// rows, or only rows whose statics threw) leaves the counts now. Its record
+// was the last thing holding it, and a cycle with nothing stale runs no
+// compaction to remove it, so each unchanged cycle kept every replaced entry
+// (its documents and bodies included) reachable.
+function routeIndexForgetIfBare(v, rec) {
+  if (!rec.dead || rec.n !== rec.broken || routeIdx.unmovable.has(v)) return;
+  routeIdx.indexedTools -= rec.n; routeIdx.staleTools -= rec.n;
+  routeIdx.rowsOf.delete(v);
 }
 // An origin whose newest entry is still to be indexed: its older entry's rows
 // may yet be moved to it, so a compaction leaves them.
@@ -12203,7 +12233,7 @@ function routeIndexAddEntry(origin, v, from = 0, until = Infinity) {
   if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings, gen, rowsOf } = routeIdx;
   let rec = rowsOf.get(v);
-  if (!rec) { rec = { origin, n: 0, dead: cache.get(origin) !== v }; rowsOf.set(v, rec); }
+  if (!rec) { rec = { origin, n: 0, broken: 0, dead: cache.get(origin) !== v }; rowsOf.set(v, rec); }
   for (let pos = from; pos < pool.length; pos++) {
     // A clock read per tool (it costs far less than one tool's statics): with
     // 64 tools between reads, tools of long seller-written text let a 12 ms
@@ -12217,15 +12247,17 @@ function routeIndexAddEntry(origin, v, from = 0, until = Infinity) {
     const st = toolStatics(t, origin);
     rec.n++; routeIdx.indexedTools++;
     if (rec.dead) routeIdx.staleTools++;
-    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
+    if (st.broken) { rec.broken++; brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
     if (h && h.gen === gen) {
       if (routeIndexCanMove(t, origin, pos)) {
         // Kept from the entry it replaced: every posting it has serves it.
         const was = rowsOf.get(h.v);
         was.n--; routeIdx.indexedTools--;
         if (was.dead) routeIdx.staleTools--;
+        const left = h.v;
         h.v = v;
         routeIdx.rowsMoved++;
+        routeIndexForgetIfBare(left, was);
         continue;
       }
       // Posted under an entry whose rows may be partly removed: a copy of its
@@ -12426,7 +12458,7 @@ function routeIndexTokensFor(term, short) {
   return out;
 }
 export function _routeIndexStatsForTest() {
-  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
+  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, entriesCounted: routeIdx.rowsOf.size, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
 }
 /** Test hook: the postings read whole. `duplicates` counts a row held twice in
  *  one list; `missing` a live row (an indexed live entry's, statics intact)
@@ -12460,7 +12492,7 @@ export function _routeIndexAuditForTest() {
 }
 /** Test hook: what the layers built and kept (counters since boot). */
 export function _rowReuseStatsForTest() {
-  return { flatRowsKept, serviceKeysKept, rowsKept, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
+  return { flatRowsKept, serviceKeysKept, rowsKept, rowsCompareCut, rowsDecorated, decorationsKept, staticsCarried, staticsBuilt, rowsPosted: routeIdx.rowsPosted, rowsMoved: routeIdx.rowsMoved, rowsCopied: routeIdx.rowsCopied };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
