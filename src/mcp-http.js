@@ -126,6 +126,7 @@ import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled, creditsKeyQualifier, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
+import { connectorNextStep, waitInWords } from "./next-step-copy.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
@@ -205,6 +206,8 @@ const mcpLimiter = createLimiter("mcp");
 // perReplica): the figure a client is told is the service-wide one, so the
 // copy says so rather than quoting it as a per-replica allowance.
 const RATE_LIMIT_COPY = `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client, shared across replicas`;
+// The same figures as a person reads them in a refusal.
+const RATE_LIMIT_WORDS = `${MAX_CALLS_PER_BURST} call${MAX_CALLS_PER_BURST === 1 ? "" : "s"} a minute, ${MAX_CALLS_PER_WINDOW} an hour from one address`;
 
 // Adoption telemetry: every session's initialize names its client. In memory
 // since boot, one map for every mount, read on the operator surface only
@@ -240,7 +243,7 @@ const mcpPaidReqLimiter = createLimiter("mcp-transport-paid", { perMin: MCP_PAID
 // restored at runtime. At most OFFER_CACHE_MAX routes are kept.
 const OFFER_CACHE_TTL_MS = 30_000;
 const OFFER_CACHE_MAX = 256;
-const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} - slow down and retry in about ${retryAfterSeconds} s.`;
+const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} from this address; the limit resets in ${waitInWords(retryAfterSeconds)}.`;
 const MCP_MAX_CONCURRENT = Number(process.env.AGENT402_MCP_MAX_CONCURRENT) || 64;
 const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 30_000;
 // After the deadline fires (or the client disconnects) we abort + close the
@@ -748,7 +751,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // A long call (isLongCall) is never invited to sign an x402 payment: it is
   // paid here over MPP as a task, or on its HTTP route as a job.
   function walletRequiredText(def, { x402 = false, mpp = payMpp } = {}) {
-    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`;
+    // The lead, then what to do next from a phone or a computer (src/next-step-copy.js).
+    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier. ${connectorNextStep(baseUrl)}`;
     if (isLongCall(def)) {
       const asTask = mpp && Boolean(tasks);
       return [
@@ -2073,7 +2077,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         const toolBudget = mcpLimiter.check(ip);
         if (toolBudget.limited) {
-          const limitText = `Free-tier rate limit reached (${RATE_LIMIT_COPY}); room again in about ${toolBudget.retryAfterSeconds} s.`;
+          const limitText = `Free-tier rate limit reached (${RATE_LIMIT_WORDS}); it resets in ${waitInWords(toolBudget.retryAfterSeconds)}. ${connectorNextStep(baseUrl, { limited: true })}`;
           // A free tool at its limit offers its own x402 challenge (the HTTP
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
@@ -2361,7 +2365,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (reqBudget.limited) {
       // A client that is told when to come back waits; one that is not retries at once.
       res.setHeader("Retry-After", String(reqBudget.retryAfterSeconds));
-      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: `Too many requests to ${path} - slow down and retry shortly.` }, id: req.body?.id ?? null });
+      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: reqLimitText(path, reqBudget.retryAfterSeconds) }, id: req.body?.id ?? null });
     }
     // MCP Tasks (io.modelcontextprotocol/tasks). Answered here, ahead of the SDK
     // transport, for two reasons: polling must not consume a transport slot (it

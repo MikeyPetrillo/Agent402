@@ -6,7 +6,7 @@
 //     requests do any work (JSON-RPC error envelope preserved);
 //   - a normal initialize under the cap still succeeds;
 //   - the free-tier tool budget's refusal says in how many seconds there is
-//     room again, the same whole seconds the limiter computed;
+//     room again (when the limit resets), the same whole seconds the limiter computed;
 //   - the 429 is emitted for a malformed body too (bounded before parse/build).
 //
 // The server is booted on port 0 with its own stores (scripts/lib/boot-server.js)
@@ -118,7 +118,7 @@ if (srv) {
     const call2 = await rpcJson(await post(callBody(3)));
     call2At.push(Date.now());
     const text = String(call2?.result?.content?.[0]?.text || "");
-    const m = /^Free-tier rate limit reached \([^)]*\); room again in about (\d+) s\. /.exec(text);
+    const m = /^Free-tier rate limit reached \([^)]*\); it resets in (\d+) seconds?\. /.exec(text);
     // The seconds the limiter computed: the first call's hit plus a minute,
     // less the moment of the refusal, rounded up (bounds from the clock
     // readings around each request, so a slow machine widens them, never fails them).

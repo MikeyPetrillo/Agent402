@@ -556,6 +556,7 @@ import { termsPage } from "./terms.js";
 import { transparencyPage, repoTraffic } from "./transparency.js";
 import { quickstartPage } from "./quickstart.js";
 import { startPage, START_PATH } from "./start-page.js";
+import { powLimitMessage } from "./next-step-copy.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { howToPayPage } from "./how-to-pay.js";
@@ -13581,7 +13582,7 @@ if (FREE_MODE) {
             res.setHeader("X-Pow-Rate-Limited", "true");
             res.setHeader("X-Pow-Limits", POW_LIMITS_LABEL);
             return res.status(429).json({
-              error: "Free-tier rate limit reached for proof-of-work redemption. Retry later, or pay per call in USDC via x402.",
+              error: powLimitMessage(BASE_URL, powBudget.retryAfterSeconds),
               limits: POW_LIMITS_LABEL,
               docs: `${BASE_URL}/llms.txt`,
             });
